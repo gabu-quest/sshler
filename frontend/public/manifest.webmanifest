@@ -1,0 +1,23 @@
+{
+  "name": "sshler",
+  "short_name": "sshler",
+  "start_url": "/app/",
+  "display": "standalone",
+  "background_color": "#0f1116",
+  "theme_color": "#3b82f6",
+  "description": "SSH box manager and terminal SPA",
+  "icons": [
+    {
+      "src": "favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

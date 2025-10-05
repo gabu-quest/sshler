@@ -1,0 +1,112 @@
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sshler"
+version = "0.4.0"
+description = "A local FastAPI-powered SSH multiplexer for tmux-in-browser — from your laptop only."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "You"}]
+license = "MIT"
+dependencies = [
+    "fastapi>=0.115.6",
+    "uvicorn[standard]>=0.30.0",
+    "pyyaml>=6.0",
+    "argon2-cffi>=23.1.0",
+    "asyncssh>=2.14.0",
+    "platformdirs>=4.2",
+    "pydantic>=2.7",
+    "python-multipart>=0.0.9",
+    "sqler>=1.2025.9.24",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.0.0",
+    "psutil>=5.9.0",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Systems Administration",
+    "Framework :: FastAPI",
+]
+keywords = ["ssh", "tmux", "fastapi", "sftp", "htmx"]
+
+[project.urls]
+Homepage = "https://github.com/gabu-quest/sshler"
+Repository = "https://github.com/gabu-quest/sshler"
+Issues = "https://github.com/gabu-quest/sshler/issues"
+
+[project.optional-dependencies]
+dev = [
+    "anyio>=4.4",
+    "httpx>=0.27.0",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "playwright>=1.48.0",
+    "pytest-playwright>=0.5.0",
+    "ruff>=0.5.6",
+]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.4",
+    "httpx>=0.27.0",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "playwright>=1.48.0",
+    "pytest-playwright>=0.5.0",
+    "ruff>=0.5.6",
+    "hypothesis>=6.100.0",
+    "mypy>=1.19.1",
+    "types-pyyaml>=6.0.12.20250915",
+    "pre-commit>=4.0.0",
+]
+
+[project.scripts]
+sshler = "sshler.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+exclude = ["frontend*", "tests*"]
+
+[tool.setuptools.package-data]
+sshler = ["templates/*.html", "templates/partials/*.html", "static/**/*", "scripts/*.ps1"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "N"]
+ignore = ["E203", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+show_error_codes = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_reexport = true
+strict_equality = true
