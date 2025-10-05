@@ -1,0 +1,35 @@
+
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ box.name }}</h1>
+<div class="grid">
+  <div>
+    <h2>Favorites</h2>
+    {% if box.favorites %}
+      <ul>
+        {% for f in box.favorites %}
+          <li>
+            <a href="/term?host={{ box.name }}&dir={{ f|urlencode }}" class="btn small">Terminal here</a>
+            <span class="mono">{{ f }}</span>
+            <button class="btn small danger"
+                    hx-post="/box/{{ box.name }}/fav?path={{ f|urlencode }}"
+                    hx-swap="none">Unstar</button>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No favorites yet.</p>
+    {% endif %}
+  </div>
+  <div>
+    <h2>Browse</h2>
+    <div id="browser"
+         hx-get="/box/{{ box.name }}/ls?path={{ base_directory|urlencode }}"
+         hx-trigger="load"
+         hx-target="#browser"
+         hx-swap="innerHTML">
+      Loading…
+    </div>
+  </div>
+</div>
+{% endblock %}

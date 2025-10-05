@@ -1,0 +1,40 @@
+
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ box.name }} — Terminal</h1>
+<div class="muted">Dir: <span class="mono">{{ directory }}</span> • Session: <span class="mono">{{ session }}</span></div>
+<div id="term" class="term"></div>
+<link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+<script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+<script>
+  const term = new Terminal({cursorBlink: true, convertEol: true});
+  term.open(document.getElementById('term'));
+  const url = new URL(window.location.href);
+  const host = url.searchParams.get('host');
+  const dir = url.searchParams.get('dir');
+  const session = url.searchParams.get('session') || '{{ session }}';
+  const cols = {{ cols }}; const rows = {{ rows }};
+  const wsProto = (location.protocol === 'https:' ? 'wss://' : 'ws://');
+  const wsUrl = wsProto + location.host + `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(dir)}&session=${encodeURIComponent(session)}&cols=${cols}&rows=${rows}`;
+  const ws = new WebSocket(wsUrl);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    term.focus();
+  };
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(ev.data));
+    } else {
+      term.write(ev.data);
+    }
+  };
+  ws.onclose = () => {
+    term.write('\r\n\x1b[31m[Connection closed — refresh to reconnect]\x1b[0m\r\n');
+  };
+  term.onData(d => {
+    const enc = new TextEncoder();
+    ws.send(enc.encode(d));
+  });
+</script>
+{% endblock %}

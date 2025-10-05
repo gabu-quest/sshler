@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import asyncssh
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from .config import AppConfig, find_box, get_config_path, load_config, save_config
+from .ssh import connect, open_tmux, sftp_is_directory, sftp_list_directory
+
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def make_app() -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Returns:
+        FastAPI: Configured ASGI application.
+    """
+
+    application = FastAPI(title="sshler", version="0.1.0")
+    application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+    def _get_application_config() -> AppConfig:
+        """Dependency that loads the persisted configuration.
+
+        Returns:
+            AppConfig: Configuration loaded from disk.
+        """
+
+        return load_config()
+
+    @application.get("/")
+    async def root() -> RedirectResponse:
+        """Redirect the index page to the boxes list.
+
+        Returns:
+            RedirectResponse: HTTP redirect to ``/boxes``.
+        """
+
+        return RedirectResponse(url="/boxes")
+
+    @application.get("/boxes", response_class=HTMLResponse)
+    async def boxes(
+        request: Request,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Render the list of configured boxes.
+
+        Args:
+            request: Incoming HTTP request.
+            application_config: Configuration loaded from disk.
+
+        Returns:
+            HTMLResponse: Rendered home page.
+        """
+
+        configuration_path = str(get_config_path())
+        context = {
+            "configuration": application_config,
+            "configuration_path": configuration_path,
+        }
+        return templates.TemplateResponse(request, "index.html", context)
+
+    @application.get("/box/{name}", response_class=HTMLResponse)
+    async def box_page(
+        name: str,
+        request: Request,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Render the detail page for a single box.
+
+        Args:
+            name: Box identifier from the URL.
+            request: Incoming HTTP request.
+            application_config: Configuration loaded from disk.
+
+        Returns:
+            HTMLResponse: Rendered page for the chosen box.
+
+        Raises:
+            HTTPException: When the requested box does not exist.
+        """
+
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+        base_directory = box.default_dir or f"/home/{box.user}"
+        context = {"box": box, "base_directory": base_directory}
+        return templates.TemplateResponse(request, "box.html", context)
+
+    @application.get("/box/{name}/ls", response_class=HTMLResponse)
+    async def list_directory(
+        name: str,
+        request: Request,
+        directory_path: str = Query(..., alias="path"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Render a partial listing for a directory via SFTP.
+
+        Args:
+            name: Box identifier from the URL.
+            request: Incoming HTTP request.
+            directory_path: Absolute path to list on the remote host.
+            application_config: Configuration loaded from disk.
+
+        Returns:
+            HTMLResponse: HTML fragment containing the directory table.
+
+        Raises:
+            HTTPException: When the requested box does not exist.
+        """
+
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+        connection = await connect(box.host, box.user, box.port, box.keyfile, box.known_hosts)
+        try:
+            try:
+                directory_entries = await sftp_list_directory(connection, directory_path)
+            except Exception:
+                directory_entries = []
+            context = {
+                "box": box,
+                "directory_path": directory_path,
+                "entries": directory_entries,
+            }
+            return templates.TemplateResponse(request, "partials/dir_listing.html", context)
+        finally:
+            connection.close()
+
+    @application.post("/box/{name}/fav", response_class=PlainTextResponse)
+    async def toggle_favorite(
+        name: str,
+        directory_path: str = Query(..., alias="path"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> str:
+        """Toggle a favorite directory for a box.
+
+        Args:
+            name: Box identifier from the URL.
+            directory_path: Remote directory to toggle as favorite.
+            application_config: Configuration loaded from disk.
+
+        Returns:
+            str: Literal ``"ok"`` acknowledging persistence.
+
+        Raises:
+            HTTPException: When the requested box does not exist.
+        """
+
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+        if directory_path in (box.favorites or []):
+            box.favorites.remove(directory_path)
+        else:
+            if box.favorites is None:
+                box.favorites = []
+            box.favorites.append(directory_path)
+        save_config(application_config)
+        return "ok"
+
+    @application.get("/term", response_class=HTMLResponse)
+    async def term_page(
+        request: Request,
+        host: str,
+        session: str | None = None,
+        columns: int = 120,
+        rows: int = 32,
+        directory: str = Query(..., alias="dir"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Render the terminal page for tmux access.
+
+        Args:
+            request: Incoming HTTP request.
+            host: Box identifier provided by the query parameter.
+            session: Optional tmux session name override.
+            columns: Initial terminal width.
+            rows: Initial terminal height.
+            directory: Preferred directory for the tmux session.
+            application_config: Configuration loaded from disk.
+
+        Returns:
+            HTMLResponse: Rendered terminal page.
+
+        Raises:
+            HTTPException: When the requested box does not exist.
+        """
+
+        box = find_box(application_config, host)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+        if not session:
+            base = Path(directory).name or "sshler"
+            session = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in base)
+        context = {
+            "box": box,
+            "directory": directory,
+            "session": session,
+            "cols": columns,
+            "rows": rows,
+        }
+        return templates.TemplateResponse(request, "term.html", context)
+
+    @application.websocket("/ws/term")
+    async def terminal_socket(
+        websocket: WebSocket,
+        host: str = Query(...),
+        directory: str = Query(..., alias="dir"),
+        session: str = Query("sshler"),
+        columns: int = Query(120, alias="cols"),
+        rows: int = Query(32, alias="rows"),
+    ) -> None:
+        """Bridge between the browser websocket and tmux over SSH.
+
+        Args:
+            websocket: Accepted websocket connection from the browser.
+            host: Box identifier provided by the client.
+            directory: Requested working directory.
+            session: Requested tmux session name.
+            columns: Terminal width reported by the client.
+            rows: Terminal height reported by the client.
+
+        Returns:
+            None: The coroutine completes when the websocket terminates.
+        """
+
+        await websocket.accept()
+        application_config = load_config()
+        box = find_box(application_config, host)
+        if not box:
+            await websocket.close()
+            return
+
+        try:
+            connection = await connect(box.host, box.user, box.port, box.keyfile, box.known_hosts)
+        except Exception as exc:  # pragma: no cover - network errors are environment specific
+            await websocket.send_text(f"Connection failed: {exc}")
+            await websocket.close()
+            return
+
+        process: asyncssh.SSHClientProcess | None = None
+        try:
+            # make sure the directory exists (best-effort)
+            try:
+                is_directory = await sftp_is_directory(connection, directory)
+                if not is_directory:
+                    directory = box.default_dir or f"/home/{box.user}"
+            except Exception:
+                pass
+
+            process = await open_tmux(
+                connection,
+                working_directory=directory,
+                session=session,
+                columns=columns,
+                rows=rows,
+            )
+
+            async def reader() -> None:
+                try:
+                    while True:
+                        data = await process.stdout.read(32768)
+                        if not data:
+                            break
+                        await websocket.send_bytes(data)
+                except Exception:
+                    pass
+
+            async def writer() -> None:
+                try:
+                    while True:
+                        message = await websocket.receive_bytes()
+                        process.stdin.write(message)
+                except WebSocketDisconnect:
+                    pass
+                except Exception:
+                    pass
+
+            await asyncio.gather(reader(), writer())
+        finally:
+            try:
+                if process:
+                    process.stdin.write_eof()
+                    process.close()
+            except Exception:
+                pass
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    return application

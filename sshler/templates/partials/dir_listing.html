@@ -1,0 +1,39 @@
+
+<div class="dir-header">
+  <span class="mono">{{ directory_path }}</span>
+  <a class="btn small" href="/term?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">Open Terminal Here</a>
+</div>
+<table class="dir">
+  <thead><tr><th>Name</th><th>Type</th><th>Actions</th></tr></thead>
+  <tbody>
+    {% set parent_directory = directory_path.rsplit('/', 1)[0] if '/' in directory_path and directory_path != '/' else '/' %}
+    {% if directory_path != '/' %}
+    <tr>
+      <td><a hx-get="/box/{{ box.name }}/ls?path={{ parent_directory|urlencode }}" hx-target="#browser" hx-swap="innerHTML">..</a></td>
+      <td>parent</td>
+      <td></td>
+    </tr>
+    {% endif %}
+    {% for entry in entries %}
+    <tr>
+      <td>
+        {% if entry.is_directory %}
+          <a hx-get="/box/{{ box.name }}/ls?path={{ (directory_path.rstrip('/') ~ '/' ~ entry.name)|urlencode }}"
+             hx-target="#browser" hx-swap="innerHTML">{{ entry.name }}</a>
+        {% else %}
+          {{ entry.name }}
+        {% endif %}
+      </td>
+      <td>{{ "dir" if entry.is_directory else "file" }}</td>
+      <td>
+        {% if entry.is_directory %}
+          <a class="btn small" href="/term?host={{ box.name }}&dir={{ (directory_path.rstrip('/') ~ '/' ~ entry.name)|urlencode }}" target="_blank">Terminal</a>
+          <button class="btn small"
+                  hx-post="/box/{{ box.name }}/fav?path={{ (directory_path.rstrip('/') ~ '/' ~ entry.name)|urlencode }}"
+                  hx-swap="none">⭐ Favorite</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

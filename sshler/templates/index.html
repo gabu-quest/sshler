@@ -1,0 +1,32 @@
+
+{% extends "base.html" %}
+{% block content %}
+<h1>Boxes</h1>
+<p>Pick a box to browse and open a terminal.</p>
+<ul class="cards">
+  {% for box in configuration.boxes %}
+  <li class="card">
+    <div class="title">{{ box.name }}</div>
+    <div class="mono">{{ box.user }}@{{ box.host }} :{{ box.port }}</div>
+    <div class="favlist">
+      {% if box.favorites %}
+        <div class="muted">Favorites</div>
+        <ul>
+          {% for favorite in box.favorites %}
+          <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}">{{ favorite }}</a></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+    <div class="actions">
+      <a class="btn" href="/box/{{ box.name }}">Open</a>
+      {% if box.default_dir %}
+      <a class="btn secondary" href="/term?host={{ box.name }}&dir={{ box.default_dir|urlencode }}">Terminal</a>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+
+<div class="muted small">Config file: {{ configuration_path if configuration_path else "" }}</div>
+{% endblock %}

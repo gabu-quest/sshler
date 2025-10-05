@@ -1,0 +1,72 @@
+
+# sshler
+
+**sshler** is a lightweight, local-only web UI which lets you browse remote files over SFTP and jump into tmux sessions in your browser — without installing anything on your server.
+
+- Runs on your Windows 11 laptop (or any OS with Python)
+- Uses your existing SSH keys
+- Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it to the browser via WebSocket + xterm.js
+- HTMX-based file browser with “Open Terminal Here”
+- Auto-creates a starter config at first run
+
+## Install (editable)
+
+```bash
+uv pip install -e .
+# or: pip install -e .
+```
+
+## Run
+
+```bash
+sshler serve
+```
+
+The app will open `http://127.0.0.1:8822` in your default browser.
+
+## Configuration
+
+A config file is created on first run:
+
+- Windows: `%APPDATA%\sshler\boxes.yaml`
+- macOS/Linux: `~/.config/sshler/boxes.yaml`
+
+Example:
+
+```yaml
+boxes:
+  - name: gabu-server
+    host: example.tailnet.ts.net
+    user: gabu
+    port: 22
+    keyfile: "C:/Users/gabu/.ssh/id_ed25519"
+    favorites:
+      - /home/gabu
+      - /home/gabu/projects
+      - /srv/codex
+    default_dir: /home/gabu
+```
+
+> Tip: Set `default_dir` if your home path isn’t `/home/<user>`.
+
+### Security note
+
+By default we use your system `known_hosts`. If you **really** want to disable host key checking, set `known_hosts: ignore` for a host.
+
+## Development
+
+```bash
+# install dependencies (project + dev extras)
+uv sync --extra dev
+
+# lint & format
+uv run ruff check .
+uv run ruff format .
+
+# run the test suite
+uv run pytest
+```
+
+## Why “sshler”?
+
+Because sometimes you want less VS Code, more terminal — but still in a nice browser tab.
