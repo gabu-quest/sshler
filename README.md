@@ -26,6 +26,8 @@ The app will open `http://127.0.0.1:8822` in your default browser.
 
 ## Configuration
 
+sshler reads your existing OpenSSH config (`~/.ssh/config`) and shows every concrete `Host` entry automatically. Any favourites, default directories, or custom hosts you add through the UI are stored in a companion YAML file.
+
 A config file is created on first run:
 
 - Windows: `%APPDATA%\sshler\boxes.yaml`
@@ -48,6 +50,10 @@ boxes:
 ```
 
 > Tip: Set `default_dir` if your home path isn’t `/home/<user>`.
+
+### Adding custom boxes
+
+Hit “Add Box” in the UI to define a host that isn’t in your SSH config (for example, a throwaway Docker container). Fields you leave blank fall back to your SSH defaults.
 
 ### Security note
 

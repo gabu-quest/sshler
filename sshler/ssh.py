@@ -15,6 +15,7 @@ async def connect(
     port: int = 22,
     keyfile: str | None = None,
     known_hosts: str | None = None,
+    ssh_config_path: str | None = None,
 ) -> asyncssh.SSHClientConnection:
     """Establish an SSH connection using asyncssh.
 
@@ -44,6 +45,7 @@ async def connect(
             username=user,
             client_keys=[keyfile] if keyfile else None,
             known_hosts=known_hosts_path,
+            config=[ssh_config_path] if ssh_config_path else None,
         )
     except (OSError, asyncssh.Error) as exc:
         raise SSHError(str(exc)) from exc

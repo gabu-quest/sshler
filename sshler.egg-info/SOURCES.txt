@@ -5,6 +5,7 @@ sshler/__init__.py
 sshler/cli.py
 sshler/config.py
 sshler/ssh.py
+sshler/ssh_config.py
 sshler/webapp.py
 sshler.egg-info/PKG-INFO
 sshler.egg-info/SOURCES.txt
@@ -16,6 +17,11 @@ sshler/static/style.css
 sshler/templates/base.html
 sshler/templates/box.html
 sshler/templates/index.html
+sshler/templates/new_box.html
 sshler/templates/term.html
 sshler/templates/partials/dir_listing.html
 tests/test_basic.py
+tests/test_config.py
+tests/test_routes.py
+tests/test_ssh.py
+tests/test_websocket.py

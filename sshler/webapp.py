@@ -1,16 +1,35 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 import asyncssh
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .config import AppConfig, find_box, get_config_path, load_config, save_config
-from .ssh import connect, open_tmux, sftp_is_directory, sftp_list_directory
+from . import __version__
+from .config import (
+    AppConfig,
+    StoredBox,
+    find_box,
+    get_config_path,
+    load_config,
+    rebuild_boxes,
+    save_config,
+)
+from .ssh import SSHError, connect, open_tmux, sftp_is_directory, sftp_list_directory
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -26,6 +45,7 @@ def make_app() -> FastAPI:
     application = FastAPI(title="sshler", version="0.1.0")
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    app_version = _compute_app_version()
 
     def _get_application_config() -> AppConfig:
         """Dependency that loads the persisted configuration.
@@ -65,6 +85,7 @@ def make_app() -> FastAPI:
         context = {
             "configuration": application_config,
             "configuration_path": configuration_path,
+            "app_version": app_version,
         }
         return templates.TemplateResponse(request, "index.html", context)
 
@@ -92,7 +113,7 @@ def make_app() -> FastAPI:
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
         base_directory = box.default_dir or f"/home/{box.user}"
-        context = {"box": box, "base_directory": base_directory}
+        context = {"box": box, "base_directory": base_directory, "app_version": app_version}
         return templates.TemplateResponse(request, "box.html", context)
 
     @application.get("/box/{name}/ls", response_class=HTMLResponse)
@@ -120,20 +141,43 @@ def make_app() -> FastAPI:
         box = find_box(application_config, name)
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
-        connection = await connect(box.host, box.user, box.port, box.keyfile, box.known_hosts)
+
+        connection = None
+        try:
+            connection = await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+            )
+        except SSHError as exc:
+            context = {
+                "box": box,
+                "directory_path": directory_path,
+                "entries": [],
+                "error": f"SSH connection failed: {exc}",
+            }
+            return templates.TemplateResponse(request, "partials/dir_listing.html", context)
+
         try:
             try:
                 directory_entries = await sftp_list_directory(connection, directory_path)
-            except Exception:
+                error_message = None
+            except Exception as exc:  # pragma: no cover - SFTP failures vary by host
                 directory_entries = []
+                error_message = f"Directory listing failed: {exc}"
             context = {
                 "box": box,
                 "directory_path": directory_path,
                 "entries": directory_entries,
+                "error": error_message,
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     @application.post("/box/{name}/fav", response_class=PlainTextResponse)
     async def toggle_favorite(
@@ -158,14 +202,67 @@ def make_app() -> FastAPI:
         box = find_box(application_config, name)
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
-        if directory_path in (box.favorites or []):
-            box.favorites.remove(directory_path)
+        stored_override = application_config.get_or_create_stored(name)
+        favorites = stored_override.favorites
+        if directory_path in favorites:
+            favorites.remove(directory_path)
         else:
-            if box.favorites is None:
-                box.favorites = []
-            box.favorites.append(directory_path)
+            favorites.append(directory_path)
+        box.favorites = list(favorites)
         save_config(application_config)
         return "ok"
+
+    @application.get("/boxes/new", response_class=HTMLResponse)
+    async def new_box_form(
+        request: Request,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Render the form to add a custom box."""
+
+        context = {
+            "configuration_path": str(get_config_path()),
+            "existing_names": [box.name for box in application_config.boxes],
+            "app_version": app_version,
+        }
+        return templates.TemplateResponse(request, "new_box.html", context)
+
+    @application.post("/boxes/new")
+    async def create_box(
+        name: str = Form(...),
+        host: str = Form(""),
+        user: str = Form(""),
+        port: int = Form(22),
+        keyfile: str = Form(""),
+        default_dir: str = Form(""),
+        favorites: str = Form(""),
+        known_hosts: str = Form(""),
+        agent: bool = Form(False),
+    ) -> RedirectResponse:
+        """Persist a new custom box definition supplied by the user."""
+
+        cleaned_name = name.strip()
+        if not cleaned_name:
+            raise HTTPException(status_code=400, detail="Box name is required")
+
+        favorites_list = [line.strip() for line in favorites.splitlines() if line.strip()]
+
+        new_box = StoredBox(
+            name=cleaned_name,
+            host=host.strip() or None,
+            user=user.strip() or None,
+            port=port or None,
+            keyfile=keyfile.strip() or None,
+            agent=agent,
+            favorites=favorites_list,
+            default_dir=default_dir.strip() or None,
+            known_hosts=known_hosts.strip() or None,
+        )
+
+        application_config = load_config()
+        application_config.stored[new_box.name] = new_box
+        rebuild_boxes(application_config)
+        save_config(application_config)
+        return RedirectResponse(url="/boxes", status_code=303)
 
     @application.get("/term", response_class=HTMLResponse)
     async def term_page(
@@ -207,6 +304,7 @@ def make_app() -> FastAPI:
             "session": session,
             "cols": columns,
             "rows": rows,
+            "app_version": app_version,
         }
         return templates.TemplateResponse(request, "term.html", context)
 
@@ -241,7 +339,14 @@ def make_app() -> FastAPI:
             return
 
         try:
-            connection = await connect(box.host, box.user, box.port, box.keyfile, box.known_hosts)
+            connection = await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+            )
         except Exception as exc:  # pragma: no cover - network errors are environment specific
             await websocket.send_text(f"Connection failed: {exc}")
             await websocket.close()
@@ -299,3 +404,20 @@ def make_app() -> FastAPI:
                 pass
 
     return application
+
+
+def _compute_app_version() -> str:
+    parts = [__version__]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        git_hash = result.stdout.strip()
+        if git_hash:
+            parts.append(f"({git_hash})")
+    except Exception:
+        pass
+    return " ".join(part for part in parts if part)

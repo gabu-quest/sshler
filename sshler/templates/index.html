@@ -2,22 +2,23 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Boxes</h1>
-<p>Pick a box to browse and open a terminal.</p>
+<p>Pick a box to browse and open a terminal. Hosts are imported from your SSH config and any custom boxes you add here.</p>
 <ul class="cards">
   {% for box in configuration.boxes %}
   <li class="card">
     <div class="title">{{ box.name }}</div>
-    <div class="mono">{{ box.user }}@{{ box.host }} :{{ box.port }}</div>
+    <div class="mono">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
+    <div class="muted small">{{ 'From SSH config' if box.source == 'ssh_config' else 'Custom box' }}</div>
+    {% if box.favorites %}
     <div class="favlist">
-      {% if box.favorites %}
-        <div class="muted">Favorites</div>
-        <ul>
-          {% for favorite in box.favorites %}
-          <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}">{{ favorite }}</a></li>
-          {% endfor %}
-        </ul>
-      {% endif %}
+      <div class="muted">Favorites</div>
+      <ul>
+        {% for favorite in box.favorites %}
+        <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}">{{ favorite }}</a></li>
+        {% endfor %}
+      </ul>
     </div>
+    {% endif %}
     <div class="actions">
       <a class="btn" href="/box/{{ box.name }}">Open</a>
       {% if box.default_dir %}

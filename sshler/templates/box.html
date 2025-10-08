@@ -11,9 +11,10 @@
           <li>
             <a href="/term?host={{ box.name }}&dir={{ f|urlencode }}" class="btn small">Terminal here</a>
             <span class="mono">{{ f }}</span>
-            <button class="btn small danger"
+            <button class="icon-btn star active"
                     hx-post="/box/{{ box.name }}/fav?path={{ f|urlencode }}"
-                    hx-swap="none">Unstar</button>
+                    hx-swap="none"
+                    aria-label="Remove favorite">★</button>
           </li>
         {% endfor %}
       </ul>

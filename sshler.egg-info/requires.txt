@@ -5,6 +5,7 @@ pyyaml>=6.0
 asyncssh>=2.14.0
 platformdirs>=4.2
 pydantic>=2.7
+python-multipart>=0.0.9
 
 [dev]
 anyio>=4.4

@@ -3,6 +3,9 @@
   <span class="mono">{{ directory_path }}</span>
   <a class="btn small" href="/term?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">Open Terminal Here</a>
 </div>
+{% if error %}
+<div class="alert error">{{ error }}</div>
+{% endif %}
 <table class="dir">
   <thead><tr><th>Name</th><th>Type</th><th>Actions</th></tr></thead>
   <tbody>
@@ -16,21 +19,24 @@
     {% endif %}
     {% for entry in entries %}
     <tr>
+      {% set target_path = (directory_path.rstrip('/') ~ '/' ~ entry.name) if directory_path != '/' else '/' ~ entry.name %}
       <td>
         {% if entry.is_directory %}
-          <a hx-get="/box/{{ box.name }}/ls?path={{ (directory_path.rstrip('/') ~ '/' ~ entry.name)|urlencode }}"
+          <a hx-get="/box/{{ box.name }}/ls?path={{ target_path|urlencode }}"
              hx-target="#browser" hx-swap="innerHTML">{{ entry.name }}</a>
         {% else %}
           {{ entry.name }}
         {% endif %}
       </td>
       <td>{{ "dir" if entry.is_directory else "file" }}</td>
-      <td>
+      <td class="dir-actions">
         {% if entry.is_directory %}
-          <a class="btn small" href="/term?host={{ box.name }}&dir={{ (directory_path.rstrip('/') ~ '/' ~ entry.name)|urlencode }}" target="_blank">Terminal</a>
-          <button class="btn small"
-                  hx-post="/box/{{ box.name }}/fav?path={{ (directory_path.rstrip('/') ~ '/' ~ entry.name)|urlencode }}"
-                  hx-swap="none">⭐ Favorite</button>
+          <a class="btn small" href="/term?host={{ box.name }}&dir={{ target_path|urlencode }}" target="_blank">Terminal</a>
+          {% set is_favorite = target_path in (box.favorites or []) %}
+          <button class="icon-btn star{{ ' active' if is_favorite else '' }}"
+                  aria-label="Toggle favorite"
+                  hx-post="/box/{{ box.name }}/fav?path={{ target_path|urlencode }}"
+                  hx-swap="none">{{ '★' if is_favorite else '☆' }}</button>
         {% endif %}
       </td>
     </tr>
