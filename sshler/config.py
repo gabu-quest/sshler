@@ -212,6 +212,8 @@ def _merge_host(
 ) -> Box:
     if stored_override and stored_override.host:
         connect_host = stored_override.host
+    elif host_config and host_config.hostname:
+        connect_host = host_config.hostname
     else:
         connect_host = name
 

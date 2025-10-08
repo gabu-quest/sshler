@@ -47,7 +47,7 @@ Host merged-box
     merged = names["merged-box"]
     assert isinstance(merged, Box)
     assert merged.display_host == "merged.example"
-    assert merged.connect_host == "merged-box"
+    assert merged.connect_host == "merged.example"
     assert merged.user == "deploy"
     assert merged.port == 2201
     assert merged.source == "ssh_config"
