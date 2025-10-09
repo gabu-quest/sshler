@@ -1,9 +1,20 @@
 
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ box.name }} — Terminal</h1>
-<div class="muted">Dir: <span class="mono">{{ directory }}</span> • Session: <span class="mono">{{ session }}</span></div>
-<div id="term" class="term"></div>
+<div class="term-page">
+  <div>
+    <h1>{{ box.name }} — Terminal</h1>
+    <div class="term-meta">
+      <span>Dir: <span class="mono">{{ directory }}</span> • Session: <span class="mono">{{ session }}</span></span>
+      <div class="actions">
+        <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+      </div>
+    </div>
+  </div>
+  <div class="term-wrapper">
+    <div id="term" class="term"></div>
+  </div>
+</div>
 <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
 <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
 <script>
@@ -32,9 +43,22 @@
   ws.onclose = () => {
     term.write('\r\n\x1b[31m[Connection closed — refresh to reconnect]\x1b[0m\r\n');
   };
+  const encoder = new TextEncoder();
   term.onData(d => {
-    const enc = new TextEncoder();
-    ws.send(enc.encode(d));
+    ws.send(encoder.encode(d));
+  });
+
+  term.attachCustomKeyEventHandler(ev => {
+    if (ev.ctrlKey && ev.key && ev.key.toLowerCase() === 't') {
+      ws.send(encoder.encode(String.fromCharCode(20)));
+      ev.preventDefault();
+      return false;
+    }
+    return true;
+  });
+
+  window.addEventListener('resize', () => {
+    term.fit?.();
   });
 </script>
 {% endblock %}

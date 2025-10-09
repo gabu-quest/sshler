@@ -22,10 +22,10 @@
       {% set target_path = (directory_path.rstrip('/') ~ '/' ~ entry.name) if directory_path != '/' else '/' ~ entry.name %}
       <td>
         {% if entry.is_directory %}
-          <a hx-get="/box/{{ box.name }}/ls?path={{ target_path|urlencode }}"
+          <a class="dir-link" hx-get="/box/{{ box.name }}/ls?path={{ target_path|urlencode }}"
              hx-target="#browser" hx-swap="innerHTML">{{ entry.name }}</a>
         {% else %}
-          {{ entry.name }}
+          <span class="dir-label">{{ entry.name }}</span>
         {% endif %}
       </td>
       <td>{{ "dir" if entry.is_directory else "file" }}</td>
