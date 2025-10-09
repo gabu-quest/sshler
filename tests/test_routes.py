@@ -234,7 +234,7 @@ Host demo
             return self.data
 
     class FakeSFTP:
-        async def open(self, path: str, mode: str):
+        async def open(self, path: str, mode: str, encoding: str | None = None):
             return FakeReader(f"existing-{path}")
 
         async def exit(self):
@@ -293,13 +293,13 @@ Host demo
 
         async def write(self, data):
             self.sink.append(self.path)
-            self.sink.append(data.decode("utf-8"))
+            self.sink.append(data)
 
     class FakeSFTPSave:
         def __init__(self, sink):
             self.sink = sink
 
-        async def open(self, path, mode):
+        async def open(self, path, mode, encoding: str | None = None):
             return FakeWriter(self.sink, path)
 
         async def exit(self):

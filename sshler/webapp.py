@@ -298,8 +298,8 @@ def make_app() -> FastAPI:
 
             sftp_client = await connection.start_sftp_client()
             try:
-                async with await sftp_client.open(file_path, "w") as remote_file:
-                    await remote_file.write(content.encode("utf-8"))
+                async with await sftp_client.open(file_path, "w", encoding="utf-8") as remote_file:
+                    await remote_file.write(content)
             finally:
                 try:
                     await sftp_client.exit()
