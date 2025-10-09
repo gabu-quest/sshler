@@ -135,5 +135,28 @@
       container.appendChild(tab);
     });
   }
+
+  const termElement = document.getElementById('term');
+  termElement.addEventListener('contextmenu', async (event) => {
+    event.preventDefault();
+    const selection = term.getSelection();
+    if (selection) {
+      try {
+        await navigator.clipboard.writeText(selection);
+        term.clearSelection();
+      } catch (err) {
+        console.warn('Clipboard copy failed', err);
+      }
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        ws.send(JSON.stringify({op: 'send', data: text}));
+      }
+    } catch (err) {
+      console.warn('Clipboard paste failed', err);
+    }
+  });
 </script>
 {% endblock %}
