@@ -87,7 +87,7 @@ h1, h2 { margin: 8px 0 12px; }
 .tmux-tab { background: #191d2a; border: 1px solid #2a2f3f; border-radius: 6px; padding: 4px 8px; font-size: 0.85em; color: var(--muted); cursor: pointer; }
 .tmux-tab.active { background: #335dff1c; border-color: #335dff; color: var(--fg); }
 .term-shell { flex: 1; display: flex; gap: 10px; align-items: stretch; }
-.term-toolbar { display: flex; flex-direction: column; gap: 6px; }
-.term-toolbar .btn { width: 120px; text-align: left; }
+.term-toolbar { display: flex; flex-direction: column; gap: 6px; min-width: 130px; }
+.term-toolbar .btn { width: 130px; text-align: left; }
 .term-wrapper { flex: 1; display: flex; }
 .term-wrapper #term { flex: 1; border: 1px solid #2a2f3f; border-radius: 8px; padding: 0; }
