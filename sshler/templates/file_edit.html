@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://unpkg.com/prismjs/themes/prism-tomorrow.css" />
+<link rel="stylesheet" href="https://unpkg.com/codemirror@5.65.16/lib/codemirror.css" />
+<script src="https://unpkg.com/codemirror@5.65.16/lib/codemirror.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/python/python.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/javascript/javascript.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/css/css.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/xml/xml.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/markdown/markdown.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/shell/shell.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/addon/display/placeholder.js"></script>
+{% endblock %}
+{% block content %}
+<div class="file-edit">
+  <div class="file-view__header">
+    <h1>{{ box.name }} — {{ path }}</h1>
+    <div class="actions">
+      <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+      <button class="btn small" id="save-btn">Save</button>
+    </div>
+  </div>
+  <textarea id="editor" class="file-edit__textarea" data-path="{{ path }}">{{ content }}</textarea>
+  <div id="save-status" class="muted small"></div>
+</div>
+<script>
+  const textarea = document.getElementById('editor');
+  const saveStatus = document.getElementById('save-status');
+  const path = textarea.dataset.path;
+  const modeMap = {
+    '.py': 'python',
+    '.js': 'javascript',
+    '.ts': 'javascript',
+    '.json': 'application/json',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+    '.md': 'markdown',
+    '.sh': 'shell',
+    '.bash': 'shell',
+    '.css': 'css',
+    '.html': 'xml'
+  };
+  const ext = path.split('.').pop().toLowerCase();
+  const cm = CodeMirror.fromTextArea(textarea, {
+    mode: modeMap['.' + ext] || 'plaintext',
+    theme: 'default',
+    lineNumbers: true,
+    lineWrapping: true,
+  });
+
+  async function saveFile() {
+    const payload = {
+      path,
+      content: cm.getValue()
+    };
+    saveStatus.textContent = 'Saving...';
+    try {
+      const response = await fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || response.statusText);
+      }
+      saveStatus.textContent = 'Saved ✓';
+      setTimeout(() => saveStatus.textContent = '', 3000);
+    } catch (error) {
+      console.error(error);
+      saveStatus.textContent = `Save failed: ${error.message}`;
+    }
+  }
+
+  document.getElementById('save-btn').addEventListener('click', saveFile);
+</script>
+{% endblock %}

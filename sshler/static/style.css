@@ -71,6 +71,12 @@ h1, h2 { margin: 8px 0 12px; }
 .file-view { display: flex; flex-direction: column; gap: 12px; }
 .file-view__header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .file-view__content { background: #11141f; border: 1px solid #2a2f3f; border-radius: 8px; padding: 12px; overflow: auto; max-height: 70vh; white-space: pre-wrap; word-break: break-word; }
+.file-edit { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 70px); }
+.file-edit__textarea { min-height: 60vh; }
+.CodeMirror { flex: 1; border: 1px solid #2a2f3f; border-radius: 8px; font-size: 0.95em; background: #11141f; color: var(--fg); }
+.CodeMirror-gutters { background: #0d101a; border-right: 1px solid #2a2f3f; }
+.CodeMirror-cursor { border-left: 1px solid #6aa6ff; }
+.file-edit .actions { display: flex; gap: 8px; }
 
 .term-page { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 70px); }
 .term-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }

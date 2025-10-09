@@ -5,6 +5,6 @@
     <h1>{{ box.name }} — {{ path }}</h1>
     <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
   </div>
-  <pre class="file-view__content">{{ content }}</pre>
+  <pre class="file-view__content"><code class="language-{{ syntax_class or 'markup' }}">{{ content }}</code></pre>
 </div>
 {% endblock %}

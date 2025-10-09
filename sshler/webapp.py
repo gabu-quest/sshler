@@ -225,12 +225,81 @@ def make_app() -> FastAPI:
                 "box": box,
                 "path": file_path,
                 "content": content,
+                "syntax_class": _syntax_from_filename(file_path),
                 "app_version": app_version,
             }
             return templates.TemplateResponse(request, "file_view.html", context)
         finally:
             if connection is not None:
                 connection.close()
+
+    @application.api_route(
+        "/box/{name}/edit",
+        methods=["GET", "POST"],
+        response_class=HTMLResponse,
+        response_model=None,
+    )
+    async def edit_file(
+        name: str,
+        request: Request,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse | RedirectResponse:
+        file_path = request.query_params.get("path")
+        if not file_path:
+            raise HTTPException(status_code=400, detail="path required")
+
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        connection = await connect(
+            box.connect_host,
+            box.user,
+            box.port,
+            box.keyfile,
+            box.known_hosts,
+            application_config.ssh_config_path,
+            box.ssh_alias,
+        )
+
+        try:
+            if request.method == "GET":
+                try:
+                    content = await sftp_read_file(connection, file_path, max_bytes=262144)
+                except Exception as exc:
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                context = {
+                    "box": box,
+                    "path": file_path,
+                    "content": content,
+                    "app_version": app_version,
+                }
+                return templates.TemplateResponse(request, "file_edit.html", context)
+
+            payload = await request.json()
+            content = payload.get("content")
+            if content is None:
+                raise HTTPException(status_code=400, detail="Missing content")
+            if len(content.encode("utf-8")) > 262144:
+                raise HTTPException(status_code=400, detail="File exceeds 256KB editing limit")
+
+            sftp_client = await connection.start_sftp_client()
+            try:
+                async with await sftp_client.open(file_path, "w") as remote_file:
+                    await remote_file.write(content.encode("utf-8"))
+            finally:
+                try:
+                    await sftp_client.exit()
+                except Exception:
+                    pass
+            return templates.TemplateResponse(request, "file_edit.html", {
+                "box": box,
+                "path": file_path,
+                "content": content,
+                "app_version": app_version,
+            })
+        finally:
+            connection.close()
 
     @application.post("/box/{name}/fav", response_class=PlainTextResponse)
     async def toggle_favorite(
@@ -541,6 +610,26 @@ def _compute_app_version() -> str:
     except Exception:
         pass
     return " ".join(part for part in parts if part)
+
+
+def _syntax_from_filename(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    mapping = {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".json": "json",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".md": "markdown",
+        ".sh": "bash",
+        ".bash": "bash",
+        ".html": "markup",
+        ".css": "css",
+        ".toml": "toml",
+        ".ini": "ini",
+    }
+    return mapping.get(suffix, "").strip()
 
 
 async def _handle_control_message(
