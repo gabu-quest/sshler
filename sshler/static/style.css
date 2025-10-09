@@ -17,7 +17,9 @@ body.term-view .container { max-width: 100%; padding: 16px 24px; }
 .topbar { display: flex; gap: 12px; padding: 8px 14px; background: #0b0d12; border-bottom: 1px solid #222635; align-items: center;}
 .brand { color: var(--fg); text-decoration: none; font-weight: 700;}
 .version-pill { color: var(--muted); border: 1px solid #2a2f3f; border-radius: 999px; padding: 2px 10px; font-size: 0.8em; }
-.link { color: var(--muted); text-decoration: none; }
+.link, a { color: var(--muted); text-decoration: none; }
+.link:hover, a:hover { color: var(--accent); }
+.link:visited, a:visited { color: var(--muted); }
 .spacer { flex: 1; }
 .container { padding: 20px; max-width: 1100px; margin: 0 auto; }
 

@@ -16,18 +16,21 @@
   <div>
     <h2>Favorites</h2>
     {% if box.favorites %}
-      <ul>
-        {% for f in box.favorites %}
-          <li>
-            <a href="/term?host={{ box.name }}&dir={{ f|urlencode }}" class="btn small">Terminal here</a>
-            <span class="mono">{{ f }}</span>
-            <button class="icon-btn star active"
-                    hx-post="/box/{{ box.name }}/fav?path={{ f|urlencode }}"
-                    hx-swap="none"
-                    aria-label="Remove favorite">★</button>
-          </li>
-        {% endfor %}
-      </ul>
+      <details class="favlist">
+        <summary class="muted">Show Favorites</summary>
+        <ul>
+          {% for f in box.favorites %}
+            <li>
+              <a href="/term?host={{ box.name }}&dir={{ f|urlencode }}" class="btn small">Terminal here</a>
+              <span class="mono">{{ f }}</span>
+              <button class="icon-btn star active"
+                      hx-post="/box/{{ box.name }}/fav?path={{ f|urlencode }}"
+                      hx-swap="none"
+                      aria-label="Remove favorite">★</button>
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
     {% else %}
       <p class="muted">No favorites yet.</p>
     {% endif %}

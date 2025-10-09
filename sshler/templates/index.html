@@ -13,14 +13,14 @@
     <div class="muted tiny">resolves to {{ box.resolved_host }}</div>
     {% endif %}
     {% if box.favorites %}
-    <div class="favlist">
-      <div class="muted">Favorites</div>
+    <details class="favlist">
+      <summary class="muted">Favorites</summary>
       <ul>
         {% for favorite in box.favorites %}
         <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}">{{ favorite }}</a></li>
         {% endfor %}
       </ul>
-    </div>
+    </details>
     {% endif %}
     <div class="actions">
       <a class="btn" href="/box/{{ box.name }}">Open</a>
