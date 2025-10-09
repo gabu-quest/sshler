@@ -5,10 +5,15 @@
 <p>Pick a box to browse and open a terminal. Hosts are imported from your SSH config and any custom boxes you add here.</p>
 <ul class="cards">
   {% for box in configuration.boxes %}
-  <li class="card {{ 'ssh-card' if box.source == 'ssh_config' else 'custom-card' }}">
+  <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}">
     <div class="title">{{ box.name }}</div>
+    {% if box.source == 'local' %}
+    <div class="mono">{{ box.user }}@{{ box.display_host }}</div>
+    <div class="muted small">Local workspace</div>
+    {% else %}
     <div class="mono">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
     <div class="muted small">{{ 'From SSH config' if box.source == 'ssh_config' else 'Custom box' }}</div>
+    {% endif %}
     {% if box.resolved_host and box.resolved_host != box.display_host %}
     <div class="muted tiny">resolves to {{ box.resolved_host }}</div>
     {% endif %}

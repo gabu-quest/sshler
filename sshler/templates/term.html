@@ -6,21 +6,28 @@
 <script src="https://unpkg.com/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
 {% endblock %}
 {% block content %}
+{% set raw_dir = directory.rstrip('/') %}
+{% if raw_dir == '' %}
+  {% set dir_label = '/' %}
+{% else %}
+  {% set dir_label = raw_dir.rsplit('/', 1)[-1] %}
+{% endif %}
 <div class="term-page">
   <div class="term-header">
-    <div>
-      <h1>{{ box.name }} — Terminal</h1>
-      <div class="term-meta">
-        <span>Dir: <span class="mono">{{ directory }}</span> • Session: <span class="mono">{{ session }}</span></span>
+    <div class="term-banner">
+      <div class="term-banner__host">{{ box.name }}</div>
+      <div class="term-banner__primary mono">{{ dir_label }}</div>
+      <div class="term-banner__meta mono">Session: {{ session }}</div>
+      <div class="term-banner__actions">
+        <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
       </div>
-    </div>
-    <div class="term-actions">
-      <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+      <div class="term-banner__path mono">{{ directory }}</div>
     </div>
   </div>
   <div id="tmux-tabs" class="tmux-tabs"></div>
   <div class="term-shell">
     <div class="term-toolbar" id="term-toolbar">
+      <button class="btn secondary small" data-command="escape">Escape</button>
       <button class="btn secondary small" data-command="ctrl-t">Ctrl+T</button>
       <button class="btn secondary small" data-command="split-h">Split %</button>
       <button class="btn secondary small" data-command="split-v">Split "</button>
@@ -30,6 +37,7 @@
       <button class="btn secondary small" data-command="next">Next Window</button>
       <button class="btn secondary small" data-command="prev">Prev Window</button>
       <button class="btn secondary small" data-command="detach">Detach</button>
+      <button class="btn secondary small" data-command="ctrl-c">Ctrl+C</button>
     </div>
     <div class="term-wrapper" id="term-wrapper">
       <div id="term" class="term"></div>
@@ -47,7 +55,15 @@
 </div>
 <script>
   document.body.classList.add('term-view');
-  window.addEventListener('beforeunload', () => document.body.classList.remove('term-view'));
+  if (window.sshlerSetFavicon) {
+    window.sshlerSetFavicon('terminal');
+  }
+  window.addEventListener('beforeunload', () => {
+    document.body.classList.remove('term-view');
+    if (window.sshlerSetFavicon) {
+      window.sshlerSetFavicon('default');
+    }
+  });
 
   const term = new Terminal({cursorBlink: true, convertEol: true, scrollback: 8000});
   const fitAddon = new FitAddon.FitAddon();
@@ -123,6 +139,7 @@
   });
 
   const commandMap = {
+    'escape': {type: 'send', payload: '\u001b'},
     'ctrl-t': {type: 'send', payload: '\u0014'},
     'split-h': {type: 'send', payload: '\u0002%'},
     'split-v': {type: 'send', payload: '\u0002"'},
@@ -131,7 +148,8 @@
     'kill-pane': {type: 'send', payload: '\u0002x'},
     'next': {type: 'send', payload: '\u0002n'},
     'prev': {type: 'send', payload: '\u0002p'},
-    'detach': {type: 'send', payload: '\u0002d'}
+    'detach': {type: 'send', payload: '\u0002d'},
+    'ctrl-c': {type: 'send', payload: '\u0003'}
   };
 
   document.querySelectorAll('.term-toolbar [data-command]').forEach(button => {

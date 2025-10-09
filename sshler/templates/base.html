@@ -6,6 +6,7 @@
     <title>sshler</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" id="favicon-link">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://unpkg.com/prismjs/themes/prism-tomorrow.css" />
     {% block head_extra %}{% endblock %}
@@ -16,6 +17,7 @@
     <script defer src="https://unpkg.com/prismjs/components/prism-yaml.min.js"></script>
   </head>
   <body>
+    <div id="toast-container"></div>
     <header class="topbar">
       <a class="brand" href="/boxes">sshler</a>
       <span class="version-pill">{{ app_version }}</span>
@@ -27,5 +29,52 @@
     <main class="container">
       {% block content %}{% endblock %}
     </main>
+    <script>
+      (function () {
+        const container = document.getElementById('toast-container');
+        const faviconLink = document.getElementById('favicon-link');
+        const FAVICONS = {
+          default: '/static/favicon.svg',
+          terminal: '/static/favicon-terminal.svg',
+        };
+
+        function setFavicon(mode) {
+          if (!faviconLink) {
+            return;
+          }
+          const target = mode === 'terminal' ? FAVICONS.terminal : FAVICONS.default;
+          if (faviconLink.getAttribute('href') !== target) {
+            faviconLink.setAttribute('href', target);
+          }
+        }
+
+        function showToast(message, type) {
+          if (!message) {
+            return;
+          }
+          const toast = document.createElement('div');
+          toast.className = `toast ${type || 'info'}`;
+          toast.textContent = message;
+          container.appendChild(toast);
+          requestAnimationFrame(() => toast.classList.add('visible'));
+          setTimeout(() => {
+            toast.classList.remove('visible');
+            toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+          }, 3600);
+        }
+
+        document.body.addEventListener('dir-action', (event) => {
+          const payload = event.detail && event.detail.value;
+          if (!payload) {
+            return;
+          }
+          const status = payload.status === 'error' ? 'error' : 'success';
+          showToast(payload.message, status);
+        });
+
+        window.sshlerShowToast = showToast;
+        window.sshlerSetFavicon = setFavicon;
+      })();
+    </script>
   </body>
 </html>

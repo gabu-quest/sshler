@@ -5,6 +5,15 @@
     <h1>{{ box.name }} — {{ path }}</h1>
     <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
   </div>
+  {% if image_data %}
+  <div class="image-preview">
+    <img src="data:{{ image_mime }};base64,{{ image_data }}" alt="Preview of {{ path }}">
+  </div>
+  {% elif image_too_large %}
+  <div class="alert error">Image exceeds the {{ image_limit_kb }} KB preview limit.</div>
+  {% endif %}
+  {% if content %}
   <pre class="file-view__content"><code class="language-{{ syntax_class or 'markup' }}">{{ content }}</code></pre>
+  {% endif %}
 </div>
 {% endblock %}

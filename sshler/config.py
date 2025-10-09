@@ -47,6 +47,7 @@ class Box:
     source: str = "custom"
     ssh_alias: str | None = None
     resolved_host: str | None = None
+    transport: str = "ssh"
 
 
 @dataclass
@@ -118,6 +119,7 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
 
     resolved_path = _resolve_ssh_config_path(ssh_config_path)
     boxes = _build_boxes(stored, load_ssh_config(resolved_path))
+    boxes.insert(0, _build_local_box())
     return AppConfig(
         boxes=boxes,
         stored=stored,
@@ -213,6 +215,25 @@ def _build_boxes(stored: dict[str, StoredBox], ssh_hosts: dict[str, HostConfig])
     return boxes
 
 
+def _build_local_box() -> Box:
+    home_directory = str(Path.home())
+    return Box(
+        name="local",
+        connect_host="local",
+        display_host="localhost",
+        user=_default_user(),
+        port=0,
+        agent=False,
+        favorites=[],
+        default_dir=home_directory,
+        known_hosts=None,
+        source="local",
+        ssh_alias=None,
+        resolved_host=None,
+        transport="local",
+    )
+
+
 def _merge_host(
     name: str, host_config: HostConfig | None, stored_override: StoredBox | None
 ) -> Box:
@@ -271,6 +292,7 @@ def _merge_host(
         source=source,
         ssh_alias=ssh_alias,
         resolved_host=resolved_host,
+        transport="ssh",
     )
 
 
