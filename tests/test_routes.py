@@ -144,3 +144,44 @@ Host demo-box
 
     stored = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
     assert stored["boxes"] == []
+
+
+def test_file_preview_route(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        """
+Host demo
+  HostName demo.internal
+  User demo
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+
+    class FakeConnection:
+        def close(self):
+            pass
+
+    async def fake_connect(*_args, **_kwargs):
+        return FakeConnection()
+
+    async def fake_read(_connection, path):
+        return f"content-{path}"
+
+    monkeypatch.setattr("sshler.webapp.connect", fake_connect)
+    monkeypatch.setattr("sshler.webapp.sftp_read_file", fake_read)
+
+    client = TestClient(make_app())
+    try:
+        response = client.get("/box/demo/cat", params={"path": "/etc/os-release"})
+        assert response.status_code == 200
+        assert "content-/etc/os-release" in response.text
+    finally:
+        client.close()

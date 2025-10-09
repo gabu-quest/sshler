@@ -31,7 +31,14 @@ from .config import (
     rebuild_boxes,
     save_config,
 )
-from .ssh import SSHError, connect, open_tmux, sftp_is_directory, sftp_list_directory
+from .ssh import (
+    SSHError,
+    connect,
+    open_tmux,
+    sftp_is_directory,
+    sftp_list_directory,
+    sftp_read_file,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -178,6 +185,49 @@ def make_app() -> FastAPI:
                 "error": error_message,
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
+        finally:
+            if connection is not None:
+                connection.close()
+
+    @application.get("/box/{name}/cat", response_class=HTMLResponse)
+    async def view_file(
+        name: str,
+        request: Request,
+        file_path: str = Query(..., alias="path"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Render a read-only preview of a remote file."""
+
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        connection = None
+        try:
+            connection = await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+            )
+        except SSHError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        try:
+            try:
+                content = await sftp_read_file(connection, file_path)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            context = {
+                "box": box,
+                "path": file_path,
+                "content": content,
+                "app_version": app_version,
+            }
+            return templates.TemplateResponse(request, "file_view.html", context)
         finally:
             if connection is not None:
                 connection.close()

@@ -37,6 +37,8 @@
                   aria-label="Toggle favorite"
                   hx-post="/box/{{ box.name }}/fav?path={{ target_path|urlencode }}"
                   hx-swap="none">{{ '★' if is_favorite else '☆' }}</button>
+        {% else %}
+          <a class="btn small" href="/box/{{ box.name }}/cat?path={{ target_path|urlencode }}" target="_blank">Preview</a>
         {% endif %}
       </td>
     </tr>

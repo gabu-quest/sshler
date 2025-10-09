@@ -182,6 +182,25 @@ async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str)
             pass
 
 
+async def sftp_read_file(
+    connection: asyncssh.SSHClientConnection,
+    path: str,
+    max_bytes: int = 65536,
+) -> str:
+    """Read a text file over SFTP, truncated to ``max_bytes``."""
+
+    sftp_client = await connection.start_sftp_client()
+    try:
+        async with await sftp_client.open(path, "r") as remote_file:
+            data = await remote_file.read(max_bytes)
+        return data.decode("utf-8", errors="replace")
+    finally:
+        try:
+            await sftp_client.exit()
+        except Exception:
+            pass
+
+
 async def _expand_alias(alias: str) -> dict[str, str]:
     process: Process | None = None
     try:

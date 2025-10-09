@@ -9,6 +9,7 @@
 - HTMX-based file browser with “Open Terminal Here”
 - Auto-creates a starter config at first run
 - Honors your OpenSSH aliases; if DNS fails it resolves them via `ssh -G` and you can reset overrides with a single click
+- One-click file previews: view remote files in a new tab without leaving the browser
 
 ## Install (editable)
 
@@ -65,6 +66,8 @@ Hit “Add Box” in the UI to define a host that isn’t in your SSH config (fo
 ### Security note
 
 By default we use your system `known_hosts`. If you **really** want to disable host key checking, set `known_hosts: ignore` for a host.
+
+The web app binds to `127.0.0.1` by default, so traffic never leaves your laptop. If you expose it beyond localhost, terminate TLS in front (nginx/Caddy/etc.) and add authentication—SSH stays encrypted end-to-end, but HTTP should still be protected.
 
 ## Development
 

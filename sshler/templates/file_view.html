@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="file-view">
+  <div class="file-view__header">
+    <h1>{{ box.name }} — {{ path }}</h1>
+    <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+  </div>
+  <pre class="file-view__content">{{ content }}</pre>
+</div>
+{% endblock %}
