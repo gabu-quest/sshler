@@ -5,7 +5,7 @@
 <p>Pick a box to browse and open a terminal. Hosts are imported from your SSH config and any custom boxes you add here.</p>
 <ul class="cards">
   {% for box in configuration.boxes %}
-  <li class="card">
+  <li class="card {{ 'ssh-card' if box.source == 'ssh_config' else 'custom-card' }}">
     <div class="title">{{ box.name }}</div>
     <div class="mono">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
     <div class="muted small">{{ 'From SSH config' if box.source == 'ssh_config' else 'Custom box' }}</div>
@@ -26,6 +26,14 @@
       <a class="btn" href="/box/{{ box.name }}">Open</a>
       {% if box.default_dir %}
       <a class="btn secondary" href="/term?host={{ box.name }}&dir={{ box.default_dir|urlencode }}">Terminal</a>
+      {% endif %}
+      {% if box.source == 'ssh_config' %}
+      <button class="btn secondary small"
+              hx-post="/box/{{ box.name }}/refresh"
+              hx-swap="none"
+              hx-on::after-request="window.location.reload()">
+        Refresh
+      </button>
       {% endif %}
     </div>
   </li>

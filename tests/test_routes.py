@@ -100,3 +100,47 @@ def test_create_box_route_persists_data(monkeypatch, tmp_path):
             "default_dir": "/srv",
         }
     ]
+
+
+def test_refresh_box_clears_overrides(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "boxes": [
+                    {
+                        "name": "demo-box",
+                        "host": "stale-host",
+                        "user": "override",
+                        "ssh_alias": "override-alias",
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        """
+Host demo-box
+  HostName fresh.example
+  User deploy
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+
+    client = TestClient(make_app())
+    try:
+        response = client.post("/box/demo-box/refresh")
+        assert response.status_code == 200
+        assert response.text == "ok"
+    finally:
+        client.close()
+
+    stored = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
+    assert stored["boxes"] == []

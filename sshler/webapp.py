@@ -267,6 +267,43 @@ def make_app() -> FastAPI:
         save_config(application_config)
         return RedirectResponse(url="/boxes", status_code=303)
 
+    @application.post("/box/{name}/refresh", response_class=PlainTextResponse)
+    async def refresh_box(
+        name: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> str:
+        """Remove connection overrides so SSH config values apply."""
+
+        stored_override = application_config.stored.get(name)
+        if stored_override is None:
+            return "ok"
+
+        stored_override.host = None
+        stored_override.user = None
+        stored_override.port = None
+        stored_override.keyfile = None
+        stored_override.known_hosts = None
+        stored_override.ssh_alias = None
+
+        if not any(
+            [
+                stored_override.host,
+                stored_override.user,
+                stored_override.port,
+                stored_override.keyfile,
+                stored_override.known_hosts,
+                stored_override.ssh_alias,
+                stored_override.favorites,
+                stored_override.default_dir,
+                stored_override.agent,
+            ]
+        ):
+            application_config.stored.pop(name, None)
+
+        rebuild_boxes(application_config)
+        save_config(application_config)
+        return "ok"
+
     @application.get("/term", response_class=HTMLResponse)
     async def term_page(
         request: Request,

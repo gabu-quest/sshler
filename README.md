@@ -8,6 +8,7 @@
 - Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it to the browser via WebSocket + xterm.js
 - HTMX-based file browser with “Open Terminal Here”
 - Auto-creates a starter config at first run
+- Honors your OpenSSH aliases; if DNS fails it resolves them via `ssh -G` and you can reset overrides with a single click
 
 ## Install (editable)
 
@@ -52,6 +53,10 @@ boxes:
 
 > Tip: Set `default_dir` if your home path isn’t `/home/<user>`.
 > If you rely on an OpenSSH alias, add `ssh_alias:` and sshler will run `ssh -G` to expand it when DNS fails.
+
+### Resetting overrides
+
+Boxes imported from SSH config show a highlighted border and “Refresh” button. If you change something in `~/.ssh/config`, hit Refresh to drop any stored overrides (host/user/port/key) so the new settings take effect without editing `boxes.yaml`.
 
 ### Adding custom boxes
 

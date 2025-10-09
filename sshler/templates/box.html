@@ -3,6 +3,15 @@
 {% block content %}
 <h1>{{ box.name }}</h1>
 <div class="muted small">{{ box.user }}@{{ box.display_host }} :{{ box.port }}{% if box.resolved_host and box.resolved_host != box.display_host %} • resolves to {{ box.resolved_host }}{% endif %}</div>
+{% if box.source == 'ssh_config' %}
+<div class="muted tiny">Sourced from SSH config &mdash; overrides reset via Refresh.</div>
+<div class="actions">
+  <button class="btn secondary small"
+          hx-post="/box/{{ box.name }}/refresh"
+          hx-swap="none"
+          hx-on::after-request="window.location.reload()">Refresh from SSH config</button>
+</div>
+{% endif %}
 <div class="grid">
   <div>
     <h2>Favorites</h2>

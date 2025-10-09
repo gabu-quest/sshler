@@ -27,6 +27,8 @@ h1, h2 { margin: 8px 0 12px; }
 
 .cards { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 .card { background: var(--card); border: 1px solid #222635; border-radius: 10px; padding: 12px; }
+.card.ssh-card { border-color: #335dff; }
+.card.custom-card { border-color: #2a2f3f; }
 .card .title { font-weight: 700; margin-bottom: 6px; }
 .card .actions { display: flex; gap: 8px; margin-top: 10px; }
 .btn { background: var(--btn); color: var(--fg); border: 1px solid #30364a; padding: 6px 10px; border-radius: 8px; text-decoration: none; cursor: pointer;}
