@@ -20,15 +20,28 @@
   </div>
   <div id="tmux-tabs" class="tmux-tabs"></div>
   <div class="term-shell">
-    <div class="term-toolbar">
+    <div class="term-toolbar" id="term-toolbar">
       <button class="btn secondary small" data-command="ctrl-t">Ctrl+T</button>
       <button class="btn secondary small" data-command="split-h">Split %</button>
       <button class="btn secondary small" data-command="split-v">Split "</button>
-      <button class="btn secondary small" data-command="next">Next</button>
-      <button class="btn secondary small" data-command="prev">Prev</button>
+      <button class="btn secondary small" data-command="new-window">New Window</button>
+      <button class="btn secondary small" data-command="rename-window">Rename Window</button>
+      <button class="btn secondary small" data-command="kill-pane">Kill Pane</button>
+      <button class="btn secondary small" data-command="next">Next Window</button>
+      <button class="btn secondary small" data-command="prev">Prev Window</button>
+      <button class="btn secondary small" data-command="detach">Detach</button>
     </div>
-    <div class="term-wrapper">
+    <div class="term-wrapper" id="term-wrapper">
       <div id="term" class="term"></div>
+    </div>
+    <div class="file-panel hidden" id="file-panel">
+      <div id="file-browser"
+           hx-get="/box/{{ box.name }}/ls?path={{ directory|urlencode }}"
+           hx-trigger="revealed"
+           hx-target="#file-browser"
+           hx-swap="innerHTML">
+        <div class="muted">Loading files…</div>
+      </div>
     </div>
   </div>
 </div>
@@ -52,6 +65,14 @@
   ws.binaryType = 'arraybuffer';
 
   const encoder = new TextEncoder();
+  const termToolbar = document.getElementById('term-toolbar');
+  const termWrapper = document.getElementById('term-wrapper');
+  const filePanel = document.getElementById('file-panel');
+  const fileBrowser = document.getElementById('file-browser');
+  let filePanelActive = false;
+  let filePanelLoaded = false;
+  let latestWindows = [];
+  let fileTabButton = null;
 
   function sendResize() {
     fitAddon.fit();
@@ -102,38 +123,100 @@
   });
 
   const commandMap = {
-    'ctrl-t': '\u0014',
-    'split-h': '\u0002%',
-    'split-v': '\u0002"',
-    'next': '\u0002n',
-    'prev': '\u0002p'
+    'ctrl-t': {type: 'send', payload: '\u0014'},
+    'split-h': {type: 'send', payload: '\u0002%'},
+    'split-v': {type: 'send', payload: '\u0002"'},
+    'new-window': {type: 'send', payload: '\u0002c'},
+    'rename-window': {type: 'operation', op: 'rename-window'},
+    'kill-pane': {type: 'send', payload: '\u0002x'},
+    'next': {type: 'send', payload: '\u0002n'},
+    'prev': {type: 'send', payload: '\u0002p'},
+    'detach': {type: 'send', payload: '\u0002d'}
   };
 
   document.querySelectorAll('.term-toolbar [data-command]').forEach(button => {
     button.addEventListener('click', () => {
-      const command = button.getAttribute('data-command');
-      const payload = commandMap[command];
-      if (payload) {
-        ws.send(JSON.stringify({op: 'send', data: payload}));
+      const command = button.dataset.command;
+      const config = commandMap[command];
+      if (!config) {
+        return;
+      }
+      if (config.type === 'send') {
+        ws.send(JSON.stringify({op: 'send', data: config.payload}));
+      } else if (config.type === 'operation') {
+        if (config.op === 'rename-window') {
+          const newName = prompt('Rename window to:');
+          if (newName) {
+            ws.send(JSON.stringify({op: 'rename-window', target: newName}));
+          }
+        }
       }
     });
   });
 
-  function renderTabs(windows) {
-    const container = document.getElementById('tmux-tabs');
-    container.innerHTML = '';
-    if (!windows || !windows.length) {
+  function activateTerminalView() {
+    if (!filePanelActive) {
       return;
     }
-    windows.forEach(windowInfo => {
+    filePanelActive = false;
+    termToolbar.classList.remove('hidden');
+    termWrapper.classList.remove('hidden');
+    filePanel.classList.add('hidden');
+    if (fileTabButton) {
+      fileTabButton.classList.remove('active');
+    }
+    fitAddon.fit();
+  }
+
+  function activateFileView() {
+    filePanelActive = true;
+    termToolbar.classList.add('hidden');
+    termWrapper.classList.add('hidden');
+    filePanel.classList.remove('hidden');
+    if (!filePanelLoaded && window.htmx) {
+      window.htmx.trigger(fileBrowser, 'revealed');
+      filePanelLoaded = true;
+    }
+    if (fileTabButton) {
+      fileTabButton.classList.add('active');
+    }
+  }
+
+  function renderTabs(windows) {
+    latestWindows = windows || [];
+    const container = document.getElementById('tmux-tabs');
+    container.innerHTML = '';
+    latestWindows.forEach(windowInfo => {
       const tab = document.createElement('button');
-      tab.className = 'tmux-tab' + (windowInfo.active ? ' active' : '');
+      const isActive = windowInfo.active && !filePanelActive;
+      tab.className = 'tmux-tab' + (isActive ? ' active' : '');
       tab.textContent = `${windowInfo.index}: ${windowInfo.name}`;
       tab.addEventListener('click', () => {
+        activateTerminalView();
         ws.send(JSON.stringify({op: 'select-window', target: windowInfo.index}));
       });
       container.appendChild(tab);
     });
+
+    const separator = document.createElement('span');
+    separator.className = 'tmux-separator';
+    separator.textContent = '|';
+    container.appendChild(separator);
+
+    const filesTab = document.createElement('button');
+    filesTab.className = 'tmux-tab' + (filePanelActive ? ' active' : '');
+    filesTab.textContent = 'Files';
+    filesTab.addEventListener('click', () => {
+      if (filePanelActive) {
+        activateTerminalView();
+        renderTabs(latestWindows);
+      } else {
+        activateFileView();
+        renderTabs(latestWindows);
+      }
+    });
+    container.appendChild(filesTab);
+    fileTabButton = filesTab;
   }
 
   const termElement = document.getElementById('term');

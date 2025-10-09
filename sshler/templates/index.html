@@ -14,10 +14,10 @@
     {% endif %}
     {% if box.favorites %}
     <details class="favlist">
-      <summary class="muted">Favorites</summary>
+      <summary class="favorite-toggle">Favorites</summary>
       <ul>
         {% for favorite in box.favorites %}
-        <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}">{{ favorite }}</a></li>
+        <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}" target="_blank" rel="noopener">{{ favorite }}</a></li>
         {% endfor %}
       </ul>
     </details>

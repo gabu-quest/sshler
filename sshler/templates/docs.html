@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>sshler Quick Reference</h1>
+<ul>
+  <li><strong>Boxes:</strong> Imported from your SSH config or added manually. Refresh an SSH-config box to pick up alias changes.</li>
+  <li><strong>Favorites:</strong> Collapse/expand quick links to directories. They always open in a new terminal tab.</li>
+  <li><strong>Terminal:</strong> Toolbar on the left sends tmux shortcuts; click window tabs or the <em>Files</em> button to jump between tmux and the file explorer.</li>
+  <li><strong>File preview:</strong> Click <em>Preview</em> next to any file to open a read-only Prism-highlighted view.</li>
+  <li><strong>Edit:</strong> Click <em>Edit</em> for inline editing (files &lt; 256&nbsp;KB). Press Save to write changes over SFTP.</li>
+  <li><strong>Clipboard:</strong> Right-click the terminal to copy/paste; Ctrl+T is trapped and sent into tmux.</li>
+  <li><strong>Security:</strong> sshler binds to 127.0.0.1. If you expose it, front it with TLS and add authentication.</li>
+</ul>
+{% endblock %}

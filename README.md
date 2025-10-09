@@ -10,6 +10,7 @@
 - Auto-creates a starter config at first run
 - Honors your OpenSSH aliases; if DNS fails it resolves them via `ssh -G` and you can reset overrides with a single click
 - One-click file previews: view remote files in a new tab without leaving the browser
+- Inline edits for lightweight text files (≤256 KB) with a CodeMirror editor and Save button
 
 ## Install (editable)
 

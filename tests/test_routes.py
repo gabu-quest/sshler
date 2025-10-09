@@ -23,6 +23,13 @@ def test_directory_listing_returns_error_message(monkeypatch):
         monkeypatch.setattr("sshler.webapp.connect", fake_connect)
 
         response = client.get("/box/gabu-server/ls", params={"path": "/home/gabu"})
+        if response.status_code != 200:
+            print('RESPONSE', response.status_code, response.text)
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            raise AssertionError(detail)
         assert response.status_code == 200
         assert "SSH connection failed: boom" in response.text
     finally:
@@ -51,6 +58,12 @@ Host demo-box
     client = TestClient(make_app())
     try:
         response = client.post("/box/demo-box/fav", params={"path": "/tmp"})
+        if response.status_code != 200:
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            raise AssertionError(detail)
         assert response.status_code == 200
         assert response.text == "ok"
     finally:
@@ -177,11 +190,143 @@ Host demo
 
     monkeypatch.setattr("sshler.webapp.connect", fake_connect)
     monkeypatch.setattr("sshler.webapp.sftp_read_file", fake_read)
+    monkeypatch.setattr("sshler.ssh.sftp_read_file", fake_read)
 
     client = TestClient(make_app())
     try:
         response = client.get("/box/demo/cat", params={"path": "/etc/os-release"})
         assert response.status_code == 200
         assert "content-/etc/os-release" in response.text
+    finally:
+        client.close()
+
+
+def test_edit_file_get(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        """
+Host demo
+  HostName demo.internal
+  User demo
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+
+    class FakeReader:
+        def __init__(self, data: str):
+            self.data = data.encode("utf-8")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self, _size: int):
+            return self.data
+
+    class FakeSFTP:
+        async def open(self, path: str, mode: str):
+            return FakeReader(f"existing-{path}")
+
+        async def exit(self):
+            pass
+
+    class FakeConnection:
+        def close(self):
+            pass
+
+        async def start_sftp_client(self):
+            return FakeSFTP()
+
+    async def fake_connect(*_args, **_kwargs):
+        return FakeConnection()
+
+    monkeypatch.setattr("sshler.webapp.connect", fake_connect)
+
+    client = TestClient(make_app())
+    try:
+        response = client.get("/box/demo/edit", params={"path": "/etc/hosts"})
+        assert response.status_code == 200
+        assert "existing-/etc/hosts" in response.text
+    finally:
+        client.close()
+
+
+def test_edit_file_post(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        """
+Host demo
+  HostName demo.internal
+  User demo
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+
+    class FakeWriter:
+        def __init__(self, sink, path):
+            self.sink = sink
+            self.path = path
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def write(self, data):
+            self.sink.append(self.path)
+            self.sink.append(data.decode("utf-8"))
+
+    class FakeSFTPSave:
+        def __init__(self, sink):
+            self.sink = sink
+
+        async def open(self, path, mode):
+            return FakeWriter(self.sink, path)
+
+        async def exit(self):
+            pass
+
+    records = []
+
+    class FakeConnectionSave:
+        def close(self):
+            pass
+
+        async def start_sftp_client(self):
+            return FakeSFTPSave(records)
+
+    async def fake_connect_save(*_args, **_kwargs):
+        return FakeConnectionSave()
+
+    monkeypatch.setattr("sshler.webapp.connect", fake_connect_save)
+
+    client = TestClient(make_app())
+    try:
+        response = client.post(
+            "/box/demo/edit",
+            params={"path": "/etc/hosts"},
+            json={"path": "/etc/hosts", "content": "hello"},
+        )
+        assert response.status_code == 200
+        assert records == ["/etc/hosts", "hello"]
     finally:
         client.close()

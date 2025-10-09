@@ -75,6 +75,15 @@ def make_app() -> FastAPI:
 
         return RedirectResponse(url="/boxes")
 
+    @application.get("/docs", response_class=HTMLResponse)
+    async def docs(request: Request) -> HTMLResponse:
+        """Render simple usage documentation."""
+
+        return templates.TemplateResponse(
+            "docs.html",
+            {"request": request, "app_version": app_version},
+        )
+
     @application.get("/boxes", response_class=HTMLResponse)
     async def boxes(
         request: Request,
@@ -667,6 +676,16 @@ async def _handle_control_message(
         if data:
             try:
                 process.stdin.write(data.encode())
+            except Exception:
+                pass
+    elif operation == "rename-window":
+        new_name = message.get("target")
+        if new_name:
+            try:
+                await connection.run(
+                    f"tmux rename-window -t {shlex.quote(session)} {shlex.quote(str(new_name))}",
+                    check=False,
+                )
             except Exception:
                 pass
 
