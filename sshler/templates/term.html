@@ -36,7 +36,7 @@
     </div>
     <div class="file-panel hidden" id="file-panel">
       <div id="file-browser"
-           hx-get="/box/{{ box.name }}/ls?path={{ directory|urlencode }}"
+           hx-get="/box/{{ box.name }}/ls?path={{ directory|urlencode }}&target=file-browser"
            hx-trigger="revealed"
            hx-target="#file-browser"
            hx-swap="innerHTML">

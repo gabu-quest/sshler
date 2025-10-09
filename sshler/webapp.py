@@ -160,6 +160,8 @@ def make_app() -> FastAPI:
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
 
+        target_id = request.query_params.get("target", "browser")
+
         connection = None
         try:
             connection = await connect(
@@ -177,6 +179,7 @@ def make_app() -> FastAPI:
                 "directory_path": directory_path,
                 "entries": [],
                 "error": f"SSH connection failed: {exc}",
+                "target_id": target_id,
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
 
@@ -192,6 +195,7 @@ def make_app() -> FastAPI:
                 "directory_path": directory_path,
                 "entries": directory_entries,
                 "error": error_message,
+                "target_id": target_id,
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
         finally:

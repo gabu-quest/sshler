@@ -3,6 +3,7 @@
   <span class="mono">{{ directory_path }}</span>
   <a class="btn small" href="/term?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">Open Terminal Here</a>
 </div>
+{% set current_target = target_id if target_id is defined else 'browser' %}
 {% if error %}
 <div class="alert error">{{ error }}</div>
 {% endif %}
@@ -10,9 +11,9 @@
   <thead><tr><th>Name</th><th>Type</th><th>Actions</th></tr></thead>
   <tbody>
     {% set parent_directory = directory_path.rsplit('/', 1)[0] if '/' in directory_path and directory_path != '/' else '/' %}
-    {% if directory_path != '/' %}
+{% if directory_path != '/' %}
     <tr>
-      <td><a hx-get="/box/{{ box.name }}/ls?path={{ parent_directory|urlencode }}" hx-target="#browser" hx-swap="innerHTML">..</a></td>
+      <td><a hx-get="/box/{{ box.name }}/ls?path={{ parent_directory|urlencode }}&target={{ current_target }}" hx-target="#{{ current_target }}" hx-swap="innerHTML">..</a></td>
       <td>parent</td>
       <td></td>
     </tr>
@@ -22,8 +23,8 @@
       {% set target_path = (directory_path.rstrip('/') ~ '/' ~ entry.name) if directory_path != '/' else '/' ~ entry.name %}
       <td>
         {% if entry.is_directory %}
-          <a class="dir-link" hx-get="/box/{{ box.name }}/ls?path={{ target_path|urlencode }}"
-             hx-target="#browser" hx-swap="innerHTML">{{ entry.name }}</a>
+          <a class="dir-link" hx-get="/box/{{ box.name }}/ls?path={{ target_path|urlencode }}&target={{ current_target }}"
+             hx-target="#{{ current_target }}" hx-swap="innerHTML">{{ entry.name }}</a>
         {% else %}
           <span class="dir-label">{{ entry.name }}</span>
         {% endif %}
