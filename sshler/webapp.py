@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -424,14 +426,41 @@ def make_app() -> FastAPI:
             async def writer() -> None:
                 try:
                     while True:
-                        message = await websocket.receive_bytes()
-                        process.stdin.write(message)
+                        message = await websocket.receive()
+                        message_type = message.get("type")
+                        if message_type == "websocket.disconnect":
+                            break
+                        if "text" in message and message["text"] is not None:
+                            await _handle_control_message(
+                                message["text"],
+                                process,
+                                connection,
+                                session,
+                            )
+                        elif "bytes" in message and message["bytes"] is not None:
+                            process.stdin.write(message["bytes"])
                 except WebSocketDisconnect:
                     pass
                 except Exception:
                     pass
 
-            await asyncio.gather(reader(), writer())
+            async def poll_tmux_windows() -> None:
+                try:
+                    while True:
+                        window_payload = await _list_tmux_windows(connection, session)
+                        if window_payload is not None:
+                            await websocket.send_text(
+                                json.dumps({"op": "windows", "windows": window_payload})
+                            )
+                        await asyncio.sleep(2)
+                except Exception:
+                    pass
+
+            poller = asyncio.create_task(poll_tmux_windows())
+            try:
+                await asyncio.gather(reader(), writer(), poller)
+            finally:
+                poller.cancel()
         finally:
             try:
                 if process:
@@ -462,3 +491,71 @@ def _compute_app_version() -> str:
     except Exception:
         pass
     return " ".join(part for part in parts if part)
+
+
+async def _handle_control_message(
+    payload: str,
+    process: asyncssh.SSHClientProcess,
+    connection: asyncssh.SSHClientConnection,
+    session: str,
+) -> None:
+    try:
+        message = json.loads(payload)
+    except json.JSONDecodeError:
+        return
+
+    operation = message.get("op")
+    if operation == "resize":
+        cols = int(message.get("cols", 0) or 0)
+        rows = int(message.get("rows", 0) or 0)
+        if cols > 0 and rows > 0:
+            try:
+                process.set_pty_size(cols, rows)
+            except Exception:
+                pass
+    elif operation == "select-window":
+        target = message.get("target")
+        if target is not None:
+            try:
+                await connection.run(
+                    f"tmux select-window -t {shlex.quote(session)}:{shlex.quote(str(target))}",
+                    check=False,
+                )
+            except Exception:
+                pass
+    elif operation == "send":
+        data = message.get("data")
+        if data:
+            try:
+                process.stdin.write(data.encode())
+            except Exception:
+                pass
+
+
+async def _list_tmux_windows(
+    connection: asyncssh.SSHClientConnection, session: str
+) -> list[dict[str, str]] | None:
+    try:
+        result = await connection.run(
+            "tmux list-windows -F '#{window_index} #{window_name} #{window_active}' -t "
+            f"{shlex.quote(session)}",
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    windows: list[dict[str, str]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) < 3:
+            continue
+        index, name, active = parts
+        windows.append({
+            "index": index,
+            "name": name,
+            "active": active == "1",
+        })
+    return windows

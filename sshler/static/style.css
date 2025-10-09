@@ -67,8 +67,15 @@ h1, h2 { margin: 8px 0 12px; }
 .form-actions { display: flex; gap: 10px; }
 
 .term-page { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 70px); }
-.term-page h1 { margin: 0; font-size: 1.2rem; }
-.term-meta { font-size: 0.85em; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
-.term-meta .actions { display: flex; gap: 6px; }
+.term-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.term-page h1 { margin: 0; font-size: 1.15rem; }
+.term-meta { font-size: 0.85em; color: var(--muted); margin-top: 4px; }
+.term-actions { display: flex; gap: 6px; }
+.tmux-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tmux-tab { background: #191d2a; border: 1px solid #2a2f3f; border-radius: 6px; padding: 4px 8px; font-size: 0.85em; color: var(--muted); cursor: pointer; }
+.tmux-tab.active { background: #335dff1c; border-color: #335dff; color: var(--fg); }
+.term-shell { flex: 1; display: flex; gap: 10px; align-items: stretch; }
+.term-toolbar { display: flex; flex-direction: column; gap: 6px; }
+.term-toolbar .btn { width: 120px; text-align: left; }
 .term-wrapper { flex: 1; display: flex; }
 .term-wrapper #term { flex: 1; border: 1px solid #2a2f3f; border-radius: 8px; padding: 0; }

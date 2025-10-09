@@ -1,64 +1,139 @@
 
 {% extends "base.html" %}
-{% block content %}
-<div class="term-page">
-  <div>
-    <h1>{{ box.name }} — Terminal</h1>
-    <div class="term-meta">
-      <span>Dir: <span class="mono">{{ directory }}</span> • Session: <span class="mono">{{ session }}</span></span>
-      <div class="actions">
-        <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
-      </div>
-    </div>
-  </div>
-  <div class="term-wrapper">
-    <div id="term" class="term"></div>
-  </div>
-</div>
+{% block head_extra %}
 <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
 <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+<script src="https://unpkg.com/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+{% endblock %}
+{% block content %}
+<div class="term-page">
+  <div class="term-header">
+    <div>
+      <h1>{{ box.name }} — Terminal</h1>
+      <div class="term-meta">
+        <span>Dir: <span class="mono">{{ directory }}</span> • Session: <span class="mono">{{ session }}</span></span>
+      </div>
+    </div>
+    <div class="term-actions">
+      <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+    </div>
+  </div>
+  <div id="tmux-tabs" class="tmux-tabs"></div>
+  <div class="term-shell">
+    <div class="term-toolbar">
+      <button class="btn secondary small" data-command="ctrl-t">Ctrl+T</button>
+      <button class="btn secondary small" data-command="split-h">Split %</button>
+      <button class="btn secondary small" data-command="split-v">Split "</button>
+      <button class="btn secondary small" data-command="next">Next</button>
+      <button class="btn secondary small" data-command="prev">Prev</button>
+    </div>
+    <div class="term-wrapper">
+      <div id="term" class="term"></div>
+    </div>
+  </div>
+</div>
 <script>
-  const term = new Terminal({cursorBlink: true, convertEol: true});
+  document.body.classList.add('term-view');
+  window.addEventListener('beforeunload', () => document.body.classList.remove('term-view'));
+
+  const term = new Terminal({cursorBlink: true, convertEol: true, scrollback: 8000});
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
   term.open(document.getElementById('term'));
+  fitAddon.fit();
+
   const url = new URL(window.location.href);
   const host = url.searchParams.get('host');
   const dir = url.searchParams.get('dir');
   const session = url.searchParams.get('session') || '{{ session }}';
-  const cols = {{ cols }}; const rows = {{ rows }};
   const wsProto = (location.protocol === 'https:' ? 'wss://' : 'ws://');
-  const wsUrl = wsProto + location.host + `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(dir)}&session=${encodeURIComponent(session)}&cols=${cols}&rows=${rows}`;
+  const wsUrl = wsProto + location.host + `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(dir)}&session=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}`;
   const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
 
+  const encoder = new TextEncoder();
+
+  function sendResize() {
+    fitAddon.fit();
+    ws.send(JSON.stringify({op: 'resize', cols: term.cols, rows: term.rows}));
+  }
+
   ws.onopen = () => {
     term.focus();
+    sendResize();
   };
+
   ws.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) {
-      term.write(new Uint8Array(ev.data));
-    } else {
+    if (typeof ev.data === 'string') {
+      try {
+        const message = JSON.parse(ev.data);
+        if (message.op === 'windows') {
+          renderTabs(message.windows);
+          return;
+        }
+      } catch (err) {
+        term.write(ev.data);
+        return;
+      }
       term.write(ev.data);
+    } else if (ev.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(ev.data));
     }
   };
+
   ws.onclose = () => {
     term.write('\r\n\x1b[31m[Connection closed — refresh to reconnect]\x1b[0m\r\n');
   };
-  const encoder = new TextEncoder();
-  term.onData(d => {
-    ws.send(encoder.encode(d));
+
+  term.onData(data => {
+    ws.send(encoder.encode(data));
   });
 
   term.attachCustomKeyEventHandler(ev => {
     if (ev.ctrlKey && ev.key && ev.key.toLowerCase() === 't') {
-      ws.send(encoder.encode(String.fromCharCode(20)));
-      ev.preventDefault();
+      ws.send(JSON.stringify({op: 'send', data: '\u0014'}));
       return false;
     }
     return true;
   });
 
   window.addEventListener('resize', () => {
-    term.fit?.();
+    sendResize();
   });
+
+  const commandMap = {
+    'ctrl-t': '\u0014',
+    'split-h': '\u0002%',
+    'split-v': '\u0002"',
+    'next': '\u0002n',
+    'prev': '\u0002p'
+  };
+
+  document.querySelectorAll('.term-toolbar [data-command]').forEach(button => {
+    button.addEventListener('click', () => {
+      const command = button.getAttribute('data-command');
+      const payload = commandMap[command];
+      if (payload) {
+        ws.send(JSON.stringify({op: 'send', data: payload}));
+      }
+    });
+  });
+
+  function renderTabs(windows) {
+    const container = document.getElementById('tmux-tabs');
+    container.innerHTML = '';
+    if (!windows || !windows.length) {
+      return;
+    }
+    windows.forEach(windowInfo => {
+      const tab = document.createElement('button');
+      tab.className = 'tmux-tab' + (windowInfo.active ? ' active' : '');
+      tab.textContent = `${windowInfo.index}: ${windowInfo.name}`;
+      tab.addEventListener('click', () => {
+        ws.send(JSON.stringify({op: 'select-window', target: windowInfo.index}));
+      });
+      container.appendChild(tab);
+    });
+  }
 </script>
 {% endblock %}
