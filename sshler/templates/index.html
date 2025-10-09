@@ -9,6 +9,9 @@
     <div class="title">{{ box.name }}</div>
     <div class="mono">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
     <div class="muted small">{{ 'From SSH config' if box.source == 'ssh_config' else 'Custom box' }}</div>
+    {% if box.resolved_host and box.resolved_host != box.display_host %}
+    <div class="muted tiny">resolves to {{ box.resolved_host }}</div>
+    {% endif %}
     {% if box.favorites %}
     <div class="favlist">
       <div class="muted">Favorites</div>

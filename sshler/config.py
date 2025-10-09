@@ -46,6 +46,7 @@ class Box:
     known_hosts: str | None = None
     source: str = "custom"
     ssh_alias: str | None = None
+    resolved_host: str | None = None
 
 
 @dataclass
@@ -224,8 +225,6 @@ def _merge_host(
 
     if stored_override and stored_override.host:
         display_host = stored_override.host
-    elif host_config and host_config.hostname:
-        display_host = host_config.hostname
     else:
         display_host = name
 
@@ -233,6 +232,8 @@ def _merge_host(
         ssh_alias = stored_override.ssh_alias
     else:
         ssh_alias = name
+
+    resolved_host = host_config.hostname if host_config and host_config.hostname else None
 
     base_user = stored_override.user if stored_override and stored_override.user else None
     if base_user is None and host_config and host_config.user:
@@ -269,6 +270,7 @@ def _merge_host(
         known_hosts=known_hosts,
         source=source,
         ssh_alias=ssh_alias,
+        resolved_host=resolved_host,
     )
 
 
