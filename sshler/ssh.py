@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import shlex
+import socket
+from asyncio.subprocess import Process
 
 import asyncssh
 
@@ -16,6 +20,7 @@ async def connect(
     keyfile: str | None = None,
     known_hosts: str | None = None,
     ssh_config_path: str | None = None,
+    ssh_alias: str | None = None,
 ) -> asyncssh.SSHClientConnection:
     """Establish an SSH connection using asyncssh.
 
@@ -38,12 +43,40 @@ async def connect(
     else:
         known_hosts_path = known_hosts
 
+    connect_host = host
+    connect_user = user
+    connect_port = port
+    connect_keyfile = keyfile
+
+    if ssh_alias and not _is_resolvable(connect_host):
+        alias_data = await _expand_alias(ssh_alias)
+        resolved_host = alias_data.get("hostname")
+        if resolved_host:
+            connect_host = resolved_host
+            if alias_data.get("user") and not connect_user:
+                connect_user = alias_data["user"]
+            try:
+                connect_port = int(alias_data.get("port") or connect_port)
+            except (TypeError, ValueError):
+                pass
+            if not connect_keyfile and alias_data.get("identityfile"):
+                connect_keyfile = alias_data["identityfile"]
+            LOGGER.info(
+                "Resolved SSH alias %s -> host=%s port=%s user=%s",
+                ssh_alias,
+                connect_host,
+                connect_port,
+                connect_user,
+            )
+        else:
+            LOGGER.warning("Failed to resolve SSH alias %s; falling back to %s", ssh_alias, host)
+
     try:
         connection = await asyncssh.connect(
-            host=host,
-            port=port,
-            username=user,
-            client_keys=[keyfile] if keyfile else None,
+            host=connect_host,
+            port=connect_port,
+            username=connect_user,
+            client_keys=[connect_keyfile] if connect_keyfile else None,
             known_hosts=known_hosts_path,
             config=[ssh_config_path] if ssh_config_path else None,
         )
@@ -147,3 +180,45 @@ async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str)
             await sftp_client.exit()
         except Exception:
             pass
+
+
+async def _expand_alias(alias: str) -> dict[str, str]:
+    process: Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ssh",
+            "-G",
+            alias,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception:
+        return {}
+
+    stdout, _ = await process.communicate()
+    if process.returncode != 0:
+        return {}
+
+    data: dict[str, str] = {}
+    for line in stdout.decode().splitlines():
+        key, _, value = line.partition(" ")
+        if key and value:
+            data[key.strip().lower()] = value.strip()
+
+    return {
+        "hostname": data.get("hostname"),
+        "user": data.get("user"),
+        "port": data.get("port"),
+        "identityfile": data.get("identityfile"),
+    }
+
+
+def _is_resolvable(name: str) -> bool:
+    try:
+        socket.getaddrinfo(name, None)
+        return True
+    except OSError:
+        return False
+
+
+LOGGER = logging.getLogger(__name__)

@@ -151,6 +151,7 @@ def make_app() -> FastAPI:
                 box.keyfile,
                 box.known_hosts,
                 application_config.ssh_config_path,
+                box.ssh_alias,
             )
         except SSHError as exc:
             context = {
@@ -233,6 +234,7 @@ def make_app() -> FastAPI:
         user: str = Form(""),
         port: int = Form(22),
         keyfile: str = Form(""),
+        ssh_alias: str = Form(""),
         default_dir: str = Form(""),
         favorites: str = Form(""),
         known_hosts: str = Form(""),
@@ -256,6 +258,7 @@ def make_app() -> FastAPI:
             favorites=favorites_list,
             default_dir=default_dir.strip() or None,
             known_hosts=known_hosts.strip() or None,
+            ssh_alias=ssh_alias.strip() or None,
         )
 
         application_config = load_config()
@@ -346,6 +349,7 @@ def make_app() -> FastAPI:
                 box.keyfile,
                 box.known_hosts,
                 application_config.ssh_config_path,
+                box.ssh_alias,
             )
         except Exception as exc:  # pragma: no cover - network errors are environment specific
             await websocket.send_text(f"Connection failed: {exc}")

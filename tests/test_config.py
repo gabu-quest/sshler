@@ -51,11 +51,13 @@ Host merged-box
     assert merged.user == "deploy"
     assert merged.port == 2201
     assert merged.source == "ssh_config"
+    assert merged.ssh_alias == "merged-box"
     custom = names["custom-only"]
     assert custom.display_host == "10.0.0.5"
     assert custom.connect_host == "10.0.0.5"
     assert custom.source == "custom"
     assert custom.favorites == ["/var/www"]
+    assert custom.ssh_alias == "custom-only"
 
 
 def test_legacy_seed_favorites_are_cleared(tmp_path, monkeypatch):

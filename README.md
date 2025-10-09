@@ -38,7 +38,8 @@ Example:
 ```yaml
 boxes:
   - name: gabu-server
-    host: example.tailnet.ts.net
+    host: example.tailnet.ts.net  # literal IP/FQDN or keep as placeholder
+    ssh_alias: gabu-server        # optional: resolves via `ssh -G gabu-server`
     user: gabu
     port: 22
     keyfile: "C:/Users/gabu/.ssh/id_ed25519"
@@ -50,6 +51,7 @@ boxes:
 ```
 
 > Tip: Set `default_dir` if your home path isn’t `/home/<user>`.
+> If you rely on an OpenSSH alias, add `ssh_alias:` and sshler will run `ssh -G` to expand it when DNS fails.
 
 ### Adding custom boxes
 

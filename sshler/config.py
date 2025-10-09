@@ -27,6 +27,7 @@ class StoredBox:
     favorites: list[str] = field(default_factory=list)
     default_dir: str | None = None
     known_hosts: str | None = None
+    ssh_alias: str | None = None
 
 
 @dataclass
@@ -44,6 +45,7 @@ class Box:
     default_dir: str | None = None
     known_hosts: str | None = None
     source: str = "custom"
+    ssh_alias: str | None = None
 
 
 @dataclass
@@ -166,6 +168,7 @@ def _stored_box_from_dict(data: dict[str, Any]) -> StoredBox:
         favorites=list(favorites),
         default_dir=data.get("default_dir"),
         known_hosts=data.get("known_hosts"),
+        ssh_alias=data.get("ssh_alias"),
     )
 
 
@@ -187,6 +190,8 @@ def _stored_box_to_dict(stored: StoredBox) -> dict[str, Any]:
         result["default_dir"] = stored.default_dir
     if stored.known_hosts:
         result["known_hosts"] = stored.known_hosts
+    if stored.ssh_alias:
+        result["ssh_alias"] = stored.ssh_alias
     return result
 
 
@@ -224,6 +229,11 @@ def _merge_host(
     else:
         display_host = name
 
+    if stored_override and stored_override.ssh_alias:
+        ssh_alias = stored_override.ssh_alias
+    else:
+        ssh_alias = name
+
     base_user = stored_override.user if stored_override and stored_override.user else None
     if base_user is None and host_config and host_config.user:
         base_user = host_config.user
@@ -258,6 +268,7 @@ def _merge_host(
         default_dir=default_dir,
         known_hosts=known_hosts,
         source=source,
+        ssh_alias=ssh_alias,
     )
 
 
