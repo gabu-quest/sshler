@@ -54,6 +54,10 @@
   </div>
 </div>
 <script>
+  const termTitle = {{ dir_label|tojson }};
+  if (termTitle) {
+    document.title = `${termTitle} — sshler`;
+  }
   document.body.classList.add('term-view');
   if (window.sshlerSetFavicon) {
     window.sshlerSetFavicon('terminal');
