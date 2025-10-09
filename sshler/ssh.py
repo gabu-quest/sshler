@@ -12,7 +12,16 @@ import asyncssh
 
 
 class SSHError(Exception):
-    """Raised when an SSH connection or command fails."""
+    """Raised when an SSH connection or command fails.
+
+    English:
+        Wrapper exception used throughout sshler so callers can handle errors
+        without depending directly on ``asyncssh`` internals.
+
+    日本語:
+        ``asyncssh`` の詳細に依存せずに呼び出し側が例外処理できるようにするための
+        ラッパー例外です。
+    """
 
 
 async def connect(
@@ -27,12 +36,23 @@ async def connect(
 ) -> asyncssh.SSHClientConnection:
     """Establish an SSH connection using asyncssh.
 
+    English:
+        Opens a connection to ``host`` with sensible defaults and optional
+        alias expansion. Errors are normalised to :class:`SSHError`.
+
+    日本語:
+        ``host`` への SSH 接続を確立します。必要に応じてエイリアス解決を行い、
+        失敗した場合は :class:`SSHError` として補足します。
+
     Args:
         host: Target host to reach.
         user: Username used for the SSH session.
         port: SSH port exposed by the host.
         keyfile: Optional explicit private-key path.
         known_hosts: Known-hosts override or ``"ignore"`` to disable checks.
+        ssh_config_path: Optional SSH config location.
+        ssh_alias: Alias name to expand via ``ssh -G`` when DNS fails.
+        allow_alias: Whether alias expansion is permitted.
 
     Returns:
         asyncssh.SSHClientConnection: Live SSH connection instance.
@@ -99,6 +119,14 @@ async def open_tmux(
 ) -> asyncssh.SSHClientProcess:
     """Launch or attach to a tmux session on the remote host.
 
+    English:
+        Spawns ``tmux new -As`` ensuring the session name is safe and returning
+        the running process object.
+
+    日本語:
+        ``tmux new -As`` コマンドを発行し、セッション名を安全な形式に整えてプロセス
+        オブジェクトを返します。
+
     Args:
         connection: Active SSH connection.
         working_directory: Working directory for the tmux session.
@@ -129,6 +157,14 @@ async def sftp_list_directory(
     connection: asyncssh.SSHClientConnection, path: str
 ) -> list[dict[str, object]]:
     """Return directory entries for ``path`` via SFTP.
+
+    English:
+        Lists children of ``path`` and records whether each entry is a
+        directory before sorting directories first.
+
+    日本語:
+        指定された ``path`` の子要素を列挙し、ディレクトリかどうかの情報とともに
+        取得してディレクトリを先頭に並べ替えます。
 
     Args:
         connection: Active SSH connection used to start SFTP.
@@ -166,6 +202,12 @@ async def sftp_list_directory(
 async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str) -> bool:
     """Return whether ``path`` resolves to a directory via SFTP.
 
+    English:
+        Performs an ``sftp.stat`` call and inspects the directory bit.
+
+    日本語:
+        ``sftp.stat`` を実行してディレクトリかどうかを判定します。
+
     Args:
         connection: Active SSH connection used to start SFTP.
         path: Remote path to probe.
@@ -190,7 +232,16 @@ async def sftp_read_file(
     path: str,
     max_bytes: int = 65536,
 ) -> str:
-    """Read a text file over SFTP, truncated to ``max_bytes``."""
+    """Read a text file over SFTP, truncated to ``max_bytes``.
+
+    English:
+        Opens the remote file, reads up to ``max_bytes`` bytes, and returns a
+        UTF-8 string with replacement for undecodable bytes.
+
+    日本語:
+        リモートファイルを開いて最大 ``max_bytes`` バイトまで読み込み、UTF-8 文字列
+        として返します（復号できないバイトは置換します）。
+    """
 
     sftp_client = await connection.start_sftp_client()
     try:
@@ -238,6 +289,16 @@ async def _expand_alias(alias: str) -> dict[str, str]:
 
 
 def _is_resolvable(name: str) -> bool:
+    """Return whether ``name`` resolves via DNS/system hosts.
+
+    English:
+        Lightweight guard to decide if ``ssh -G`` alias expansion is needed.
+
+    日本語:
+        DNS や hosts ファイルで名前解決できるかを確認し、エイリアス解決が必要かどうかを
+        判定します。
+    """
+
     try:
         socket.getaddrinfo(name, None)
         return True
@@ -246,6 +307,17 @@ def _is_resolvable(name: str) -> bool:
 
 
 def _ssh_command() -> str:
+    """Return the preferred ``ssh`` executable path for the current OS.
+
+    English:
+        On Windows the system OpenSSH path is used to avoid PATH hijacking;
+        otherwise ``ssh`` from the user's PATH is returned.
+
+    日本語:
+        Windows では PATH 乗っ取りを避けるためにシステムの OpenSSH を優先し、
+        それ以外ではユーザーの PATH にある ``ssh`` を利用します。
+    """
+
     if os.name == "nt":
         system_root = os.environ.get("SystemRoot", "C:\\Windows")
         candidate = Path(system_root) / "System32" / "OpenSSH" / "ssh.exe"

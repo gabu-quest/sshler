@@ -43,7 +43,7 @@ Host merged-box
     config = load_config()
     names = {box.name: box for box in config.boxes}
 
-    assert set(names) == {"custom-only", "merged-box"}
+    assert {"local", "custom-only", "merged-box"}.issubset(set(names))
     merged = names["merged-box"]
     assert isinstance(merged, Box)
     assert merged.display_host == "merged-box"
@@ -60,6 +60,10 @@ Host merged-box
     assert custom.favorites == ["/var/www"]
     assert custom.ssh_alias == "custom-only"
     assert custom.resolved_host is None
+
+    local = names["local"]
+    assert isinstance(local, Box)
+    assert local.transport == "local"
 
 
 def test_legacy_seed_favorites_are_cleared(tmp_path, monkeypatch):

@@ -1,26 +1,43 @@
 
-# sshler
+# sshler / エスエスエイチラー
 
-**sshler** is a lightweight, local-only web UI which lets you browse remote files over SFTP and jump into tmux sessions in your browser — without installing anything on your server.
+**English:** sshler is a lightweight, local-only web UI that lets you browse remote
+files over SFTP and jump into tmux sessions in your browser — without installing
+anything on the remote host.
+
+**日本語:** sshler はローカル専用の軽量 Web UI で、リモートファイルを SFTP で閲覧したり、
+ブラウザ上で tmux セッションに接続したりできます。リモート側に追加ソフトを
+インストールする必要はありません。
 
 - Runs on your Windows 11 laptop (or any OS with Python)
+  - **日本語:** Windows 11 を含む Python が動く環境ならどこでも動作します。
 - Includes a "local" workspace card so you can browse your own filesystem and launch WSL-backed tmux sessions alongside remote hosts
+  - **日本語:** ローカルワークスペースカードを備え、ローカル/WSL のファイルや tmux も同じ UI で扱えます。
 - Uses your existing SSH keys
+  - **日本語:** 既存の SSH 鍵をそのまま利用します。
 - Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it to the browser via WebSocket + xterm.js
+  - **日本語:** リモートで `tmux new -As <session> -c <dir>` を実行し、WebSocket と xterm.js でブラウザに橋渡しします。
 - HTMX-based file browser with “Open Terminal Here”
+  - **日本語:** HTMX 製のファイルブラウザから「このディレクトリで端末を開く」がワンクリックで可能です。
 - Auto-creates a starter config at first run
+  - **日本語:** 初回起動時に自動で設定ファイルを生成します。
 - Honors your OpenSSH aliases; if DNS fails it resolves them via `ssh -G` and you can reset overrides with a single click
+  - **日本語:** OpenSSH のエイリアスを解釈し、DNS 解決に失敗した場合でも `ssh -G` で補完します。ワンクリックで上書きをリセットできます。
 - One-click file previews: view remote files in a new tab without leaving the browser
+  - **日本語:** ワンクリックでプレビュー表示。ブラウザを離れずに内容確認できます。
 - Inline edits for lightweight text files (≤256 KB) with a CodeMirror editor and Save button
+  - **日本語:** 256 KB 以下のテキストならブラウザ内で編集し、その場で保存できます。
 
-## Install (editable)
+## Install (editable) / インストール（開発用）
 
 ```bash
 uv pip install -e .
 # or: pip install -e .
 ```
 
-## Run
+- **日本語:** 開発時は上記のように editable install を利用してください。
+
+## Run / 実行
 
 ```bash
 sshler serve
@@ -28,9 +45,13 @@ sshler serve
 
 The app will open `http://127.0.0.1:8822` in your default browser.
 
-## Configuration
+- **日本語:** 上記を実行するとデフォルトブラウザで `http://127.0.0.1:8822` が開きます。
+
+## Configuration / 設定
 
 sshler reads your existing OpenSSH config (`~/.ssh/config`) and shows every concrete `Host` entry automatically. Any favourites, default directories, or custom hosts you add through the UI are stored in a companion YAML file.
+
+- **日本語:** OpenSSH の設定 (`~/.ssh/config`) を読み取り、すべての `Host` が自動的に一覧に表示されます。お気に入りやデフォルトディレクトリ、カスタムホストは付属の YAML に保存されます。
 
 A config file is created on first run:
 
@@ -57,13 +78,19 @@ boxes:
 > Tip: Set `default_dir` if your home path isn’t `/home/<user>`.
 > If you rely on an OpenSSH alias, add `ssh_alias:` and sshler will run `ssh -G` to expand it when DNS fails.
 
-### Resetting overrides
+- **日本語のヒント:** ホームディレクトリが `/home/<user>` 以外なら `default_dir` を設定してください。OpenSSH のエイリアスを利用する場合は `ssh_alias:` を追加すると、DNS 失敗時に `ssh -G` で解決します。
+
+### Resetting overrides / 上書き設定のリセット
 
 Boxes imported from SSH config show a highlighted border and “Refresh” button. If you change something in `~/.ssh/config`, hit Refresh to drop any stored overrides (host/user/port/key) so the new settings take effect without editing `boxes.yaml`.
 
-### Adding custom boxes
+- **日本語:** SSH 設定から取り込まれたボックスは枠が強調表示され、「Refresh」ボタンで上書き設定を削除できます。`~/.ssh/config` を更新した際はボタンを押すだけで最新状態になります。
+
+### Adding custom boxes / カスタムボックスの追加
 
 Hit “Add Box” in the UI to define a host that isn’t in your SSH config (for example, a throwaway Docker container). Fields you leave blank fall back to your SSH defaults.
+
+- **日本語:** UI の “Add Box” から SSH 設定に存在しないホストも追加できます（例: 一時的な Docker コンテナ）。未入力の項目は SSH のデフォルト値が使われます。
 
 ### Security model (important)
 
@@ -95,6 +122,8 @@ sshler serve \
 
 The server prints the token (and, if enabled, the basic auth username) on startup so you can copy it into API clients or browser extensions.
 
+- **日本語:** サーバー起動時にトークン（および Basic 認証を有効にした場合はユーザー名）を表示するので、API クライアントやブラウザ拡張に貼り付けて利用できます。
+
 ### Dependencies & licenses
 
 - FastAPI, uvicorn, asyncssh, platformdirs, yaml (PyPI packages, permissive licenses)
@@ -103,7 +132,9 @@ The server prints the token (and, if enabled, the basic auth username) on startu
 
 All assets are used under their respective MIT/BSD-style licenses. sshler itself ships under the MIT license.
 
-## Development
+- **日本語:** 依存ライブラリはいずれも寛容なライセンス (MIT/BSD) で提供されています。sshler 本体も MIT ライセンスで配布されます。
+
+## Development / 開発
 
 ```bash
 # install dependencies (project + dev extras)
@@ -117,6 +148,10 @@ uv run ruff format .
 uv run pytest
 ```
 
-## Why “sshler”?
+- **日本語:** 上記コマンドで依存関係のインストール、Lint/整形、テスト実行が行えます。
 
-Because sometimes you want less VS Code, more terminal — but still in a nice browser tab.
+## Why “sshler”? / 名前の由来
+
+**English:** Because sometimes you want less VS Code, more terminal — but still in a nice browser tab.
+
+**日本語:** VS Code だけに頼らず、ブラウザタブの中で軽快にターミナルを扱いたい──そんな願いからこの名前になりました。

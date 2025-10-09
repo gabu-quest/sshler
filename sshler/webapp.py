@@ -301,6 +301,16 @@ async def _list_local_tmux_windows(session: str) -> list[dict[str, str]] | None:
 def make_app(settings: ServerSettings | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
+    English:
+        Applies security middleware, template globals, and route wiring. A
+        :class:`ServerSettings` instance controls auth, CORS, upload limits, and
+        alias resolution.
+
+    日本語:
+        セキュリティミドルウェアやテンプレート変数、各種ルートを設定します。
+        :class:`ServerSettings` により認証や CORS、アップロード上限、エイリアス解決
+        を制御します。
+
     Returns:
         FastAPI: Configured ASGI application.
     """
@@ -467,6 +477,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     async def root() -> RedirectResponse:
         """Redirect the index page to the boxes list.
 
+        English:
+            Visiting ``/`` immediately sends the browser to ``/boxes``.
+
+        日本語:
+            ルート ``/`` にアクセスした際に ``/boxes`` へリダイレクトします。
+
         Returns:
             RedirectResponse: HTTP redirect to ``/boxes``.
         """
@@ -475,7 +491,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     @application.get("/docs", response_class=HTMLResponse)
     async def docs(request: Request) -> HTMLResponse:
-        """Render simple usage documentation."""
+        """Render simple usage documentation.
+
+        English:
+            Serves the built-in help page explaining basic operations.
+
+        日本語:
+            基本的な使い方を説明する内蔵ドキュメントページを表示します。
+        """
 
         return templates.TemplateResponse(
             "docs.html",
@@ -488,6 +511,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         application_config: AppConfig = Depends(_get_application_config),
     ) -> HTMLResponse:
         """Render the list of configured boxes.
+
+        English:
+            Shows local and remote boxes, including metadata such as favourites
+            and default directories.
+
+        日本語:
+            ローカルおよびリモートのボックス一覧と、そのお気に入りやデフォルト
+            ディレクトリなどの情報を表示します。
 
         Args:
             request: Incoming HTTP request.
@@ -512,6 +543,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         application_config: AppConfig = Depends(_get_application_config),
     ) -> HTMLResponse:
         """Render the detail page for a single box.
+
+        English:
+            Displays favourites and directory browser for the selected box.
+
+        日本語:
+            選択したボックスの詳細ページを表示し、お気に入りやディレクトリブラウザを
+            操作できるようにします。
 
         Args:
             name: Box identifier from the URL.
@@ -542,7 +580,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         directory_path: str = Query(..., alias="path"),
         application_config: AppConfig = Depends(_get_application_config),
     ) -> HTMLResponse:
-        """Render a partial listing for a directory via SFTP.
+        """Render a partial listing for a directory.
+
+        English:
+            Produces the table fragment used by HTMX for both SSH and local
+            transports.
+
+        日本語:
+            HTMX が利用するディレクトリ一覧の部分テンプレートを生成します。SSH と
+            ローカルの両方に対応します。
 
         Args:
             name: Box identifier from the URL.
@@ -877,7 +923,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         file_path: str = Query(..., alias="path"),
         application_config: AppConfig = Depends(_get_application_config),
     ) -> HTMLResponse:
-        """Render a read-only preview of a remote file."""
+        """Render a read-only preview of a remote or local file.
+
+        English:
+            Loads text content (or inline images) and renders the preview page.
+
+        日本語:
+            テキストまたは画像を読み込み、プレビュー用ページを表示します。
+        """
 
         box = find_box(application_config, name)
         if not box:
@@ -1046,21 +1099,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         )
 
         try:
-        if request.method == "GET":
-            try:
-                content = await sftp_read_file(connection, file_path, max_bytes=262144)
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            context = {
-                "box": box,
-                "path": file_path,
-                "content": content,
-                "app_version": app_version,
-            }
-            return templates.TemplateResponse(request, "file_edit.html", context)
+            if request.method == "GET":
+                try:
+                    content = await sftp_read_file(connection, file_path, max_bytes=262144)
+                except Exception as exc:
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                context = {
+                    "box": box,
+                    "path": file_path,
+                    "content": content,
+                    "app_version": app_version,
+                }
+                return templates.TemplateResponse(request, "file_edit.html", context)
 
-        _require_token(request)
-        payload = await request.json()
+            _require_token(request)
+            payload = await request.json()
             content = payload.get("content")
             if content is None:
                 raise HTTPException(status_code=400, detail="Missing content")
@@ -1098,6 +1151,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     ) -> str:
         """Toggle a favorite directory for a box.
 
+        English:
+            Adds or removes ``directory_path`` from the stored favourites for
+            the given box.
+
+        日本語:
+            指定されたディレクトリをお気に入りに追加または削除します。
+
         Args:
             name: Box identifier from the URL.
             directory_path: Remote directory to toggle as favorite.
@@ -1130,7 +1190,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         request: Request,
         application_config: AppConfig = Depends(_get_application_config),
     ) -> HTMLResponse:
-        """Render the form to add a custom box."""
+        """Render the form to add a custom box.
+
+        English:
+            Presents the HTML form used to create additional stored boxes.
+
+        日本語:
+            追加のボックスを作成するためのフォームを表示します。
+        """
 
         context = {
             "configuration_path": str(get_config_path()),
@@ -1188,7 +1255,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         request: Request,
         application_config: AppConfig = Depends(_get_application_config),
     ) -> str:
-        """Remove connection overrides so SSH config values apply."""
+        """Remove connection overrides so SSH config values apply.
+
+        English:
+            Clears stored overrides for the chosen box and rebuilds the merged
+            configuration.
+
+        日本語:
+            対象ボックスの上書き設定を削除し、統合された設定を再構築します。
+        """
 
         _require_token(request)
 
@@ -1233,6 +1308,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         application_config: AppConfig = Depends(_get_application_config),
     ) -> HTMLResponse:
         """Render the terminal page for tmux access.
+
+        English:
+            Builds the xterm.js front-end for either SSH or local tmux sessions.
+
+        日本語:
+            SSH またはローカル tmux セッションに接続するための xterm.js ベースの
+            端末ページを生成します。
 
         Args:
             request: Incoming HTTP request.
@@ -1280,7 +1362,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         columns: int = Query(120, alias="cols"),
         rows: int = Query(32, alias="rows"),
     ) -> None:
-        """Bridge between the browser websocket and tmux over SSH.
+        """Bridge between the browser websocket and tmux over SSH or locally.
+
+        English:
+            Streams bytes between the browser and tmux, handling command
+            messages (resize, rename, etc.) and window polling.
+
+        日本語:
+            ブラウザと tmux の間でバイトストリームを仲介し、リサイズやウィンドウ
+            切り替えなどのコマンドメッセージを処理します。
 
         Args:
             websocket: Accepted websocket connection from the browser.

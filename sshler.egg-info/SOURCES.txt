@@ -13,9 +13,17 @@ sshler.egg-info/dependency_links.txt
 sshler.egg-info/entry_points.txt
 sshler.egg-info/requires.txt
 sshler.egg-info/top_level.txt
+sshler/scripts/install-sshler-task.ps1
+sshler/scripts/remove-sshler-task.ps1
+sshler/scripts/run-sshler.ps1
+sshler/static/favicon-terminal.svg
+sshler/static/favicon.svg
 sshler/static/style.css
 sshler/templates/base.html
 sshler/templates/box.html
+sshler/templates/docs.html
+sshler/templates/file_edit.html
+sshler/templates/file_view.html
 sshler/templates/index.html
 sshler/templates/new_box.html
 sshler/templates/term.html

@@ -36,7 +36,16 @@ def serve(
     open_browser: bool = True,
     token: Optional[str] = None,
 ) -> None:
-    """Start the sshler FastAPI application via uvicorn."""
+    """Start the sshler FastAPI application via uvicorn.
+
+    English:
+        Bootstraps the FastAPI app with the provided security settings and begins
+        serving requests on the chosen host/port.
+
+    日本語:
+        指定されたセキュリティ設定で FastAPI アプリケーションを初期化し、
+        指定したホストとポートでリクエスト受付を開始します。
+    """
 
     settings = ServerSettings(
         allow_origins=allow_origins or [],
@@ -70,8 +79,13 @@ def serve(
 def main() -> None:
     """Parse CLI arguments and invoke the requested subcommand.
 
-    Returns:
-        None: The function exits after invoking the requested command.
+    English:
+        Handles ``sshler`` command-line parsing and dispatches to ``serve`` when
+        no subcommand is explicitly provided.
+
+    日本語:
+        ``sshler`` のコマンドライン引数を解析し、サブコマンドが指定されて
+        いない場合は ``serve`` を実行します。
     """
 
     parser = argparse.ArgumentParser(prog="sshler", description="Local SSH tmux-in-browser")

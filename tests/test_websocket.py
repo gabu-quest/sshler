@@ -65,7 +65,7 @@ def configured_app_fixture() -> TestClient:
 
 def test_websocket_falls_back_to_default_directory(monkeypatch, configured_app: TestClient):
     config = load_config()
-    box = config.boxes[0]
+    box = next(b for b in config.boxes if b.name != "local")
     fallback_directory = box.default_dir or f"/home/{box.user}"
 
     fake_process = FakeProcess()

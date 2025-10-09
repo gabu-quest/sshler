@@ -16,7 +16,16 @@ ENV_CONFIG_DIR = "SSHLER_CONFIG_DIR"
 
 @dataclass
 class StoredBox:
-    """User-defined overrides and custom boxes persisted in YAML."""
+    """User-defined overrides and custom boxes persisted in YAML.
+
+    English:
+        Represents a single box entry saved by the user. Values here override
+        hosts discovered from OpenSSH configuration files.
+
+    日本語:
+        ユーザーが保存したボックス定義を表します。OpenSSH の設定から検出した
+        ホスト情報に対する上書き値として利用されます。
+    """
 
     name: str
     host: str | None = None
@@ -32,7 +41,17 @@ class StoredBox:
 
 @dataclass
 class Box:
-    """Concrete SSH box presented in the UI after merging sources."""
+    """Concrete SSH box presented in the UI after merging sources.
+
+    English:
+        Materialised box configuration shown in the UI after combining SSH
+        config values with stored overrides and synthetic entries such as the
+        local workspace.
+
+    日本語:
+        SSH 設定、保存済みの上書き、ローカルワークスペースなどを統合した結果を
+        UI に表示するための構造体です。
+    """
 
     name: str
     connect_host: str
@@ -52,7 +71,16 @@ class Box:
 
 @dataclass
 class AppConfig:
-    """Complete configuration containing merged boxes and stored overrides."""
+    """Complete configuration containing merged boxes and stored overrides.
+
+    English:
+        In-memory representation of all known boxes plus metadata such as the
+        resolved SSH config path.
+
+    日本語:
+        既知のすべてのボックス情報と、解決済みの SSH 設定パスなどのメタデータを
+        保持するメモリ上の設定です。
+    """
 
     boxes: list[Box] = field(default_factory=list)
     stored: dict[str, StoredBox] = field(default_factory=dict)
@@ -76,7 +104,15 @@ DEFAULT_CONFIGURATION_TEMPLATE: dict[str, Any] = {"boxes": []}
 
 
 def get_config_dir() -> Path:
-    """Return the configuration directory, creating it when missing."""
+    """Return the configuration directory, creating it when missing.
+
+    English:
+        Determines the directory that will contain ``boxes.yaml`` and creates
+        it if necessary.
+
+    日本語:
+        ``boxes.yaml`` を格納するディレクトリを決定し、存在しない場合は作成します。
+    """
 
     override_directory = os.getenv(ENV_CONFIG_DIR)
     if override_directory:
@@ -88,13 +124,31 @@ def get_config_dir() -> Path:
 
 
 def get_config_path() -> Path:
-    """Return the path to the boxes configuration file."""
+    """Return the path to the boxes configuration file.
+
+    English:
+        Combines :func:`get_config_dir` with ``boxes.yaml`` to produce the full
+        configuration filename.
+
+    日本語:
+        :func:`get_config_dir` の結果に ``boxes.yaml`` を連結した設定ファイルのパスを
+        返します。
+    """
 
     return get_config_dir() / "boxes.yaml"
 
 
 def ensure_config() -> Path:
-    """Create a default configuration file when none exists."""
+    """Create a default configuration file when none exists.
+
+    English:
+        Writes an empty configuration file so later reads never fail because the
+        file is missing.
+
+    日本語:
+        設定ファイルが存在しない場合に空のファイルを作成し、読み込みに失敗しない
+        ようにします。
+    """
 
     config_path = get_config_path()
     if not config_path.exists():
@@ -104,7 +158,16 @@ def ensure_config() -> Path:
 
 
 def load_config(ssh_config_path: str | None = None) -> AppConfig:
-    """Load the application configuration from disk and merge SSH config hosts."""
+    """Load the application configuration from disk and merge SSH config hosts.
+
+    English:
+        Reads ``boxes.yaml``, normalises data, merges it with OpenSSH hosts, and
+        returns a populated :class:`AppConfig` including the synthetic local box.
+
+    日本語:
+        ``boxes.yaml`` を読み込んで正規化し、OpenSSH のホスト情報と統合したうえで
+        ローカルボックスを含む :class:`AppConfig` を返します。
+    """
 
     config_path = ensure_config()
     with config_path.open("r", encoding="utf-8") as file_pointer:
@@ -128,7 +191,16 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
 
 
 def save_config(application_config: AppConfig) -> None:
-    """Persist stored overrides to disk."""
+    """Persist stored overrides to disk.
+
+    English:
+        Serialises the ``stored`` mapping to ``boxes.yaml`` so user-created
+        overrides survive restarts.
+
+    日本語:
+        ``stored`` マッピングを ``boxes.yaml`` に書き出し、ユーザーが作成した上書き
+        設定を永続化します。
+    """
 
     config_path = get_config_path()
     payload = {
@@ -144,13 +216,29 @@ def save_config(application_config: AppConfig) -> None:
 
 
 def find_box(application_config: AppConfig, name: str) -> Box | None:
-    """Return the box matching ``name`` when present."""
+    """Return the box matching ``name`` when present.
+
+    English:
+        Helper used by request handlers to locate a box by name.
+
+    日本語:
+        リクエストハンドラがボックス名で検索するためのヘルパー関数です。
+    """
 
     return application_config.get_box(name)
 
 
 def rebuild_boxes(application_config: AppConfig, ssh_config_path: str | None = None) -> None:
-    """Refresh the merged box list after stored overrides change."""
+    """Refresh the merged box list after stored overrides change.
+
+    English:
+        Recomputes the list of concrete boxes based on the latest stored data
+        and (optionally) a new SSH config file path.
+
+    日本語:
+        最新の保存情報と SSH 設定パス (必要に応じて) を基に、利用可能なボックスの
+        リストを再構築します。
+    """
 
     resolved_path = _resolve_ssh_config_path(ssh_config_path or application_config.ssh_config_path)
     application_config.ssh_config_path = str(resolved_path) if resolved_path else None
