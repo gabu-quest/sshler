@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sshler"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local FastAPI-powered SSH multiplexer for tmux-in-browser — from your laptop only."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,16 +23,19 @@ dependencies = [
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: SSH",
+    "Topic :: System :: Systems Administration",
+    "Framework :: FastAPI",
 ]
 keywords = ["ssh", "tmux", "fastapi", "sftp", "htmx"]
 
@@ -52,7 +55,7 @@ sshler = "sshler.cli:main"
 include-package-data = true
 
 [tool.setuptools.package-data]
-sshler = ["templates/*.html", "templates/partials/*.html", "static/*"]
+sshler = ["templates/*.html", "templates/partials/*.html", "static/*", "scripts/*.ps1"]
 
 [tool.ruff]
 target-version = "py310"

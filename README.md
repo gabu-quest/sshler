@@ -4,6 +4,7 @@
 **sshler** is a lightweight, local-only web UI which lets you browse remote files over SFTP and jump into tmux sessions in your browser — without installing anything on your server.
 
 - Runs on your Windows 11 laptop (or any OS with Python)
+- Includes a "local" workspace card so you can browse your own filesystem and launch WSL-backed tmux sessions alongside remote hosts
 - Uses your existing SSH keys
 - Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it to the browser via WebSocket + xterm.js
 - HTMX-based file browser with “Open Terminal Here”
@@ -64,11 +65,43 @@ Boxes imported from SSH config show a highlighted border and “Refresh” butto
 
 Hit “Add Box” in the UI to define a host that isn’t in your SSH config (for example, a throwaway Docker container). Fields you leave blank fall back to your SSH defaults.
 
-### Security note
+### Security model (important)
 
-By default we use your system `known_hosts`. If you **really** want to disable host key checking, set `known_hosts: ignore` for a host.
+- sshler is designed for **single-user localhost** use. By default `sshler serve` binds to `127.0.0.1` and prints a random `X-SSHLER-TOKEN` that every state-changing request must send.
+- File uploads are capped at 50 MB (tunable via `--max-upload-mb`). Uploaded content is never executed server-side.
+- SSH connections still honour your system `known_hosts`. Only set `known_hosts: ignore` if you fully understand the risk.
+- If you expose sshler beyond localhost, opt-in via `--allow-origin` and add `--auth user:pass` (basic auth). Use it only on networks you trust and put TLS in front (nginx, Caddy, etc.).
+- There is no telemetry, analytics, or call-home behaviour.
 
-The web app binds to `127.0.0.1` by default, so traffic never leaves your laptop. If you expose it beyond localhost, terminate TLS in front (nginx/Caddy/etc.) and add authentication—SSH stays encrypted end-to-end, but HTTP should still be protected.
+### CLI options
+
+```
+sshler serve \
+  --bind 127.0.0.1 \
+  --port 8822 \
+  --max-upload-mb 50 \
+  --allow-origin http://workstation:8822 \
+  --auth coder:supersecret \
+  --no-ssh-alias \
+  --log-level info
+```
+
+- `--bind` (alias `--host`) keeps the server on localhost by default.
+- `--allow-origin` can be repeated to expand CORS; combine it with `--auth` if you expose the UI to the LAN.
+- `--max-upload-mb` lets you raise/lower the upload ceiling.
+- `--no-ssh-alias` disables the `ssh -G` fallback when DNS fails.
+- `--token` lets you supply your own `X-SSHLER-TOKEN` (otherwise a secure random value is generated).
+- `--log-level` feeds directly into uvicorn.
+
+The server prints the token (and, if enabled, the basic auth username) on startup so you can copy it into API clients or browser extensions.
+
+### Dependencies & licenses
+
+- FastAPI, uvicorn, asyncssh, platformdirs, yaml (PyPI packages, permissive licenses)
+- HTMX (MIT) and xterm.js (MIT) are loaded from unpkg
+- CodeMirror (MIT) powers the editor
+
+All assets are used under their respective MIT/BSD-style licenses. sshler itself ships under the MIT license.
 
 ## Development
 

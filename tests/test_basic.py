@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 os.environ["SSHLER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="sshler_")
 
 from sshler.config import ensure_config, load_config
-from sshler.webapp import make_app
+from sshler.webapp import ServerSettings, make_app
 
 
 def test_config_created() -> None:
@@ -17,7 +17,7 @@ def test_config_created() -> None:
 
 
 def test_boxes_route() -> None:
-    app = make_app()
+    app = make_app(ServerSettings(csrf_token="test-token"))
     client = TestClient(app)
     response = client.get("/boxes")
     assert response.status_code == 200

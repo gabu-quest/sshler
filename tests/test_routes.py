@@ -9,12 +9,19 @@ if "SSHLER_CONFIG_DIR" not in os.environ:
 
 from sshler.config import ensure_config
 from sshler.ssh import SSHError
-from sshler.webapp import make_app
+from sshler.webapp import ServerSettings, make_app
+
+
+TEST_TOKEN = "test-token"
+
+
+def build_client() -> TestClient:
+    return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
 def test_directory_listing_returns_error_message(monkeypatch):
     ensure_config()
-    client = TestClient(make_app())
+    client = build_client()
     try:
 
         async def fake_connect(*_args, **_kwargs):
@@ -55,9 +62,13 @@ Host demo-box
     )
     monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
 
-    client = TestClient(make_app())
+    client = build_client()
     try:
-        response = client.post("/box/demo-box/fav", params={"path": "/tmp"})
+        response = client.post(
+            "/box/demo-box/fav",
+            params={"path": "/tmp"},
+            headers={"X-SSHLER-TOKEN": TEST_TOKEN},
+        )
         if response.status_code != 200:
             try:
                 detail = response.json()
@@ -81,7 +92,7 @@ def test_create_box_route_persists_data(monkeypatch, tmp_path):
         yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
     )
 
-    client = TestClient(make_app())
+    client = build_client()
     try:
         response = client.post(
             "/boxes/new",
@@ -95,6 +106,7 @@ def test_create_box_route_persists_data(monkeypatch, tmp_path):
                 "default_dir": "/srv",
             },
             follow_redirects=False,
+            headers={"X-SSHLER-TOKEN": TEST_TOKEN},
         )
         assert response.status_code == 303
         assert response.headers["location"] == "/boxes"
@@ -147,9 +159,12 @@ Host demo-box
     )
     monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
 
-    client = TestClient(make_app())
+    client = build_client()
     try:
-        response = client.post("/box/demo-box/refresh")
+        response = client.post(
+            "/box/demo-box/refresh",
+            headers={"X-SSHLER-TOKEN": TEST_TOKEN},
+        )
         assert response.status_code == 200
         assert response.text == "ok"
     finally:
@@ -192,7 +207,7 @@ Host demo
     monkeypatch.setattr("sshler.webapp.sftp_read_file", fake_read)
     monkeypatch.setattr("sshler.ssh.sftp_read_file", fake_read)
 
-    client = TestClient(make_app())
+    client = build_client()
     try:
         response = client.get("/box/demo/cat", params={"path": "/etc/os-release"})
         assert response.status_code == 200

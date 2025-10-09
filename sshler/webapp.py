@@ -5,8 +5,10 @@ import base64
 import json
 import os
 import platform
+import secrets
 import shlex
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import asyncssh
@@ -22,7 +24,8 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -48,7 +51,7 @@ from .ssh import (
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
-MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MiB hard limit for uploads
+DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_IMAGE_PREVIEW_BYTES = 2 * 1024 * 1024
 IMAGE_CONTENT_TYPES: dict[str, str] = {
     ".png": "image/png",
@@ -59,6 +62,33 @@ IMAGE_CONTENT_TYPES: dict[str, str] = {
     ".svg": "image/svg+xml",
 }
 LOCAL_IS_WINDOWS = platform.system().lower().startswith("windows")
+
+
+@dataclass
+class ServerSettings:
+    allow_origins: list[str] = field(default_factory=list)
+    csrf_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
+    allow_ssh_alias: bool = True
+    basic_auth: tuple[str, str] | None = None
+    basic_auth_header: str | None = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        # normalise origins without trailing slashes and drop duplicates while preserving order
+        seen: set[str] = set()
+        normalised: list[str] = []
+        for origin in self.allow_origins:
+            cleaned = origin.rstrip("/")
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                normalised.append(cleaned)
+        self.allow_origins = normalised
+
+        if self.basic_auth:
+            user, password = self.basic_auth
+            raw = f"{user}:{password}".encode("utf-8")
+            self.basic_auth_header = "Basic " + base64.b64encode(raw).decode("ascii")
+
 
 
 def _normalize_directory_path(directory: str | None) -> str:
@@ -268,17 +298,57 @@ async def _list_local_tmux_windows(session: str) -> list[dict[str, str]] | None:
     return windows
 
 
-def make_app() -> FastAPI:
+def make_app(settings: ServerSettings | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Returns:
         FastAPI: Configured ASGI application.
     """
 
+    settings = settings or ServerSettings()
+
     application = FastAPI(title="sshler", version="0.1.0")
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     app_version = _compute_app_version()
+
+    application.state.settings = settings
+    templates.env.globals["csrf_token"] = settings.csrf_token
+
+    if settings.allow_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.allow_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"]
+        )
+
+    @application.middleware("http")
+    async def _security_middleware(request: Request, call_next):
+        if settings.basic_auth_header and request.method != "OPTIONS":
+            auth_header = request.headers.get("authorization")
+            if auth_header != settings.basic_auth_header:
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="sshler"'},
+                )
+
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers[
+            "Content-Security-Policy"
+        ] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; connect-src 'self';"
+        return response
+
+    def _require_token(request: Request) -> None:
+        if not settings.csrf_token:
+            return
+        supplied = request.headers.get("x-sshler-token")
+        if supplied != settings.csrf_token:
+            raise HTTPException(status_code=403, detail="Missing or invalid X-SSHLER-TOKEN header")
 
     def _build_directory_urls(request: Request, box_name: str) -> dict[str, str]:
         def _resolve(endpoint: str, **params: str) -> str:
@@ -350,6 +420,7 @@ def make_app() -> FastAPI:
                 box.known_hosts,
                 application_config.ssh_config_path,
                 box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
             )
         except SSHError as exc:
             context = {
@@ -513,6 +584,8 @@ def make_app() -> FastAPI:
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
 
+        _require_token(request)
+
         directory_path = (
             _normalize_local_path(directory)
             if box.transport == "local"
@@ -583,6 +656,7 @@ def make_app() -> FastAPI:
                 box.known_hosts,
                 application_config.ssh_config_path,
                 box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
             )
             try:
                 sftp_client = await connection.start_sftp_client()
@@ -646,6 +720,8 @@ def make_app() -> FastAPI:
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
 
+        _require_token(request)
+
         directory_path = (
             _normalize_local_path(directory)
             if box.transport == "local"
@@ -677,8 +753,8 @@ def make_app() -> FastAPI:
 
             if not candidate_name:
                 error_message = "Select a file to upload"
-            elif len(contents) > MAX_UPLOAD_BYTES:
-                limit_kb = MAX_UPLOAD_BYTES // 1024
+            elif len(contents) > settings.max_upload_bytes:
+                limit_kb = settings.max_upload_bytes // 1024
                 error_message = f"Upload exceeds {limit_kb} KB limit"
 
             if error_message is None:
@@ -729,8 +805,8 @@ def make_app() -> FastAPI:
 
         if not candidate_name:
             error_message = "Select a file to upload"
-        elif len(contents) > MAX_UPLOAD_BYTES:
-            limit_kb = MAX_UPLOAD_BYTES // 1024
+        elif len(contents) > settings.max_upload_bytes:
+            limit_kb = settings.max_upload_bytes // 1024
             error_message = f"Upload exceeds {limit_kb} KB limit"
 
         connection = None
@@ -745,6 +821,7 @@ def make_app() -> FastAPI:
                     box.known_hosts,
                     application_config.ssh_config_path,
                     box.ssh_alias,
+                    allow_alias=settings.allow_ssh_alias,
                 )
                 try:
                     sftp_client = await connection.start_sftp_client()
@@ -827,7 +904,7 @@ def make_app() -> FastAPI:
             text_content: str | None = None
             if not image_mime or image_too_large:
                 try:
-                    text_content = await _local_read_text(normalized_path, MAX_UPLOAD_BYTES)
+                    text_content = await _local_read_text(normalized_path, settings.max_upload_bytes)
                 except Exception as exc:
                     raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -854,6 +931,7 @@ def make_app() -> FastAPI:
                 box.known_hosts,
                 application_config.ssh_config_path,
                 box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
             )
         except SSHError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -878,7 +956,9 @@ def make_app() -> FastAPI:
             text_content: str | None = None
             if not image_mime or image_too_large:
                 try:
-                    text_content = await sftp_read_file(connection, file_path)
+                    text_content = await sftp_read_file(
+                        connection, file_path, max_bytes=settings.max_upload_bytes
+                    )
                 except Exception as exc:
                     raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -933,6 +1013,7 @@ def make_app() -> FastAPI:
                 }
                 return templates.TemplateResponse(request, "file_edit.html", context)
 
+            _require_token(request)
             payload = await request.json()
             content = payload.get("content")
             if content is None:
@@ -961,23 +1042,25 @@ def make_app() -> FastAPI:
             box.known_hosts,
             application_config.ssh_config_path,
             box.ssh_alias,
+            allow_alias=settings.allow_ssh_alias,
         )
 
         try:
-            if request.method == "GET":
-                try:
-                    content = await sftp_read_file(connection, file_path, max_bytes=262144)
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
-                context = {
-                    "box": box,
-                    "path": file_path,
-                    "content": content,
-                    "app_version": app_version,
-                }
-                return templates.TemplateResponse(request, "file_edit.html", context)
+        if request.method == "GET":
+            try:
+                content = await sftp_read_file(connection, file_path, max_bytes=262144)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            context = {
+                "box": box,
+                "path": file_path,
+                "content": content,
+                "app_version": app_version,
+            }
+            return templates.TemplateResponse(request, "file_edit.html", context)
 
-            payload = await request.json()
+        _require_token(request)
+        payload = await request.json()
             content = payload.get("content")
             if content is None:
                 raise HTTPException(status_code=400, detail="Missing content")
@@ -1009,6 +1092,7 @@ def make_app() -> FastAPI:
     @application.post("/box/{name}/fav", response_class=PlainTextResponse)
     async def toggle_favorite(
         name: str,
+        request: Request,
         directory_path: str = Query(..., alias="path"),
         application_config: AppConfig = Depends(_get_application_config),
     ) -> str:
@@ -1025,6 +1109,8 @@ def make_app() -> FastAPI:
         Raises:
             HTTPException: When the requested box does not exist.
         """
+
+        _require_token(request)
 
         box = find_box(application_config, name)
         if not box:
@@ -1055,6 +1141,7 @@ def make_app() -> FastAPI:
 
     @application.post("/boxes/new")
     async def create_box(
+        request: Request,
         name: str = Form(...),
         host: str = Form(""),
         user: str = Form(""),
@@ -1067,6 +1154,8 @@ def make_app() -> FastAPI:
         agent: bool = Form(False),
     ) -> RedirectResponse:
         """Persist a new custom box definition supplied by the user."""
+
+        _require_token(request)
 
         cleaned_name = name.strip()
         if not cleaned_name:
@@ -1096,9 +1185,12 @@ def make_app() -> FastAPI:
     @application.post("/box/{name}/refresh", response_class=PlainTextResponse)
     async def refresh_box(
         name: str,
+        request: Request,
         application_config: AppConfig = Depends(_get_application_config),
     ) -> str:
         """Remove connection overrides so SSH config values apply."""
+
+        _require_token(request)
 
         stored_override = application_config.stored.get(name)
         if stored_override is None:
@@ -1201,6 +1293,19 @@ def make_app() -> FastAPI:
         Returns:
             None: The coroutine completes when the websocket terminates.
         """
+
+        settings: ServerSettings = websocket.app.state.settings  # type: ignore[attr-defined]
+
+        if settings.basic_auth_header:
+            auth_header = websocket.headers.get("authorization")
+            if auth_header != settings.basic_auth_header:
+                await websocket.close(code=4401, reason="Unauthorized")
+                return
+
+        token_param = websocket.query_params.get("token")
+        if settings.csrf_token and token_param != settings.csrf_token:
+            await websocket.close(code=4403, reason="Invalid token")
+            return
 
         await websocket.accept()
         application_config = load_config()

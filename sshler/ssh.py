@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shlex
 import socket
+from pathlib import Path
 from asyncio.subprocess import Process
 
 import asyncssh
@@ -21,6 +23,7 @@ async def connect(
     known_hosts: str | None = None,
     ssh_config_path: str | None = None,
     ssh_alias: str | None = None,
+    allow_alias: bool = True,
 ) -> asyncssh.SSHClientConnection:
     """Establish an SSH connection using asyncssh.
 
@@ -48,7 +51,7 @@ async def connect(
     connect_port = port
     connect_keyfile = keyfile
 
-    if ssh_alias and not _is_resolvable(connect_host):
+    if allow_alias and ssh_alias and not _is_resolvable(connect_host):
         alias_data = await _expand_alias(ssh_alias)
         resolved_host = alias_data.get("hostname")
         if resolved_host:
@@ -207,7 +210,7 @@ async def _expand_alias(alias: str) -> dict[str, str]:
     process: Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
-            "ssh",
+            _ssh_command(),
             "-G",
             alias,
             stdout=asyncio.subprocess.PIPE,
@@ -240,6 +243,15 @@ def _is_resolvable(name: str) -> bool:
         return True
     except OSError:
         return False
+
+
+def _ssh_command() -> str:
+    if os.name == "nt":
+        system_root = os.environ.get("SystemRoot", "C:\\Windows")
+        candidate = Path(system_root) / "System32" / "OpenSSH" / "ssh.exe"
+        if candidate.exists():
+            return str(candidate)
+    return "ssh"
 
 
 LOGGER = logging.getLogger(__name__)

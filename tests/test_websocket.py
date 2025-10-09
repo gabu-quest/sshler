@@ -9,7 +9,9 @@ if "SSHLER_CONFIG_DIR" not in os.environ:
     os.environ["SSHLER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="sshler_")
 
 from sshler.config import ensure_config, load_config
-from sshler.webapp import make_app
+from sshler.webapp import ServerSettings, make_app
+
+TEST_TOKEN = "test-token"
 
 
 class FakeStdout:
@@ -54,7 +56,7 @@ class FakeConnection:
 @pytest.fixture(name="configured_app")
 def configured_app_fixture() -> TestClient:
     ensure_config()
-    client = TestClient(make_app())
+    client = TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
     try:
         yield client
     finally:
@@ -84,7 +86,7 @@ def test_websocket_falls_back_to_default_directory(monkeypatch, configured_app: 
     monkeypatch.setattr("sshler.webapp.open_tmux", fake_open_tmux)
 
     with configured_app.websocket_connect(
-        f"/ws/term?host={box.name}&dir=/does-not-exist&session=check"
+        f"/ws/term?host={box.name}&dir=/does-not-exist&session=check&token={TEST_TOKEN}"
     ) as websocket:
         websocket.send_bytes(b"hello")
 

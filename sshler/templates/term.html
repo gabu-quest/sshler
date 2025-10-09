@@ -80,7 +80,8 @@
   const dir = url.searchParams.get('dir');
   const session = url.searchParams.get('session') || '{{ session }}';
   const wsProto = (location.protocol === 'https:' ? 'wss://' : 'ws://');
-  const wsUrl = wsProto + location.host + `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(dir)}&session=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}`;
+  const token = window.sshlerToken || '';
+  const wsUrl = wsProto + location.host + `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(dir)}&session=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}&token=${encodeURIComponent(token)}`;
   const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
 

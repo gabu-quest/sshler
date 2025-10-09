@@ -6,6 +6,7 @@
     <title>sshler</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <meta name="sshler-token" content="{{ csrf_token }}">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" id="favicon-link">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://unpkg.com/prismjs/themes/prism-tomorrow.css" />
@@ -33,6 +34,16 @@
       (function () {
         const container = document.getElementById('toast-container');
         const faviconLink = document.getElementById('favicon-link');
+        const tokenMeta = document.querySelector('meta[name="sshler-token"]');
+        const csrfToken = tokenMeta ? tokenMeta.getAttribute('content') : null;
+
+        if (csrfToken) {
+          window.sshlerToken = csrfToken;
+          if (window.htmx) {
+            htmx.config.headers = htmx.config.headers || {};
+            htmx.config.headers['X-SSHLER-TOKEN'] = csrfToken;
+          }
+        }
         const FAVICONS = {
           default: '/static/favicon.svg',
           terminal: '/static/favicon-terminal.svg',

@@ -58,7 +58,10 @@
       const endpoint = window.location.pathname + window.location.search;
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-SSHLER-TOKEN': window.sshlerToken || ''
+        },
         body: JSON.stringify(payload)
       });
       if (!response.ok) {
