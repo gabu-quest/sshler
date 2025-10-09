@@ -305,12 +305,16 @@ def make_app() -> FastAPI:
                     await sftp_client.exit()
                 except Exception:
                     pass
-            return templates.TemplateResponse(request, "file_edit.html", {
-                "box": box,
-                "path": file_path,
-                "content": content,
-                "app_version": app_version,
-            })
+            return templates.TemplateResponse(
+                request,
+                "file_edit.html",
+                {
+                    "box": box,
+                    "path": file_path,
+                    "content": content,
+                    "app_version": app_version,
+                },
+            )
         finally:
             connection.close()
 
@@ -715,9 +719,11 @@ async def _list_tmux_windows(
         if len(parts) < 3:
             continue
         index, name, active = parts
-        windows.append({
-            "index": index,
-            "name": name,
-            "active": active == "1",
-        })
+        windows.append(
+            {
+                "index": index,
+                "name": name,
+                "active": active == "1",
+            }
+        )
     return windows
