@@ -16,6 +16,7 @@
     <script defer src="https://unpkg.com/prismjs/components/prism-javascript.min.js"></script>
     <script defer src="https://unpkg.com/prismjs/components/prism-json.min.js"></script>
     <script defer src="https://unpkg.com/prismjs/components/prism-yaml.min.js"></script>
+    <script defer src="/static/base.js"></script>
   </head>
   <body>
     <div id="toast-container"></div>
@@ -26,66 +27,14 @@
       <a class="link" href="/boxes">Boxes</a>
       <a class="link" href="/boxes/new">Add Box</a>
       <a class="link" href="/docs" target="_blank" rel="noopener">Docs</a>
+      <button id="lang-toggle" class="lang-toggle" title="Switch language / 言語を切り替え">
+        <span data-lang="en">EN</span>
+        <span data-lang="ja" class="hidden">JP</span>
+      </button>
     </header>
     <main class="container">
       {% block content %}{% endblock %}
     </main>
-    <script>
-      (function () {
-        const container = document.getElementById('toast-container');
-        const faviconLink = document.getElementById('favicon-link');
-        const tokenMeta = document.querySelector('meta[name="sshler-token"]');
-        const csrfToken = tokenMeta ? tokenMeta.getAttribute('content') : null;
-
-        if (csrfToken) {
-          window.sshlerToken = csrfToken;
-          if (window.htmx) {
-            htmx.config.headers = htmx.config.headers || {};
-            htmx.config.headers['X-SSHLER-TOKEN'] = csrfToken;
-          }
-        }
-        const FAVICONS = {
-          default: '/static/favicon.svg',
-          terminal: '/static/favicon-terminal.svg',
-        };
-
-        function setFavicon(mode) {
-          if (!faviconLink) {
-            return;
-          }
-          const target = mode === 'terminal' ? FAVICONS.terminal : FAVICONS.default;
-          if (faviconLink.getAttribute('href') !== target) {
-            faviconLink.setAttribute('href', target);
-          }
-        }
-
-        function showToast(message, type) {
-          if (!message) {
-            return;
-          }
-          const toast = document.createElement('div');
-          toast.className = `toast ${type || 'info'}`;
-          toast.textContent = message;
-          container.appendChild(toast);
-          requestAnimationFrame(() => toast.classList.add('visible'));
-          setTimeout(() => {
-            toast.classList.remove('visible');
-            toast.addEventListener('transitionend', () => toast.remove(), { once: true });
-          }, 3600);
-        }
-
-        document.body.addEventListener('dir-action', (event) => {
-          const payload = event.detail && event.detail.value;
-          if (!payload) {
-            return;
-          }
-          const status = payload.status === 'error' ? 'error' : 'success';
-          showToast(payload.message, status);
-        });
-
-        window.sshlerShowToast = showToast;
-        window.sshlerSetFavicon = setFavicon;
-      })();
-    </script>
+    {% block extra_scripts %}{% endblock %}
   </body>
 </html>

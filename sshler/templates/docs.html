@@ -1,13 +1,44 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>sshler Quick Reference</h1>
-<ul>
-  <li><strong>Boxes:</strong> Imported from your SSH config or added manually. Refresh an SSH-config box to pick up alias changes.</li>
-  <li><strong>Favorites:</strong> Collapse/expand quick links to directories. They always open in a new terminal tab.</li>
-  <li><strong>Terminal:</strong> Toolbar on the left sends tmux shortcuts; click window tabs or the <em>Files</em> button to jump between tmux and the file explorer.</li>
-  <li><strong>File preview:</strong> Click <em>Preview</em> next to any file to open a read-only Prism-highlighted view.</li>
-  <li><strong>Edit:</strong> Click <em>Edit</em> for inline editing (files &lt; 256&nbsp;KB). Press Save to write changes over SFTP.</li>
-  <li><strong>Clipboard:</strong> Right-click the terminal to copy/paste; Ctrl+T is trapped and sent into tmux.</li>
-  <li><strong>Security:</strong> sshler binds to 127.0.0.1. If you expose it, front it with TLS and add authentication.</li>
-</ul>
+<div id="docs-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>sshler Quick Reference</h2>
+      <div class="modal-actions">
+        <button class="lang-btn" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="ja">日本語</button>
+        <button class="modal-close">&times;</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="lang-content" data-lang="en">
+        <ul>
+          <li><strong>Boxes:</strong> Imported from your SSH config or added manually. Refresh an SSH-config box to pick up alias changes.</li>
+          <li><strong>Favorites:</strong> Collapse/expand quick links to directories. They always open in a new terminal tab.</li>
+          <li><strong>Terminal:</strong> Toolbar on the left sends tmux shortcuts; click window tabs or the <em>Files</em> button to jump between tmux and the file explorer.</li>
+          <li><strong>File preview:</strong> Click <em>Preview</em> next to any file to open a read-only view with syntax highlighting.</li>
+          <li><strong>Edit:</strong> Click <em>Edit</em> for inline editing (files &lt; 256 KB). Press Save to write changes and return to preview mode.</li>
+          <li><strong>Delete:</strong> Delete button appears in file preview and directory listings. Confirmation required before deletion.</li>
+          <li><strong>Clipboard:</strong> Right-click the terminal to copy/paste; Ctrl+T is trapped and sent into tmux.</li>
+          <li><strong>Keyboard shortcuts:</strong> Ctrl+Shift+B toggles between terminal and file browser when in terminal view.</li>
+          <li><strong>Security:</strong> sshler binds to 127.0.0.1 by default. If you expose it beyond localhost, add TLS and authentication.</li>
+        </ul>
+      </div>
+      <div class="lang-content hidden" data-lang="ja">
+        <ul>
+          <li><strong>ボックス:</strong> SSH 設定から自動取り込み、または手動で追加できます。SSH 設定を変更した際は Refresh ボタンでエイリアスの変更を反映します。</li>
+          <li><strong>お気に入り:</strong> ディレクトリへのクイックリンクを折りたたみ表示。常に新しいターミナルタブで開きます。</li>
+          <li><strong>ターミナル:</strong> 左側のツールバーで tmux ショートカットを送信。ウィンドウタブまたは<em>Files</em>ボタンをクリックして tmux とファイルエクスプローラーを切り替えられます。</li>
+          <li><strong>ファイルプレビュー:</strong> <em>Preview</em>をクリックすると、シンタックスハイライト付きの読み取り専用ビューが開きます。</li>
+          <li><strong>編集:</strong> <em>Edit</em>をクリックすると、256 KB 未満のファイルをブラウザ内で編集できます。Save を押すと変更が書き込まれ、プレビューモードに戻ります。</li>
+          <li><strong>削除:</strong> ファイルプレビューとディレクトリ一覧に削除ボタンが表示されます。削除前に確認ダイアログが表示されます。</li>
+          <li><strong>クリップボード:</strong> ターミナル上で右クリックしてコピー/ペースト。Ctrl+T は tmux に送信されます。</li>
+          <li><strong>キーボードショートカット:</strong> ターミナル表示中に Ctrl+Shift+B でターミナルとファイルブラウザを切り替えられます。</li>
+          <li><strong>セキュリティ:</strong> デフォルトで 127.0.0.1 にバインドされます。localhost 以外に公開する場合は TLS と認証を追加してください。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<script defer src="/static/docs.js"></script>
 {% endblock %}

@@ -22,3 +22,15 @@ def test_boxes_route() -> None:
     response = client.get("/boxes")
     assert response.status_code == 200
     assert "Boxes" in response.text
+
+
+def test_csp_allows_inline_styles() -> None:
+    """Test that Content-Security-Policy allows inline styles for terminal rendering."""
+    app = make_app(ServerSettings(csrf_token="test-token"))
+    client = TestClient(app)
+    response = client.get("/boxes")
+    assert response.status_code == 200
+    csp_header = response.headers.get("Content-Security-Policy")
+    assert csp_header is not None
+    assert "'unsafe-inline'" in csp_header
+    assert "style-src 'self' 'unsafe-inline' https://unpkg.com" in csp_header

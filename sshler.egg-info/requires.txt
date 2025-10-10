@@ -6,6 +6,7 @@ asyncssh>=2.14.0
 platformdirs>=4.2
 pydantic>=2.7
 python-multipart>=0.0.9
+sqler>=1.2025.9.24
 
 [dev]
 anyio>=4.4

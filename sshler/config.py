@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 from platformdirs import user_config_dir
 
+from . import state
 from .ssh_config import HostConfig, load_ssh_config
 
 ENV_CONFIG_DIR = "SSHLER_CONFIG_DIR"
@@ -169,6 +170,8 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
         ローカルボックスを含む :class:`AppConfig` を返します。
     """
 
+    config_dir = get_config_dir()
+    state.initialize(config_dir)
     config_path = ensure_config()
     with config_path.open("r", encoding="utf-8") as file_pointer:
         raw_data = yaml.safe_load(file_pointer) or {}
@@ -178,16 +181,21 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
         stored_box = _stored_box_from_dict(entry)
         stored[stored_box.name] = stored_box
 
+    migrated = state.migrate_legacy_favorites(stored)
     _remove_legacy_seed(stored)
 
     resolved_path = _resolve_ssh_config_path(ssh_config_path)
     boxes = _build_boxes(stored, load_ssh_config(resolved_path))
     boxes.insert(0, _build_local_box())
-    return AppConfig(
+    _apply_favorites(boxes)
+    app_config = AppConfig(
         boxes=boxes,
         stored=stored,
         ssh_config_path=str(resolved_path) if resolved_path else None,
     )
+    if migrated:
+        save_config(app_config)
+    return app_config
 
 
 def save_config(application_config: AppConfig) -> None:
@@ -240,11 +248,21 @@ def rebuild_boxes(application_config: AppConfig, ssh_config_path: str | None = N
         リストを再構築します。
     """
 
+    state.initialize(get_config_dir())
     resolved_path = _resolve_ssh_config_path(ssh_config_path or application_config.ssh_config_path)
     application_config.ssh_config_path = str(resolved_path) if resolved_path else None
     application_config.boxes = _build_boxes(
         application_config.stored, load_ssh_config(resolved_path)
     )
+    _apply_favorites(application_config.boxes)
+
+
+def _apply_favorites(boxes: list[Box]) -> None:
+    if not boxes:
+        return
+    mapping = state.favorites_map([box.name for box in boxes])
+    for box in boxes:
+        box.favorites = mapping.get(box.name, [])
 
 
 def _stored_box_from_dict(data: dict[str, Any]) -> StoredBox:
@@ -275,8 +293,6 @@ def _stored_box_to_dict(stored: StoredBox) -> dict[str, Any]:
         result["keyfile"] = stored.keyfile
     if stored.agent:
         result["agent"] = stored.agent
-    if stored.favorites:
-        result["favorites"] = stored.favorites
     if stored.default_dir:
         result["default_dir"] = stored.default_dir
     if stored.known_hosts:
@@ -360,7 +376,6 @@ def _merge_host(
     if base_keyfile is None and host_config and host_config.identity_files:
         base_keyfile = host_config.identity_files[0]
 
-    favorites = list(stored_override.favorites) if stored_override else []
     default_dir = stored_override.default_dir if stored_override else None
     known_hosts = stored_override.known_hosts if stored_override else None
     agent = stored_override.agent if stored_override else False
@@ -374,7 +389,7 @@ def _merge_host(
         port=base_port,
         keyfile=base_keyfile,
         agent=agent,
-        favorites=favorites,
+        favorites=[],
         default_dir=default_dir,
         known_hosts=known_hosts,
         source=source,

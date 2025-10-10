@@ -94,3 +94,46 @@ def test_websocket_falls_back_to_default_directory(monkeypatch, configured_app: 
     assert fake_process.stdin.messages == [b"hello"]
     assert fake_process.stdin.eof_called is True
     assert fake_process.closed is True
+
+
+def test_local_box_connects_successfully(monkeypatch, configured_app: TestClient):
+    """Test that local boxes can connect successfully."""
+    config = load_config()
+
+    # Find or create a local box
+    local_box = next((b for b in config.boxes if b.name == "local"), None)
+    if not local_box:
+        pytest.skip("No local box configured")
+
+    class FakeLocalProcess:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+            self.stdout = FakeStdout()
+            self.terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        async def wait(self) -> None:
+            await asyncio.sleep(0)
+
+    async def fake_open_local_tmux(*args, **kwargs):
+        return FakeLocalProcess()
+
+    async def fake_local_is_directory(_path: str) -> bool:
+        return True
+
+    async def fake_list_local_tmux_windows(_session: str):
+        return None
+
+    monkeypatch.setattr("sshler.webapp._local_is_directory", fake_local_is_directory)
+    monkeypatch.setattr("sshler.webapp._open_local_tmux", fake_open_local_tmux)
+    monkeypatch.setattr("sshler.webapp._list_local_tmux_windows", fake_list_local_tmux_windows)
+
+    with configured_app.websocket_connect(
+        f"/ws/term?host=local&dir=/tmp&session=test&token={TEST_TOKEN}"
+    ) as websocket:
+        websocket.send_bytes(b"test")
+
+    # If we get here without exceptions, the connection succeeded
+    assert True

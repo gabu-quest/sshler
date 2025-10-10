@@ -1,11 +1,6 @@
 
 {% extends "base.html" %}
 {% block content %}
-<script>
-  if (window.sshlerSetFavicon) {
-    window.sshlerSetFavicon('default');
-  }
-</script>
 <h1>{{ box.name }}</h1>
 {% if box.source == 'local' %}
 <div class="muted small">Local workspace • {{ box.user }}@{{ box.display_host }}</div>

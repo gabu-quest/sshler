@@ -1,5 +1,6 @@
 import yaml
 
+from sshler import state
 from sshler.config import Box, StoredBox, load_config
 
 
@@ -58,6 +59,7 @@ Host merged-box
     assert custom.connect_host == "10.0.0.5"
     assert custom.source == "custom"
     assert custom.favorites == ["/var/www"]
+    assert state.list_favorites("custom-only") == ["/var/www"]
     assert custom.ssh_alias == "custom-only"
     assert custom.resolved_host is None
 
@@ -94,3 +96,7 @@ def test_legacy_seed_favorites_are_cleared(tmp_path, monkeypatch):
     stored = config.stored.get("gabu-server")
     assert isinstance(stored, StoredBox)
     assert stored.favorites == []
+    assert state.list_favorites("gabu-server") == ["/home/gabu"]
+
+    data = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
+    assert data["boxes"][0].get("favorites") is None

@@ -6,6 +6,7 @@ sshler/cli.py
 sshler/config.py
 sshler/ssh.py
 sshler/ssh_config.py
+sshler/state.py
 sshler/webapp.py
 sshler.egg-info/PKG-INFO
 sshler.egg-info/SOURCES.txt
@@ -16,9 +17,12 @@ sshler.egg-info/top_level.txt
 sshler/scripts/install-sshler-task.ps1
 sshler/scripts/remove-sshler-task.ps1
 sshler/scripts/run-sshler.ps1
+sshler/static/base.js
 sshler/static/favicon-terminal.svg
 sshler/static/favicon.svg
+sshler/static/file-edit.js
 sshler/static/style.css
+sshler/static/term.js
 sshler/templates/base.html
 sshler/templates/box.html
 sshler/templates/docs.html

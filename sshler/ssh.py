@@ -5,8 +5,8 @@ import logging
 import os
 import shlex
 import socket
-from pathlib import Path
 from asyncio.subprocess import Process
+from pathlib import Path
 
 import asyncssh
 

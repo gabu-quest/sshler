@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import os
 import platform
 import secrets
 import shlex
@@ -29,7 +28,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import __version__
+from . import __version__, state
 from .config import (
     AppConfig,
     StoredBox,
@@ -67,7 +66,7 @@ LOCAL_IS_WINDOWS = platform.system().lower().startswith("windows")
 @dataclass
 class ServerSettings:
     allow_origins: list[str] = field(default_factory=list)
-    csrf_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    csrf_token: str | None = field(default_factory=lambda: secrets.token_urlsafe(32))
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     allow_ssh_alias: bool = True
     basic_auth: tuple[str, str] | None = None
@@ -86,7 +85,7 @@ class ServerSettings:
 
         if self.basic_auth:
             user, password = self.basic_auth
-            raw = f"{user}:{password}".encode("utf-8")
+            raw = f"{user}:{password}".encode()
             self.basic_auth_header = "Basic " + base64.b64encode(raw).decode("ascii")
 
 
@@ -209,6 +208,13 @@ async def _local_create_file(path: str) -> None:
     await asyncio.to_thread(_worker)
 
 
+async def _local_delete_file(path: str) -> None:
+    def _worker() -> None:
+        Path(path).unlink()
+
+    await asyncio.to_thread(_worker)
+
+
 def _local_tmux_base_command() -> list[str]:
     if LOCAL_IS_WINDOWS:
         return ["wsl", "--", "tmux"]
@@ -245,6 +251,18 @@ async def _open_local_tmux(
             if converted:
                 target_dir = converted
         command.extend(["-c", target_dir])
+
+    # On Windows, we need to use winpty or conpty to provide a PTY for tmux
+    # For now, let's try using script to provide a PTY
+    if LOCAL_IS_WINDOWS:
+        # Use 'script' command in WSL to create a PTY
+        script_command = ["wsl", "--", "script", "-qfc", " ".join(f"'{arg}'" if " " in arg else arg for arg in command[2:]), "/dev/null"]
+        return await asyncio.create_subprocess_exec(
+            *script_command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
     return await asyncio.create_subprocess_exec(
         *command,
@@ -348,9 +366,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers[
-            "Content-Security-Policy"
-        ] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' https://unpkg.com; connect-src 'self';"
+        csp_directives = [
+            "default-src 'self'",
+            "img-src 'self' data:",
+            "style-src 'self' 'unsafe-inline' https://unpkg.com",
+            "script-src 'self' https://unpkg.com",
+            "connect-src 'self' https://unpkg.com",
+        ]
+        response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
         return response
 
     def _require_token(request: Request) -> None:
@@ -377,6 +400,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     return f"/box/{box_name}/cat"
                 if endpoint == "edit_file":
                     return f"/box/{box_name}/edit"
+                if endpoint == "delete_file":
+                    return f"/box/{box_name}/delete"
                 if endpoint == "term_page":
                     return "/term"
                 return "/"
@@ -388,6 +413,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             "favorite": _resolve("toggle_favorite", name=box_name),
             "preview": _resolve("view_file", name=box_name),
             "edit": _resolve("edit_file", name=box_name),
+            "delete": _resolve("delete_file", name=box_name),
             "term": _resolve("term_page"),
         }
 
@@ -672,7 +698,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             message = error_message or success_message
             if message:
                 trigger_payload = json.dumps(
-                    {"dir-action": {"status": "error" if error_message else "success", "message": message}}
+                    {
+                        "dir-action": {
+                            "status": "error" if error_message else "success",
+                            "message": message,
+                        }
+                    }
                 )
                 response.headers["HX-Trigger"] = trigger_payload
             return response
@@ -748,7 +779,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         message = error_message or success_message
         if message:
             trigger_payload = json.dumps(
-                {"dir-action": {"status": "error" if error_message else "success", "message": message}}
+                {
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                }
             )
             response.headers["HX-Trigger"] = trigger_payload
         return response
@@ -824,7 +860,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             message = error_message or success_message
             if message:
                 trigger_payload = json.dumps(
-                    {"dir-action": {"status": "error" if error_message else "success", "message": message}}
+                    {
+                        "dir-action": {
+                            "status": "error" if error_message else "success",
+                            "message": message,
+                        }
+                    }
                 )
                 response.headers["HX-Trigger"] = trigger_payload
             return response
@@ -911,7 +952,129 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         message = error_message or success_message
         if message:
             trigger_payload = json.dumps(
-                {"dir-action": {"status": "error" if error_message else "success", "message": message}}
+                {
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                }
+            )
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
+    @application.post("/box/{name}/delete", response_class=HTMLResponse)
+    async def delete_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        directory: str = Form(...),
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Delete a file from the box."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        if box.transport == "local":
+            normalized_path = _normalize_local_path(file_path)
+            error_message = None
+            success_message: str | None = None
+
+            try:
+                await _local_delete_file(normalized_path)
+                success_message = f"Deleted {Path(normalized_path).name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {Path(normalized_path).name}"
+            except Exception as exc:
+                error_message = f"Failed to delete file: {exc}"
+
+            response = await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=error_message,
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps(
+                    {
+                        "dir-action": {
+                            "status": "error" if error_message else "success",
+                            "message": message,
+                        }
+                    }
+                )
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote file deletion
+        error_message = None
+        success_message: str | None = None
+        connection = None
+        sftp_client = None
+
+        try:
+            connection = await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
+            )
+            try:
+                sftp_client = await connection.start_sftp_client()
+            except Exception as exc:
+                error_message = f"SFTP session failed: {exc}"
+            else:
+                try:
+                    await sftp_client.remove(file_path)
+                    success_message = f"Deleted {PurePosixPath(file_path).name}"
+                except FileNotFoundError:
+                    error_message = f"File not found: {PurePosixPath(file_path).name}"
+                except Exception as exc:
+                    error_message = f"Failed to delete file: {exc}"
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+        finally:
+            if sftp_client is not None:
+                try:
+                    await sftp_client.exit()
+                except Exception:
+                    pass
+            if connection is not None:
+                connection.close()
+
+        response = await _render_directory_listing(
+            request,
+            box,
+            directory_path,
+            target,
+            application_config,
+            error_override=error_message,
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps(
+                {
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                }
             )
             response.headers["HX-Trigger"] = trigger_payload
         return response
@@ -957,13 +1120,19 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             text_content: str | None = None
             if not image_mime or image_too_large:
                 try:
-                    text_content = await _local_read_text(normalized_path, settings.max_upload_bytes)
+                    text_content = await _local_read_text(
+                        normalized_path, settings.max_upload_bytes
+                    )
                 except Exception as exc:
                     raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+            # Get the directory containing the file
+            parent_dir = str(Path(normalized_path).parent)
 
             context = {
                 "box": box,
                 "path": normalized_path,
+                "parent_directory": parent_dir,
                 "content": text_content or "",
                 "syntax_class": _syntax_from_filename(normalized_path),
                 "app_version": app_version,
@@ -1009,15 +1178,19 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             text_content: str | None = None
             if not image_mime or image_too_large:
                 try:
-                    text_content = await sftp_read_file(
-                        connection, file_path, max_bytes=settings.max_upload_bytes
+                    text_content = await _read_remote_text(
+                        connection, file_path, settings.max_upload_bytes
                     )
                 except Exception as exc:
                     raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+            # Get the directory containing the file
+            parent_dir = str(PurePosixPath(file_path).parent)
+
             context = {
                 "box": box,
                 "path": file_path,
+                "parent_directory": parent_dir,
                 "content": text_content or "",
                 "syntax_class": _syntax_from_filename(file_path),
                 "app_version": app_version,
@@ -1101,7 +1274,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         try:
             if request.method == "GET":
                 try:
-                    content = await sftp_read_file(connection, file_path, max_bytes=262144)
+                    content = await _read_remote_text(connection, file_path, 262144)
                 except Exception as exc:
                     raise HTTPException(status_code=500, detail=str(exc)) from exc
                 context = {
@@ -1175,14 +1348,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         box = find_box(application_config, name)
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
-        stored_override = application_config.get_or_create_stored(name)
-        favorites = stored_override.favorites
-        if directory_path in favorites:
-            favorites.remove(directory_path)
-        else:
-            favorites.append(directory_path)
-        box.favorites = list(favorites)
-        save_config(application_config)
+
+        await state.toggle_favorite_async(name, directory_path)
+        box.favorites = await state.list_favorites_async(name)
         return "ok"
 
     @application.get("/boxes/new", response_class=HTMLResponse)
@@ -1237,7 +1405,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             port=port or None,
             keyfile=keyfile.strip() or None,
             agent=agent,
-            favorites=favorites_list,
+            favorites=[],
             default_dir=default_dir.strip() or None,
             known_hosts=known_hosts.strip() or None,
             ssh_alias=ssh_alias.strip() or None,
@@ -1247,6 +1415,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         application_config.stored[new_box.name] = new_box
         rebuild_boxes(application_config)
         save_config(application_config)
+        await state.replace_favorites_async(new_box.name, favorites_list)
         return RedirectResponse(url="/boxes", status_code=303)
 
     @application.post("/box/{name}/refresh", response_class=PlainTextResponse)
@@ -1267,34 +1436,34 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         _require_token(request)
 
+        await state.replace_favorites_async(name, [])
+
         stored_override = application_config.stored.get(name)
-        if stored_override is None:
-            return "ok"
+        if stored_override is not None:
+            stored_override.host = None
+            stored_override.user = None
+            stored_override.port = None
+            stored_override.keyfile = None
+            stored_override.known_hosts = None
+            stored_override.ssh_alias = None
 
-        stored_override.host = None
-        stored_override.user = None
-        stored_override.port = None
-        stored_override.keyfile = None
-        stored_override.known_hosts = None
-        stored_override.ssh_alias = None
+            if not any(
+                [
+                    stored_override.host,
+                    stored_override.user,
+                    stored_override.port,
+                    stored_override.keyfile,
+                    stored_override.known_hosts,
+                    stored_override.ssh_alias,
+                    stored_override.default_dir,
+                    stored_override.agent,
+                ]
+            ):
+                application_config.stored.pop(name, None)
 
-        if not any(
-            [
-                stored_override.host,
-                stored_override.user,
-                stored_override.port,
-                stored_override.keyfile,
-                stored_override.known_hosts,
-                stored_override.ssh_alias,
-                stored_override.favorites,
-                stored_override.default_dir,
-                stored_override.agent,
-            ]
-        ):
-            application_config.stored.pop(name, None)
+            save_config(application_config)
 
         rebuild_boxes(application_config)
-        save_config(application_config)
         return "ok"
 
     @application.get("/term", response_class=HTMLResponse)
@@ -1411,6 +1580,19 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             else _normalize_directory_path(directory)
         )
 
+        # Set up logging
+        import logging
+        logger = logging.getLogger("sshler.webapp")
+
+        # Configure file logging if not already configured
+        if not logger.handlers:
+            logger.setLevel(logging.DEBUG)
+            file_handler = logging.FileHandler("debug.log")
+            file_handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+
         connection: asyncssh.SSHClientConnection | None = None
         process = None
 
@@ -1422,10 +1604,20 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     is_directory = False
                 if not is_directory:
                     normalized_directory = _normalize_local_path(box.default_dir)
+
+                # Debug: Log the command we're about to run
+                logger.info(f"Starting local tmux: transport={transport}, dir={normalized_directory}, session={session}")
+
                 try:
                     process = await _open_local_tmux(normalized_directory, session)
+                    logger.info(f"Local tmux process started: {process}")
                 except Exception as exc:
-                    await websocket.send_text(f"Connection failed: {exc}")
+                    logger.error(f"Failed to start local tmux: {exc}", exc_info=True)
+                    error_msg = f"Connection failed: {exc}\r\n"
+                    try:
+                        await websocket.send_text(error_msg)
+                    except Exception:
+                        pass
                     await websocket.close()
                     return
             else:
@@ -1439,7 +1631,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         application_config.ssh_config_path,
                         box.ssh_alias,
                     )
-                except Exception as exc:  # pragma: no cover - network errors are environment specific
+                except Exception as exc:  # pragma: no cover
+                    # network errors are environment specific
                     await websocket.send_text(f"Connection failed: {exc}")
                     await websocket.close()
                     return
@@ -1460,23 +1653,31 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 )
 
             async def reader() -> None:
+                logger.info("Reader task started")
                 try:
                     while True:
+                        logger.debug("Reader: waiting for stdout data...")
                         data = await process.stdout.read(32768)
                         if not data:
+                            logger.info("Reader: got empty data, ending")
                             break
+                        logger.debug(f"Reader: got {len(data)} bytes, sending to websocket")
                         await websocket.send_bytes(data)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.error(f"Reader exception: {exc}", exc_info=True)
 
             async def writer() -> None:
+                logger.info("Writer task started")
                 try:
                     while True:
+                        logger.debug("Writer: waiting for websocket message...")
                         message = await websocket.receive()
                         message_type = message.get("type")
                         if message_type == "websocket.disconnect":
+                            logger.info("Writer: got disconnect")
                             break
                         if "text" in message and message["text"] is not None:
+                            logger.debug(f"Writer: got text message: {message['text'][:50]}")
                             await _handle_control_message(
                                 message["text"],
                                 process,
@@ -1485,11 +1686,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 transport,
                             )
                         elif "bytes" in message and message["bytes"] is not None:
+                            logger.debug(f"Writer: got {len(message['bytes'])} bytes, writing to stdin")
                             process.stdin.write(message["bytes"])
                 except WebSocketDisconnect:
-                    pass
-                except Exception:
-                    pass
+                    logger.info("Writer: websocket disconnected")
+                except Exception as exc:
+                    logger.error(f"Writer exception: {exc}", exc_info=True)
 
             async def poll_tmux_windows() -> None:
                 try:
@@ -1515,9 +1717,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             try:
                 if process:
                     if transport == "local":
-                        process.terminate()
+                        # Don't terminate! Just close stdin/stdout to detach gracefully
+                        # The tmux session will continue running in WSL
                         try:
-                            await process.wait()
+                            process.stdin.close()
+                        except Exception:
+                            pass
+                        try:
+                            # Give it a moment to flush
+                            await asyncio.sleep(0.1)
                         except Exception:
                             pass
                     else:
@@ -1589,6 +1797,19 @@ async def _read_file_bytes(
     return data, False
 
 
+async def _read_remote_text(
+    connection: asyncssh.SSHClientConnection, path: str, limit: int
+) -> str:
+    """Retrieve UTF-8 text from an SFTP connection with graceful fallback."""
+
+    try:
+        return await sftp_read_file(connection, path, max_bytes=limit)
+    except TypeError as exc:
+        if "max_bytes" not in str(exc):
+            raise
+        return await sftp_read_file(connection, path)
+
+
 async def _handle_control_message(
     payload: str,
     process,
@@ -1637,10 +1858,10 @@ async def _handle_control_message(
                 await _run_local_tmux_command(["rename-window", "-t", session, str(new_name)])
             elif connection is not None:
                 try:
-                    await connection.run(
-                        f"tmux rename-window -t {shlex.quote(session)} {shlex.quote(str(new_name))}",
-                        check=False,
+                    rename_command = (
+                        f"tmux rename-window -t {shlex.quote(session)} {shlex.quote(str(new_name))}"
                     )
+                    await connection.run(rename_command, check=False)
                 except Exception:
                     pass
 

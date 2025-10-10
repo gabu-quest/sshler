@@ -56,10 +56,10 @@
             <span class="fs-label">{{ entry.name }}</span>
           </a>
         {% else %}
-          <span class="fs-entry file">
+          <a class="fs-entry file" href="{{ preview_url }}?path={{ target_path|urlencode }}" target="_blank">
             <span class="fs-icon file"></span>
             <span class="fs-label">{{ entry.name }}</span>
-          </span>
+          </a>
         {% endif %}
       </td>
       <td class="fs-type">{{ "dir" if entry.is_directory else "file" }}</td>
@@ -76,6 +76,13 @@
         {% else %}
           <a class="action-btn" href="{{ preview_url }}?path={{ target_path|urlencode }}" target="_blank" title="Preview file">Preview</a>
           <a class="action-btn" href="{{ edit_url }}?path={{ target_path|urlencode }}" target="_blank" title="Edit file">Edit</a>
+          <button class="action-btn danger-btn delete-file-btn"
+                  data-box="{{ box.name }}"
+                  data-path="{{ target_path }}"
+                  data-directory="{{ directory_path }}"
+                  data-target="{{ current_target }}"
+                  data-filename="{{ entry.name }}"
+                  title="Delete file">Delete</button>
         {% endif %}
       </td>
     </tr>

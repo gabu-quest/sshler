@@ -4,7 +4,6 @@ import argparse
 import secrets
 import threading
 import webbrowser
-from typing import List, Optional, Tuple
 
 import uvicorn
 
@@ -28,13 +27,13 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8822,
     reload: bool = False,
-    allow_origins: Optional[List[str]] = None,
-    basic_auth: Optional[Tuple[str, str]] = None,
+    allow_origins: list[str] | None = None,
+    basic_auth: tuple[str, str] | None = None,
     max_upload_mb: int = 50,
     allow_ssh_alias: bool = True,
     log_level: str = "info",
     open_browser: bool = True,
-    token: Optional[str] = None,
+    token: str | None = None,
 ) -> None:
     """Start the sshler FastAPI application via uvicorn.
 
@@ -92,7 +91,11 @@ def main() -> None:
     subcommands = parser.add_subparsers(dest="command")
 
     serve_parser = subcommands.add_parser("serve", help="Start the sshler web app")
-    serve_parser.add_argument("--host", default="127.0.0.1", help="Interface to bind (default: 127.0.0.1)")
+    serve_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Interface to bind (default: 127.0.0.1)",
+    )
     serve_parser.add_argument("--bind", default=None, help="Alias for --host")
     serve_parser.add_argument("--port", type=int, default=8822)
     serve_parser.add_argument("--reload", action="store_true")
@@ -136,7 +139,7 @@ def main() -> None:
     parsed_args = parser.parse_args()
     if parsed_args.command in (None, "serve"):
         bind_host = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
-        basic_auth: Optional[Tuple[str, str]] = None
+        basic_auth: tuple[str, str] | None = None
         auth_value = getattr(parsed_args, "auth", None)
         if auth_value:
             if ":" not in auth_value:

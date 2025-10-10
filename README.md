@@ -28,14 +28,39 @@ anything on the remote host.
 - Inline edits for lightweight text files (≤256 KB) with a CodeMirror editor and Save button
   - **日本語:** 256 KB 以下のテキストならブラウザ内で編集し、その場で保存できます。
 
-## Install (editable) / インストール（開発用）
+## Install / インストール
+
+### PyPI (recommended) / PyPI からのインストール
+
+```bash
+pip install sshler
+
+# launch once to create the config + systemd/service assets
+sshler serve
+```
+
+- **日本語:** `pip install sshler` で最新の安定版を取得し、`sshler serve` を実行すると初期設定ファイルが生成されます。
+
+Requires Python **3.12+**.
+
+### Development / 開発インストール
 
 ```bash
 uv pip install -e .
 # or: pip install -e .
 ```
 
-- **日本語:** 開発時は上記のように editable install を利用してください。
+- **日本語:** 開発時は editable install (`-e`) を利用してください。
+
+After cloning the repository, install the dev extras and run the usual tooling:
+
+```bash
+uv sync --group dev
+uv run ruff check .
+uv run pytest
+```
+
+- **日本語:** リポジトリを取得したら `uv sync --group dev` で依存関係をそろえ、`uv run ruff check .` や `uv run pytest` で動作を確認します。
 
 ## Run / 実行
 
@@ -124,6 +149,45 @@ The server prints the token (and, if enabled, the basic auth username) on startu
 
 - **日本語:** サーバー起動時にトークン（および Basic 認証を有効にした場合はユーザー名）を表示するので、API クライアントやブラウザ拡張に貼り付けて利用できます。
 
+## Autostart / 自動起動
+
+### Windows (Task Scheduler)
+
+1. Run `where sshler` to locate the installed executable (for example, `%LOCALAPPDATA%\Programs\Python\Python312\Scripts\sshler.exe`).
+2. Open **Task Scheduler → Create Task…**.
+3. Under **Triggers**, add “At log on”.
+4. Under **Actions**, choose “Start a program” and point to the `sshler.exe` path. Add arguments such as `serve --no-browser` and set **Start in** to a writable directory.
+5. Tick “Run with highest privileges” if you need WSL access, then save. sshler will now launch automatically every time you sign in.
+
+- **日本語:** Task Scheduler で「ログオン時」をトリガーにし、`sshler.exe serve --no-browser` を実行するタスクを作成すると、サインイン時に自動起動します。
+
+### Linux / macOS (systemd user service)
+
+Create `~/.config/systemd/user/sshler.service`:
+
+```ini
+[Unit]
+Description=sshler – local tmux bridge
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/sshler serve --bind 127.0.0.1 --no-browser
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Reload and enable:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now sshler.service
+```
+
+- **日本語:** 上記の systemd ユーザーサービスを作成し、`systemctl --user enable --now sshler.service` を実行するとサインイン時に自動起動します。
+
 ### Dependencies & licenses
 
 - FastAPI, uvicorn, asyncssh, platformdirs, yaml (PyPI packages, permissive licenses)
@@ -133,22 +197,6 @@ The server prints the token (and, if enabled, the basic auth username) on startu
 All assets are used under their respective MIT/BSD-style licenses. sshler itself ships under the MIT license.
 
 - **日本語:** 依存ライブラリはいずれも寛容なライセンス (MIT/BSD) で提供されています。sshler 本体も MIT ライセンスで配布されます。
-
-## Development / 開発
-
-```bash
-# install dependencies (project + dev extras)
-uv sync --extra dev
-
-# lint & format
-uv run ruff check .
-uv run ruff format .
-
-# run the test suite
-uv run pytest
-```
-
-- **日本語:** 上記コマンドで依存関係のインストール、Lint/整形、テスト実行が行えます。
 
 ## Why “sshler”? / 名前の由来
 

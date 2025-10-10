@@ -4,12 +4,13 @@ import tempfile
 import yaml
 from fastapi.testclient import TestClient
 
-if "SSHLER_CONFIG_DIR" not in os.environ:
-    os.environ["SSHLER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="sshler_")
-
+from sshler import state
 from sshler.config import ensure_config
 from sshler.ssh import SSHError
 from sshler.webapp import ServerSettings, make_app
+
+if "SSHLER_CONFIG_DIR" not in os.environ:
+    os.environ["SSHLER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="sshler_")
 
 
 TEST_TOKEN = "test-token"
@@ -80,8 +81,9 @@ Host demo-box
     finally:
         client.close()
 
+    assert state.list_favorites("demo-box") == ["/tmp"]
     stored = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
-    assert stored["boxes"] == [{"name": "demo-box", "favorites": ["/tmp"]}]
+    assert stored["boxes"] == []
 
 
 def test_create_box_route_persists_data(monkeypatch, tmp_path):
@@ -113,6 +115,7 @@ def test_create_box_route_persists_data(monkeypatch, tmp_path):
     finally:
         client.close()
 
+    assert state.list_favorites("custom") == ["/srv", "/var/log"]
     stored = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
     assert stored["boxes"] == [
         {
@@ -121,7 +124,6 @@ def test_create_box_route_persists_data(monkeypatch, tmp_path):
             "user": "ubuntu",
             "port": 2200,
             "keyfile": "~/.ssh/custom",
-            "favorites": ["/srv", "/var/log"],
             "default_dir": "/srv",
         }
     ]
@@ -170,6 +172,7 @@ Host demo-box
     finally:
         client.close()
 
+    assert state.list_favorites("demo-box") == []
     stored = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
     assert stored["boxes"] == []
 
@@ -267,7 +270,7 @@ Host demo
 
     monkeypatch.setattr("sshler.webapp.connect", fake_connect)
 
-    client = TestClient(make_app())
+    client = TestClient(make_app(ServerSettings(csrf_token=None)))
     try:
         response = client.get("/box/demo/edit", params={"path": "/etc/hosts"})
         assert response.status_code == 200
@@ -334,7 +337,7 @@ Host demo
 
     monkeypatch.setattr("sshler.webapp.connect", fake_connect_save)
 
-    client = TestClient(make_app())
+    client = TestClient(make_app(ServerSettings(csrf_token=None)))
     try:
         response = client.post(
             "/box/demo/edit",
