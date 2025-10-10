@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sshler"
-version = "0.3.1"
+version = "0.3.2"
 description = "A local FastAPI-powered SSH multiplexer for tmux-in-browser — from your laptop only."
 readme = "README.md"
 requires-python = ">=3.12"
