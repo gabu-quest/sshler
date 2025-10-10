@@ -27,6 +27,7 @@ body.term-view .container { width: 100%; max-width: none; margin: 0; padding: 16
 .link:hover, a:hover { color: var(--accent); }
 .link:visited, a:visited { color: var(--muted); }
 .spacer { flex: 1; }
+.docs-btn { background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; font-size: inherit; }
 .lang-toggle { background: transparent; border: 1px solid #2a2f3f; border-radius: 6px; color: var(--muted); padding: 4px 10px; cursor: pointer; font-size: 0.85em; font-weight: 600; }
 .lang-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .container { padding: 20px; max-width: 1100px; margin: 0 auto; }

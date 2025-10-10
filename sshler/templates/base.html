@@ -24,9 +24,9 @@
       <a class="brand" href="/boxes">sshler</a>
       <span class="version-pill">{{ app_version }}</span>
       <div class="spacer"></div>
-      <a class="link" href="/boxes">Boxes</a>
-      <a class="link" href="/boxes/new">Add Box</a>
-      <a class="link" href="/docs" target="_blank" rel="noopener">Docs</a>
+      <a class="link" href="/boxes" data-i18n="nav.boxes">Boxes</a>
+      <a class="link" href="/boxes/new" data-i18n="nav.addBox">Add Box</a>
+      <button id="docs-btn" class="link docs-btn" data-i18n="nav.docs">Docs</button>
       <button id="lang-toggle" class="lang-toggle" title="Switch language / 言語を切り替え">
         <span data-lang="en">EN</span>
         <span data-lang="ja" class="hidden">JP</span>
@@ -35,6 +35,7 @@
     <main class="container">
       {% block content %}{% endblock %}
     </main>
+    <div id="modal-container"></div>
     {% block extra_scripts %}{% endblock %}
   </body>
 </html>

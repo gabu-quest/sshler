@@ -5,6 +5,19 @@
   };
   const LANG_KEY = "sshler-language";
 
+  const I18N = {
+    en: {
+      "nav.boxes": "Boxes",
+      "nav.addBox": "Add Box",
+      "nav.docs": "Docs",
+    },
+    ja: {
+      "nav.boxes": "ボックス",
+      "nav.addBox": "ボックスを追加",
+      "nav.docs": "ドキュメント",
+    },
+  };
+
   function readToken() {
     const tokenMeta = document.querySelector('meta[name="sshler-token"]');
     const token = tokenMeta ? tokenMeta.getAttribute("content") : null;
@@ -79,6 +92,17 @@
     }
   }
 
+  function translate(lang) {
+    const elements = document.querySelectorAll("[data-i18n]");
+    elements.forEach((el) => {
+      const key = el.dataset.i18n;
+      const text = I18N[lang]?.[key];
+      if (text) {
+        el.textContent = text;
+      }
+    });
+  }
+
   function updateLangToggle(lang) {
     const langToggle = document.getElementById("lang-toggle");
     if (!langToggle) {
@@ -94,6 +118,42 @@
     });
   }
 
+  function switchLanguage(newLang) {
+    setStoredLang(newLang);
+    updateLangToggle(newLang);
+    translate(newLang);
+
+    // Update docs modal if it's open
+    const docsModal = document.querySelector("#modal-container .modal");
+    if (docsModal) {
+      switchDocsLanguage(newLang);
+    }
+  }
+
+  function switchDocsLanguage(lang) {
+    const modal = document.querySelector("#modal-container #docs-modal");
+    if (!modal) return;
+
+    const contents = modal.querySelectorAll(".lang-content");
+    const buttons = modal.querySelectorAll(".lang-btn");
+
+    contents.forEach((el) => {
+      if (el.dataset.lang === lang) {
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    });
+
+    buttons.forEach((btn) => {
+      if (btn.dataset.lang === lang) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+      }
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     const token = readToken();
     applyToken(token);
@@ -102,16 +162,87 @@
     // Initialize language toggle
     const currentLang = getStoredLang();
     updateLangToggle(currentLang);
+    translate(currentLang);
 
     const langToggle = document.getElementById("lang-toggle");
     if (langToggle) {
       langToggle.addEventListener("click", () => {
         const current = getStoredLang();
         const newLang = current === "en" ? "ja" : "en";
-        setStoredLang(newLang);
-        updateLangToggle(newLang);
-        // Reload to apply language change
-        window.location.reload();
+        switchLanguage(newLang);
+      });
+    }
+
+    // Docs button handler
+    const docsBtn = document.getElementById("docs-btn");
+    if (docsBtn) {
+      docsBtn.addEventListener("click", async () => {
+        const modalContainer = document.getElementById("modal-container");
+        if (!modalContainer) return;
+
+        try {
+          const response = await fetch("/docs");
+          if (!response.ok) throw new Error("Failed to load docs");
+          const html = await response.text();
+          modalContainer.innerHTML = html;
+
+          const modal = modalContainer.querySelector("#docs-modal");
+          if (!modal) return;
+
+          // Show modal
+          modal.classList.add("visible");
+
+          // Set initial language
+          switchDocsLanguage(currentLang);
+
+          // Language switcher in modal
+          const langButtons = modal.querySelectorAll(".lang-btn");
+          langButtons.forEach((btn) => {
+            btn.addEventListener("click", () => {
+              const newLang = btn.dataset.lang;
+              switchDocsLanguage(newLang);
+              setStoredLang(newLang);
+              updateLangToggle(newLang);
+              translate(newLang);
+            });
+          });
+
+          // Close button
+          const closeBtn = modal.querySelector(".modal-close");
+          if (closeBtn) {
+            closeBtn.addEventListener("click", () => {
+              modal.classList.remove("visible");
+              setTimeout(() => {
+                modalContainer.innerHTML = "";
+              }, 300);
+            });
+          }
+
+          // Close on outside click
+          modal.addEventListener("click", (event) => {
+            if (event.target === modal) {
+              modal.classList.remove("visible");
+              setTimeout(() => {
+                modalContainer.innerHTML = "";
+              }, 300);
+            }
+          });
+
+          // Close on Escape key
+          const escHandler = (event) => {
+            if (event.key === "Escape") {
+              modal.classList.remove("visible");
+              setTimeout(() => {
+                modalContainer.innerHTML = "";
+              }, 300);
+              document.removeEventListener("keydown", escHandler);
+            }
+          };
+          document.addEventListener("keydown", escHandler);
+        } catch (err) {
+          console.error("Failed to load docs:", err);
+          showToast("Failed to load documentation", "error");
+        }
       });
     }
 
