@@ -1,56 +1,38 @@
+# sshler
 
-# sshler / エスエスエイチラー
+sshler is a lightweight, local-only web UI that lets you browse remote files over SFTP and jump into tmux sessions in your browser — without installing anything on the remote host.
 
-**English:** sshler is a lightweight, local-only web UI that lets you browse remote
-files over SFTP and jump into tmux sessions in your browser — without installing
-anything on the remote host.
+## Features
 
-**日本語:** sshler はローカル専用の軽量 Web UI で、リモートファイルを SFTP で閲覧したり、
-ブラウザ上で tmux セッションに接続したりできます。リモート側に追加ソフトを
-インストールする必要はありません。
+- **Cross-platform**: Runs on Windows 11, macOS, and Linux (anywhere with Python 3.12+)
+- **Local workspace**: Browse your own filesystem and launch WSL-backed tmux sessions alongside remote hosts
+- **SSH integration**: Uses your existing SSH keys and honors OpenSSH aliases
+- **Terminal in browser**: Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it via WebSocket + xterm.js
+- **File management**: HTMX-based file browser with preview, edit, delete, and "Open Terminal Here"
+- **Auto-configuration**: Creates starter config on first run
+- **Alias resolution**: Falls back to `ssh -G` when DNS fails; reset overrides with one click
+- **File operations**: Preview, edit (≤256 KB), and delete files with CodeMirror editor
+- **Bilingual UI**: Full English and Japanese language support
 
-- Runs on your Windows 11 laptop (or any OS with Python)
-  - **日本語:** Windows 11 を含む Python が動く環境ならどこでも動作します。
-- Includes a "local" workspace card so you can browse your own filesystem and launch WSL-backed tmux sessions alongside remote hosts
-  - **日本語:** ローカルワークスペースカードを備え、ローカル/WSL のファイルや tmux も同じ UI で扱えます。
-- Uses your existing SSH keys
-  - **日本語:** 既存の SSH 鍵をそのまま利用します。
-- Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it to the browser via WebSocket + xterm.js
-  - **日本語:** リモートで `tmux new -As <session> -c <dir>` を実行し、WebSocket と xterm.js でブラウザに橋渡しします。
-- HTMX-based file browser with “Open Terminal Here”
-  - **日本語:** HTMX 製のファイルブラウザから「このディレクトリで端末を開く」がワンクリックで可能です。
-- Auto-creates a starter config at first run
-  - **日本語:** 初回起動時に自動で設定ファイルを生成します。
-- Honors your OpenSSH aliases; if DNS fails it resolves them via `ssh -G` and you can reset overrides with a single click
-  - **日本語:** OpenSSH のエイリアスを解釈し、DNS 解決に失敗した場合でも `ssh -G` で補完します。ワンクリックで上書きをリセットできます。
-- One-click file previews: view remote files in a new tab without leaving the browser
-  - **日本語:** ワンクリックでプレビュー表示。ブラウザを離れずに内容確認できます。
-- Inline edits for lightweight text files (≤256 KB) with a CodeMirror editor and Save button
-  - **日本語:** 256 KB 以下のテキストならブラウザ内で編集し、その場で保存できます。
+## Install
 
-## Install / インストール
-
-### PyPI (recommended) / PyPI からのインストール
+### PyPI (recommended)
 
 ```bash
 pip install sshler
 
-# launch once to create the config + systemd/service assets
+# Launch once to create the config + systemd/service assets
 sshler serve
 ```
 
-- **日本語:** `pip install sshler` で最新の安定版を取得し、`sshler serve` を実行すると初期設定ファイルが生成されます。
-
 Requires Python **3.12+**.
 
-### Development / 開発インストール
+### Development
 
 ```bash
 uv pip install -e .
 # or: pip install -e .
 ```
-
-- **日本語:** 開発時は editable install (`-e`) を利用してください。
 
 After cloning the repository, install the dev extras and run the usual tooling:
 
@@ -60,17 +42,13 @@ uv run ruff check .
 uv run pytest
 ```
 
-- **日本語:** リポジトリを取得したら `uv sync --group dev` で依存関係をそろえ、`uv run ruff check .` や `uv run pytest` で動作を確認します。
-
-## Run / 実行
+## Run
 
 ```bash
 sshler serve
 ```
 
 The app will open `http://127.0.0.1:8822` in your default browser.
-
-- **日本語:** 上記を実行するとデフォルトブラウザで `http://127.0.0.1:8822` が開きます。
 
 ## Configuration / 設定
 
@@ -198,8 +176,92 @@ All assets are used under their respective MIT/BSD-style licenses. sshler itself
 
 - **日本語:** 依存ライブラリはいずれも寛容なライセンス (MIT/BSD) で提供されています。sshler 本体も MIT ライセンスで配布されます。
 
-## Why “sshler”? / 名前の由来
+## Why "sshler"?
 
-**English:** Because sometimes you want less VS Code, more terminal — but still in a nice browser tab.
+Because sometimes you want less VS Code, more terminal — but still in a nice browser tab.
 
-**日本語:** VS Code だけに頼らず、ブラウザタブの中で軽快にターミナルを扱いたい──そんな願いからこの名前になりました。
+---
+
+# 日本語ドキュメント
+
+sshler はローカル専用の軽量 Web UI で、リモートファイルを SFTP で閲覧したり、ブラウザ上で tmux セッションに接続したりできます。リモート側に追加ソフトをインストールする必要はありません。
+
+## 特徴
+
+- **クロスプラットフォーム**: Windows 11、macOS、Linux で動作（Python 3.12+ が必要）
+- **ローカルワークスペース**: ローカルファイルシステムを閲覧し、リモートホストと並べて WSL ベースの tmux セッションを起動
+- **SSH 統合**: 既存の SSH 鍵を使用し、OpenSSH エイリアスに対応
+- **ブラウザ内ターミナル**: リモートホストで `tmux new -As <session> -c <dir>` を開き、WebSocket + xterm.js 経由で接続
+- **ファイル管理**: プレビュー、編集、削除、「ここでターミナルを開く」機能を備えた HTMX ベースのファイルブラウザ
+- **自動設定**: 初回起動時にスターター設定を作成
+- **エイリアス解決**: DNS 失敗時は `ssh -G` にフォールバック。ワンクリックで上書きをリセット
+- **ファイル操作**: CodeMirror エディタでファイルのプレビュー、編集（256 KB 以下）、削除が可能
+- **バイリンガル UI**: 英語と日本語の完全サポート
+
+## インストール
+
+### PyPI（推奨）
+
+```bash
+pip install sshler
+
+# 設定ファイルと systemd/サービスアセットを作成するため一度起動
+sshler serve
+```
+
+Python **3.12+** が必要です。
+
+### 開発用
+
+```bash
+uv pip install -e .
+# または: pip install -e .
+```
+
+リポジトリをクローンした後、dev extras をインストールして通常のツールを実行：
+
+```bash
+uv sync --group dev
+uv run ruff check .
+uv run pytest
+```
+
+## 実行
+
+```bash
+sshler serve
+```
+
+デフォルトブラウザで `http://127.0.0.1:8822` が開きます。
+
+## 設定
+
+sshler は既存の OpenSSH 設定（`~/.ssh/config`）を読み取り、すべての具体的な `Host` エントリを自動的に表示します。UI を通じて追加したお気に入り、デフォルトディレクトリ、カスタムホストは、付属の YAML ファイルに保存されます。
+
+設定ファイルは初回実行時に作成されます：
+
+- Windows: `%APPDATA%\sshler\boxes.yaml`
+- macOS/Linux: `~/.config/sshler/boxes.yaml`
+
+例：
+
+```yaml
+boxes:
+  - name: gabu-server
+    host: example.tailnet.ts.net
+    ssh_alias: gabu-server
+    user: gabu
+    port: 22
+    keyfile: "C:/Users/gabu/.ssh/id_ed25519"
+    favorites:
+      - /home/gabu
+      - /home/gabu/projects
+      - /srv/codex
+    default_dir: /home/gabu
+```
+
+> ヒント: ホームパスが `/home/<user>` でない場合は `default_dir` を設定してください。OpenSSH エイリアスを使用する場合は `ssh_alias:` を追加すると、DNS 失敗時に `ssh -G` で解決します。
+
+## 名前の由来
+
+VS Code だけに頼らず、ブラウザタブの中で軽快にターミナルを扱いたい──そんな願いからこの名前になりました。
