@@ -5,7 +5,7 @@ sshler is a lightweight, local-only web UI that lets you browse remote files ove
 ## Features
 
 - **Cross-platform**: Runs on Windows 11, macOS, and Linux (anywhere with Python 3.12+)
-- **Local workspace**: Browse your own filesystem and launch WSL-backed tmux sessions alongside remote hosts
+- **Local workspace**: Browse your own filesystem and launch native tmux sessions alongside remote hosts (uses WSL tmux on Windows, native tmux on Linux/macOS)
 - **SSH integration**: Uses your existing SSH keys and honors OpenSSH aliases
 - **Terminal in browser**: Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it via WebSocket + xterm.js
 - **File management**: HTMX-based file browser with preview, edit, delete, and "Open Terminal Here"
@@ -105,9 +105,9 @@ Hit “Add Box” in the UI to define a host that isn’t in your SSH config (fo
 
 ### CLI options
 
-```
+```bash
 sshler serve \
-  --bind 127.0.0.1 \
+  --host 127.0.0.1 \
   --port 8822 \
   --max-upload-mb 50 \
   --allow-origin http://workstation:8822 \
@@ -116,16 +116,27 @@ sshler serve \
   --log-level info
 ```
 
-- `--bind` (alias `--host`) keeps the server on localhost by default.
-- `--allow-origin` can be repeated to expand CORS; combine it with `--auth` if you expose the UI to the LAN.
-- `--max-upload-mb` lets you raise/lower the upload ceiling.
+- `--host` (alias `--bind`) sets the bind address (default: `127.0.0.1` for localhost-only). Use `0.0.0.0` to expose on all interfaces, but **only on trusted networks with `--auth` and TLS**.
+- `--port` sets the port number (default: `8822`).
+- `--allow-origin` can be repeated to expand CORS; combine it with `--auth` if you expose the UI beyond localhost.
+- `--auth user:pass` enables HTTP basic authentication (recommended if binding to `0.0.0.0`).
+- `--max-upload-mb` sets the upload size limit (default: 50 MB).
 - `--no-ssh-alias` disables the `ssh -G` fallback when DNS fails.
 - `--token` lets you supply your own `X-SSHLER-TOKEN` (otherwise a secure random value is generated).
-- `--log-level` feeds directly into uvicorn.
+- `--log-level` feeds directly into uvicorn (options: `critical`, `error`, `warning`, `info`, `debug`, `trace`).
 
 The server prints the token (and, if enabled, the basic auth username) on startup so you can copy it into API clients or browser extensions.
 
 - **日本語:** サーバー起動時にトークン（および Basic 認証を有効にした場合はユーザー名）を表示するので、API クライアントやブラウザ拡張に貼り付けて利用できます。
+
+### Terminal notifications
+
+- Send a bell (`printf '\a'`) from tmux or your shell to flash the browser title and raise a desktop notification whenever the sshler tab is hidden.
+- For richer messages use OSC 777: `printf '\033]777;notify=Codex%20done|Check%20the%20output\a'`. The text before the `|` becomes the title; the second part is the body.
+- JSON payloads are also supported: `printf '\033]777;notify={"title":"Codex","message":"All tasks finished"}\a'`.
+- The first notification prompts the browser for permission. Denying it still leaves the in-app toast and title badge when you return to the tab.
+
+- **日本語:** タブが非表示のときに `printf '\a'` でベルを送ると、ブラウザタイトルが点滅しデスクトップ通知が表示されます。`printf '\033]777;notify=タイトル|本文\a'` で任意メッセージを送信でき、JSON (`notify={"title":"...","message":"..."}`) にも対応しています。初回は通知許可のダイアログが表示されますが、拒否した場合でもタブ復帰時にトーストとタイトルのバッジで気付けます。
 
 ## Autostart / 自動起動
 
@@ -189,7 +200,7 @@ sshler はローカル専用の軽量 Web UI で、リモートファイルを S
 ## 特徴
 
 - **クロスプラットフォーム**: Windows 11、macOS、Linux で動作（Python 3.12+ が必要）
-- **ローカルワークスペース**: ローカルファイルシステムを閲覧し、リモートホストと並べて WSL ベースの tmux セッションを起動
+- **ローカルワークスペース**: ローカルファイルシステムを閲覧し、リモートホストと並べてネイティブの tmux セッションを起動（Windows では WSL tmux、Linux/macOS ではネイティブ tmux を使用）
 - **SSH 統合**: 既存の SSH 鍵を使用し、OpenSSH エイリアスに対応
 - **ブラウザ内ターミナル**: リモートホストで `tmux new -As <session> -c <dir>` を開き、WebSocket + xterm.js 経由で接続
 - **ファイル管理**: プレビュー、編集、削除、「ここでターミナルを開く」機能を備えた HTMX ベースのファイルブラウザ

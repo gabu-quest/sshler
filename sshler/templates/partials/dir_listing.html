@@ -15,21 +15,21 @@
   <form class="dir-tool" hx-post="{{ touch_url }}" hx-target="#{{ current_target }}" hx-swap="innerHTML">
     <input type="hidden" name="directory" value="{{ directory_path }}">
     <input type="hidden" name="target" value="{{ current_target }}">
-    <input type="text" name="filename" placeholder="new_file.txt" required>
-    <button type="submit" class="action-btn">Create</button>
+    <input type="text" name="filename" placeholder="new_file.txt" data-i18n-placeholder="box.filename" required>
+    <button type="submit" class="action-btn" data-i18n="box.create">Create</button>
   </form>
   <form class="dir-tool" hx-post="{{ upload_url }}" hx-target="#{{ current_target }}" hx-swap="innerHTML" hx-encoding="multipart/form-data">
     <input type="hidden" name="directory" value="{{ directory_path }}">
     <input type="hidden" name="target" value="{{ current_target }}">
     <input type="file" name="file" required>
-    <button type="submit" class="action-btn">Upload</button>
+    <button type="submit" class="action-btn" data-i18n="box.upload">Upload</button>
   </form>
 </div>
 {% if error %}
 <div class="alert error">{{ error }}</div>
 {% endif %}
 <table class="dir dir-table">
-  <thead><tr><th>Name</th><th>Type</th><th class="actions-col">Actions</th></tr></thead>
+  <thead><tr><th data-i18n="box.name">Name</th><th data-i18n="box.type">Type</th><th class="actions-col" data-i18n="box.actions">Actions</th></tr></thead>
   <tbody>
     {% set parent_directory = directory_path.rsplit('/', 1)[0] if '/' in directory_path and directory_path != '/' else '/' %}
     {% if parent_directory.endswith(':') %}
@@ -74,15 +74,16 @@
                   hx-post="{{ fav_url }}?path={{ target_path|urlencode }}"
                   hx-swap="none">{{ '★' if is_favorite else '☆' }}</button>
         {% else %}
-          <a class="action-btn" href="{{ preview_url }}?path={{ target_path|urlencode }}" target="_blank" title="Preview file">Preview</a>
-          <a class="action-btn" href="{{ edit_url }}?path={{ target_path|urlencode }}" target="_blank" title="Edit file">Edit</a>
+          <a class="action-btn" href="{{ preview_url }}?path={{ target_path|urlencode }}" target="_blank" title="Preview file" data-i18n="box.preview">Preview</a>
+          <a class="action-btn" href="{{ edit_url }}?path={{ target_path|urlencode }}" target="_blank" title="Edit file" data-i18n="box.edit">Edit</a>
           <button class="action-btn danger-btn delete-file-btn"
                   data-box="{{ box.name }}"
                   data-path="{{ target_path }}"
                   data-directory="{{ directory_path }}"
                   data-target="{{ current_target }}"
                   data-filename="{{ entry.name }}"
-                  title="Delete file">Delete</button>
+                  title="Delete file"
+                  data-i18n="box.delete">Delete</button>
         {% endif %}
       </td>
     </tr>

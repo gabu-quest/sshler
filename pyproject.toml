@@ -20,6 +20,7 @@ dependencies = [
     "platformdirs>=4.2",
     "pydantic>=2.7",
     "python-multipart>=0.0.9",
+    "markdown-it-py>=3.0.0",
     "sqler>=1.2025.9.24",
 ]
 classifiers = [

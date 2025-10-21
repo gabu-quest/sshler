@@ -18,14 +18,15 @@
      data-host="{{ box.name }}"
      data-directory="{{ directory }}"
      data-session="{{ session }}"
-     data-dir-label="{{ dir_label }}">
+     data-dir-label="{{ dir_label }}"
+     data-transport="{{ box.transport }}">
   <div class="term-header">
     <div class="term-banner">
       <div class="term-banner__host">{{ box.name }}</div>
       <div class="term-banner__primary mono">{{ dir_label }}</div>
-      <div class="term-banner__meta mono">Session: {{ session }}</div>
+      <div class="term-banner__meta mono"><span data-i18n="term.session">Session:</span> {{ session }}</div>
       <div class="term-banner__actions">
-        <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+        <a class="btn secondary small" href="/box/{{ box.name }}" data-i18n="term.back">Back</a>
       </div>
       <div class="term-banner__path mono">{{ directory }}</div>
     </div>
@@ -33,18 +34,18 @@
   <div id="tmux-tabs" class="tmux-tabs"></div>
   <div class="term-shell">
     <div class="term-toolbar" id="term-toolbar">
-      <button class="btn secondary small" data-command="scroll-mode">Scroll Mode</button>
-      <button class="btn secondary small" data-command="escape">Escape</button>
-      <button class="btn secondary small" data-command="ctrl-t">Ctrl+T</button>
-      <button class="btn secondary small" data-command="ctrl-c">Ctrl+C</button>
-      <button class="btn secondary small" data-command="split-h">Split %</button>
-      <button class="btn secondary small" data-command="split-v">Split "</button>
-      <button class="btn secondary small" data-command="new-window">New Window</button>
-      <button class="btn secondary small" data-command="rename-window">Rename Window</button>
-      <button class="btn secondary small" data-command="kill-pane">Kill Pane</button>
-      <button class="btn secondary small" data-command="next">Next Window</button>
-      <button class="btn secondary small" data-command="prev">Prev Window</button>
-      <button class="btn secondary small" data-command="detach">Detach</button>
+      <button class="btn secondary small" data-command="scroll-mode" data-i18n="term.scrollMode">Scroll Mode</button>
+      <button class="btn secondary small" data-command="escape" data-i18n="term.escape">Escape</button>
+      <button class="btn secondary small" data-command="ctrl-t" data-i18n="term.ctrlT">Ctrl+T</button>
+      <button class="btn secondary small" data-command="ctrl-c" data-i18n="term.ctrlC">Ctrl+C</button>
+      <button class="btn secondary small" data-command="split-h" data-i18n="term.splitH">Split %</button>
+      <button class="btn secondary small" data-command="split-v" data-i18n="term.splitV">Split "</button>
+      <button class="btn secondary small" data-command="new-window" data-i18n="term.newWindow">New Window</button>
+      <button class="btn secondary small" data-command="rename-window" data-i18n="term.renameWindow">Rename Window</button>
+      <button class="btn secondary small" data-command="kill-pane" data-i18n="term.killPane">Kill Pane</button>
+      <button class="btn secondary small" data-command="next" data-i18n="term.nextWindow">Next Window</button>
+      <button class="btn secondary small" data-command="prev" data-i18n="term.prevWindow">Prev Window</button>
+      <button class="btn secondary small" data-command="detach" data-i18n="term.detach">Detach</button>
     </div>
     <div class="term-wrapper" id="term-wrapper">
       <div id="term" class="term"></div>

@@ -54,6 +54,9 @@
       return;
     }
 
+    const transport = root.dataset.transport || "ssh";
+    const isLocal = transport === "local";
+
     const dirLabel = root.dataset.dirLabel || "";
     if (dirLabel) {
       document.title = `${dirLabel} — sshler`;
@@ -61,7 +64,7 @@
 
     document.body.classList.add("term-view");
     if (typeof window.sshlerSetFavicon === "function") {
-      window.sshlerSetFavicon("terminal");
+      window.sshlerSetFavicon(isLocal ? "terminal-local" : "terminal");
     }
     window.addEventListener("beforeunload", () => {
       document.body.classList.remove("term-view");
@@ -76,10 +79,161 @@
       scrollback: 10000,
       fastScrollModifier: "shift",
       fastScrollSensitivity: 5,
+      bellStyle: "sound",
     });
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(document.getElementById("term"));
+
+    const notifyContext = {
+      host: root.dataset.host || root.dataset.boxName || "",
+      session: root.dataset.session || "default",
+      dirLabel,
+    };
+
+    let pendingTitleRestore = null;
+    let notificationPermissionRequested = false;
+
+    function decodeSegment(value) {
+      if (!value) {
+        return "";
+      }
+      try {
+        return decodeURIComponent(value.replace(/\+/g, "%20"));
+      } catch (err) {
+        return value;
+      }
+    }
+
+    function restoreTitle() {
+      if (pendingTitleRestore) {
+        pendingTitleRestore();
+        pendingTitleRestore = null;
+      }
+    }
+
+    function emphasizeTitle(message) {
+      if (!document.hidden || pendingTitleRestore) {
+        return;
+      }
+      const previousTitle = document.title;
+      document.title = `★ ${message}`;
+      pendingTitleRestore = () => {
+        document.title = previousTitle;
+      };
+      document.addEventListener(
+        "visibilitychange",
+        () => {
+          if (!document.hidden) {
+            restoreTitle();
+          }
+        },
+        { once: true },
+      );
+    }
+
+    function maybeShowSystemNotification(title, body, options) {
+      if (typeof Notification === "undefined") {
+        return;
+      }
+
+      const payload = {
+        body: body || "",
+        tag: options?.tag,
+        renotify: true,
+      };
+
+      if (Notification.permission === "granted") {
+        new Notification(title, payload);
+        return;
+      }
+
+      if (Notification.permission === "denied" || notificationPermissionRequested) {
+        return;
+      }
+
+      notificationPermissionRequested = true;
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") {
+          new Notification(title, payload);
+        }
+      }).finally(() => {
+        notificationPermissionRequested = false;
+      });
+    }
+
+    function notifyUser(title, body, options) {
+      const opts = options || {};
+      const toastMessage = body || title;
+      const shouldToast = opts.forceToast || !document.hidden;
+      if (shouldToast && typeof window.sshlerShowToast === "function") {
+        window.sshlerShowToast(toastMessage, opts.level || "info");
+      }
+
+      if (document.hidden || opts.alwaysNotify) {
+        emphasizeTitle(title);
+        maybeShowSystemNotification(title, body || toastMessage, opts);
+      }
+    }
+
+    function registerOscHandlers() {
+      if (typeof term.registerOscHandler !== "function") {
+        return;
+      }
+
+      term.registerOscHandler(777, (data) => {
+        const payload = (data || "").trim();
+        if (!payload || !payload.toLowerCase().startsWith("notify=")) {
+          return false;
+        }
+
+        let message = payload.slice(7);
+        let title = notifyContext.dirLabel || notifyContext.host || "Terminal";
+        let level = "info";
+
+        if (!message) {
+          notifyUser(title, "", { forceToast: true, alwaysNotify: true });
+          return true;
+        }
+
+        const trimmed = message.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.title) {
+              title = String(parsed.title);
+            }
+            if (parsed.message || parsed.body) {
+              message = String(parsed.message || parsed.body);
+            }
+            if (parsed.level) {
+              level = String(parsed.level);
+            }
+          } catch (err) {
+            // Fall back to original message when JSON parsing fails
+          }
+        } else {
+          const segments = trimmed.split("|", 2);
+          if (segments.length === 2) {
+            title = decodeSegment(segments[0]) || title;
+            message = decodeSegment(segments[1]);
+          } else {
+            message = decodeSegment(trimmed);
+          }
+        }
+
+        notifyUser(title, message, {
+          level,
+          forceToast: true,
+          alwaysNotify: true,
+          tag: `notify-${notifyContext.host || "terminal"}-${notifyContext.session}`,
+        });
+
+        return true;
+      });
+    }
+
+    registerOscHandlers();
 
     // Fit immediately to get proper dimensions before creating WebSocket
     // Use triple requestAnimationFrame to ensure layout is fully settled
@@ -97,6 +251,13 @@
             url.searchParams.get("session") || root.dataset.session || "default";
           const wsProto = location.protocol === "https:" ? "wss://" : "ws://";
           const token = getToken();
+
+          notifyContext.host = host || notifyContext.host;
+          notifyContext.session = session || notifyContext.session;
+          if (directory) {
+            const parts = directory.replace(/\/?$/, "").split("/");
+            notifyContext.dirLabel = parts.pop() || "/";
+          }
 
           // Now use the fitted dimensions
           const wsUrl =
@@ -126,16 +287,37 @@
       let latestWindows = [];
 
       function sendResize() {
-      // Use requestAnimationFrame to ensure DOM is updated before fitting
-      requestAnimationFrame(() => {
-        fitAddon.fit();
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({ op: "resize", cols: term.cols, rows: term.rows }),
-          );
-        }
+        // Use requestAnimationFrame to ensure DOM is updated before fitting
+        requestAnimationFrame(() => {
+          fitAddon.fit();
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({ op: "resize", cols: term.cols, rows: term.rows }),
+            );
+          }
+        });
+      }
+
+    let lastBellTimestamp = 0;
+    term.onBell(() => {
+      if (!document.hidden) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastBellTimestamp < 1500) {
+        return;
+      }
+      lastBellTimestamp = now;
+      const hostLabel = notifyContext.host || "Terminal";
+      const message = notifyContext.session
+        ? `Session ${notifyContext.session} sent a bell`
+        : "Terminal bell";
+      notifyUser(`${hostLabel} — Bell`, message, {
+        forceToast: false,
+        level: "info",
+        tag: `bell-${notifyContext.host || "host"}-${notifyContext.session}`,
       });
-    }
+    });
 
     function activateTerminalView() {
       if (!filePanelActive) {
@@ -203,6 +385,7 @@
 
       fileTabButton = document.createElement("button");
       fileTabButton.className = "tmux-tab" + (filePanelActive ? " active" : "");
+      fileTabButton.setAttribute("data-i18n", "term.files");
       fileTabButton.textContent = "Files";
       fileTabButton.addEventListener("click", () => {
         if (filePanelActive) {
@@ -213,6 +396,11 @@
         renderTabs(latestWindows);
       });
       tabsContainer.appendChild(fileTabButton);
+
+      // Translate the Files button after creating it
+      if (typeof window.sshlerTranslate === "function") {
+        window.sshlerTranslate();
+      }
     }
 
     ws.onopen = () => {
@@ -239,6 +427,7 @@
 
     ws.onclose = () => {
       term.write("\r\n\u001b[31m[Connection closed — refresh to reconnect]\u001b[0m\r\n");
+      restoreTitle();
     };
 
     term.onData((data) => {

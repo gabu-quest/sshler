@@ -2,6 +2,7 @@
   const FAVICONS = {
     default: "/static/favicon.svg",
     terminal: "/static/favicon-terminal.svg",
+    "terminal-local": "/static/favicon-terminal-local.svg",
   };
   const LANG_KEY = "sshler-language";
 
@@ -10,11 +11,89 @@
       "nav.boxes": "Boxes",
       "nav.addBox": "Add Box",
       "nav.docs": "Docs",
+      "boxes.title": "Boxes",
+      "boxes.subtitle": "Pick a box to browse and open a terminal. Hosts are imported from your SSH config and any custom boxes you add here.",
+      "boxes.localWorkspace": "Local workspace",
+      "boxes.fromSSHConfig": "From SSH config",
+      "boxes.customBox": "Custom box",
+      "boxes.resolvesTo": "resolves to",
+      "boxes.favorites": "Favorites",
+      "boxes.open": "Open",
+      "boxes.terminal": "Terminal",
+      "boxes.refresh": "Refresh",
+      "boxes.configFile": "Config file:",
+      "box.browse": "Browse",
+      "box.name": "Name",
+      "box.type": "Type",
+      "box.size": "Size",
+      "box.actions": "Actions",
+      "box.preview": "Preview",
+      "box.edit": "Edit",
+      "box.delete": "Delete",
+      "box.createFile": "Create File",
+      "box.uploadFile": "Upload File",
+      "box.filename": "Filename",
+      "box.create": "Create",
+      "box.upload": "Upload",
+      "term.session": "Session:",
+      "term.back": "Back",
+      "term.files": "Files",
+      "term.scrollMode": "Scroll Mode",
+      "term.escape": "Escape",
+      "term.ctrlT": "Ctrl+T",
+      "term.ctrlC": "Ctrl+C",
+      "term.splitH": "Split %",
+      "term.splitV": "Split \"",
+      "term.newWindow": "New Window",
+      "term.renameWindow": "Rename Window",
+      "term.killPane": "Kill Pane",
+      "term.nextWindow": "Next Window",
+      "term.prevWindow": "Prev Window",
+      "term.detach": "Detach",
     },
     ja: {
       "nav.boxes": "ボックス",
       "nav.addBox": "ボックスを追加",
       "nav.docs": "ドキュメント",
+      "boxes.title": "ボックス",
+      "boxes.subtitle": "ボックスを選択してファイルブラウザとターミナルを開きます。SSH 設定からホストが自動的にインポートされ、カスタムボックスも追加できます。",
+      "boxes.localWorkspace": "ローカルワークスペース",
+      "boxes.fromSSHConfig": "SSH 設定から",
+      "boxes.customBox": "カスタムボックス",
+      "boxes.resolvesTo": "解決先",
+      "boxes.favorites": "お気に入り",
+      "boxes.open": "開く",
+      "boxes.terminal": "ターミナル",
+      "boxes.refresh": "更新",
+      "boxes.configFile": "設定ファイル:",
+      "box.browse": "ブラウズ",
+      "box.name": "名前",
+      "box.type": "種類",
+      "box.size": "サイズ",
+      "box.actions": "操作",
+      "box.preview": "プレビュー",
+      "box.edit": "編集",
+      "box.delete": "削除",
+      "box.createFile": "ファイル作成",
+      "box.uploadFile": "ファイルアップロード",
+      "box.filename": "ファイル名",
+      "box.create": "作成",
+      "box.upload": "アップロード",
+      "term.session": "セッション:",
+      "term.back": "戻る",
+      "term.files": "ファイル",
+      "term.scrollMode": "スクロールモード",
+      "term.escape": "Escape",
+      "term.ctrlT": "Ctrl+T",
+      "term.ctrlC": "Ctrl+C",
+      "term.splitH": "横分割 %",
+      "term.splitV": "縦分割 \"",
+      "term.newWindow": "新規ウィンドウ",
+      "term.renameWindow": "ウィンドウ名変更",
+      "term.killPane": "ペイン終了",
+      "term.nextWindow": "次のウィンドウ",
+      "term.prevWindow": "前のウィンドウ",
+      "term.detach": "デタッチ",
     },
   };
 
@@ -47,7 +126,7 @@
     if (!faviconLink) {
       return;
     }
-    const target = mode === "terminal" ? FAVICONS.terminal : FAVICONS.default;
+    const target = FAVICONS[mode] || FAVICONS.default;
     if (faviconLink.getAttribute("href") !== target) {
       faviconLink.setAttribute("href", target);
     }
@@ -99,6 +178,16 @@
       const text = I18N[lang]?.[key];
       if (text) {
         el.textContent = text;
+      }
+    });
+
+    // Also translate placeholders
+    const placeholderElements = document.querySelectorAll("[data-i18n-placeholder]");
+    placeholderElements.forEach((el) => {
+      const key = el.dataset.i18nPlaceholder;
+      const text = I18N[lang]?.[key];
+      if (text && el.tagName === "INPUT") {
+        el.placeholder = text;
       }
     });
   }
@@ -192,7 +281,8 @@
           // Show modal
           modal.classList.add("visible");
 
-          // Set initial language
+          // Set initial language to match current site language
+          const currentLang = getStoredLang();
           switchDocsLanguage(currentLang);
 
           // Language switcher in modal
@@ -255,6 +345,12 @@
       showToast(payload.message, status);
     });
 
+    // Re-translate after HTMX swaps new content
+    document.body.addEventListener("htmx:afterSwap", () => {
+      const currentLang = getStoredLang();
+      translate(currentLang);
+    });
+
     // Event delegation for delete buttons
     document.body.addEventListener("click", (event) => {
       const deleteBtn = event.target.closest(".delete-file-btn");
@@ -302,4 +398,7 @@
   window.sshlerShowToast = showToast;
   window.sshlerSetFavicon = setFavicon;
   window.sshlerDeleteFile = deleteFile;
+  window.sshlerTranslate = function() {
+    translate(getStoredLang());
+  };
 })();

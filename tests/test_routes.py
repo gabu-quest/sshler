@@ -86,6 +86,46 @@ Host demo-box
     assert stored["boxes"] == []
 
 
+def test_toggle_favorite_normalizes_path(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        """
+Host demo-box
+  HostName demo.internal
+  User demo
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+
+    client = build_client()
+    try:
+        response = client.post(
+            "/box/demo-box/fav",
+            params={"path": "/home/demo/../logs/.."},
+            headers={"X-SSHLER-TOKEN": TEST_TOKEN},
+        )
+        if response.status_code != 200:
+            try:
+                detail = response.json()
+            except Exception:
+                detail = response.text
+            raise AssertionError(detail)
+        assert response.status_code == 200
+        assert response.text == "ok"
+    finally:
+        client.close()
+
+    assert state.list_favorites("demo-box") == ["/home"]
+
+
 def test_create_box_route_persists_data(monkeypatch, tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()

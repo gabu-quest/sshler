@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import platform
+import posixpath
 import secrets
 import shlex
 import subprocess
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import asyncssh
+from markdown_it import MarkdownIt
 from fastapi import (
     Depends,
     FastAPI,
@@ -91,10 +93,17 @@ class ServerSettings:
 
 
 def _normalize_directory_path(directory: str | None) -> str:
-    base = PurePosixPath(directory or "/")
-    if not base.is_absolute():
-        base = PurePosixPath("/") / base
-    normalized = base.as_posix()
+    raw = (directory or "/").strip()
+    if not raw:
+        raw = "/"
+    if not raw.startswith("/"):
+        raw = "/" + raw.lstrip("/")
+
+    normalized = posixpath.normpath(raw)
+    if normalized == ".":
+        return "/"
+    if not normalized.startswith("/"):
+        normalized = "/" + normalized.lstrip("/")
     return normalized or "/"
 
 
@@ -335,7 +344,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     settings = settings or ServerSettings()
 
-    application = FastAPI(title="sshler", version="0.1.0")
+    # Disable automatic /docs and /redoc endpoints
+    application = FastAPI(title="sshler", version="0.1.0", docs_url=None, redoc_url=None)
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     app_version = _compute_app_version()
@@ -369,8 +379,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         csp_directives = [
             "default-src 'self'",
             "img-src 'self' data:",
-            "style-src 'self' 'unsafe-inline' https://unpkg.com",
-            "script-src 'self' https://unpkg.com",
+            "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net",
+            "script-src 'self' https://unpkg.com https://cdn.jsdelivr.net",
             "connect-src 'self' https://unpkg.com",
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
@@ -516,7 +526,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         return RedirectResponse(url="/boxes")
 
     @application.get("/docs", response_class=HTMLResponse)
-    async def docs(request: Request) -> HTMLResponse:
+    async def docs(request: Request, lang: str = Query("en")) -> HTMLResponse:
         """Render simple usage documentation.
 
         English:
@@ -526,9 +536,37 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             基本的な使い方を説明する内蔵ドキュメントページを表示します。
         """
 
+        # Parse README.md and extract the appropriate language section
+        readme_path = Path(__file__).parent.parent / "README.md"
+        english_html = ""
+        japanese_html = ""
+
+        try:
+            readme_text = readme_path.read_text(encoding="utf-8")
+            # Split by the separator
+            parts = readme_text.split("\n---\n")
+
+            md = MarkdownIt()
+
+            if len(parts) >= 2:
+                english_html = md.render(parts[0].strip())
+                japanese_html = md.render(parts[1].strip())
+            else:
+                # Fallback: use entire content for both
+                english_html = md.render(readme_text)
+                japanese_html = english_html
+        except Exception:
+            # If README can't be read, use empty strings
+            pass
+
         return templates.TemplateResponse(
             "docs.html",
-            {"request": request, "app_version": app_version},
+            {
+                "request": request,
+                "app_version": app_version,
+                "english_content": english_html,
+                "japanese_content": japanese_html,
+            },
         )
 
     @application.get("/boxes", response_class=HTMLResponse)
@@ -1349,7 +1387,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
 
-        await state.toggle_favorite_async(name, directory_path)
+        normalized_path = (
+            _normalize_local_path(directory_path)
+            if getattr(box, "transport", "ssh") == "local"
+            else _normalize_directory_path(directory_path)
+        )
+
+        await state.toggle_favorite_async(name, normalized_path)
         box.favorites = await state.list_favorites_async(name)
         return "ok"
 

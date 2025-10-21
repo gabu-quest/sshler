@@ -18,7 +18,7 @@ sshler/scripts/install-sshler-task.ps1
 sshler/scripts/remove-sshler-task.ps1
 sshler/scripts/run-sshler.ps1
 sshler/static/base.js
-sshler/static/docs.js
+sshler/static/favicon-terminal-local.svg
 sshler/static/favicon-terminal.svg
 sshler/static/favicon.svg
 sshler/static/file-edit.js

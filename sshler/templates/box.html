@@ -26,7 +26,7 @@
           {% for f in box.favorites %}
             <li>
               <a href="/term?host={{ box.name }}&dir={{ f|urlencode }}" class="btn small" target="_blank" rel="noopener">Terminal here</a>
-              <span class="mono">{{ f }}</span>
+              <span class="mono">{{ f|replace('/', '/<wbr>')|safe }}</span>
               <button class="icon-btn star active"
                       hx-post="/box/{{ box.name }}/fav?path={{ f|urlencode }}"
                       hx-swap="none"
