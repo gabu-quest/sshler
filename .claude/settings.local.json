@@ -20,7 +20,8 @@
       "Bash(uv build:*)",
       "Bash(curl:*)",
       "Bash(uv add:*)",
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []
