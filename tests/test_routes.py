@@ -20,8 +20,25 @@ def build_client() -> TestClient:
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
-def test_directory_listing_returns_error_message(monkeypatch):
-    ensure_config()
+def test_directory_listing_returns_error_message(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        """
+Host gabu-server
+  HostName gabu.example.com
+  User gabu
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+
     client = build_client()
     try:
 
