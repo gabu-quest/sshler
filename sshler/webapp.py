@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import asyncssh
-from markdown_it import MarkdownIt
 from fastapi import (
     Depends,
     FastAPI,
@@ -29,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markdown_it import MarkdownIt
 
 from . import __version__, state
 from .config import (
@@ -265,7 +265,8 @@ async def _open_local_tmux(
     # For now, let's try using script to provide a PTY
     if LOCAL_IS_WINDOWS:
         # Use 'script' command in WSL to create a PTY
-        script_command = ["wsl", "--", "script", "-qfc", " ".join(f"'{arg}'" if " " in arg else arg for arg in command[2:]), "/dev/null"]
+        cmd_str = " ".join(f"'{arg}'" if " " in arg else arg for arg in command[2:])
+        script_command = ["wsl", "--", "script", "-qfc", cmd_str, "/dev/null"]
         return await asyncio.create_subprocess_exec(
             *script_command,
             stdin=asyncio.subprocess.PIPE,
@@ -1650,7 +1651,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     normalized_directory = _normalize_local_path(box.default_dir)
 
                 # Debug: Log the command we're about to run
-                logger.info(f"Starting local tmux: transport={transport}, dir={normalized_directory}, session={session}")
+                logger.info(
+                    f"Starting local tmux: transport={transport}, "
+                    f"dir={normalized_directory}, session={session}"
+                )
 
                 try:
                     process = await _open_local_tmux(normalized_directory, session)
@@ -1730,7 +1734,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 transport,
                             )
                         elif "bytes" in message and message["bytes"] is not None:
-                            logger.debug(f"Writer: got {len(message['bytes'])} bytes, writing to stdin")
+                            num_bytes = len(message["bytes"])
+                            logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
                             process.stdin.write(message["bytes"])
                 except WebSocketDisconnect:
                     logger.info("Writer: websocket disconnected")
