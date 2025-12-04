@@ -32,9 +32,9 @@
     </details>
     {% endif %}
     <div class="actions">
-      <a class="btn" href="/box/{{ box.name }}" data-i18n="boxes.open">Open</a>
+      <a class="btn primary" href="/box/{{ box.name }}" data-i18n="boxes.open">Open</a>
       {% if box.default_dir %}
-      <a class="btn secondary" href="/term?host={{ box.name }}&dir={{ box.default_dir|urlencode }}" data-i18n="boxes.terminal">Terminal</a>
+      <a class="btn" href="/term?host={{ box.name }}&dir={{ box.default_dir|urlencode }}" data-i18n="boxes.terminal">Terminal</a>
       {% endif %}
       {% if box.source == 'ssh_config' %}
       <button class="btn secondary small"
