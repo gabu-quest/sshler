@@ -1,0 +1,20 @@
+<div id="docs-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>sshler Documentation</h2>
+      <div class="modal-actions">
+        <button class="lang-btn" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="ja">日本語</button>
+        <button class="modal-close">&times;</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="lang-content readme-content" data-lang="en">
+        <div class="markdown-body">{{ english_content|safe }}</div>
+      </div>
+      <div class="lang-content readme-content hidden" data-lang="ja">
+        <div class="markdown-body">{{ japanese_content|safe }}</div>
+      </div>
+    </div>
+  </div>
+</div>

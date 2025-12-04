@@ -1,0 +1,92 @@
+
+{% set current_target = target_id if target_id is defined else 'browser' %}
+{% set dir_url = urls.list %}
+{% set touch_url = urls.touch %}
+{% set upload_url = urls.upload %}
+{% set fav_url = urls.favorite %}
+{% set preview_url = urls.preview %}
+{% set edit_url = urls.edit %}
+{% set term_url = urls.term %}
+<div class="dir-header">
+  <span class="mono">{{ directory_path }}</span>
+  <a class="btn small" href="{{ term_url }}?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">Open Terminal Here</a>
+</div>
+<div class="dir-tools">
+  <form class="dir-tool" hx-post="{{ touch_url }}" hx-target="#{{ current_target }}" hx-swap="innerHTML">
+    <input type="hidden" name="directory" value="{{ directory_path }}">
+    <input type="hidden" name="target" value="{{ current_target }}">
+    <input type="text" name="filename" placeholder="new_file.txt" data-i18n-placeholder="box.filename" required>
+    <button type="submit" class="action-btn" data-i18n="box.create">Create</button>
+  </form>
+  <form class="dir-tool" hx-post="{{ upload_url }}" hx-target="#{{ current_target }}" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+    <input type="hidden" name="directory" value="{{ directory_path }}">
+    <input type="hidden" name="target" value="{{ current_target }}">
+    <input type="file" name="file" required>
+    <button type="submit" class="action-btn" data-i18n="box.upload">Upload</button>
+  </form>
+</div>
+{% if error %}
+<div class="alert error">{{ error }}</div>
+{% endif %}
+<table class="dir dir-table">
+  <thead><tr><th data-i18n="box.name">Name</th><th data-i18n="box.type">Type</th><th class="actions-col" data-i18n="box.actions">Actions</th></tr></thead>
+  <tbody>
+    {% set parent_directory = directory_path.rsplit('/', 1)[0] if '/' in directory_path and directory_path != '/' else '/' %}
+    {% if parent_directory.endswith(':') %}
+      {% set parent_directory = parent_directory ~ '/' %}
+    {% endif %}
+{% if directory_path != '/' and parent_directory != directory_path %}
+    <tr class="fs-row">
+      <td class="fs-name">
+        <a class="fs-entry up" hx-get="{{ dir_url }}?path={{ parent_directory|urlencode }}&target={{ current_target }}"
+           hx-target="#{{ current_target }}" hx-swap="innerHTML">..</a>
+      </td>
+      <td class="fs-type">parent</td>
+      <td class="fs-actions"></td>
+    </tr>
+    {% endif %}
+    {% for entry in entries %}
+    <tr class="fs-row">
+      {% set target_path = (directory_path.rstrip('/') ~ '/' ~ entry.name) if directory_path != '/' else '/' ~ entry.name %}
+      <td class="fs-name">
+        {% if entry.is_directory %}
+          <a class="fs-entry folder" hx-get="{{ dir_url }}?path={{ target_path|urlencode }}&target={{ current_target }}"
+             hx-target="#{{ current_target }}" hx-swap="innerHTML">
+            <span class="fs-icon folder"></span>
+            <span class="fs-label">{{ entry.name }}</span>
+          </a>
+        {% else %}
+          <a class="fs-entry file" href="{{ preview_url }}?path={{ target_path|urlencode }}" target="_blank">
+            <span class="fs-icon file"></span>
+            <span class="fs-label">{{ entry.name }}</span>
+          </a>
+        {% endif %}
+      </td>
+      <td class="fs-type">{{ "dir" if entry.is_directory else "file" }}</td>
+      <td class="fs-actions">
+        {% if entry.is_directory %}
+          <a class="action-btn" href="{{ term_url }}?host={{ box.name }}&dir={{ target_path|urlencode }}" target="_blank" title="Open terminal">
+            Term
+          </a>
+          {% set is_favorite = target_path in (box.favorites or []) %}
+          <button class="icon-btn star{{ ' active' if is_favorite else '' }}"
+                  aria-label="Toggle favorite"
+                  hx-post="{{ fav_url }}?path={{ target_path|urlencode }}"
+                  hx-swap="none">{{ '★' if is_favorite else '☆' }}</button>
+        {% else %}
+          <a class="action-btn" href="{{ preview_url }}?path={{ target_path|urlencode }}" target="_blank" title="Preview file" data-i18n="box.preview">Preview</a>
+          <a class="action-btn" href="{{ edit_url }}?path={{ target_path|urlencode }}" target="_blank" title="Edit file" data-i18n="box.edit">Edit</a>
+          <button class="action-btn danger-btn delete-file-btn"
+                  data-box="{{ box.name }}"
+                  data-path="{{ target_path }}"
+                  data-directory="{{ directory_path }}"
+                  data-target="{{ current_target }}"
+                  data-filename="{{ entry.name }}"
+                  title="Delete file"
+                  data-i18n="box.delete">Delete</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
