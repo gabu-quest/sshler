@@ -10,6 +10,34 @@
   document.addEventListener("DOMContentLoaded", () => {
     const backBtn = document.getElementById("back-btn");
     const deleteBtn = document.getElementById("delete-btn");
+    const toggleViewBtn = document.getElementById("toggle-view-btn");
+    const markdownRendered = document.getElementById("markdown-rendered");
+    const markdownSource = document.getElementById("markdown-source");
+
+    // Toggle between rendered and source view for markdown
+    if (toggleViewBtn && markdownRendered && markdownSource) {
+      let showingRendered = true;
+      toggleViewBtn.addEventListener("click", () => {
+        if (showingRendered) {
+          markdownRendered.classList.add("hidden");
+          markdownSource.classList.remove("hidden");
+          toggleViewBtn.textContent = "View Rendered";
+          showingRendered = false;
+        } else {
+          markdownRendered.classList.remove("hidden");
+          markdownSource.classList.add("hidden");
+          toggleViewBtn.textContent = "View Source";
+          showingRendered = true;
+        }
+      });
+    }
+
+    // Apply Prism syntax highlighting to markdown code blocks
+    if (markdownRendered && window.Prism) {
+      markdownRendered.querySelectorAll("pre code").forEach((block) => {
+        window.Prism.highlightElement(block);
+      });
+    }
 
     if (backBtn) {
       backBtn.addEventListener("click", (event) => {

@@ -5,6 +5,9 @@
     <h1>{{ box.name }} — {{ path }}</h1>
     <div class="file-view__actions">
       <button id="back-btn" class="btn secondary small">Back</button>
+      {% if is_markdown %}
+      <button id="toggle-view-btn" class="btn secondary small">View Source</button>
+      {% endif %}
       <a class="btn small" href="/box/{{ box.name }}/edit?path={{ path|urlencode }}">Edit</a>
       <button id="delete-btn" class="btn small danger"
               data-box="{{ box.name }}"
@@ -21,9 +24,10 @@
   <div class="alert error">Image exceeds the {{ image_limit_kb }} KB preview limit.</div>
   {% endif %}
   {% if is_markdown and markdown_html %}
-  <div class="markdown-body">
+  <div id="markdown-rendered" class="markdown-body">
     {{ markdown_html|safe }}
   </div>
+  <pre id="markdown-source" class="file-view__content hidden"><code class="language-markdown">{{ content }}</code></pre>
   {% elif content %}
   <pre class="file-view__content"><code class="language-{{ syntax_class or 'markup' }}">{{ content }}</code></pre>
   {% endif %}
