@@ -20,7 +20,11 @@
   {% elif image_too_large %}
   <div class="alert error">Image exceeds the {{ image_limit_kb }} KB preview limit.</div>
   {% endif %}
-  {% if content %}
+  {% if is_markdown and markdown_html %}
+  <div class="markdown-body">
+    {{ markdown_html|safe }}
+  </div>
+  {% elif content %}
   <pre class="file-view__content"><code class="language-{{ syntax_class or 'markup' }}">{{ content }}</code></pre>
   {% endif %}
 </div>

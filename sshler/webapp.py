@@ -1168,6 +1168,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             # Get the directory containing the file
             parent_dir = str(Path(normalized_path).parent)
 
+            # Check if this is a markdown file and render it
+            is_markdown = _is_markdown_file(normalized_path)
+            markdown_html = None
+            if is_markdown and text_content:
+                markdown_html = _render_markdown(text_content)
+
             context = {
                 "box": box,
                 "path": normalized_path,
@@ -1179,6 +1185,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 "image_mime": image_mime,
                 "image_too_large": image_too_large,
                 "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,
+                "is_markdown": is_markdown,
+                "markdown_html": markdown_html,
             }
             return templates.TemplateResponse(request, "file_view.html", context)
 
@@ -1226,6 +1234,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             # Get the directory containing the file
             parent_dir = str(PurePosixPath(file_path).parent)
 
+            # Check if this is a markdown file and render it
+            is_markdown = _is_markdown_file(file_path)
+            markdown_html = None
+            if is_markdown and text_content:
+                markdown_html = _render_markdown(text_content)
+
             context = {
                 "box": box,
                 "path": file_path,
@@ -1237,6 +1251,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 "image_mime": image_mime,
                 "image_too_large": image_too_large,
                 "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,
+                "is_markdown": is_markdown,
+                "markdown_html": markdown_html,
             }
             return templates.TemplateResponse(request, "file_view.html", context)
         finally:
@@ -1826,6 +1842,18 @@ def _syntax_from_filename(path: str) -> str:
         ".ini": "ini",
     }
     return mapping.get(suffix, "").strip()
+
+
+def _is_markdown_file(path: str) -> bool:
+    """Check if a file is a markdown file based on its extension."""
+    suffix = Path(path).suffix.lower()
+    return suffix in [".md", ".markdown"]
+
+
+def _render_markdown(content: str) -> str:
+    """Convert markdown content to HTML."""
+    md = MarkdownIt()
+    return md.render(content)
 
 
 async def _read_file_bytes(
