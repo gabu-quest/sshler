@@ -1,0 +1,2 @@
+[console_scripts]
+sshler = sshler.cli:main

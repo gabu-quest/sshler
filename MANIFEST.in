@@ -1,0 +1,2 @@
+recursive-include sshler/templates *.html
+recursive-include sshler/static *

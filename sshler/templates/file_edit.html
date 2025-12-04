@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://unpkg.com/prismjs/themes/prism-tomorrow.css" />
+<link rel="stylesheet" href="https://unpkg.com/codemirror@5.65.16/lib/codemirror.css" />
+<script src="https://unpkg.com/codemirror@5.65.16/lib/codemirror.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/python/python.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/javascript/javascript.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/css/css.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/xml/xml.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/markdown/markdown.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/shell/shell.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/addon/display/placeholder.js"></script>
+{% endblock %}
+{% block content %}
+<div class="file-edit">
+  <div class="file-view__header">
+    <h1>{{ box.name }} — {{ path }}</h1>
+    <div class="actions">
+      <a class="btn secondary small" href="/box/{{ box.name }}">Back</a>
+      <button class="btn small" id="save-btn">Save</button>
+    </div>
+  </div>
+  <textarea id="editor" class="file-edit__textarea" data-path="{{ path }}">{{ content }}</textarea>
+  <div id="save-status" class="muted small"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script defer src="/static/file-edit.js"></script>
+{% endblock %}

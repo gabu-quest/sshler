@@ -1,0 +1,53 @@
+
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ box.name }}</h1>
+{% if box.source == 'local' %}
+<div class="muted small">Local workspace • {{ box.user }}@{{ box.display_host }}</div>
+{% elif box.source == 'ssh_config' %}
+<div class="muted small">{{ box.user }}@{{ box.display_host }} :{{ box.port }}{% if box.resolved_host and box.resolved_host != box.display_host %} • resolves to {{ box.resolved_host }}{% endif %}</div>
+<div class="muted tiny">Sourced from SSH config &mdash; overrides reset via Refresh.</div>
+<div class="actions">
+  <button class="btn secondary small"
+          hx-post="/box/{{ box.name }}/refresh"
+          hx-swap="none"
+          hx-on::after-request="window.location.reload()">Refresh from SSH config</button>
+</div>
+{% else %}
+<div class="muted small">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
+{% endif %}
+<div class="grid">
+  <div>
+    <h2>Favorites</h2>
+    {% if box.favorites %}
+      <details class="favlist">
+        <summary class="favorite-toggle">Show Favorites</summary>
+        <ul>
+          {% for f in box.favorites %}
+            <li>
+              <a href="/term?host={{ box.name }}&dir={{ f|urlencode }}" class="btn small" target="_blank" rel="noopener">Terminal here</a>
+              <span class="mono">{{ f|replace('/', '/<wbr>')|safe }}</span>
+              <button class="icon-btn star active"
+                      hx-post="/box/{{ box.name }}/fav?path={{ f|urlencode }}"
+                      hx-swap="none"
+                      aria-label="Remove favorite">★</button>
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% else %}
+      <p class="muted">No favorites yet.</p>
+    {% endif %}
+  </div>
+  <div>
+    <h2>Browse</h2>
+    <div id="browser"
+         hx-get="/box/{{ box.name }}/ls?path={{ base_directory|urlencode }}"
+         hx-trigger="load"
+         hx-target="#browser"
+         hx-swap="innerHTML">
+      Loading…
+    </div>
+  </div>
+</div>
+{% endblock %}

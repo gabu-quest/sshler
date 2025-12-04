@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="file-view">
+  <div class="file-view__header">
+    <h1>{{ box.name }} — {{ path }}</h1>
+    <div class="file-view__actions">
+      <button id="back-btn" class="btn secondary small">Back</button>
+      <a class="btn small" href="/box/{{ box.name }}/edit?path={{ path|urlencode }}">Edit</a>
+      <button id="delete-btn" class="btn small danger"
+              data-box="{{ box.name }}"
+              data-path="{{ path }}"
+              data-parentdir="{{ parent_directory }}"
+              data-filename="{{ path.split('/')[-1] if '/' in path else path }}">Delete</button>
+    </div>
+  </div>
+  {% if image_data %}
+  <div class="image-preview">
+    <img src="data:{{ image_mime }};base64,{{ image_data }}" alt="Preview of {{ path }}">
+  </div>
+  {% elif image_too_large %}
+  <div class="alert error">Image exceeds the {{ image_limit_kb }} KB preview limit.</div>
+  {% endif %}
+  {% if content %}
+  <pre class="file-view__content"><code class="language-{{ syntax_class or 'markup' }}">{{ content }}</code></pre>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script defer src="/static/file-view.js"></script>
+{% endblock %}

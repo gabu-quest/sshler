@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm:*)",
+      "Bash(uv venv:*)",
+      "Bash(uv pip install:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(if [ -f debug.log ])",
+      "Bash(then tail -50 debug.log)",
+      "Bash(else echo \"No debug.log file found yet\")",
+      "Bash(fi)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(twine check:*)",
+      "Bash(twine upload:*)",
+      "Bash(git add:*)",
+      "Bash(git reset:*)",
+      "Bash(git commit:*)",
+      "Bash(uv build:*)",
+      "Bash(curl:*)",
+      "Bash(uv add:*)",
+      "Bash(uv run:*)",
+      "Bash(git push)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

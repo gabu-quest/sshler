@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Add Box</h1>
+<p>Define a custom box. Fields you leave blank will rely on SSH defaults.</p>
+<form method="post" class="form">
+  <label>Name
+    <input type="text" name="name" required>
+  </label>
+  <label>Host (hostname or IP)
+    <input type="text" name="host" placeholder="my-server.internal">
+  </label>
+  <label>User
+    <input type="text" name="user" placeholder="deploy">
+  </label>
+  <label>Port
+    <input type="number" name="port" value="22" min="1" max="65535">
+  </label>
+  <label>Key file
+    <input type="text" name="keyfile" placeholder="~/.ssh/id_ed25519">
+  </label>
+  <label>SSH alias (optional)
+    <input type="text" name="ssh_alias" placeholder="OpenSSH alias to resolve">
+  </label>
+  <label>Default directory
+    <input type="text" name="default_dir" placeholder="/home/user">
+  </label>
+  <label>Favorites (one per line)
+    <textarea name="favorites" rows="4" placeholder="/var/www
+/srv"></textarea>
+  </label>
+  <label>Known hosts override
+    <input type="text" name="known_hosts" placeholder="ignore or path">
+  </label>
+  <label class="checkbox">
+    <input type="checkbox" name="agent" value="1"> Use SSH agent
+  </label>
+  <div class="form-actions">
+    <button class="btn" type="submit">Save</button>
+    <a class="btn secondary" href="/boxes">Cancel</a>
+  </div>
+</form>
+{% endblock %}

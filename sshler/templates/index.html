@@ -1,0 +1,54 @@
+
+{% extends "base.html" %}
+{% block content %}
+<h1 data-i18n="boxes.title">Boxes</h1>
+<p data-i18n="boxes.subtitle">Pick a box to browse and open a terminal. Hosts are imported from your SSH config and any custom boxes you add here.</p>
+<ul class="cards">
+  {% for box in configuration.boxes %}
+  <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}">
+    <div class="title">{{ box.name }}</div>
+    {% if box.source == 'local' %}
+    <div class="mono">{{ box.user }}@{{ box.display_host }}</div>
+    <div class="muted small" data-i18n="boxes.localWorkspace">Local workspace</div>
+    {% else %}
+    <div class="mono">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
+    <div class="muted small">
+      <span data-i18n="{% if box.source == 'ssh_config' %}boxes.fromSSHConfig{% else %}boxes.customBox{% endif %}">
+        {{ 'From SSH config' if box.source == 'ssh_config' else 'Custom box' }}
+      </span>
+    </div>
+    {% endif %}
+    {% if box.resolved_host and box.resolved_host != box.display_host %}
+    <div class="muted tiny"><span data-i18n="boxes.resolvesTo">resolves to</span> {{ box.resolved_host }}</div>
+    {% endif %}
+    {% if box.favorites %}
+    <details class="favlist">
+      <summary class="favorite-toggle" data-i18n="boxes.favorites">Favorites</summary>
+      <ul>
+        {% for favorite in box.favorites %}
+        <li><a href="/term?host={{ box.name }}&dir={{ favorite|urlencode }}" target="_blank" rel="noopener">{{ favorite|replace('/', '/<wbr>')|safe }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    <div class="actions">
+      <a class="btn" href="/box/{{ box.name }}" data-i18n="boxes.open">Open</a>
+      {% if box.default_dir %}
+      <a class="btn secondary" href="/term?host={{ box.name }}&dir={{ box.default_dir|urlencode }}" data-i18n="boxes.terminal">Terminal</a>
+      {% endif %}
+      {% if box.source == 'ssh_config' %}
+      <button class="btn secondary small"
+              hx-post="/box/{{ box.name }}/refresh"
+              hx-swap="none"
+              hx-on::after-request="window.location.reload()"
+              data-i18n="boxes.refresh">
+        Refresh
+      </button>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+
+<div class="muted small"><span data-i18n="boxes.configFile">Config file:</span> {{ configuration_path if configuration_path else "" }}</div>
+{% endblock %}

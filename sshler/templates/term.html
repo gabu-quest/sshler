@@ -1,0 +1,68 @@
+
+{% extends "base.html" %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+<script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+<script src="https://unpkg.com/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+{% endblock %}
+{% block content %}
+{% set raw_dir = directory.rstrip('/') %}
+{% if raw_dir == '' %}
+  {% set dir_label = '/' %}
+{% else %}
+  {% set dir_label = raw_dir.rsplit('/', 1)[-1] %}
+{% endif %}
+<div class="term-page"
+     data-term-root
+     data-box-name="{{ box.name }}"
+     data-host="{{ box.name }}"
+     data-directory="{{ directory }}"
+     data-session="{{ session }}"
+     data-dir-label="{{ dir_label }}"
+     data-transport="{{ box.transport }}">
+  <div class="term-header">
+    <div class="term-banner">
+      <div class="term-banner__host">{{ box.name }}</div>
+      <div class="term-banner__primary mono">{{ dir_label }}</div>
+      <div class="term-banner__meta mono"><span data-i18n="term.session">Session:</span> {{ session }}</div>
+      <div class="term-banner__actions">
+        <a class="btn secondary small" href="/box/{{ box.name }}" data-i18n="term.back">Back</a>
+      </div>
+      <div class="term-banner__path mono">{{ directory }}</div>
+    </div>
+  </div>
+  <div id="tmux-tabs" class="tmux-tabs"></div>
+  <div class="term-shell">
+    <div class="term-toolbar" id="term-toolbar">
+      <button class="btn secondary small" data-command="scroll-mode" data-i18n="term.scrollMode">Scroll Mode</button>
+      <button class="btn secondary small" data-command="escape" data-i18n="term.escape">Escape</button>
+      <button class="btn secondary small" data-command="ctrl-t" data-i18n="term.ctrlT">Ctrl+T</button>
+      <button class="btn secondary small" data-command="ctrl-c" data-i18n="term.ctrlC">Ctrl+C</button>
+      <button class="btn secondary small" data-command="split-h" data-i18n="term.splitH">Split %</button>
+      <button class="btn secondary small" data-command="split-v" data-i18n="term.splitV">Split "</button>
+      <button class="btn secondary small" data-command="new-window" data-i18n="term.newWindow">New Window</button>
+      <button class="btn secondary small" data-command="rename-window" data-i18n="term.renameWindow">Rename Window</button>
+      <button class="btn secondary small" data-command="kill-pane" data-i18n="term.killPane">Kill Pane</button>
+      <button class="btn secondary small" data-command="next" data-i18n="term.nextWindow">Next Window</button>
+      <button class="btn secondary small" data-command="prev" data-i18n="term.prevWindow">Prev Window</button>
+      <button class="btn secondary small" data-command="detach" data-i18n="term.detach">Detach</button>
+    </div>
+    <div class="term-wrapper" id="term-wrapper">
+      <div id="term" class="term"></div>
+    </div>
+    <div class="file-panel hidden" id="file-panel">
+      <div id="file-browser" class="file-browser-content"
+           hx-get="/box/{{ box.name }}/ls?path={{ directory|urlencode }}&target=file-browser"
+           hx-trigger="revealed"
+           hx-target="#file-browser"
+           hx-swap="innerHTML">
+        <div class="muted">Loading files…</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script defer src="/static/term.js"></script>
+{% endblock %}

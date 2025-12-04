@@ -1,0 +1,41 @@
+
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>sshler</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <meta name="sshler-token" content="{{ csrf_token }}">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" id="favicon-link">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/prismjs/themes/prism-tomorrow.css" />
+    {% block head_extra %}{% endblock %}
+    <script defer src="https://unpkg.com/prismjs/prism.js"></script>
+    <script defer src="https://unpkg.com/prismjs/components/prism-python.min.js"></script>
+    <script defer src="https://unpkg.com/prismjs/components/prism-javascript.min.js"></script>
+    <script defer src="https://unpkg.com/prismjs/components/prism-json.min.js"></script>
+    <script defer src="https://unpkg.com/prismjs/components/prism-yaml.min.js"></script>
+    <script defer src="/static/base.js"></script>
+  </head>
+  <body>
+    <div id="toast-container"></div>
+    <header class="topbar">
+      <a class="brand" href="/boxes">sshler</a>
+      <span class="version-pill">{{ app_version }}</span>
+      <div class="spacer"></div>
+      <a class="link" href="/boxes" data-i18n="nav.boxes">Boxes</a>
+      <a class="link" href="/boxes/new" data-i18n="nav.addBox">Add Box</a>
+      <button id="docs-btn" class="link docs-btn" data-i18n="nav.docs">Docs</button>
+      <button id="lang-toggle" class="lang-toggle" title="Switch language / 言語を切り替え">
+        <span data-lang="en">EN</span>
+        <span data-lang="ja" class="hidden">JP</span>
+      </button>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+    <div id="modal-container"></div>
+    {% block extra_scripts %}{% endblock %}
+  </body>
+</html>
