@@ -246,12 +246,128 @@
     });
   }
 
+  // === BULK SELECTION & ACTIONS ===
+  function initBulkSelection() {
+    const selectAll = document.getElementById('select-all');
+    const bulkActions = document.getElementById('bulk-actions');
+    const bulkCount = bulkActions?.querySelector('.bulk-count');
+    const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+    const bulkCancelBtn = document.getElementById('bulk-cancel-btn');
+
+    if (!selectAll || !bulkActions) return;
+
+    function getSelectedFiles() {
+      return Array.from(document.querySelectorAll('.file-select:checked'));
+    }
+
+    function updateBulkActions() {
+      const selected = getSelectedFiles();
+      const count = selected.length;
+
+      if (count > 0) {
+        bulkActions.style.display = 'flex';
+        bulkCount.textContent = `${count} file${count === 1 ? '' : 's'} selected`;
+      } else {
+        bulkActions.style.display = 'none';
+        selectAll.checked = false;
+      }
+
+      // Update select-all checkbox state
+      const allCheckboxes = document.querySelectorAll('.file-select');
+      if (allCheckboxes.length > 0) {
+        selectAll.checked = count === allCheckboxes.length;
+        selectAll.indeterminate = count > 0 && count < allCheckboxes.length;
+      }
+    }
+
+    // Select all functionality
+    selectAll.addEventListener('change', () => {
+      const checkboxes = document.querySelectorAll('.file-select');
+      checkboxes.forEach(cb => cb.checked = selectAll.checked);
+      updateBulkActions();
+    });
+
+    // Individual checkbox changes
+    document.addEventListener('change', (e) => {
+      if (e.target.classList.contains('file-select')) {
+        updateBulkActions();
+      }
+    });
+
+    // Cancel bulk selection
+    bulkCancelBtn?.addEventListener('click', () => {
+      const checkboxes = document.querySelectorAll('.file-select');
+      checkboxes.forEach(cb => cb.checked = false);
+      selectAll.checked = false;
+      updateBulkActions();
+    });
+
+    // Bulk delete
+    bulkDeleteBtn?.addEventListener('click', async () => {
+      const selected = getSelectedFiles();
+      if (selected.length === 0) return;
+
+      const fileNames = selected.map(cb => cb.dataset.fileName).join(', ');
+      const confirmMsg = `Delete ${selected.length} file${selected.length === 1 ? '' : 's'}?\n\n${fileNames}`;
+
+      if (!confirm(confirmMsg)) return;
+
+      // Get the current box name and directory from the page
+      const boxName = window.location.pathname.split('/')[2];
+      const deleteForm = document.querySelector('form[hx-post*="/delete"]');
+      const directory = deleteForm?.querySelector('input[name="directory"]')?.value || '/';
+      const target = deleteForm?.querySelector('input[name="target"]')?.value || 'browser';
+
+      // Delete each file
+      for (const checkbox of selected) {
+        const filePath = checkbox.dataset.filePath;
+
+        try {
+          const response = await fetch(`/box/${boxName}/delete`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-SSHLER-TOKEN': window.sshlerToken || '',
+            },
+            body: new URLSearchParams({
+              path: filePath,
+              directory: directory,
+              target: target,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to delete ${checkbox.dataset.fileName}`);
+          }
+        } catch (err) {
+          console.error('Delete error:', err);
+          window.sshlerShowToast?.(err.message, 'error');
+        }
+      }
+
+      // Reload the directory listing
+      const dirUrl = deleteForm?.getAttribute('hx-post').replace('/delete', '/ls');
+      if (dirUrl) {
+        const targetElement = document.getElementById(target);
+        if (targetElement) {
+          const response = await fetch(`${dirUrl}?path=${encodeURIComponent(directory)}&target=${target}`);
+          const html = await response.text();
+          targetElement.innerHTML = html;
+          init(); // Re-initialize after reload
+        }
+      }
+
+      window.sshlerShowToast?.(`Deleted ${selected.length} file${selected.length === 1 ? '' : 's'}`, 'success');
+    });
+  }
+
   // === INITIALIZATION ===
   function init() {
     initDragAndDrop();
     initContextMenus();
     initFileSearch();
     initKeyboardShortcuts();
+    initBulkSelection();
   }
 
   // Run on page load
