@@ -3,7 +3,22 @@
 {% block content %}
 <h1 data-i18n="boxes.title">Boxes</h1>
 <p data-i18n="boxes.subtitle">Pick a box to browse and open a terminal. Hosts are imported from your SSH config and any custom boxes you add here.</p>
-<ul class="cards">
+
+<!-- Search and Filter -->
+<div class="search-box" id="box-search-container">
+  <span class="search-icon">🔍</span>
+  <input type="text" class="search-input" id="box-search" placeholder="Search boxes by name or host..." />
+  <button class="search-clear" id="box-search-clear">✕</button>
+</div>
+
+<div class="filter-tags" id="box-filters">
+  <button class="filter-tag active" data-filter="all">All</button>
+  <button class="filter-tag" data-filter="ssh">SSH</button>
+  <button class="filter-tag" data-filter="custom">Custom</button>
+  <button class="filter-tag" data-filter="local">Local</button>
+</div>
+
+<ul class="cards" id="boxes-list">
   {% for box in configuration.boxes %}
   <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}">
     <div class="title">{{ box.name }}</div>
@@ -50,5 +65,87 @@
   {% endfor %}
 </ul>
 
+<!-- Empty State -->
+<div class="empty-state hidden" id="empty-state">
+  <div class="empty-state__icon">📦</div>
+  <h2 class="empty-state__title">No boxes found</h2>
+  <p class="empty-state__message">Try adjusting your search or filter, or add a new box to get started.</p>
+  <div class="empty-state__action">
+    <a href="/boxes/new" class="btn primary">Add Your First Box</a>
+  </div>
+</div>
+
 <div class="muted small"><span data-i18n="boxes.configFile">Config file:</span> {{ configuration_path if configuration_path else "" }}</div>
+
+<script>
+// Box search and filter functionality
+(function() {
+  const searchInput = document.getElementById('box-search');
+  const searchClear = document.getElementById('box-search-clear');
+  const searchContainer = document.getElementById('box-search-container');
+  const boxesList = document.getElementById('boxes-list');
+  const emptyState = document.getElementById('empty-state');
+  const filterButtons = document.querySelectorAll('.filter-tag');
+
+  let currentFilter = 'all';
+
+  function filterBoxes() {
+    const searchTerm = searchInput.value.toLowerCase();
+    const boxes = boxesList.querySelectorAll('.card');
+    let visibleCount = 0;
+
+    boxes.forEach(box => {
+      const title = box.querySelector('.title')?.textContent.toLowerCase() || '';
+      const hostInfo = box.querySelector('.mono')?.textContent.toLowerCase() || '';
+      const matchesSearch = title.includes(searchTerm) || hostInfo.includes(searchTerm);
+
+      let matchesFilter = true;
+      if (currentFilter !== 'all') {
+        if (currentFilter === 'ssh') matchesFilter = box.classList.contains('ssh-card');
+        else if (currentFilter === 'custom') matchesFilter = box.classList.contains('custom-card');
+        else if (currentFilter === 'local') matchesFilter = box.classList.contains('local-card');
+      }
+
+      if (matchesSearch && matchesFilter) {
+        box.style.display = '';
+        visibleCount++;
+      } else {
+        box.style.display = 'none';
+      }
+    });
+
+    // Show/hide empty state
+    if (visibleCount === 0) {
+      boxesList.style.display = 'none';
+      emptyState.classList.remove('hidden');
+    } else {
+      boxesList.style.display = '';
+      emptyState.classList.add('hidden');
+    }
+
+    // Toggle clear button
+    if (searchInput.value) {
+      searchContainer.classList.add('has-value');
+    } else {
+      searchContainer.classList.remove('has-value');
+    }
+  }
+
+  searchInput?.addEventListener('input', filterBoxes);
+  searchClear?.addEventListener('click', () => {
+    searchInput.value = '';
+    filterBoxes();
+    searchInput.focus();
+  });
+
+  filterButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      filterButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFilter = btn.dataset.filter;
+      filterBoxes();
+    });
+  });
+})();
+</script>
 {% endblock %}

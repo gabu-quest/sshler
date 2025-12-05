@@ -7,9 +7,32 @@
 {% set preview_url = urls.preview %}
 {% set edit_url = urls.edit %}
 {% set term_url = urls.term %}
+<!-- Breadcrumb Navigation -->
+<div class="breadcrumbs">
+  {% set parts = directory_path.strip('/').split('/') if directory_path != '/' else [] %}
+  <a href="#" class="breadcrumb-item"
+     hx-get="{{ dir_url }}?path=/&target={{ current_target }}"
+     hx-target="#{{ current_target }}"
+     hx-swap="innerHTML">🏠</a>
+  {% if parts %}
+  <span class="breadcrumb-separator">/</span>
+  {% for i in range(parts|length) %}
+    {% set path = '/' + '/'.join(parts[:i+1]) %}
+    {% if i == parts|length - 1 %}
+      <span class="breadcrumb-item active">{{ parts[i] }}</span>
+    {% else %}
+      <a href="#" class="breadcrumb-item"
+         hx-get="{{ dir_url }}?path={{ path|urlencode }}&target={{ current_target }}"
+         hx-target="#{{ current_target }}"
+         hx-swap="innerHTML">{{ parts[i] }}</a>
+      <span class="breadcrumb-separator">/</span>
+    {% endif %}
+  {% endfor %}
+  {% endif %}
+</div>
+
 <div class="dir-header">
-  <span class="mono">{{ directory_path }}</span>
-  <a class="btn small" href="{{ term_url }}?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">Open Terminal Here</a>
+  <a class="btn primary small" href="{{ term_url }}?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">📂 Open Terminal Here</a>
 </div>
 <div class="dir-tools">
   <form class="dir-tool" hx-post="{{ touch_url }}" hx-target="#{{ current_target }}" hx-swap="innerHTML">
@@ -62,7 +85,18 @@
           </a>
         {% endif %}
       </td>
-      <td class="fs-type">{{ "dir" if entry.is_directory else "file" }}</td>
+      <td class="fs-type">
+        {% if entry.is_directory %}
+          <span class="muted small">directory</span>
+        {% else %}
+          {% set ext = entry.name.split('.')[-1].lower() if '.' in entry.name else 'txt' %}
+          {% if ext in ['py', 'js', 'ts', 'html', 'css', 'md', 'json', 'yml', 'yaml', 'sh', 'txt'] %}
+            <span class="file-badge {{ ext }}">{{ ext }}</span>
+          {% else %}
+            <span class="file-badge default">{{ ext[:4] }}</span>
+          {% endif %}
+        {% endif %}
+      </td>
       <td class="fs-actions">
         {% if entry.is_directory %}
           <a class="action-btn" href="{{ term_url }}?host={{ box.name }}&dir={{ target_path|urlencode }}" target="_blank" title="Open terminal">
