@@ -1667,6 +1667,222 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         except Exception:
             return {"status": "offline", "latency_ms": None}
 
+    # Session Management API
+
+    @application.get("/box/{name}/sessions")
+    async def list_box_sessions(
+        request: Request,
+        name: str,
+        active_only: bool = Query(False),
+        limit: int = Query(50),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse | dict[str, object]:
+        """List all tracked sessions for a box.
+
+        English:
+            Returns recent and active tmux sessions with metadata.
+            Returns HTML for HTMX requests, JSON otherwise.
+
+        日本語:
+            最近のアクティブな tmux セッションとメタデータを返します。
+            HTMX リクエストには HTML、それ以外は JSON を返します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        sessions = await state.list_sessions_async(name, active_only=active_only, limit=limit)
+
+        # Return HTML for HTMX requests
+        is_htmx = request.headers.get("hx-request") == "true"
+        if is_htmx:
+            # Format timestamps for display
+            import time as time_module
+
+            def format_timestamp(ts: float) -> str:
+                """Format timestamp as relative time."""
+                now = time_module.time()
+                diff = now - ts
+
+                if diff < 60:
+                    return "just now"
+                elif diff < 3600:
+                    mins = int(diff / 60)
+                    return f"{mins}m ago"
+                elif diff < 86400:
+                    hours = int(diff / 3600)
+                    return f"{hours}h ago"
+                elif diff < 604800:
+                    days = int(diff / 86400)
+                    return f"{days}d ago"
+                else:
+                    weeks = int(diff / 604800)
+                    return f"{weeks}w ago"
+
+            formatted_sessions = [
+                {
+                    "id": s.id,
+                    "session_name": s.session_name,
+                    "working_directory": s.working_directory,
+                    "active": s.active,
+                    "window_count": s.window_count,
+                    "last_accessed": format_timestamp(s.last_accessed_at),
+                }
+                for s in sessions
+            ]
+
+            context = {
+                "box": box,
+                "sessions": formatted_sessions,
+            }
+            return templates.TemplateResponse(request, "session_list.html", context)
+
+        # Return JSON for API requests
+        return {
+            "box": name,
+            "sessions": [
+                {
+                    "id": s.id,
+                    "session_name": s.session_name,
+                    "working_directory": s.working_directory,
+                    "created_at": s.created_at,
+                    "last_accessed_at": s.last_accessed_at,
+                    "active": s.active,
+                    "window_count": s.window_count,
+                    "metadata": s.metadata,
+                }
+                for s in sessions
+            ],
+        }
+
+    @application.get("/box/{name}/sessions/{session_id}")
+    async def get_session_details(
+        name: str,
+        session_id: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, object]:
+        """Get details of a specific session.
+
+        English:
+            Returns full details of a tracked session.
+
+        日本語:
+            追跡されたセッションの詳細を返します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        session = await state.get_session_by_id_async(session_id)
+        if not session or session.box != name:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        return {
+            "id": session.id,
+            "box": session.box,
+            "session_name": session.session_name,
+            "working_directory": session.working_directory,
+            "created_at": session.created_at,
+            "last_accessed_at": session.last_accessed_at,
+            "active": session.active,
+            "window_count": session.window_count,
+            "metadata": session.metadata,
+        }
+
+    @application.post("/box/{name}/sessions/{session_id}/resume")
+    async def resume_session(
+        name: str,
+        session_id: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, str]:
+        """Generate terminal URL for resuming a session.
+
+        English:
+            Returns a URL to reconnect to an existing tmux session.
+
+        日本語:
+            既存の tmux セッションに再接続するための URL を返します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        session = await state.get_session_by_id_async(session_id)
+        if not session or session.box != name:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Build terminal URL
+        terminal_url = (
+            f"/term?host={name}"
+            f"&session={session.session_name}"
+            f"&dir={session.working_directory}"
+        )
+
+        return {"terminal_url": terminal_url, "session_name": session.session_name}
+
+    @application.delete("/box/{name}/sessions/{session_id}")
+    async def delete_box_session(
+        name: str,
+        session_id: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, str]:
+        """Delete a tmux session and its tracking record.
+
+        English:
+            Kills the tmux session on the remote server and removes tracking data.
+
+        日本語:
+            リモートサーバー上の tmux セッションを終了し、追跡データを削除します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        session = await state.get_session_by_id_async(session_id)
+        if not session or session.box != name:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Kill tmux session on server
+        transport = getattr(box, "transport", "ssh")
+        try:
+            if transport == "local":
+                # Kill local tmux session
+                result = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "kill-session",
+                    "-t",
+                    session.session_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
+            else:
+                # Kill remote tmux session
+                connection = await connect(
+                    box.connect_host,
+                    box.user,
+                    box.port,
+                    box.keyfile,
+                    box.known_hosts,
+                    application_config.ssh_config_path,
+                    box.ssh_alias,
+                )
+                try:
+                    await connection.run(
+                        f"tmux kill-session -t {shlex.quote(session.session_name)}",
+                        check=False,
+                    )
+                finally:
+                    connection.close()
+        except Exception:
+            # Continue even if tmux kill fails (session might already be dead)
+            pass
+
+        # Remove from database
+        await state.delete_session_async(session_id)
+
+        return {"status": "deleted", "session_id": session_id}
+
     @application.get("/term", response_class=HTMLResponse)
     async def term_page(
         request: Request,
@@ -1856,6 +2072,24 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     rows=rows,
                 )
 
+            # Track session in database
+            try:
+                tracked_session = await state.create_or_update_session_async(
+                    box_name=box.name,
+                    session_name=session,
+                    working_directory=normalized_directory,
+                    metadata={
+                        "columns": columns,
+                        "rows": rows,
+                        "transport": transport,
+                    },
+                )
+                session_id = tracked_session.id
+                logger.info(f"Session tracked: {session_id}")
+            except Exception as exc:
+                logger.warning(f"Failed to track session: {exc}")
+                session_id = None
+
             async def reader() -> None:
                 logger.info("Reader task started")
                 try:
@@ -1909,6 +2143,16 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             await websocket.send_text(
                                 json.dumps({"op": "windows", "windows": window_payload})
                             )
+                            # Update window count in session tracking
+                            if session_id:
+                                try:
+                                    await state.update_session_activity_async(
+                                        session_id,
+                                        active=True,
+                                        window_count=len(window_payload),
+                                    )
+                                except Exception:
+                                    pass
                         await asyncio.sleep(2)
                 except Exception:
                     pass
@@ -1918,6 +2162,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 await asyncio.gather(reader(), writer(), poller)
             finally:
                 poller.cancel()
+
+                # Mark session as inactive (detached) when WebSocket closes
+                if session_id:
+                    try:
+                        await state.update_session_activity_async(session_id, active=False)
+                        logger.info(f"Session marked inactive: {session_id}")
+                    except Exception as exc:
+                        logger.warning(f"Failed to mark session inactive: {exc}")
         finally:
             try:
                 if process:

@@ -7,6 +7,96 @@
     return tokenMeta ? tokenMeta.getAttribute("content") || "" : "";
   }
 
+  function showScrollModeIndicator() {
+    // Check if indicator already exists
+    let indicator = document.querySelector('.scroll-mode-indicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.className = 'scroll-mode-indicator';
+      indicator.innerHTML = `
+        <span class="scroll-icon">📜</span>
+        <div class="scroll-info">
+          <div class="scroll-title">SCROLL MODE</div>
+          <div class="scroll-hint">↑↓ navigate • PgUp/PgDn page • / search • q quit</div>
+        </div>
+      `;
+      document.body.appendChild(indicator);
+
+      // Add styles if not already present
+      if (!document.querySelector('#scroll-mode-styles')) {
+        const style = document.createElement('style');
+        style.id = 'scroll-mode-styles';
+        style.textContent = `
+          .scroll-mode-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 10000;
+            animation: slideIn 0.3s ease-out;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          }
+
+          @keyframes slideIn {
+            from {
+              transform: translateX(100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateX(0);
+              opacity: 1;
+            }
+          }
+
+          .scroll-icon {
+            font-size: 24px;
+          }
+
+          .scroll-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+          }
+
+          .scroll-title {
+            font-weight: 700;
+            font-size: 14px;
+            letter-spacing: 0.5px;
+          }
+
+          .scroll-hint {
+            font-size: 12px;
+            opacity: 0.9;
+            font-weight: 400;
+          }
+
+          .scroll-hint kbd {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    }
+    indicator.style.display = 'flex';
+  }
+
+  function hideScrollModeIndicator() {
+    const indicator = document.querySelector('.scroll-mode-indicator');
+    if (indicator) {
+      indicator.style.display = 'none';
+    }
+  }
+
   function setupCommandButtons(ws) {
     const commandMap = {
       "scroll-mode": { type: "send", payload: "\u0002[" },
@@ -36,6 +126,13 @@
             ws.send(
               JSON.stringify({ op: "send", data: config.payload }),
             );
+
+            // Show scroll mode indicator when entering scroll mode
+            if (command === "scroll-mode") {
+              showScrollModeIndicator();
+              // Hide after a delay (user presses 'q' to exit, so we auto-hide after 30s)
+              setTimeout(hideScrollModeIndicator, 30000);
+            }
           } else if (config.type === "operation" && config.op === "rename-window") {
             const newName = prompt("Rename window to:");
             if (newName) {
@@ -265,15 +362,48 @@
             location.host +
             `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(directory)}&session=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}&token=${encodeURIComponent(token)}`;
 
-          ws = new WebSocket(wsUrl);
-          ws.binaryType = "arraybuffer";
+          let reconnectAttempts = 0;
+          const MAX_RECONNECT_ATTEMPTS = 5;
+          const RECONNECT_BASE_DELAY = 1000; // 1 second
+          let reconnectTimeout = null;
+          let intentionalDisconnect = false;
 
-          setupWebSocket(ws, term, fitAddon);
+          function createWebSocket() {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = "arraybuffer";
+            return ws;
+          }
+
+          function attemptReconnect() {
+            if (intentionalDisconnect || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+              return;
+            }
+
+            reconnectAttempts++;
+            const delay = RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempts - 1); // Exponential backoff
+
+            term.write(`\r\n\u001b[33m[Connection lost. Reconnecting in ${delay / 1000}s... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})]\u001b[0m\r\n`);
+
+            reconnectTimeout = setTimeout(() => {
+              term.write(`\u001b[33m[Attempting to reconnect...]\u001b[0m\r\n`);
+              try {
+                const newWs = createWebSocket();
+                setupWebSocket(newWs, term, fitAddon, true);
+              } catch (error) {
+                term.write(`\u001b[31m[Reconnection failed: ${error.message}]\u001b[0m\r\n`);
+                attemptReconnect();
+              }
+            }, delay);
+          }
+
+          ws = createWebSocket();
+          setupWebSocket(ws, term, fitAddon, false);
         });
       });
     });
 
-    function setupWebSocket(ws, term, fitAddon) {
+    function setupWebSocket(ws, term, fitAddon, isReconnect) {
+      isReconnect = isReconnect || false;
       const encoder = new TextEncoder();
       const termToolbar = document.getElementById("term-toolbar");
       const termWrapper = document.getElementById("term-wrapper");
@@ -286,7 +416,37 @@
       let fileTabButton = null;
       let latestWindows = [];
 
+      // Throttled resize to prevent flooding WebSocket
+      let resizeTimeout = null;
+      let lastResizeTime = 0;
+      const RESIZE_THROTTLE_MS = 100; // Minimum 100ms between resize messages
+
       function sendResize() {
+        const now = Date.now();
+        const timeSinceLastResize = now - lastResizeTime;
+
+        // Clear any pending resize
+        if (resizeTimeout) {
+          clearTimeout(resizeTimeout);
+          resizeTimeout = null;
+        }
+
+        // If enough time has passed, resize immediately
+        if (timeSinceLastResize >= RESIZE_THROTTLE_MS) {
+          performResize();
+          lastResizeTime = now;
+        } else {
+          // Otherwise, schedule resize after throttle period
+          const delay = RESIZE_THROTTLE_MS - timeSinceLastResize;
+          resizeTimeout = setTimeout(() => {
+            performResize();
+            lastResizeTime = Date.now();
+            resizeTimeout = null;
+          }, delay);
+        }
+      }
+
+      function performResize() {
         // Use requestAnimationFrame to ensure DOM is updated before fitting
         requestAnimationFrame(() => {
           fitAddon.fit();
@@ -404,6 +564,13 @@
     }
 
     ws.onopen = () => {
+      if (isReconnect) {
+        // Successfully reconnected
+        reconnectAttempts = 0;
+        term.write(`\r\n\u001b[32m[✓ Reconnected successfully!]\u001b[0m\r\n`);
+        // Send resize to ensure terminal is properly sized
+        performResize();
+      }
       term.focus();
     };
 
@@ -425,8 +592,24 @@
       }
     };
 
-    ws.onclose = () => {
-      term.write("\r\n\u001b[31m[Connection closed — refresh to reconnect]\u001b[0m\r\n");
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    ws.onclose = (event) => {
+      // Check if this was an intentional disconnect (user detached)
+      const wasClean = event.wasClean;
+      const code = event.code;
+
+      // Code 1000 = normal closure, 1001 = going away (refresh)
+      if (wasClean || code === 1000 || code === 1001) {
+        intentionalDisconnect = true;
+        term.write("\r\n\u001b[33m[Connection closed]\u001b[0m\r\n");
+      } else {
+        // Unexpected disconnect, try to reconnect
+        term.write(`\r\n\u001b[31m[Connection lost unexpectedly (code: ${code})]\u001b[0m\r\n`);
+        attemptReconnect();
+      }
       restoreTitle();
     };
 
@@ -435,10 +618,26 @@
     });
 
     term.attachCustomKeyEventHandler((ev) => {
+      // Ctrl+T
       if (ev.ctrlKey && ev.key && ev.key.toLowerCase() === "t") {
         ws.send(JSON.stringify({ op: "send", data: "\u0014" }));
         return false;
       }
+
+      // Shift+PageUp to enter scroll mode
+      if (ev.shiftKey && ev.key === "PageUp" && !ev.ctrlKey && !ev.altKey) {
+        ws.send(JSON.stringify({ op: "send", data: "\u0002[" })); // Ctrl+B [
+        showScrollModeIndicator();
+        setTimeout(hideScrollModeIndicator, 30000);
+        return false;
+      }
+
+      // Detect 'q' to hide scroll mode indicator (user exiting scroll mode)
+      if (ev.key === "q" && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
+        // Hide indicator after a small delay to ensure user pressed 'q' in scroll mode
+        setTimeout(hideScrollModeIndicator, 200);
+      }
+
       return true;
     });
 

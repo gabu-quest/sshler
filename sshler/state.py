@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import secrets
 import threading
 import time
 from collections.abc import Iterable, Sequence
@@ -32,6 +34,35 @@ class Favorite(SQLerModel):
     updated_at: float = Field(default_factory=time.time)
 
 
+class Session(SQLerModel):
+    """Persisted tmux session metadata per box."""
+
+    __tablename__ = "sessions"
+
+    id: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
+    box: str
+    session_name: str
+    working_directory: str
+    created_at: float = Field(default_factory=time.time)
+    last_accessed_at: float = Field(default_factory=time.time)
+    active: bool = True
+    window_count: int = 1
+    metadata_json: str = Field(default="{}")  # JSON string for terminal size, colors, etc.
+
+    @property
+    def metadata(self) -> dict:
+        """Parse metadata JSON."""
+        try:
+            return json.loads(self.metadata_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    @metadata.setter
+    def metadata(self, value: dict) -> None:
+        """Set metadata as JSON."""
+        self.metadata_json = json.dumps(value)
+
+
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from .config import StoredBox
 
@@ -40,7 +71,7 @@ def initialize(config_dir: Path) -> None:
     """Initialise the SQLite-backed state store using ``sqler``.
 
     The state database lives alongside ``boxes.yaml`` and holds favourites and
-    future history records.
+    session tracking records.
     """
 
     global _DB, _DB_PATH, _INITIALISED
@@ -58,9 +89,18 @@ def initialize(config_dir: Path) -> None:
 
         adapter = SQLiteAdapter(path=str(target_path))
         db = SQLerDB(adapter)
+
+        # Initialize Favorite model
         Favorite.set_db(db)
         Favorite.ensure_index("box")
         Favorite.ensure_index("position")
+
+        # Initialize Session model
+        Session.set_db(db)
+        Session.ensure_index("box")
+        Session.ensure_index("last_accessed_at")
+        Session.ensure_index("active")
+        Session.ensure_index("session_name")
 
         _DB = db
         _DB_PATH = target_path
@@ -228,3 +268,179 @@ def _next_position(box_name: str) -> int:
     if not existing:
         return 0
     return existing.position + 1
+
+
+# Session Management Functions
+
+
+def create_or_update_session(
+    box_name: str,
+    session_name: str,
+    working_directory: str,
+    metadata: dict | None = None,
+) -> Session:
+    """Create or update a session record."""
+    _require_db()
+    now = time.time()
+
+    with _DB_LOCK:
+        # Check if session already exists
+        existing = (
+            Session.query()
+            .filter((F("box") == box_name) & (F("session_name") == session_name))
+            .first()
+        )
+
+        if existing:
+            # Update existing session
+            existing.last_accessed_at = now
+            existing.active = True
+            existing.working_directory = working_directory
+            if metadata:
+                existing.metadata = metadata
+            existing.save()
+            return existing
+
+        # Create new session
+        session = Session(
+            box=box_name,
+            session_name=session_name,
+            working_directory=working_directory,
+            created_at=now,
+            last_accessed_at=now,
+            active=True,
+            window_count=1,
+        )
+        if metadata:
+            session.metadata = metadata
+        session.save()
+        return session
+
+
+async def create_or_update_session_async(
+    box_name: str,
+    session_name: str,
+    working_directory: str,
+    metadata: dict | None = None,
+) -> Session:
+    return await asyncio.to_thread(
+        create_or_update_session, box_name, session_name, working_directory, metadata
+    )
+
+
+def list_sessions(
+    box_name: str,
+    active_only: bool = False,
+    limit: int = 50,
+) -> list[Session]:
+    """List sessions for a box, ordered by last accessed (most recent first)."""
+    _require_db()
+
+    with _DB_LOCK:
+        query = Session.query().filter(F("box") == box_name)
+
+        if active_only:
+            query = query.filter(F("active") == True)  # noqa: E712
+
+        rows = query.order_by("last_accessed_at", desc=True).limit(limit).all()
+        return list(rows)
+
+
+async def list_sessions_async(
+    box_name: str,
+    active_only: bool = False,
+    limit: int = 50,
+) -> list[Session]:
+    return await asyncio.to_thread(list_sessions, box_name, active_only, limit)
+
+
+def get_session_by_id(session_id: str) -> Session | None:
+    """Get a session by its ID."""
+    _require_db()
+
+    with _DB_LOCK:
+        return Session.query().filter(F("id") == session_id).first()
+
+
+async def get_session_by_id_async(session_id: str) -> Session | None:
+    return await asyncio.to_thread(get_session_by_id, session_id)
+
+
+def get_session_by_name(box_name: str, session_name: str) -> Session | None:
+    """Get a session by box and session name."""
+    _require_db()
+
+    with _DB_LOCK:
+        return (
+            Session.query()
+            .filter((F("box") == box_name) & (F("session_name") == session_name))
+            .first()
+        )
+
+
+async def get_session_by_name_async(box_name: str, session_name: str) -> Session | None:
+    return await asyncio.to_thread(get_session_by_name, box_name, session_name)
+
+
+def update_session_activity(session_id: str, active: bool = True, window_count: int | None = None) -> bool:
+    """Update session activity status and optionally window count."""
+    _require_db()
+
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+
+        session.active = active
+        session.last_accessed_at = time.time()
+        if window_count is not None:
+            session.window_count = window_count
+        session.save()
+        return True
+
+
+async def update_session_activity_async(
+    session_id: str, active: bool = True, window_count: int | None = None
+) -> bool:
+    return await asyncio.to_thread(update_session_activity, session_id, active, window_count)
+
+
+def delete_session(session_id: str) -> bool:
+    """Delete a session record."""
+    _require_db()
+
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+
+        session.delete()
+        return True
+
+
+async def delete_session_async(session_id: str) -> bool:
+    return await asyncio.to_thread(delete_session, session_id)
+
+
+def cleanup_old_sessions(max_age_days: int = 30) -> int:
+    """Delete sessions older than max_age_days that are inactive."""
+    _require_db()
+
+    cutoff = time.time() - (max_age_days * 24 * 60 * 60)
+    with _DB_LOCK:
+        sessions = (
+            Session.query()
+            .filter((F("active") == False) & (F("last_accessed_at") < cutoff))  # noqa: E712
+            .all()
+        )
+
+        count = 0
+        for session in sessions:
+            session.delete()
+            count += 1
+
+        return count
+
+
+async def cleanup_old_sessions_async(max_age_days: int = 30) -> int:
+    return await asyncio.to_thread(cleanup_old_sessions, max_age_days)
