@@ -182,6 +182,10 @@
     term.loadAddon(fitAddon);
     term.open(document.getElementById("term"));
 
+    // Export instances globally for multi-session manager
+    window.termInstance = term;
+    window.fitAddonInstance = fitAddon;
+
     const notifyContext = {
       host: root.dataset.host || root.dataset.boxName || "",
       session: root.dataset.session || "default",
@@ -398,6 +402,9 @@
 
           ws = createWebSocket();
           setupWebSocket(ws, term, fitAddon, false);
+
+          // Export WebSocket instance globally for multi-session manager
+          window.wsInstance = ws;
         });
       });
     });

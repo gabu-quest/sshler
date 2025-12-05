@@ -1,7 +1,10 @@
 {% if sessions %}
   <div class="session-cards">
     {% for session in sessions %}
-      <div class="session-card {% if session.active %}active{% endif %}">
+      <div class="session-card {% if session.active %}active{% endif %}"
+           data-session-id="{{ session.id }}"
+           data-session-name="{{ session.session_name }}"
+           data-working-directory="{{ session.working_directory }}">
         <div class="session-header">
           <div class="session-info">
             <div class="session-name">{{ session.session_name }}</div>

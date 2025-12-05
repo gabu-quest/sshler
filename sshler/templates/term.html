@@ -26,11 +26,57 @@
       <div class="term-banner__primary mono">{{ dir_label }}</div>
       <div class="term-banner__meta mono"><span data-i18n="term.session">Session:</span> {{ session }}</div>
       <div class="term-banner__actions">
+        <button class="btn secondary small" id="session-manager-btn" title="Manage sessions">
+          <span>📋</span> Sessions
+        </button>
         <a class="btn secondary small" href="/box/{{ box.name }}" data-i18n="term.back">Back</a>
       </div>
       <div class="term-banner__path mono">{{ directory }}</div>
     </div>
   </div>
+
+  <!-- Session Manager Panel -->
+  <div class="session-manager-panel hidden" id="session-manager-panel">
+    <div class="session-manager-header">
+      <h3>Session Manager</h3>
+      <button class="btn-close" id="close-session-manager">×</button>
+    </div>
+    <div class="session-manager-content">
+      <div class="session-actions">
+        <button class="btn primary small" id="split-horizontal-btn">
+          <span>⬌</span> Split Horizontal
+        </button>
+        <button class="btn primary small" id="split-vertical-btn">
+          <span>⬍</span> Split Vertical
+        </button>
+        <button class="btn secondary small" id="close-pane-btn">
+          <span>×</span> Close Current Pane
+        </button>
+      </div>
+      <div class="session-list-container">
+        <h4>Available Sessions</h4>
+        <div id="available-sessions"
+             hx-get="/box/{{ box.name }}/sessions?active_only=false&limit=20"
+             hx-trigger="load, sessionListRefresh from:body"
+             hx-target="#available-sessions"
+             hx-swap="innerHTML">
+          <div class="muted">Loading sessions...</div>
+        </div>
+      </div>
+      <div class="keyboard-hints">
+        <h4>Keyboard Shortcuts</h4>
+        <ul>
+          <li><kbd>Ctrl+Shift+H</kbd> - Focus left pane</li>
+          <li><kbd>Ctrl+Shift+L</kbd> - Focus right pane</li>
+          <li><kbd>Ctrl+Shift+J</kbd> - Focus pane below</li>
+          <li><kbd>Ctrl+Shift+K</kbd> - Focus pane above</li>
+          <li><kbd>Ctrl+Shift+W</kbd> - Cycle panes</li>
+          <li><kbd>Ctrl+Shift+X</kbd> - Close current pane</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
   <div id="tmux-tabs" class="tmux-tabs"></div>
   <div class="term-shell">
     <div class="term-toolbar" id="term-toolbar">
@@ -60,7 +106,17 @@
       </div>
     </div>
     <div class="term-wrapper" id="term-wrapper">
-      <div id="term" class="term"></div>
+      <!-- Main terminal pane container - will hold one or more terminal panes -->
+      <div id="term-panes-container" class="term-panes-container">
+        <!-- Initial terminal pane -->
+        <div class="term-pane focused" id="term-pane-0" data-pane-index="0">
+          <div class="term-pane-header">
+            <span class="term-pane-title">{{ session }}</span>
+            <span class="term-pane-focus-indicator">●</span>
+          </div>
+          <div id="term" class="term"></div>
+        </div>
+      </div>
     </div>
     <div class="file-panel hidden" id="file-panel">
       <div id="file-browser" class="file-browser-content"
@@ -78,4 +134,249 @@
 {% block extra_scripts %}
 <script defer src="/static/term.js"></script>
 <script defer src="/static/file-browser.js"></script>
+<script defer src="/static/multi-session.js"></script>
+<style>
+/* Multi-Session Styles */
+.session-manager-panel {
+  position: fixed;
+  top: 60px;
+  right: 20px;
+  width: 400px;
+  max-height: 80vh;
+  background: var(--card-bg, white);
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-manager-panel.hidden {
+  display: none;
+}
+
+.session-manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.session-manager-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-secondary, #666);
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-close:hover {
+  color: var(--text-color, #333);
+}
+
+.session-manager-content {
+  padding: 1rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.session-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.session-list-container {
+  margin: 1rem 0;
+}
+
+.session-list-container h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary, #666);
+}
+
+.keyboard-hints {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color, #e0e0e0);
+}
+
+.keyboard-hints h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary, #666);
+}
+
+.keyboard-hints ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.keyboard-hints li {
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+}
+
+.keyboard-hints kbd {
+  background: var(--bg-secondary, #f5f5f5);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-color, #ddd);
+}
+
+/* Terminal Panes */
+.term-panes-container {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  gap: 4px;
+  height: 100%;
+  background: var(--bg-secondary, #f0f0f0);
+}
+
+.term-panes-container.horizontal-split {
+  grid-template-columns: 1fr 1fr;
+}
+
+.term-panes-container.vertical-split {
+  grid-template-rows: 1fr 1fr;
+}
+
+.term-pane {
+  display: flex;
+  flex-direction: column;
+  background: black;
+  position: relative;
+  border: 2px solid transparent;
+  transition: border-color 0.2s;
+}
+
+.term-pane.focused {
+  border-color: #007bff;
+}
+
+.term-pane-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: #2d2d2d;
+  color: #ccc;
+  font-size: 0.85rem;
+  font-family: monospace;
+}
+
+.term-pane.focused .term-pane-header {
+  background: #007bff;
+  color: white;
+}
+
+.term-pane-title {
+  flex: 1;
+}
+
+.term-pane-focus-indicator {
+  margin-right: 8px;
+  opacity: 0;
+  color: #4caf50;
+  font-size: 0.7rem;
+}
+
+.term-pane.focused .term-pane-focus-indicator {
+  opacity: 1;
+}
+
+.term-pane-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.term-pane-close:hover {
+  opacity: 1;
+  color: #ff5555;
+}
+
+.term-pane .term {
+  flex: 1;
+  padding: 4px;
+}
+
+/* Session Picker Modal */
+.session-picker-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.session-picker-content {
+  background: var(--card-bg, white);
+  border-radius: 8px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.session-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.session-picker-header h3 {
+  margin: 0;
+}
+
+.session-picker-body {
+  padding: 1rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Make session cards in picker more interactive */
+.session-picker-body .session-card {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.session-picker-body .session-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: #007bff;
+}
+</style>
 {% endblock %}

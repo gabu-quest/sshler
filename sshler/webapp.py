@@ -48,6 +48,8 @@ from .ssh import (
     sftp_list_directory,
     sftp_read_file,
 )
+from .ssh_pool import get_pool, initialize_pool, shutdown_pool
+from .config_cache import get_cache
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -550,14 +552,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         finally:
             connection.close()
 
-    def _get_application_config() -> AppConfig:
-        """Dependency that loads the persisted configuration.
+    async def _get_application_config() -> AppConfig:
+        """Dependency that loads the persisted configuration with caching.
 
         Returns:
-            AppConfig: Configuration loaded from disk.
+            AppConfig: Configuration loaded from disk or cache.
         """
-
-        return load_config()
+        config_cache = get_cache(ttl=60)
+        return await config_cache.get(load_config)
 
     @application.get("/")
     async def root() -> RedirectResponse:
@@ -2195,6 +2197,20 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     connection.close()
             except Exception:
                 pass
+
+    # Application lifecycle events
+    @application.on_event("startup")
+    async def startup_event():
+        """Initialize services on application startup."""
+        # Initialize SSH connection pool
+        await initialize_pool()
+        application.state.ssh_pool = get_pool()
+
+    @application.on_event("shutdown")
+    async def shutdown_event():
+        """Cleanup services on application shutdown."""
+        # Shutdown SSH connection pool
+        await shutdown_pool()
 
     return application
 
