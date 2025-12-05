@@ -52,7 +52,7 @@
 <div class="alert error">{{ error }}</div>
 {% endif %}
 <table class="dir dir-table">
-  <thead><tr><th data-i18n="box.name">Name</th><th data-i18n="box.type">Type</th><th class="actions-col" data-i18n="box.actions">Actions</th></tr></thead>
+  <thead><tr><th data-i18n="box.name">Name</th><th data-i18n="box.type">Type</th><th data-i18n="box.size">Size</th><th>Modified</th><th class="actions-col" data-i18n="box.actions">Actions</th></tr></thead>
   <tbody>
     {% set parent_directory = directory_path.rsplit('/', 1)[0] if '/' in directory_path and directory_path != '/' else '/' %}
     {% if parent_directory.endswith(':') %}
@@ -65,6 +65,8 @@
            hx-target="#{{ current_target }}" hx-swap="innerHTML">..</a>
       </td>
       <td class="fs-type">parent</td>
+      <td class="fs-size"></td>
+      <td class="fs-modified"></td>
       <td class="fs-actions"></td>
     </tr>
     {% endif %}
@@ -96,6 +98,12 @@
             <span class="file-badge default">{{ ext[:4] }}</span>
           {% endif %}
         {% endif %}
+      </td>
+      <td class="fs-size">
+        <span class="muted small">{{ format_file_size(entry.size) }}</span>
+      </td>
+      <td class="fs-modified">
+        <span class="muted small">{{ format_timestamp(entry.modified) }}</span>
       </td>
       <td class="fs-actions">
         {% if entry.is_directory %}

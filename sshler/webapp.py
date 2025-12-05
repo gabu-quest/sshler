@@ -92,6 +92,52 @@ class ServerSettings:
 
 
 
+def _format_file_size(size: int | None) -> str:
+    """Format file size in human-readable format (B, KB, MB, GB)."""
+    if size is None:
+        return "-"
+    if size < 1024:
+        return f"{size} B"
+    elif size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    elif size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _format_timestamp(timestamp: float | None) -> str:
+    """Format Unix timestamp as relative time or absolute date."""
+    if timestamp is None:
+        return "-"
+
+    import time
+    from datetime import datetime
+
+    now = time.time()
+    diff = now - timestamp
+
+    # If less than 1 minute ago
+    if diff < 60:
+        return "just now"
+    # If less than 1 hour ago
+    elif diff < 3600:
+        minutes = int(diff / 60)
+        return f"{minutes}m ago"
+    # If less than 24 hours ago
+    elif diff < 86400:
+        hours = int(diff / 3600)
+        return f"{hours}h ago"
+    # If less than 7 days ago
+    elif diff < 604800:
+        days = int(diff / 86400)
+        return f"{days}d ago"
+    # Otherwise show absolute date
+    else:
+        dt = datetime.fromtimestamp(timestamp)
+        return dt.strftime("%Y-%m-%d")
+
+
 def _normalize_directory_path(directory: str | None) -> str:
     raw = (directory or "/").strip()
     if not raw:
@@ -160,6 +206,7 @@ async def _local_list_directory(path: str) -> list[dict[str, object]]:
                     "name": child.name,
                     "is_directory": child.is_dir(),
                     "size": stats.st_size if child.is_file() else None,
+                    "modified": stats.st_mtime,
                 }
             )
         entries.sort(key=lambda entry: (not entry["is_directory"], entry["name"].lower()))
@@ -353,6 +400,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     application.state.settings = settings
     templates.env.globals["csrf_token"] = settings.csrf_token
+    templates.env.globals["format_file_size"] = _format_file_size
+    templates.env.globals["format_timestamp"] = _format_timestamp
 
     if settings.allow_origins:
         application.add_middleware(
