@@ -20,7 +20,7 @@
 
 <ul class="cards" id="boxes-list">
   {% for box in configuration.boxes %}
-  <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}{% if box.pinned %} pinned-card{% endif %}" data-last-accessed="{{ box.last_accessed or 0 }}">
+  <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}{% if box.pinned %} pinned-card{% endif %}" data-last-accessed="{{ box.last_accessed or 0 }}" data-box-name="{{ box.name }}">
     <button class="pin-btn {{ 'active' if box.pinned else '' }}"
             hx-post="/box/{{ box.name }}/pin"
             hx-swap="none"
@@ -29,6 +29,9 @@
             title="{{ 'Unpin from top' if box.pinned else 'Pin to top' }}">
       {{ '📌' if box.pinned else '📍' }}
     </button>
+    <div class="status-badge status-unknown" data-status-badge title="Checking status...">
+      <span class="status-indicator"></span>
+    </div>
     <div class="title">{{ box.name }}</div>
     {% if box.source == 'local' %}
     <div class="mono">{{ box.user }}@{{ box.display_host }}</div>
@@ -152,6 +155,50 @@
       btn.classList.add('active');
       currentFilter = btn.dataset.filter;
       filterBoxes();
+    });
+  });
+})();
+
+// Connection status polling
+(function() {
+  async function checkBoxStatus(boxName, badge) {
+    try {
+      const response = await fetch(`/box/${boxName}/status`);
+      if (!response.ok) {
+        throw new Error('Status check failed');
+      }
+      const data = await response.json();
+
+      // Remove all status classes
+      badge.classList.remove('status-online', 'status-offline', 'status-unknown');
+
+      // Add appropriate status class
+      badge.classList.add(`status-${data.status}`);
+
+      // Update title with latency info
+      if (data.status === 'online' && data.latency_ms !== null) {
+        badge.title = `Online (${data.latency_ms}ms)`;
+      } else if (data.status === 'offline') {
+        badge.title = 'Offline - cannot connect';
+      } else {
+        badge.title = 'Status unknown';
+      }
+    } catch (err) {
+      badge.classList.remove('status-online', 'status-offline', 'status-unknown');
+      badge.classList.add('status-unknown');
+      badge.title = 'Status check failed';
+    }
+  }
+
+  // Check status for all boxes on page load
+  document.addEventListener('DOMContentLoaded', () => {
+    const cards = document.querySelectorAll('[data-box-name]');
+    cards.forEach(card => {
+      const boxName = card.dataset.boxName;
+      const badge = card.querySelector('[data-status-badge]');
+      if (badge && boxName) {
+        checkBoxStatus(boxName, badge);
+      }
     });
   });
 })();

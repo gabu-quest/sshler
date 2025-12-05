@@ -1625,6 +1625,48 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         rebuild_boxes(application_config)
         return "ok"
 
+    @application.get("/box/{name}/status")
+    async def get_box_status(
+        name: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, object]:
+        """Get the connection status of a box.
+
+        English:
+            Performs a quick connection test and returns status and latency.
+
+        日本語:
+            接続テストを実行し、ステータスとレイテンシを返します。
+        """
+
+        box = find_box(application_config, name)
+        if not box:
+            return {"status": "unknown", "latency_ms": None}
+
+        # Local box is always online
+        if box.transport == "local":
+            return {"status": "online", "latency_ms": 0}
+
+        # Try to connect to remote box
+        import time as time_module
+        start_time = time_module.time()
+        try:
+            connection = await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
+            )
+            connection.close()
+            elapsed = (time_module.time() - start_time) * 1000  # Convert to ms
+            return {"status": "online", "latency_ms": round(elapsed)}
+        except Exception:
+            return {"status": "offline", "latency_ms": None}
+
     @application.get("/term", response_class=HTMLResponse)
     async def term_page(
         request: Request,
