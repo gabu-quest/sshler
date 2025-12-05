@@ -34,18 +34,30 @@
   <div id="tmux-tabs" class="tmux-tabs"></div>
   <div class="term-shell">
     <div class="term-toolbar" id="term-toolbar">
-      <button class="btn secondary small" data-command="scroll-mode" data-i18n="term.scrollMode">Scroll Mode</button>
-      <button class="btn secondary small" data-command="escape" data-i18n="term.escape">Escape</button>
-      <button class="btn secondary small" data-command="ctrl-t" data-i18n="term.ctrlT">Ctrl+T</button>
-      <button class="btn secondary small" data-command="ctrl-c" data-i18n="term.ctrlC">Ctrl+C</button>
-      <button class="btn secondary small" data-command="split-h" data-i18n="term.splitH">Split %</button>
-      <button class="btn secondary small" data-command="split-v" data-i18n="term.splitV">Split "</button>
-      <button class="btn secondary small" data-command="new-window" data-i18n="term.newWindow">New Window</button>
-      <button class="btn secondary small" data-command="rename-window" data-i18n="term.renameWindow">Rename Window</button>
-      <button class="btn secondary small" data-command="kill-pane" data-i18n="term.killPane">Kill Pane</button>
-      <button class="btn secondary small" data-command="next" data-i18n="term.nextWindow">Next Window</button>
-      <button class="btn secondary small" data-command="prev" data-i18n="term.prevWindow">Prev Window</button>
-      <button class="btn secondary small" data-command="detach" data-i18n="term.detach">Detach</button>
+      <div class="term-toolbar-group">
+        <div class="term-toolbar-group-title">View</div>
+        <button class="btn secondary small" data-command="scroll-mode" data-i18n="term.scrollMode" title="Enter scroll mode to navigate terminal history">Scroll Mode</button>
+        <button class="btn secondary small" data-command="escape" data-i18n="term.escape" title="Send Escape key">Escape</button>
+      </div>
+      <div class="term-toolbar-group">
+        <div class="term-toolbar-group-title">Keys</div>
+        <button class="btn secondary small" data-command="ctrl-t" data-i18n="term.ctrlT" title="Send Ctrl+T">Ctrl+T</button>
+        <button class="btn secondary small" data-command="ctrl-c" data-i18n="term.ctrlC" title="Send Ctrl+C (interrupt)">Ctrl+C</button>
+      </div>
+      <div class="term-toolbar-group">
+        <div class="term-toolbar-group-title">Panes</div>
+        <button class="btn secondary small" data-command="split-h" data-i18n="term.splitH" title="Split pane horizontally (Ctrl+B %)">Split %</button>
+        <button class="btn secondary small" data-command="split-v" data-i18n="term.splitV" title="Split pane vertically (Ctrl+B &quot;)">Split "</button>
+        <button class="btn secondary small" data-command="kill-pane" data-i18n="term.killPane" title="Kill current pane (Ctrl+B x)">Kill Pane</button>
+      </div>
+      <div class="term-toolbar-group">
+        <div class="term-toolbar-group-title">Windows</div>
+        <button class="btn secondary small" data-command="new-window" data-i18n="term.newWindow" title="Create new window (Ctrl+B c)">New Window</button>
+        <button class="btn secondary small" data-command="rename-window" data-i18n="term.renameWindow" title="Rename window (Ctrl+B ,)">Rename Window</button>
+        <button class="btn secondary small" data-command="next" data-i18n="term.nextWindow" title="Next window (Ctrl+B n)">Next</button>
+        <button class="btn secondary small" data-command="prev" data-i18n="term.prevWindow" title="Previous window (Ctrl+B p)">Prev</button>
+        <button class="btn secondary small" data-command="detach" data-i18n="term.detach" title="Detach from session (Ctrl+B d)">Detach</button>
+      </div>
     </div>
     <div class="term-wrapper" id="term-wrapper">
       <div id="term" class="term"></div>
@@ -65,4 +77,5 @@
 
 {% block extra_scripts %}
 <script defer src="/static/term.js"></script>
+<script defer src="/static/file-browser.js"></script>
 {% endblock %}

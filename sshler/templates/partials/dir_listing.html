@@ -7,9 +7,32 @@
 {% set preview_url = urls.preview %}
 {% set edit_url = urls.edit %}
 {% set term_url = urls.term %}
+<!-- Breadcrumb Navigation -->
+<div class="breadcrumbs">
+  {% set parts = directory_path.strip('/').split('/') if directory_path != '/' else [] %}
+  <a href="#" class="breadcrumb-item"
+     hx-get="{{ dir_url }}?path=/&target={{ current_target }}"
+     hx-target="#{{ current_target }}"
+     hx-swap="innerHTML">🏠</a>
+  {% if parts %}
+  <span class="breadcrumb-separator">/</span>
+  {% for i in range(parts|length) %}
+    {% set path = '/' + '/'.join(parts[:i+1]) %}
+    {% if i == parts|length - 1 %}
+      <span class="breadcrumb-item active">{{ parts[i] }}</span>
+    {% else %}
+      <a href="#" class="breadcrumb-item"
+         hx-get="{{ dir_url }}?path={{ path|urlencode }}&target={{ current_target }}"
+         hx-target="#{{ current_target }}"
+         hx-swap="innerHTML">{{ parts[i] }}</a>
+      <span class="breadcrumb-separator">/</span>
+    {% endif %}
+  {% endfor %}
+  {% endif %}
+</div>
+
 <div class="dir-header">
-  <span class="mono">{{ directory_path }}</span>
-  <a class="btn small" href="{{ term_url }}?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">Open Terminal Here</a>
+  <a class="btn primary small" href="{{ term_url }}?host={{ box.name }}&dir={{ directory_path|urlencode }}" target="_blank">📂 Open Terminal Here</a>
 </div>
 <div class="dir-tools">
   <form class="dir-tool" hx-post="{{ touch_url }}" hx-target="#{{ current_target }}" hx-swap="innerHTML">
@@ -28,8 +51,16 @@
 {% if error %}
 <div class="alert error">{{ error }}</div>
 {% endif %}
+
+<!-- Bulk Actions Toolbar (hidden by default) -->
+<div class="bulk-actions" id="bulk-actions" style="display: none;">
+  <span class="bulk-count">0 files selected</span>
+  <button class="btn danger small" id="bulk-delete-btn">Delete Selected</button>
+  <button class="btn secondary small" id="bulk-cancel-btn">Cancel</button>
+</div>
+
 <table class="dir dir-table">
-  <thead><tr><th data-i18n="box.name">Name</th><th data-i18n="box.type">Type</th><th class="actions-col" data-i18n="box.actions">Actions</th></tr></thead>
+  <thead><tr><th class="select-col"><input type="checkbox" id="select-all" aria-label="Select all files"></th><th data-i18n="box.name">Name</th><th data-i18n="box.type">Type</th><th data-i18n="box.size">Size</th><th>Modified</th><th class="actions-col" data-i18n="box.actions">Actions</th></tr></thead>
   <tbody>
     {% set parent_directory = directory_path.rsplit('/', 1)[0] if '/' in directory_path and directory_path != '/' else '/' %}
     {% if parent_directory.endswith(':') %}
@@ -37,17 +68,25 @@
     {% endif %}
 {% if directory_path != '/' and parent_directory != directory_path %}
     <tr class="fs-row">
+      <td class="select-col"></td>
       <td class="fs-name">
         <a class="fs-entry up" hx-get="{{ dir_url }}?path={{ parent_directory|urlencode }}&target={{ current_target }}"
            hx-target="#{{ current_target }}" hx-swap="innerHTML">..</a>
       </td>
       <td class="fs-type">parent</td>
+      <td class="fs-size"></td>
+      <td class="fs-modified"></td>
       <td class="fs-actions"></td>
     </tr>
     {% endif %}
     {% for entry in entries %}
     <tr class="fs-row">
       {% set target_path = (directory_path.rstrip('/') ~ '/' ~ entry.name) if directory_path != '/' else '/' ~ entry.name %}
+      <td class="select-col">
+        {% if not entry.is_directory %}
+        <input type="checkbox" class="file-select" data-file-path="{{ target_path }}" data-file-name="{{ entry.name }}" aria-label="Select {{ entry.name }}">
+        {% endif %}
+      </td>
       <td class="fs-name">
         {% if entry.is_directory %}
           <a class="fs-entry folder" hx-get="{{ dir_url }}?path={{ target_path|urlencode }}&target={{ current_target }}"
@@ -62,7 +101,24 @@
           </a>
         {% endif %}
       </td>
-      <td class="fs-type">{{ "dir" if entry.is_directory else "file" }}</td>
+      <td class="fs-type">
+        {% if entry.is_directory %}
+          <span class="muted small">directory</span>
+        {% else %}
+          {% set ext = entry.name.split('.')[-1].lower() if '.' in entry.name else 'txt' %}
+          {% if ext in ['py', 'js', 'ts', 'html', 'css', 'md', 'json', 'yml', 'yaml', 'sh', 'txt'] %}
+            <span class="file-badge {{ ext }}">{{ ext }}</span>
+          {% else %}
+            <span class="file-badge default">{{ ext[:4] }}</span>
+          {% endif %}
+        {% endif %}
+      </td>
+      <td class="fs-size">
+        <span class="muted small">{{ format_file_size(entry.size) }}</span>
+      </td>
+      <td class="fs-modified">
+        <span class="muted small">{{ format_timestamp(entry.modified) }}</span>
+      </td>
       <td class="fs-actions">
         {% if entry.is_directory %}
           <a class="action-btn" href="{{ term_url }}?host={{ box.name }}&dir={{ target_path|urlencode }}" target="_blank" title="Open terminal">

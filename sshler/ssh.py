@@ -186,6 +186,7 @@ async def sftp_list_directory(
                         "is_directory": (stats.permissions & 0o40000)
                         == 0o40000,  # check the directory bit (s_ifdir)
                         "size": stats.size,
+                        "modified": stats.mtime,
                     }
                 )
             except Exception:

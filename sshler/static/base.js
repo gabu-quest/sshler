@@ -401,4 +401,108 @@
   window.sshlerTranslate = function() {
     translate(getStoredLang());
   };
+
+  // Keyboard shortcuts
+  let shortcutsModal = null;
+
+  function showKeyboardShortcuts() {
+    if (shortcutsModal) {
+      shortcutsModal.classList.add('visible');
+      return;
+    }
+
+    const modalContainer = document.getElementById('modal-container');
+    if (!modalContainer) return;
+
+    const shortcuts = [
+      { key: '?', desc: 'Show keyboard shortcuts' },
+      { key: '/', desc: 'Focus search (on boxes page)' },
+      { key: 'n', desc: 'New box (on boxes page)' },
+      { key: 'Ctrl/Cmd+F', desc: 'Search files in directory' },
+      { key: 'Esc', desc: 'Close modals / Clear search' },
+      { key: 'Right-click', desc: 'Context menu on files' },
+    ];
+
+    const html = `
+      <div class="modal visible" id="shortcuts-modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>⌨️ Keyboard Shortcuts</h2>
+            <button class="modal-close" id="shortcuts-close">×</button>
+          </div>
+          <div class="modal-body">
+            <table style="width: 100%; border-collapse: collapse;">
+              ${shortcuts.map(s => `
+                <tr style="border-bottom: 1px solid var(--border);">
+                  <td style="padding: 12px 16px;">
+                    <kbd style="background: var(--btn); border: 2px solid var(--btn-border); padding: 4px 12px; border-radius: 6px; font-family: var(--mono); font-size: 14px;">${s.key}</kbd>
+                  </td>
+                  <td style="padding: 12px 16px; color: var(--fg-muted);">${s.desc}</td>
+                </tr>
+              `).join('')}
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    modalContainer.innerHTML = html;
+    shortcutsModal = modalContainer.querySelector('#shortcuts-modal');
+
+    const closeBtn = shortcutsModal.querySelector('#shortcuts-close');
+    closeBtn?.addEventListener('click', () => {
+      shortcutsModal.classList.remove('visible');
+    });
+
+    shortcutsModal.addEventListener('click', (e) => {
+      if (e.target === shortcutsModal) {
+        shortcutsModal.classList.remove('visible');
+      }
+    });
+  }
+
+  // Global keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Don't trigger if typing in an input
+    if (e.target.matches('input, textarea')) {
+      // Esc clears search
+      if (e.key === 'Escape' && e.target.matches('input[type="text"]')) {
+        e.target.value = '';
+        e.target.dispatchEvent(new Event('input'));
+        e.target.blur();
+      }
+      return;
+    }
+
+    // Show shortcuts
+    if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+      e.preventDefault();
+      showKeyboardShortcuts();
+      return;
+    }
+
+    // Close modal with Esc
+    if (e.key === 'Escape') {
+      const modal = document.querySelector('.modal.visible');
+      if (modal) {
+        modal.classList.remove('visible');
+        return;
+      }
+    }
+
+    // Focus search on /
+    if (e.key === '/' && window.location.pathname === '/boxes') {
+      e.preventDefault();
+      const searchInput = document.getElementById('box-search');
+      searchInput?.focus();
+      return;
+    }
+
+    // New box on n
+    if (e.key === 'n' && window.location.pathname === '/boxes') {
+      e.preventDefault();
+      window.location.href = '/boxes/new';
+      return;
+    }
+  });
 })();

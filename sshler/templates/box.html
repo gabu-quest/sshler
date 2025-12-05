@@ -36,7 +36,11 @@
         </ul>
       </details>
     {% else %}
-      <p class="muted">No favorites yet.</p>
+      <div class="empty-state">
+        <div class="empty-state__icon">⭐</div>
+        <h3 class="empty-state__title">No favorites yet</h3>
+        <p class="empty-state__message">Star folders in the file browser to quickly access them later.</p>
+      </div>
     {% endif %}
   </div>
   <div>
@@ -46,8 +50,18 @@
          hx-trigger="load"
          hx-target="#browser"
          hx-swap="innerHTML">
-      Loading…
+      <!-- Skeleton Loading -->
+      <div class="skeleton" style="height: 40px; margin-bottom: 12px;"></div>
+      <div class="skeleton" style="height: 48px; margin-bottom: 8px;"></div>
+      <div class="skeleton" style="height: 48px; margin-bottom: 8px;"></div>
+      <div class="skeleton" style="height: 48px; margin-bottom: 8px;"></div>
+      <div class="skeleton" style="height: 48px; margin-bottom: 8px;"></div>
+      <div class="skeleton" style="height: 48px;"></div>
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script defer src="/static/file-browser.js"></script>
 {% endblock %}

@@ -38,6 +38,8 @@ class StoredBox:
     default_dir: str | None = None
     known_hosts: str | None = None
     ssh_alias: str | None = None
+    pinned: bool = False
+    last_accessed: float | None = None
 
 
 @dataclass
@@ -68,6 +70,8 @@ class Box:
     ssh_alias: str | None = None
     resolved_host: str | None = None
     transport: str = "ssh"
+    pinned: bool = False
+    last_accessed: float | None = None
 
 
 @dataclass
@@ -278,6 +282,8 @@ def _stored_box_from_dict(data: dict[str, Any]) -> StoredBox:
         default_dir=data.get("default_dir"),
         known_hosts=data.get("known_hosts"),
         ssh_alias=data.get("ssh_alias"),
+        pinned=bool(data.get("pinned", False)),
+        last_accessed=float(data["last_accessed"]) if "last_accessed" in data and data["last_accessed"] is not None else None,
     )
 
 
@@ -299,6 +305,10 @@ def _stored_box_to_dict(stored: StoredBox) -> dict[str, Any]:
         result["known_hosts"] = stored.known_hosts
     if stored.ssh_alias:
         result["ssh_alias"] = stored.ssh_alias
+    if stored.pinned:
+        result["pinned"] = stored.pinned
+    if stored.last_accessed is not None:
+        result["last_accessed"] = stored.last_accessed
     return result
 
 
@@ -380,6 +390,8 @@ def _merge_host(
     known_hosts = stored_override.known_hosts if stored_override else None
     agent = stored_override.agent if stored_override else False
     source = "ssh_config" if host_config else "custom"
+    pinned = stored_override.pinned if stored_override else False
+    last_accessed = stored_override.last_accessed if stored_override else None
 
     return Box(
         name=name,
@@ -396,6 +408,8 @@ def _merge_host(
         ssh_alias=ssh_alias,
         resolved_host=resolved_host,
         transport="ssh",
+        pinned=pinned,
+        last_accessed=last_accessed,
     )
 
 
