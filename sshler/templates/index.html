@@ -20,7 +20,15 @@
 
 <ul class="cards" id="boxes-list">
   {% for box in configuration.boxes %}
-  <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}">
+  <li class="card {% if box.source == 'local' %}local-card{% elif box.source == 'ssh_config' %}ssh-card{% else %}custom-card{% endif %}{% if box.pinned %} pinned-card{% endif %}" data-last-accessed="{{ box.last_accessed or 0 }}">
+    <button class="pin-btn {{ 'active' if box.pinned else '' }}"
+            hx-post="/box/{{ box.name }}/pin"
+            hx-swap="none"
+            hx-on::after-request="window.location.reload()"
+            aria-label="{{ 'Unpin' if box.pinned else 'Pin' }} box"
+            title="{{ 'Unpin from top' if box.pinned else 'Pin to top' }}">
+      {{ '📌' if box.pinned else '📍' }}
+    </button>
     <div class="title">{{ box.name }}</div>
     {% if box.source == 'local' %}
     <div class="mono">{{ box.user }}@{{ box.display_host }}</div>

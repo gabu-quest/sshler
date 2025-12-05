@@ -643,6 +643,18 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         """
 
         configuration_path = str(get_config_path())
+
+        # Sort boxes: pinned first, then by last accessed (most recent first), then alphabetically
+        sorted_boxes = sorted(
+            application_config.boxes,
+            key=lambda b: (
+                not b.pinned,  # Pinned boxes first (False < True, so not pinned sorts first)
+                -(b.last_accessed or 0),  # Most recent first (negative for descending order)
+                b.name.lower()  # Alphabetically as final tiebreaker
+            )
+        )
+        application_config.boxes = sorted_boxes
+
         context = {
             "configuration": application_config,
             "configuration_path": configuration_path,
@@ -680,6 +692,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         box = find_box(application_config, name)
         if not box:
             raise HTTPException(status_code=404, detail="Unknown box")
+
+        # Update last_accessed timestamp
+        import time
+        stored = application_config.get_or_create_stored(name)
+        stored.last_accessed = time.time()
+        box.last_accessed = stored.last_accessed
+        save_config(application_config)
+
         if getattr(box, "transport", "ssh") == "local":
             base_directory = _normalize_local_path(box.default_dir)
         else:
@@ -1573,6 +1593,35 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
             save_config(application_config)
 
+        rebuild_boxes(application_config)
+        return "ok"
+
+    @application.post("/box/{name}/pin", response_class=PlainTextResponse)
+    async def toggle_pin_box(
+        name: str,
+        request: Request,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> str:
+        """Toggle the pinned status of a box.
+
+        English:
+            Pins or unpins a box to keep it at the top of the boxes list.
+
+        日本語:
+            ボックスをピン留めまたはピン留め解除します。
+        """
+
+        _require_token(request)
+
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        # Get or create stored override
+        stored = application_config.get_or_create_stored(name)
+        stored.pinned = not stored.pinned
+
+        save_config(application_config)
         rebuild_boxes(application_config)
         return "ok"
 
