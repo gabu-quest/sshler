@@ -418,7 +418,9 @@
       { key: '?', desc: 'Show keyboard shortcuts' },
       { key: '/', desc: 'Focus search (on boxes page)' },
       { key: 'n', desc: 'New box (on boxes page)' },
+      { key: 'Ctrl/Cmd+F', desc: 'Search files in directory' },
       { key: 'Esc', desc: 'Close modals / Clear search' },
+      { key: 'Right-click', desc: 'Context menu on files' },
     ];
 
     const html = `
