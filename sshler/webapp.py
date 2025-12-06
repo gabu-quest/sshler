@@ -50,6 +50,8 @@ from .ssh import (
 )
 from .ssh_pool import get_pool, initialize_pool, shutdown_pool
 from .config_cache import get_cache
+from .validation import PathValidator, InputValidator, ValidationError
+from .rate_limit import get_rate_limiter
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -438,6 +440,39 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
         return response
 
+    @application.middleware("http")
+    async def _rate_limit_middleware(request: Request, call_next):
+        """Rate limiting middleware to prevent abuse."""
+        # Skip rate limiting for static files and health checks
+        if request.url.path.startswith("/static/") or request.url.path in ["/", "/docs"]:
+            return await call_next(request)
+
+        # Get client identifier (IP address)
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Different rate limits for different endpoint types
+        if request.url.path.startswith("/box/") and "/upload" in request.url.path:
+            # File uploads: 10 per minute
+            limiter = get_rate_limiter("upload", rate=10, per=60)
+        elif request.url.path.startswith("/ws/"):
+            # WebSocket connections: 5 per minute
+            limiter = get_rate_limiter("websocket", rate=5, per=60)
+        elif request.method == "POST":
+            # POST requests: 60 per minute
+            limiter = get_rate_limiter("post", rate=60, per=60)
+        else:
+            # General requests: 100 per minute
+            limiter = get_rate_limiter("general", rate=100, per=60)
+
+        if not limiter.check(client_ip):
+            return Response(
+                status_code=429,
+                content="Rate limit exceeded. Please try again later.",
+                headers={"Retry-After": "60"},
+            )
+
+        return await call_next(request)
+
     def _require_token(request: Request) -> None:
         if not settings.csrf_token:
             return
@@ -507,10 +542,26 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
 
-        normalized_directory = _normalize_directory_path(directory_path)
-
+        # Validate and normalize path
         try:
-            connection = await connect(
+            normalized_directory = PathValidator.validate_remote_path(_normalize_directory_path(directory_path))
+        except ValidationError as exc:
+            context = {
+                "request": request,
+                "box": box,
+                "directory_path": directory_path,
+                "entries": [],
+                "error": error_override or f"Invalid path: {exc}",
+                "target_id": target_id,
+                "urls": _build_directory_urls(request, box.name),
+            }
+            return templates.TemplateResponse(request, "partials/dir_listing.html", context)
+
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -520,6 +571,26 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                try:
+                    entries = await sftp_list_directory(connection, normalized_directory)
+                    error_message = error_override
+                except Exception as exc:  # pragma: no cover - remote SFTP failures vary by host
+                    entries = []
+                    error_message = error_override or f"Directory listing failed: {exc}"
+
+                context = {
+                    "request": request,
+                    "box": box,
+                    "directory_path": normalized_directory,
+                    "entries": entries,
+                    "error": error_message,
+                    "target_id": target_id,
+                    "urls": _build_directory_urls(request, box.name),
+                }
+                return templates.TemplateResponse(request, "partials/dir_listing.html", context)
         except SSHError as exc:
             context = {
                 "request": request,
@@ -531,26 +602,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 "urls": _build_directory_urls(request, box.name),
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
-
-        try:
-            try:
-                entries = await sftp_list_directory(connection, normalized_directory)
-                error_message = error_override
-            except Exception as exc:  # pragma: no cover - remote SFTP failures vary by host
-                entries = []
-                error_message = error_override or f"Directory listing failed: {exc}"
-            context = {
-                "request": request,
-                "box": box,
-                "directory_path": normalized_directory,
-                "entries": entries,
-                "error": error_message,
-                "target_id": target_id,
-                "urls": _build_directory_urls(request, box.name),
-            }
-            return templates.TemplateResponse(request, "partials/dir_listing.html", context)
-        finally:
-            connection.close()
 
     async def _get_application_config() -> AppConfig:
         """Dependency that loads the persisted configuration with caching.
@@ -818,8 +869,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
             return response
 
+        # Validate filename and compose path
         try:
-            remote_path = _compose_remote_child_path(directory_path, filename)
+            validated_filename = PathValidator.validate_filename(filename)
+            remote_path = _compose_remote_child_path(directory_path, validated_filename)
+            # Additionally validate the complete path
+            PathValidator.validate_remote_path(remote_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=f"Invalid filename: {exc}",
+            )
         except ValueError as exc:
             return await _render_directory_listing(
                 request,
@@ -831,11 +895,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             )
 
         error_message = None
-        connection = None
-        sftp_client = None
         success_message: str | None = None
-        try:
-            connection = await connect(
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -845,38 +909,35 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
-            try:
-                sftp_client = await connection.start_sftp_client()
-            except Exception as exc:  # pragma: no cover - depends on remote server
-                error_message = f"SFTP session failed: {exc}"
-            else:
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
                 try:
+                    sftp_client = await connection.start_sftp_client()
                     try:
-                        await sftp_client.stat(remote_path)
-                    except Exception:
-                        pass
-                    else:
-                        error_message = (
-                            f"File already exists: {PurePosixPath(remote_path).name}"
-                        )
-                    if error_message is None:
-                        async with await sftp_client.open(
-                            remote_path, "w", encoding="utf-8"
-                        ) as remote_file:
-                            await remote_file.write("")
-                        success_message = f"Created {PurePosixPath(remote_path).name}"
-                except Exception as exc:  # pragma: no cover - remote host behavior varies
-                    error_message = f"Failed to create file: {exc}"
+                        try:
+                            await sftp_client.stat(remote_path)
+                            error_message = (
+                                f"File already exists: {PurePosixPath(remote_path).name}"
+                            )
+                        except Exception:
+                            # File doesn't exist, we can create it
+                            async with await sftp_client.open(
+                                remote_path, "w", encoding="utf-8"
+                            ) as remote_file:
+                                await remote_file.write("")
+                            success_message = f"Created {PurePosixPath(remote_path).name}"
+                    except Exception as exc:  # pragma: no cover - remote host behavior varies
+                        error_message = f"Failed to create file: {exc}"
+                    finally:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+                except Exception as exc:  # pragma: no cover - depends on remote server
+                    error_message = f"SFTP session failed: {exc}"
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
-        finally:
-            if sftp_client is not None:
-                try:
-                    await sftp_client.exit()
-                except Exception:
-                    pass
-            if connection is not None:
-                connection.close()
 
         response = await _render_directory_listing(
             request,
