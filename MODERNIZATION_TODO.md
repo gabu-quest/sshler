@@ -4,11 +4,11 @@ Implementation roadmap for UX improvements and modernization features.
 
 ## Phase 1: Foundation & Core UX (High Impact, Low-Medium Effort)
 
-### 1. Light/Dark Theme Toggle + System Preference Detection
-- [ ] Add light theme CSS variables to style.css
-- [ ] Implement system preference detection with `prefers-color-scheme`
-- [ ] Add theme toggle button in header
-- [ ] Persist theme choice in localStorage
+### 1. Light/Dark Theme Toggle + System Preference Detection ✅
+- [x] Add light theme CSS variables to style.css
+- [x] Implement system preference detection with `prefers-color-scheme`
+- [x] Add theme toggle button in header
+- [x] Persist theme choice in localStorage
 - [ ] Update CodeMirror theme integration
 - [ ] Test contrast ratios for accessibility
 

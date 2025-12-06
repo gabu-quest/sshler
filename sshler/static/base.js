@@ -143,6 +143,14 @@
     const toast = document.createElement("div");
     toast.className = `toast ${type || "info"}`;
     toast.textContent = message;
+
+    // Add ARIA role for screen readers
+    if (type === "error") {
+      toast.setAttribute("role", "alert");
+    } else {
+      toast.setAttribute("role", "status");
+    }
+
     container.appendChild(toast);
     requestAnimationFrame(() => toast.classList.add("visible"));
     setTimeout(() => {
