@@ -15,15 +15,15 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Foundational feature that affects all UI. Broadens appeal to users who prefer light mode.
 **Files:** `static/style.css`, `templates/base.html`, `static/base.js`
 
-### 2. Accessibility Improvements
-- [ ] Add `aria-live` regions for toast notifications
-- [ ] Implement `prefers-reduced-motion` support
-- [ ] Add keyboard navigation in file browser (arrow keys)
-- [ ] Add visible focus indicators to all interactive elements
-- [ ] Add skip navigation links
-- [ ] Add ARIA labels to all buttons and interactive elements
-- [ ] Add `role` attributes to custom components
-- [ ] Verify color contrast ratios (WCAG AA compliance)
+### 2. Accessibility Improvements ✅ (Mostly Complete)
+- [x] Add `aria-live` regions for toast notifications
+- [x] Implement `prefers-reduced-motion` support
+- [ ] Add keyboard navigation in file browser (arrow keys) - *Deferred to later*
+- [x] Add visible focus indicators to all interactive elements
+- [x] Add skip navigation links
+- [x] Add ARIA labels to all buttons and interactive elements
+- [x] Add `role` attributes to custom components (toasts)
+- [ ] Verify color contrast ratios (WCAG AA compliance) - *Needs testing*
 
 **Why:** Makes sshler accessible to more users, improves keyboard navigation for power users.
 **Files:** `static/style.css`, `static/file-browser.js`, `templates/base.html`
@@ -191,9 +191,13 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 0
+**Completed:** 2 (Light/Dark Theme, Accessibility Improvements)
 **In Progress:** 0
-**Remaining:** 14
+**Remaining:** 12
+
+### Recently Completed:
+- ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
+- ✅ Feature #2: Accessibility Improvements (commit: 26d1ce6)
 
 ---
 
