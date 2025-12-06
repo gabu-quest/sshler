@@ -1041,8 +1041,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
             return response
 
+        # Validate filename and compose path
         try:
-            remote_path = _compose_remote_child_path(directory_path, candidate_name)
+            validated_filename = PathValidator.validate_filename(candidate_name)
+            remote_path = _compose_remote_child_path(directory_path, validated_filename)
+            PathValidator.validate_remote_path(remote_path)
+        except ValidationError as exc:
+            await file.close()
+            return await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=f"Invalid filename: {exc}",
+            )
         except ValueError as exc:
             await file.close()
             return await _render_directory_listing(
@@ -1067,50 +1080,53 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             limit_kb = settings.max_upload_bytes // 1024
             error_message = f"Upload exceeds {limit_kb} KB limit"
 
-        connection = None
-        sftp_client = None
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
+            )
+
         if error_message is None:
             try:
-                connection = await connect(
-                    box.connect_host,
-                    box.user,
-                    box.port,
-                    box.keyfile,
-                    box.known_hosts,
-                    application_config.ssh_config_path,
-                    box.ssh_alias,
-                    allow_alias=settings.allow_ssh_alias,
-                )
-                try:
-                    sftp_client = await connection.start_sftp_client()
-                except Exception as exc:  # pragma: no cover - depends on remote server
-                    error_message = f"SFTP session failed: {exc}"
-                else:
+                async with ssh_pool.connection(box, connect_func) as connection:
+                    sftp_client = None
                     try:
+                        sftp_client = await connection.start_sftp_client()
+                    except Exception as exc:  # pragma: no cover - depends on remote server
+                        error_message = f"SFTP session failed: {exc}"
+                    else:
                         try:
-                            await sftp_client.stat(remote_path)
-                        except Exception:
-                            pass
-                        else:
-                            error_message = (
-                                f"File already exists: {PurePosixPath(remote_path).name}"
-                            )
-                        if error_message is None:
-                            async with await sftp_client.open(remote_path, "wb") as remote_file:
-                                await remote_file.write(contents)
-                            success_message = f"Uploaded {PurePosixPath(remote_path).name}"
-                    except Exception as exc:  # pragma: no cover - remote SFTP failures vary
-                        error_message = f"Failed to upload file: {exc}"
+                            try:
+                                await sftp_client.stat(remote_path)
+                            except Exception:
+                                pass
+                            else:
+                                error_message = (
+                                    f"File already exists: {PurePosixPath(remote_path).name}"
+                                )
+                            if error_message is None:
+                                async with await sftp_client.open(remote_path, "wb") as remote_file:
+                                    await remote_file.write(contents)
+                                success_message = f"Uploaded {PurePosixPath(remote_path).name}"
+                        except Exception as exc:  # pragma: no cover - remote SFTP failures vary
+                            error_message = f"Failed to upload file: {exc}"
+                        finally:
+                            if sftp_client is not None:
+                                try:
+                                    await sftp_client.exit()
+                                except Exception:
+                                    pass
             except SSHError as exc:
                 error_message = f"SSH connection failed: {exc}"
-            finally:
-                if sftp_client is not None:
-                    try:
-                        await sftp_client.exit()
-                    except Exception:
-                        pass
-                if connection is not None:
-                    connection.close()
 
         response = await _render_directory_listing(
             request,
@@ -1189,14 +1205,38 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
             return response
 
+        # Validate and normalize remote path
+        try:
+            validated_path = PathValidator.validate_remote_path(file_path)
+        except ValidationError as exc:
+            response = await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=f"Invalid path: {exc}",
+            )
+            trigger_payload = json.dumps(
+                {
+                    "dir-action": {
+                        "status": "error",
+                        "message": f"Invalid path: {exc}",
+                    }
+                }
+            )
+            response.headers["HX-Trigger"] = trigger_payload
+            return response
+
         # Remote file deletion
         error_message = None
         success_message: str | None = None
-        connection = None
-        sftp_client = None
 
-        try:
-            connection = await connect(
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -1206,28 +1246,30 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
-            try:
-                sftp_client = await connection.start_sftp_client()
-            except Exception as exc:
-                error_message = f"SFTP session failed: {exc}"
-            else:
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
                 try:
-                    await sftp_client.remove(file_path)
-                    success_message = f"Deleted {PurePosixPath(file_path).name}"
-                except FileNotFoundError:
-                    error_message = f"File not found: {PurePosixPath(file_path).name}"
+                    sftp_client = await connection.start_sftp_client()
                 except Exception as exc:
-                    error_message = f"Failed to delete file: {exc}"
+                    error_message = f"SFTP session failed: {exc}"
+                else:
+                    try:
+                        await sftp_client.remove(validated_path)
+                        success_message = f"Deleted {PurePosixPath(validated_path).name}"
+                    except FileNotFoundError:
+                        error_message = f"File not found: {PurePosixPath(validated_path).name}"
+                    except Exception as exc:
+                        error_message = f"Failed to delete file: {exc}"
+                    finally:
+                        if sftp_client is not None:
+                            try:
+                                await sftp_client.exit()
+                            except Exception:
+                                pass
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
-        finally:
-            if sftp_client is not None:
-                try:
-                    await sftp_client.exit()
-                except Exception:
-                    pass
-            if connection is not None:
-                connection.close()
 
         response = await _render_directory_listing(
             request,
@@ -1322,9 +1364,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "file_view.html", context)
 
-        connection = None
+        # Validate and normalize remote path
         try:
-            connection = await connect(
+            validated_path = PathValidator.validate_remote_path(file_path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid path: {exc}")
+
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -1334,62 +1384,60 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
-        except SSHError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         try:
-            suffix = Path(file_path).suffix.lower()
-            image_mime = IMAGE_CONTENT_TYPES.get(suffix)
-            image_data: str | None = None
-            image_too_large = False
-            if image_mime:
-                try:
-                    image_bytes, too_large = await _read_file_bytes(
-                        connection, file_path, MAX_IMAGE_PREVIEW_BYTES
-                    )
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
-                if too_large:
-                    image_too_large = True
-                else:
-                    image_data = base64.b64encode(image_bytes).decode("ascii")
+            async with ssh_pool.connection(box, connect_func) as connection:
+                suffix = Path(validated_path).suffix.lower()
+                image_mime = IMAGE_CONTENT_TYPES.get(suffix)
+                image_data: str | None = None
+                image_too_large = False
+                if image_mime:
+                    try:
+                        image_bytes, too_large = await _read_file_bytes(
+                            connection, validated_path, MAX_IMAGE_PREVIEW_BYTES
+                        )
+                    except Exception as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
+                    if too_large:
+                        image_too_large = True
+                    else:
+                        image_data = base64.b64encode(image_bytes).decode("ascii")
 
-            text_content: str | None = None
-            if not image_mime or image_too_large:
-                try:
-                    text_content = await _read_remote_text(
-                        connection, file_path, settings.max_upload_bytes
-                    )
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                text_content: str | None = None
+                if not image_mime or image_too_large:
+                    try:
+                        text_content = await _read_remote_text(
+                            connection, validated_path, settings.max_upload_bytes
+                        )
+                    except Exception as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-            # Get the directory containing the file
-            parent_dir = str(PurePosixPath(file_path).parent)
+                # Get the directory containing the file
+                parent_dir = str(PurePosixPath(validated_path).parent)
 
-            # Check if this is a markdown file and render it
-            is_markdown = _is_markdown_file(file_path)
-            markdown_html = None
-            if is_markdown and text_content:
-                markdown_html = _render_markdown(text_content)
+                # Check if this is a markdown file and render it
+                is_markdown = _is_markdown_file(validated_path)
+                markdown_html = None
+                if is_markdown and text_content:
+                    markdown_html = _render_markdown(text_content)
 
-            context = {
-                "box": box,
-                "path": file_path,
-                "parent_directory": parent_dir,
-                "content": text_content or "",
-                "syntax_class": _syntax_from_filename(file_path),
-                "app_version": app_version,
-                "image_data": image_data,
-                "image_mime": image_mime,
-                "image_too_large": image_too_large,
-                "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,
-                "is_markdown": is_markdown,
-                "markdown_html": markdown_html,
-            }
-            return templates.TemplateResponse(request, "file_view.html", context)
-        finally:
-            if connection is not None:
-                connection.close()
+                context = {
+                    "box": box,
+                    "path": validated_path,
+                    "parent_directory": parent_dir,
+                    "content": text_content or "",
+                    "syntax_class": _syntax_from_filename(validated_path),
+                    "app_version": app_version,
+                    "image_data": image_data,
+                    "image_mime": image_mime,
+                    "image_too_large": image_too_large,
+                    "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,
+                    "is_markdown": is_markdown,
+                    "markdown_html": markdown_html,
+                }
+                return templates.TemplateResponse(request, "file_view.html", context)
+        except SSHError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.api_route(
         "/box/{name}/edit",
@@ -1447,60 +1495,71 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "file_edit.html", context)
 
-        connection = await connect(
-            box.connect_host,
-            box.user,
-            box.port,
-            box.keyfile,
-            box.known_hosts,
-            application_config.ssh_config_path,
-            box.ssh_alias,
-            allow_alias=settings.allow_ssh_alias,
-        )
+        # Validate and normalize remote path
+        try:
+            validated_path = PathValidator.validate_remote_path(file_path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid path: {exc}")
+
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
+            )
 
         try:
-            if request.method == "GET":
-                try:
-                    content = await _read_remote_text(connection, file_path, 262144)
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
-                context = {
-                    "box": box,
-                    "path": file_path,
-                    "content": content,
-                    "app_version": app_version,
-                }
-                return templates.TemplateResponse(request, "file_edit.html", context)
+            async with ssh_pool.connection(box, connect_func) as connection:
+                if request.method == "GET":
+                    try:
+                        content = await _read_remote_text(connection, validated_path, 262144)
+                    except Exception as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
+                    context = {
+                        "box": box,
+                        "path": validated_path,
+                        "content": content,
+                        "app_version": app_version,
+                    }
+                    return templates.TemplateResponse(request, "file_edit.html", context)
 
-            _require_token(request)
-            payload = await request.json()
-            content = payload.get("content")
-            if content is None:
-                raise HTTPException(status_code=400, detail="Missing content")
-            if len(content.encode("utf-8")) > 262144:
-                raise HTTPException(status_code=400, detail="File exceeds 256KB editing limit")
+                _require_token(request)
+                payload = await request.json()
+                content = payload.get("content")
+                if content is None:
+                    raise HTTPException(status_code=400, detail="Missing content")
+                if len(content.encode("utf-8")) > 262144:
+                    raise HTTPException(status_code=400, detail="File exceeds 256KB editing limit")
 
-            sftp_client = await connection.start_sftp_client()
-            try:
-                async with await sftp_client.open(file_path, "w", encoding="utf-8") as remote_file:
-                    await remote_file.write(content)
-            finally:
+                sftp_client = await connection.start_sftp_client()
                 try:
-                    await sftp_client.exit()
-                except Exception:
-                    pass
-            return templates.TemplateResponse(
-                request,
-                "file_edit.html",
-                {
-                    "box": box,
-                    "path": file_path,
-                    "content": content,
-                    "app_version": app_version,
-                },
-            )
-        finally:
-            connection.close()
+                    async with await sftp_client.open(validated_path, "w", encoding="utf-8") as remote_file:
+                        await remote_file.write(content)
+                finally:
+                    try:
+                        await sftp_client.exit()
+                    except Exception:
+                        pass
+                return templates.TemplateResponse(
+                    request,
+                    "file_edit.html",
+                    {
+                        "box": box,
+                        "path": validated_path,
+                        "content": content,
+                        "app_version": app_version,
+                    },
+                )
+        except SSHError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.post("/box/{name}/fav", response_class=PlainTextResponse)
     async def toggle_favorite(
