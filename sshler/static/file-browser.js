@@ -79,6 +79,7 @@
       <div class="context-menu-item" data-action="open">📂 Open</div>
       <div class="context-menu-item" data-action="preview">👁️ Preview</div>
       <div class="context-menu-item" data-action="edit">✏️ Edit</div>
+      <div class="context-menu-item" data-action="rename">✍️ Rename</div>
       <div class="context-menu-item" data-action="copy-path">📋 Copy Path</div>
       <div class="context-menu-separator"></div>
       <div class="context-menu-item danger" data-action="delete">🗑️ Delete</div>
@@ -130,6 +131,13 @@
             break;
           case 'edit':
             fileRow.querySelector('.action-btn[title*="Edit"]')?.click();
+            break;
+          case 'rename':
+            // Trigger double-click on the name cell to start rename
+            const nameCell = fileRow.querySelector('td.file-name');
+            if (nameCell) {
+              nameCell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            }
             break;
           case 'copy-path':
             const pathText = fileRow.closest('table')?.parentElement?.querySelector('.breadcrumb-item.active')?.textContent || '';
@@ -361,6 +369,109 @@
     });
   }
 
+  // === INLINE RENAME ===
+  function initInlineRename() {
+    const fileTable = document.querySelector('.dir-table');
+    if (!fileTable) return;
+
+    // Double-click on filename to rename
+    fileTable.addEventListener('dblclick', (e) => {
+      const nameCell = e.target.closest('td.file-name');
+      if (!nameCell) return;
+
+      const fileRow = nameCell.closest('tr');
+      if (!fileRow) return;
+
+      const filePath = fileRow.dataset.path;
+      const fileName = fileRow.dataset.name;
+      const isDirectory = fileRow.dataset.isDirectory === 'true';
+
+      if (!filePath || !fileName) return;
+
+      // Create inline input
+      const nameLink = nameCell.querySelector('.file-name-link');
+      if (!nameLink) return;
+
+      const originalText = nameLink.textContent;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'inline-rename-input';
+      input.value = fileName;
+      input.style.cssText = 'width: 100%; padding: 4px; border: 2px solid var(--accent); border-radius: 4px; background: var(--input-bg); color: var(--fg);';
+
+      nameCell.innerHTML = '';
+      nameCell.appendChild(input);
+      input.focus();
+      input.select();
+
+      const finishRename = async (save) => {
+        const newName = input.value.trim();
+
+        if (!save || !newName || newName === fileName) {
+          // Cancel - restore original
+          nameCell.innerHTML = '';
+          nameCell.appendChild(nameLink);
+          return;
+        }
+
+        // Perform rename
+        const boxName = window.location.pathname.split('/')[2];
+        const directory = new URLSearchParams(window.location.search).get('path') || '/';
+        const token = window.sshlerToken || '';
+
+        try {
+          const formData = new FormData();
+          formData.append('path', filePath);
+          formData.append('new_name', newName);
+          formData.append('directory', directory);
+          formData.append('target', 'browser');
+
+          const response = await fetch(`/box/${boxName}/rename`, {
+            method: 'POST',
+            headers: {
+              'X-SSHLER-TOKEN': token,
+            },
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error('Rename failed');
+          }
+
+          // Success - reload the directory listing
+          const browserEl = document.getElementById('browser');
+          if (browserEl && window.htmx) {
+            window.htmx.trigger(browserEl, 'reload');
+          } else {
+            window.location.reload();
+          }
+        } catch (error) {
+          console.error('Rename error:', error);
+          window.showToast?.('Failed to rename file', 'error');
+          // Restore original
+          nameCell.innerHTML = '';
+          nameCell.appendChild(nameLink);
+        }
+      };
+
+      // Handle Enter and Escape keys
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          finishRename(true);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          finishRename(false);
+        }
+      });
+
+      // Handle blur (click outside)
+      input.addEventListener('blur', () => {
+        finishRename(false);
+      });
+    });
+  }
+
   // === INITIALIZATION ===
   function init() {
     initDragAndDrop();
@@ -368,6 +479,7 @@
     initFileSearch();
     initKeyboardShortcuts();
     initBulkSelection();
+    initInlineRename();
   }
 
   // Run on page load

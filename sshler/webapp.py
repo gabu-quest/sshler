@@ -1292,6 +1292,126 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             response.headers["HX-Trigger"] = trigger_payload
         return response
 
+    @application.post("/box/{name}/rename", response_class=HTMLResponse)
+    async def rename_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        new_name: str = Form(...),
+        directory: str = Form(...),
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Rename a file or directory."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        # Validate new name
+        try:
+            validated_new_name = PathValidator.validate_filename(new_name)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid filename: {exc}"
+            )
+
+        if box.transport == "local":
+            old_path = _normalize_local_path(file_path)
+            new_path = str(Path(old_path).parent / validated_new_name)
+            error_message = None
+            success_message = None
+
+            try:
+                Path(old_path).rename(new_path)
+                success_message = f"Renamed to {validated_new_name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {Path(old_path).name}"
+            except Exception as exc:
+                error_message = f"Failed to rename: {exc}"
+
+            response = await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=error_message
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote rename
+        try:
+            validated_old_path = PathValidator.validate_remote_path(file_path)
+            old_dir = str(PurePosixPath(validated_old_path).parent)
+            new_path = f"{old_dir}/{validated_new_name}" if old_dir != "." else validated_new_name
+            PathValidator.validate_remote_path(new_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid path: {exc}"
+            )
+
+        error_message = None
+        success_message = None
+
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host, box.user, box.port, box.keyfile,
+                box.known_hosts, application_config.ssh_config_path,
+                box.ssh_alias, allow_alias=settings.allow_ssh_alias,
+            )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
+                try:
+                    sftp_client = await connection.start_sftp_client()
+                    await sftp_client.rename(validated_old_path, new_path)
+                    success_message = f"Renamed to {validated_new_name}"
+                except FileNotFoundError:
+                    error_message = f"File not found: {PurePosixPath(validated_old_path).name}"
+                except Exception as exc:
+                    error_message = f"Failed to rename: {exc}"
+                finally:
+                    if sftp_client:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+
+        response = await _render_directory_listing(
+            request, box, directory_path, target, application_config,
+            error_override=error_message
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps({
+                "dir-action": {
+                    "status": "error" if error_message else "success",
+                    "message": message,
+                }
+            })
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
     @application.get("/box/{name}/cat", response_class=HTMLResponse)
     async def view_file(
         name: str,
