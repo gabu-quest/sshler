@@ -28,14 +28,15 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Makes sshler accessible to more users, improves keyboard navigation for power users.
 **Files:** `static/style.css`, `static/file-browser.js`, `templates/base.html`
 
-### 3. PWA Support (Progressive Web App)
-- [ ] Create `manifest.json` with app metadata
-- [ ] Generate app icons (192x192, 512x512)
-- [ ] Create service worker for offline support
-- [ ] Cache static assets (CSS, JS, images)
-- [ ] Implement offline shell
-- [ ] Add "Add to Home Screen" prompt
-- [ ] Test installation on desktop and mobile
+### 3. PWA Support (Progressive Web App) ✅
+- [x] Create `manifest.json` with app metadata
+- [ ] Generate app icons (192x192, 512x512) - *Using SVG for now*
+- [x] Create service worker for offline support
+- [x] Cache static assets (CSS, JS, images)
+- [x] Implement offline shell
+- [x] Add meta tags for installation support
+- [x] Service worker registration and update handling
+- [ ] Test installation on desktop and mobile - *Ready for testing*
 
 **Why:** Makes sshler installable as a native-feeling app on desktop and mobile.
 **Files:** `manifest.json` (new), `static/sw.js` (new), `templates/base.html`
@@ -191,13 +192,14 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 2 (Light/Dark Theme, Accessibility Improvements)
+**Completed:** 3 (Light/Dark Theme, Accessibility, PWA Support)
 **In Progress:** 0
-**Remaining:** 12
+**Remaining:** 11
 
 ### Recently Completed:
 - ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
 - ✅ Feature #2: Accessibility Improvements (commit: 26d1ce6)
+- ✅ Feature #3: PWA Support (commit: 6c3d257)
 
 ---
 
