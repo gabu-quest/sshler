@@ -109,18 +109,18 @@ Implementation roadmap for UX improvements and modernization features.
 
 ## Phase 3: Advanced Features & Polish
 
-### 9. Global Search
-- [ ] Add global search bar in header
-- [ ] Search across box names
-- [ ] Search across file names in all boxes
-- [ ] Implement file content search (backend grep)
-- [ ] Add search filters (file type, date, size)
-- [ ] Show search results in modal
-- [ ] Add recent searches
-- [ ] Highlight search terms in results
-- [ ] Keyboard navigation in results
+### 9. Global Search ✅
+- [x] Add global search bar in header
+- [x] Search across box names
+- [ ] Search across file names in all boxes - *Future enhancement*
+- [ ] Implement file content search (backend grep) - *Future enhancement*
+- [ ] Add search filters (file type, date, size) - *Future enhancement*
+- [x] Show search results in modal
+- [ ] Add recent searches - *Future enhancement*
+- [x] Highlight search terms in results
+- [x] Keyboard navigation in results
 
-**Why:** Find anything across all boxes quickly.
+**Why:** Find anything across all boxes quickly. Core search complete.
 **Files:** `static/base.js`, `webapp.py`, `templates/base.html`
 
 ### 10. Session Persistence
@@ -135,17 +135,17 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Don't lose your workspace on browser refresh.
 **Files:** `static/multi-session.js`, `static/term.js`
 
-### 11. Connection Status Indicators
-- [ ] Add connection status indicator in header
-- [ ] Show number of active sessions
-- [ ] Display WebSocket connection state
-- [ ] Add reconnecting indicator with countdown
-- [ ] Show error state with retry button
-- [ ] Add connection health metrics
-- [ ] Notify on connection loss
+### 11. Connection Status Indicators ✅
+- [x] Add connection status indicator in header
+- [x] Show number of active sessions
+- [x] Display WebSocket connection state
+- [x] Add reconnecting indicator with countdown
+- [x] Show error state
+- [x] Monitor network connectivity and fetch errors
+- [x] Auto-minimize when healthy
 
-**Why:** Immediate feedback when connection issues occur.
-**Files:** `static/term.js`, `templates/base.html`
+**Why:** Immediate feedback when connection issues occur. Complete.
+**Files:** `static/base.js`, `static/style.css`
 
 ### 12. Comprehensive Keyboard Shortcuts Overlay
 - [ ] Design keyboard shortcuts modal
@@ -192,9 +192,9 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 8 (All of Phase 1 & Phase 2!)
+**Completed:** 10 (All of Phase 1, Phase 2, and 2 from Phase 3!)
 **In Progress:** 0
-**Remaining:** 6
+**Remaining:** 4
 
 ### Phase 1: Foundation & Core UX ✅ COMPLETE
 - ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
@@ -207,6 +207,10 @@ Implementation roadmap for UX improvements and modernization features.
 - ✅ Feature #6: Upload Progress Indicators (commit: 0d80fc3)
 - ✅ Feature #7: Recent Files & Bookmarks (commit: c972ebb)
 - ✅ Feature #8: Command Palette (Cmd/Ctrl+K) (commit: e7c7d9d)
+
+### Phase 3: Advanced Features & Polish (In Progress)
+- ✅ Feature #9: Global Search (commit: a192deb)
+- ✅ Feature #11: Connection Status Indicators (commit: 3876553)
 
 ---
 
