@@ -646,4 +646,237 @@
       return;
     }
   });
+
+  // === RECENT FILES & BOOKMARKS ===
+  const RECENT_FILES_KEY = 'sshler-recent-files';
+  const BOOKMARKS_KEY = 'sshler-bookmarks';
+  const MAX_RECENT_FILES = 10;
+
+  function getRecentFiles() {
+    try {
+      return JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function getBookmarks() {
+    try {
+      return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function addRecentFile(fileInfo) {
+    const recent = getRecentFiles();
+
+    // Remove if already exists
+    const filtered = recent.filter(f => f.path !== fileInfo.path);
+
+    // Add to front
+    filtered.unshift({
+      ...fileInfo,
+      timestamp: Date.now(),
+    });
+
+    // Keep only MAX_RECENT_FILES
+    const trimmed = filtered.slice(0, MAX_RECENT_FILES);
+
+    localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(trimmed));
+    updateRecentFilesUI();
+  }
+
+  function toggleBookmark(fileInfo) {
+    const bookmarks = getBookmarks();
+    const exists = bookmarks.findIndex(b => b.path === fileInfo.path);
+
+    if (exists >= 0) {
+      // Remove bookmark
+      bookmarks.splice(exists, 1);
+    } else {
+      // Add bookmark
+      bookmarks.push({
+        ...fileInfo,
+        timestamp: Date.now(),
+      });
+    }
+
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+    updateRecentFilesUI();
+  }
+
+  function clearRecentFiles() {
+    localStorage.removeItem(RECENT_FILES_KEY);
+    updateRecentFilesUI();
+  }
+
+  function updateRecentFilesUI() {
+    const dropdownContent = document.querySelector('.recent-files-dropdown-content');
+    if (!dropdownContent) return;
+
+    const recent = getRecentFiles();
+    const bookmarks = getBookmarks();
+
+    let html = '';
+
+    // Bookmarks section
+    if (bookmarks.length > 0) {
+      html += '<div class="recent-section-header">Bookmarks</div>';
+      bookmarks.forEach(file => {
+        html += `
+          <a href="${file.url}" class="recent-file-item" data-path="${file.path}">
+            <span class="recent-file-icon">⭐</span>
+            <span class="recent-file-name">${file.name}</span>
+            <span class="recent-file-box">${file.boxName}</span>
+          </a>
+        `;
+      });
+    }
+
+    // Recent files section
+    if (recent.length > 0) {
+      if (bookmarks.length > 0) {
+        html += '<div class="recent-section-divider"></div>';
+      }
+      html += '<div class="recent-section-header">Recent Files</div>';
+      recent.forEach(file => {
+        const timeAgo = formatTimeAgo(file.timestamp);
+        html += `
+          <a href="${file.url}" class="recent-file-item" data-path="${file.path}">
+            <span class="recent-file-icon">📄</span>
+            <span class="recent-file-name">${file.name}</span>
+            <span class="recent-file-time">${timeAgo}</span>
+          </a>
+        `;
+      });
+
+      html += '<div class="recent-section-divider"></div>';
+      html += `
+        <button class="recent-clear-btn" id="clear-recent-files">
+          Clear Recent Files
+        </button>
+      `;
+    }
+
+    if (html === '') {
+      html = '<div class="recent-empty">No recent files or bookmarks</div>';
+    }
+
+    dropdownContent.innerHTML = html;
+
+    // Add clear button handler
+    const clearBtn = document.getElementById('clear-recent-files');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        clearRecentFiles();
+      });
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+    return `${Math.floor(seconds / 604800)}w ago`;
+  }
+
+  function initRecentFiles() {
+    const header = document.querySelector('.topbar');
+    if (!header) return;
+
+    // Create recent files dropdown button
+    const recentBtn = document.createElement('button');
+    recentBtn.id = 'recent-files-btn';
+    recentBtn.className = 'link recent-files-btn';
+    recentBtn.setAttribute('aria-label', 'Recent files and bookmarks');
+    recentBtn.innerHTML = '📋';
+    recentBtn.title = 'Recent Files & Bookmarks';
+
+    // Create dropdown
+    const dropdown = document.createElement('div');
+    dropdown.className = 'recent-files-dropdown';
+    dropdown.innerHTML = `
+      <div class="recent-files-dropdown-content"></div>
+    `;
+
+    // Insert button before theme toggle
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      header.insertBefore(recentBtn, themeToggle);
+      header.insertBefore(dropdown, themeToggle);
+    }
+
+    // Toggle dropdown
+    recentBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle('visible');
+      updateRecentFilesUI();
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', () => {
+      dropdown.classList.remove('visible');
+    });
+
+    dropdown.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
+    updateRecentFilesUI();
+  }
+
+  // Track file views automatically
+  function trackFileView() {
+    // Check if we're viewing a file (preview or edit page)
+    const pathname = window.location.pathname;
+    const params = new URLSearchParams(window.location.search);
+    const filePath = params.get('path');
+
+    if (!filePath) return;
+
+    // Extract box name from pathname
+    let boxName = '';
+    let url = '';
+
+    if (pathname.includes('/box/') && pathname.includes('/cat')) {
+      // Preview page: /box/{name}/cat?path=...
+      const match = pathname.match(/\/box\/([^\/]+)\/cat/);
+      if (match) {
+        boxName = match[1];
+        url = pathname + '?' + params.toString();
+      }
+    } else if (pathname.includes('/box/') && pathname.includes('/edit')) {
+      // Edit page: /box/{name}/edit?path=...
+      const match = pathname.match(/\/box\/([^\/]+)\/edit/);
+      if (match) {
+        boxName = match[1];
+        url = pathname + '?' + params.toString();
+      }
+    }
+
+    if (boxName && url) {
+      const fileName = filePath.split('/').pop();
+      addRecentFile({
+        name: fileName,
+        path: filePath,
+        boxName: boxName,
+        url: url,
+      });
+    }
+  }
+
+  // Export functions for use in file browser
+  window.sshlerAddRecentFile = addRecentFile;
+  window.sshlerToggleBookmark = toggleBookmark;
+
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', () => {
+    initRecentFiles();
+    trackFileView();
+  });
 })();

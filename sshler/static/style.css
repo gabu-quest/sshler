@@ -1782,6 +1782,113 @@ details[open] .favorite-toggle::after {
   border-color: transparent;
 }
 
+/* Recent Files Dropdown */
+.recent-files-btn {
+  position: relative;
+  font-size: var(--text-lg);
+  cursor: pointer;
+}
+
+.recent-files-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 120px;
+  min-width: 300px;
+  max-width: 400px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  display: none;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.recent-files-dropdown.visible {
+  display: block;
+  animation: slideDown 0.2s ease-out;
+}
+
+.recent-files-dropdown-content {
+  padding: var(--space-sm);
+}
+
+.recent-section-header {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: var(--space-sm) var(--space-md);
+  letter-spacing: 0.5px;
+}
+
+.recent-section-divider {
+  height: 1px;
+  background: var(--border);
+  margin: var(--space-sm) 0;
+}
+
+.recent-file-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--fg);
+  transition: background var(--transition-fast);
+  cursor: pointer;
+}
+
+.recent-file-item:hover {
+  background: var(--btn-hover);
+}
+
+.recent-file-icon {
+  font-size: var(--text-lg);
+  flex-shrink: 0;
+}
+
+.recent-file-name {
+  flex: 1;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-file-box,
+.recent-file-time {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.recent-clear-btn {
+  width: 100%;
+  padding: var(--space-sm);
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  text-align: center;
+  border-radius: var(--radius);
+  transition: background var(--transition-fast);
+}
+
+.recent-clear-btn:hover {
+  background: var(--danger-bg);
+}
+
+.recent-empty {
+  padding: var(--space-xl);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 /* Upload Progress Indicator */
 .upload-progress-container {
   background: var(--card);
