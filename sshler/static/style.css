@@ -1782,6 +1782,132 @@ details[open] .favorite-toggle::after {
   border-color: transparent;
 }
 
+/* Connection Status Indicators */
+.connection-status {
+  position: relative;
+  margin-right: var(--space-md);
+  transition: opacity var(--transition-fast);
+}
+
+.connection-status.minimized .connection-text {
+  max-width: 0;
+  opacity: 0;
+  margin-left: 0;
+}
+
+.connection-status.minimized {
+  cursor: pointer;
+}
+
+.connection-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.connection-text {
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 200px;
+  transition: all var(--transition-fast);
+}
+
+/* Connected state (green) */
+.connection-connected {
+  background: #d4edda;
+  color: #155724;
+}
+
+.connection-connected .connection-dot {
+  background: #28a745;
+  box-shadow: 0 0 6px rgba(40, 167, 69, 0.5);
+}
+
+/* Reconnecting state (yellow) */
+.connection-reconnecting {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.connection-reconnecting .connection-dot {
+  background: #ffc107;
+  box-shadow: 0 0 6px rgba(255, 193, 7, 0.5);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* Error state (orange) */
+.connection-error {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.connection-error .connection-dot {
+  background: #ff9800;
+  box-shadow: 0 0 6px rgba(255, 152, 0, 0.5);
+}
+
+/* Disconnected state (red) */
+.connection-disconnected {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.connection-disconnected .connection-dot {
+  background: #dc3545;
+  box-shadow: 0 0 6px rgba(220, 53, 69, 0.5);
+  animation: none;
+}
+
+/* Idle state (gray) */
+.connection-idle {
+  background: var(--btn-hover);
+  color: var(--muted);
+}
+
+.connection-idle .connection-dot {
+  background: var(--muted);
+  animation: none;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] .connection-connected {
+  background: rgba(40, 167, 69, 0.2);
+  color: #7ce89b;
+}
+
+[data-theme="dark"] .connection-reconnecting,
+[data-theme="dark"] .connection-error {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffd966;
+}
+
+[data-theme="dark"] .connection-disconnected {
+  background: rgba(220, 53, 69, 0.2);
+  color: #ff8a95;
+}
+
 /* Global Search */
 .global-search-container {
   position: relative;

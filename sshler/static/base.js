@@ -1106,10 +1106,148 @@
     });
   }
 
+  // === CONNECTION STATUS INDICATORS ===
+  function initConnectionStatus() {
+    const header = document.querySelector('.topbar');
+    if (!header) return;
+
+    // Create status indicator
+    const statusIndicator = document.createElement('div');
+    statusIndicator.id = 'connection-status';
+    statusIndicator.className = 'connection-status';
+    statusIndicator.innerHTML = `
+      <div class="connection-indicator">
+        <span class="connection-dot"></span>
+        <span class="connection-text">Connected</span>
+      </div>
+    `;
+
+    // Insert before theme toggle
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      header.insertBefore(statusIndicator, themeToggle);
+    }
+
+    const indicator = statusIndicator.querySelector('.connection-indicator');
+    const dot = statusIndicator.querySelector('.connection-dot');
+    const text = statusIndicator.querySelector('.connection-text');
+
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+
+    function updateStatus(status, message) {
+      indicator.className = `connection-indicator connection-${status}`;
+      text.textContent = message || status;
+
+      // Auto-hide "Connected" status after 3 seconds
+      if (status === 'connected') {
+        setTimeout(() => {
+          if (indicator.classList.contains('connection-connected')) {
+            statusIndicator.classList.add('minimized');
+          }
+        }, 3000);
+      } else {
+        statusIndicator.classList.remove('minimized');
+      }
+    }
+
+    // Monitor network connectivity
+    window.addEventListener('online', () => {
+      updateStatus('connected', 'Connected');
+      reconnectAttempts = 0;
+    });
+
+    window.addEventListener('offline', () => {
+      updateStatus('disconnected', 'Offline');
+    });
+
+    // Monitor fetch/XHR errors
+    const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+      try {
+        const response = await originalFetch.apply(this, args);
+
+        if (response.ok) {
+          if (!indicator.classList.contains('connection-connected')) {
+            updateStatus('connected', 'Connected');
+            reconnectAttempts = 0;
+          }
+        } else if (response.status >= 500) {
+          updateStatus('error', 'Server Error');
+        }
+
+        return response;
+      } catch (error) {
+        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+          reconnectAttempts++;
+
+          if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+            updateStatus('reconnecting', `Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+          } else {
+            updateStatus('disconnected', 'Connection Lost');
+          }
+        }
+        throw error;
+      }
+    };
+
+    // Monitor WebSocket connections (for terminal sessions)
+    const originalWebSocket = window.WebSocket;
+    let activeWebSockets = 0;
+
+    window.WebSocket = function(...args) {
+      const ws = new originalWebSocket(...args);
+      activeWebSockets++;
+      updateSessionCount();
+
+      ws.addEventListener('open', () => {
+        updateStatus('connected', 'Connected');
+        reconnectAttempts = 0;
+        updateSessionCount();
+      });
+
+      ws.addEventListener('close', () => {
+        activeWebSockets = Math.max(0, activeWebSockets - 1);
+        updateSessionCount();
+
+        if (activeWebSockets === 0) {
+          // Last WebSocket closed, show reconnecting if unexpected
+          setTimeout(() => {
+            if (activeWebSockets === 0) {
+              updateStatus('idle', 'Connected');
+            }
+          }, 1000);
+        }
+      });
+
+      ws.addEventListener('error', () => {
+        updateStatus('error', 'Connection Error');
+      });
+
+      return ws;
+    };
+
+    function updateSessionCount() {
+      if (activeWebSockets > 0) {
+        text.textContent = `${activeWebSockets} active session${activeWebSockets !== 1 ? 's' : ''}`;
+        statusIndicator.classList.remove('minimized');
+      }
+    }
+
+    // Click to toggle minimized state
+    statusIndicator.addEventListener('click', () => {
+      statusIndicator.classList.toggle('minimized');
+    });
+
+    // Initial status
+    updateStatus('connected', 'Connected');
+  }
+
   // Initialize on page load
   document.addEventListener('DOMContentLoaded', () => {
     initRecentFiles();
     trackFileView();
     initGlobalSearch();
+    initConnectionStatus();
   });
 })();
