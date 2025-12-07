@@ -441,12 +441,95 @@
 
       try {
         const layout = JSON.parse(saved);
-        // TODO: Restore layout from saved data
-        // This would require fetching session info and recreating panes
-        console.log('Saved layout found:', layout);
+
+        // Only restore if we have more than one pane saved
+        if (!layout.panes || layout.panes.length <= 1) return;
+
+        // Show restore prompt
+        this.showRestorePrompt(layout);
       } catch (error) {
         console.error('Failed to load layout:', error);
       }
+    }
+
+    showRestorePrompt(layout) {
+      const prompt = document.createElement('div');
+      prompt.className = 'session-restore-prompt';
+      prompt.innerHTML = `
+        <div class="session-restore-content">
+          <h3>Restore Previous Session?</h3>
+          <p>You had ${layout.panes.length} terminal panes open. Restore your workspace?</p>
+          <div class="session-restore-actions">
+            <button class="btn primary" id="restore-yes">Restore</button>
+            <button class="btn secondary" id="restore-no">Start Fresh</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(prompt);
+
+      document.getElementById('restore-yes')?.addEventListener('click', () => {
+        this.restoreLayout(layout);
+        prompt.remove();
+      });
+
+      document.getElementById('restore-no')?.addEventListener('click', () => {
+        localStorage.removeItem(`terminal_layout_${this.boxName}`);
+        prompt.remove();
+      });
+
+      // Auto-dismiss after 10 seconds with default action (don't restore)
+      setTimeout(() => {
+        if (document.body.contains(prompt)) {
+          prompt.remove();
+        }
+      }, 10000);
+    }
+
+    async restoreLayout(layout) {
+      const container = document.getElementById('term-panes-container');
+      if (!container) return;
+
+      // Restore layout type
+      this.layout = layout.type || 'single';
+
+      // Apply layout classes
+      container.classList.remove('horizontal-split', 'vertical-split');
+      if (this.layout === 'hsplit' || this.layout === 'grid') {
+        container.classList.add('horizontal-split');
+      }
+      if (this.layout === 'vsplit' || this.layout === 'grid') {
+        container.classList.add('vertical-split');
+      }
+
+      // Restore panes (skip first one as it already exists)
+      for (let i = 1; i < layout.panes.length; i++) {
+        const savedPane = layout.panes[i];
+        await this.restorePane(savedPane);
+      }
+
+      // Restore focus
+      if (layout.focusedIndex !== undefined && layout.focusedIndex < this.panes.length) {
+        this.focusPane(layout.focusedIndex);
+      }
+    }
+
+    async restorePane(savedPane) {
+      return new Promise((resolve) => {
+        const newPaneId = this.nextPaneId++;
+        const paneEl = this.createPaneElement(newPaneId, savedPane.session || 'Terminal');
+
+        const container = document.getElementById('term-panes-container');
+        container.appendChild(paneEl);
+
+        // Create terminal instance for restored pane
+        this.initializeTerminalForPane(paneEl, {
+          session_name: savedPane.session,
+          directory: savedPane.directory || '~',
+        });
+
+        resolve();
+      });
     }
   }
 

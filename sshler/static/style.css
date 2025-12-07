@@ -1880,6 +1880,57 @@ details[open] .favorite-toggle::after {
   border-color: transparent;
 }
 
+/* Session Restore Prompt */
+.session-restore-prompt {
+  position: fixed;
+  top: 80px;
+  right: var(--space-xl);
+  z-index: 9999;
+  animation: slideInRight 0.3s ease-out;
+}
+
+.session-restore-content {
+  background: var(--card);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-lg);
+  min-width: 300px;
+  max-width: 400px;
+}
+
+.session-restore-content h3 {
+  margin: 0 0 var(--space-sm) 0;
+  font-size: var(--text-lg);
+  color: var(--fg);
+}
+
+.session-restore-content p {
+  margin: 0 0 var(--space-md) 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.session-restore-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.session-restore-actions .btn {
+  flex: 1;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
 /* Connection Status Indicators */
 .connection-status {
   position: relative;
