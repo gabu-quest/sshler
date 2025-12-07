@@ -147,17 +147,17 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Immediate feedback when connection issues occur. Complete.
 **Files:** `static/base.js`, `static/style.css`
 
-### 12. Comprehensive Keyboard Shortcuts Overlay
-- [ ] Design keyboard shortcuts modal
-- [ ] Organize shortcuts into categories
-- [ ] Show current context shortcuts (file browser vs terminal)
-- [ ] Add searchable shortcuts
-- [ ] Show custom user shortcuts
-- [ ] Add print shortcuts option
-- [ ] Improve existing `?` shortcut modal
+### 12. Comprehensive Keyboard Shortcuts Overlay ✅
+- [x] Design keyboard shortcuts modal
+- [x] Organize shortcuts into categories (5 categories)
+- [x] Show current context shortcuts (file browser vs terminal)
+- [x] Add searchable shortcuts
+- [ ] Show custom user shortcuts - *Future enhancement*
+- [ ] Add print shortcuts option - *Future enhancement*
+- [x] Improve existing `?` shortcut modal
 
-**Why:** Discoverability of keyboard shortcuts improves power user adoption.
-**Files:** `static/base.js`, `templates/base.html`
+**Why:** Discoverability of keyboard shortcuts improves power user adoption. Complete.
+**Files:** `static/base.js`, `static/style.css`
 
 ### 13. File Preview Improvements
 - [ ] Add PDF viewer integration (PDF.js)
@@ -192,9 +192,9 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 10 (All of Phase 1, Phase 2, and 2 from Phase 3!)
+**Completed:** 11 (All of Phase 1, Phase 2, and 3 from Phase 3!)
 **In Progress:** 0
-**Remaining:** 4
+**Remaining:** 3
 
 ### Phase 1: Foundation & Core UX ✅ COMPLETE
 - ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
@@ -208,9 +208,10 @@ Implementation roadmap for UX improvements and modernization features.
 - ✅ Feature #7: Recent Files & Bookmarks (commit: c972ebb)
 - ✅ Feature #8: Command Palette (Cmd/Ctrl+K) (commit: e7c7d9d)
 
-### Phase 3: Advanced Features & Polish (In Progress)
+### Phase 3: Advanced Features & Polish (In Progress - 3/5)
 - ✅ Feature #9: Global Search (commit: a192deb)
 - ✅ Feature #11: Connection Status Indicators (commit: 3876553)
+- ✅ Feature #12: Keyboard Shortcuts Overlay (commit: b166f0a)
 
 ---
 
