@@ -549,39 +549,76 @@
   function showKeyboardShortcuts() {
     if (shortcutsModal) {
       shortcutsModal.classList.add('visible');
+      // Update categories based on current page
+      updateShortcutCategories();
       return;
     }
 
     const modalContainer = document.getElementById('modal-container');
     if (!modalContainer) return;
 
-    const shortcuts = [
-      { key: '?', desc: 'Show keyboard shortcuts' },
-      { key: '/', desc: 'Focus search (on boxes page)' },
-      { key: 'n', desc: 'New box (on boxes page)' },
-      { key: 'Ctrl/Cmd+F', desc: 'Search files in directory' },
-      { key: 'Esc', desc: 'Close modals / Clear search' },
-      { key: 'Right-click', desc: 'Context menu on files' },
-    ];
+    const shortcuts = {
+      'Global': [
+        { key: '?', desc: 'Show keyboard shortcuts' },
+        { key: 'Cmd/Ctrl+K', desc: 'Open command palette' },
+        { key: 'Cmd/Ctrl+/', desc: 'Open global search' },
+        { key: 'Esc', desc: 'Close modals / Clear search' },
+      ],
+      'Navigation': [
+        { key: '/', desc: 'Focus search (on boxes page)' },
+        { key: 'n', desc: 'New box (on boxes page)' },
+        { key: 'Click Recent Files', desc: 'View recent files and bookmarks' },
+      ],
+      'File Browser': [
+        { key: 'Ctrl/Cmd+F', desc: 'Search files in directory' },
+        { key: 'Right-click', desc: 'Context menu on files' },
+        { key: 'Double-click name', desc: 'Rename file' },
+        { key: 'Drag & Drop', desc: 'Move files to folders' },
+        { key: 'Checkbox + Delete', desc: 'Bulk delete files' },
+      ],
+      'Terminal': [
+        { key: 'Ctrl+F', desc: 'Search in terminal' },
+        { key: 'Ctrl+L', desc: 'Clear terminal' },
+        { key: '+/-', desc: 'Adjust font size' },
+        { key: 'Scroll Mode', desc: 'Enable mouse scrolling' },
+      ],
+      'Theme & Display': [
+        { key: 'Click Theme Toggle', desc: 'Switch light/dark theme' },
+        { key: 'Click Language', desc: 'Switch EN/JP' },
+      ],
+    };
 
     const html = `
       <div class="modal visible" id="shortcuts-modal">
-        <div class="modal-content">
+        <div class="modal-content shortcuts-modal-content">
           <div class="modal-header">
             <h2>⌨️ Keyboard Shortcuts</h2>
             <button class="modal-close" id="shortcuts-close">×</button>
           </div>
-          <div class="modal-body">
-            <table style="width: 100%; border-collapse: collapse;">
-              ${shortcuts.map(s => `
-                <tr style="border-bottom: 1px solid var(--border);">
-                  <td style="padding: 12px 16px;">
-                    <kbd style="background: var(--btn); border: 2px solid var(--btn-border); padding: 4px 12px; border-radius: 6px; font-family: var(--mono); font-size: 14px;">${s.key}</kbd>
-                  </td>
-                  <td style="padding: 12px 16px; color: var(--fg-muted);">${s.desc}</td>
-                </tr>
-              `).join('')}
-            </table>
+          <div class="shortcuts-search-container">
+            <input type="text"
+                   id="shortcuts-search"
+                   class="shortcuts-search-input"
+                   placeholder="Search shortcuts..."
+                   aria-label="Search shortcuts">
+          </div>
+          <div class="modal-body shortcuts-modal-body">
+            ${Object.entries(shortcuts).map(([category, items]) => `
+              <div class="shortcuts-category" data-category="${category}">
+                <h3 class="shortcuts-category-title">${category}</h3>
+                <div class="shortcuts-list">
+                  ${items.map(s => `
+                    <div class="shortcuts-item" data-search="${s.key.toLowerCase()} ${s.desc.toLowerCase()}">
+                      <kbd class="shortcuts-key">${s.key}</kbd>
+                      <span class="shortcuts-desc">${s.desc}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="shortcuts-footer">
+            <p>Tip: Most shortcuts work context-aware based on the current page</p>
           </div>
         </div>
       </div>
@@ -591,6 +628,8 @@
     shortcutsModal = modalContainer.querySelector('#shortcuts-modal');
 
     const closeBtn = shortcutsModal.querySelector('#shortcuts-close');
+    const searchInput = shortcutsModal.querySelector('#shortcuts-search');
+
     closeBtn?.addEventListener('click', () => {
       shortcutsModal.classList.remove('visible');
     });
@@ -598,6 +637,56 @@
     shortcutsModal.addEventListener('click', (e) => {
       if (e.target === shortcutsModal) {
         shortcutsModal.classList.remove('visible');
+      }
+    });
+
+    // Search functionality
+    searchInput?.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      const items = shortcutsModal.querySelectorAll('.shortcuts-item');
+      const categories = shortcutsModal.querySelectorAll('.shortcuts-category');
+
+      if (!query) {
+        items.forEach(item => item.style.display = 'flex');
+        categories.forEach(cat => cat.style.display = 'block');
+        return;
+      }
+
+      items.forEach(item => {
+        const searchText = item.dataset.search || '';
+        if (searchText.includes(query)) {
+          item.style.display = 'flex';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+
+      // Hide empty categories
+      categories.forEach(cat => {
+        const visibleItems = cat.querySelectorAll('.shortcuts-item[style="display: flex;"]');
+        cat.style.display = visibleItems.length > 0 ? 'block' : 'none';
+      });
+    });
+
+    updateShortcutCategories();
+  }
+
+  function updateShortcutCategories() {
+    if (!shortcutsModal) return;
+
+    const currentPath = window.location.pathname;
+    const categories = shortcutsModal.querySelectorAll('.shortcuts-category');
+
+    categories.forEach(cat => {
+      const category = cat.dataset.category;
+
+      // Show/hide based on context
+      if (category === 'File Browser' && !currentPath.includes('/box/')) {
+        cat.classList.add('context-hidden');
+      } else if (category === 'Terminal' && !currentPath.includes('/term')) {
+        cat.classList.add('context-hidden');
+      } else {
+        cat.classList.remove('context-hidden');
       }
     });
   }

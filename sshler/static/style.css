@@ -1197,6 +1197,104 @@ details[open] .favorite-toggle::after {
 .modal-body {
   padding: var(--space-xl);
 }
+
+/* Keyboard Shortcuts Modal */
+.shortcuts-modal-content {
+  max-width: 900px;
+}
+
+.shortcuts-search-container {
+  padding: var(--space-md) var(--space-xl);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.shortcuts-search-input {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--input-bg);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.shortcuts-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+.shortcuts-modal-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-lg) var(--space-xl);
+}
+
+.shortcuts-category {
+  margin-bottom: var(--space-xl);
+}
+
+.shortcuts-category.context-hidden {
+  opacity: 0.5;
+}
+
+.shortcuts-category-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  margin-bottom: var(--space-md);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: var(--text-sm);
+}
+
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.shortcuts-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-sm) 0;
+}
+
+.shortcuts-key {
+  background: var(--btn);
+  border: 2px solid var(--btn-border);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  min-width: 140px;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.shortcuts-desc {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  flex: 1;
+}
+
+.shortcuts-footer {
+  padding: var(--space-md) var(--space-xl);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  text-align: center;
+}
+
+.shortcuts-footer p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
 .lang-btn { background: var(--btn); color: var(--fg); border: 1px solid #30364a; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; }
 .lang-btn:hover { border-color: var(--accent); color: var(--accent); }
 .lang-btn.active { background: #335dff1c; border-color: #335dff; color: var(--accent); }
