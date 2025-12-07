@@ -750,6 +750,193 @@
     });
   }
 
+  // === TOUCH GESTURES ===
+  function initTouchGestures() {
+    // Only initialize on touch devices
+    if (!('ontouchstart' in window)) return;
+
+    const browserContainer = document.querySelector('.dir-table');
+    if (!browserContainer) return;
+
+    // Long-press for context menu on file rows
+    let longPressTimer = null;
+    let touchStartX = 0;
+    let touchStartY = 0;
+    const longPressDuration = 500; // ms
+
+    browserContainer.addEventListener('touchstart', (e) => {
+      const row = e.target.closest('tr[data-path]');
+      if (!row) return;
+
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+
+      longPressTimer = setTimeout(() => {
+        // Trigger context menu
+        const path = row.dataset.path;
+        const isDir = row.dataset.type === 'dir';
+
+        // Vibrate if supported
+        if (navigator.vibrate) {
+          navigator.vibrate(50);
+        }
+
+        // Show custom context menu or native one
+        const contextEvent = new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: touchStartX,
+          clientY: touchStartY
+        });
+        row.dispatchEvent(contextEvent);
+      }, longPressDuration);
+    });
+
+    browserContainer.addEventListener('touchmove', (e) => {
+      // Cancel long-press if finger moves too much
+      if (longPressTimer) {
+        const touch = e.touches[0];
+        const deltaX = Math.abs(touch.clientX - touchStartX);
+        const deltaY = Math.abs(touch.clientY - touchStartY);
+
+        if (deltaX > 10 || deltaY > 10) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
+      }
+    });
+
+    browserContainer.addEventListener('touchend', () => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    });
+
+    browserContainer.addEventListener('touchcancel', () => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    });
+  }
+
+  function initPullToRefresh() {
+    // Only on touch devices
+    if (!('ontouchstart' in window)) return;
+
+    const container = document.querySelector('.container');
+    if (!container) return;
+
+    let startY = 0;
+    let pullDistance = 0;
+    const threshold = 80;
+    let isPulling = false;
+
+    const pullIndicator = document.createElement('div');
+    pullIndicator.className = 'pull-to-refresh-indicator';
+    pullIndicator.innerHTML = '<span>↓ Pull to refresh</span>';
+    pullIndicator.style.cssText = `
+      position: absolute;
+      top: -60px;
+      left: 0;
+      right: 0;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      font-size: 14px;
+      transition: transform 0.2s;
+      z-index: 1000;
+    `;
+    container.style.position = 'relative';
+    container.insertBefore(pullIndicator, container.firstChild);
+
+    container.addEventListener('touchstart', (e) => {
+      if (window.scrollY === 0) {
+        startY = e.touches[0].clientY;
+        isPulling = true;
+      }
+    }, { passive: true });
+
+    container.addEventListener('touchmove', (e) => {
+      if (!isPulling) return;
+
+      const currentY = e.touches[0].clientY;
+      pullDistance = currentY - startY;
+
+      if (pullDistance > 0 && pullDistance < threshold * 1.5) {
+        pullIndicator.style.transform = `translateY(${Math.min(pullDistance, threshold)}px)`;
+
+        if (pullDistance >= threshold) {
+          pullIndicator.innerHTML = '<span>↑ Release to refresh</span>';
+        } else {
+          pullIndicator.innerHTML = '<span>↓ Pull to refresh</span>';
+        }
+      }
+    }, { passive: true });
+
+    container.addEventListener('touchend', () => {
+      if (isPulling && pullDistance >= threshold) {
+        // Trigger refresh
+        pullIndicator.innerHTML = '<span>⟳ Refreshing...</span>';
+
+        // Refresh the current directory
+        setTimeout(() => {
+          window.location.reload();
+        }, 300);
+      }
+
+      // Reset
+      pullIndicator.style.transform = 'translateY(0)';
+      isPulling = false;
+      pullDistance = 0;
+
+      setTimeout(() => {
+        pullIndicator.innerHTML = '<span>↓ Pull to refresh</span>';
+      }, 300);
+    });
+  }
+
+  function initSwipeGestures() {
+    // Only on touch devices
+    if (!('ontouchstart' in window)) return;
+
+    const container = document.querySelector('.container');
+    if (!container) return;
+
+    let startX = 0;
+    let startY = 0;
+    const swipeThreshold = 100;
+
+    container.addEventListener('touchstart', (e) => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, { passive: true });
+
+    container.addEventListener('touchend', (e) => {
+      const endX = e.changedTouches[0].clientX;
+      const endY = e.changedTouches[0].clientY;
+
+      const deltaX = endX - startX;
+      const deltaY = endY - startY;
+
+      // Only horizontal swipes (and mostly horizontal)
+      if (Math.abs(deltaX) > swipeThreshold && Math.abs(deltaX) > Math.abs(deltaY) * 2) {
+        if (deltaX > 0) {
+          // Swipe right - go back/up directory
+          const backLink = document.querySelector('.breadcrumb a:last-of-type');
+          if (backLink) {
+            backLink.click();
+          }
+        }
+        // Note: Swipe left could be used for forward navigation if history is implemented
+      }
+    }, { passive: true });
+  }
+
   // === INITIALIZATION ===
   function init() {
     initDragAndDrop();
@@ -760,6 +947,9 @@
     initInlineRename();
     initFileDragDrop();
     initUploadProgress();
+    initTouchGestures();
+    initPullToRefresh();
+    initSwipeGestures();
   }
 
   // Run on page load

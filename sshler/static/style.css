@@ -2553,10 +2553,20 @@ details[open] .favorite-toggle::after {
     padding: var(--space-md);
   }
 
-  /* Buttons */
+  /* Buttons - increase touch targets for mobile */
   .btn {
-    padding: var(--space-sm) var(--space-md);
+    padding: 12px 16px;
     font-size: var(--text-xs);
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .btn.small {
+    padding: 10px 14px;
+    min-height: 44px;
+  }
+  .btn.icon {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   /* Forms */
@@ -2564,20 +2574,32 @@ details[open] .favorite-toggle::after {
     max-width: 100%;
   }
 
-  /* File browser */
+  /* File browser - optimize for touch */
   .dir-table {
     font-size: var(--text-xs);
   }
   .dir th,
   .dir td {
-    padding: var(--space-sm);
+    padding: 12px;
+    min-height: 48px;
+  }
+  .dir tbody tr {
+    cursor: pointer;
+  }
+  .fs-name a {
+    padding: 8px;
+    margin: -8px;
+    display: inline-block;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
   }
   .actions-col {
     width: auto;
   }
   .fs-actions {
     flex-direction: column;
-    gap: var(--space-xs);
+    gap: 8px;
   }
   /* Hide size and modified columns on mobile */
   .fs-size,
@@ -2587,6 +2609,8 @@ details[open] .favorite-toggle::after {
   .action-btn {
     width: 100%;
     justify-content: center;
+    min-height: 44px;
+    padding: 10px;
   }
 
   /* Terminal */
@@ -2635,6 +2659,23 @@ details[open] .favorite-toggle::after {
   }
   .term-toolbar .btn {
     font-size: var(--text-xs);
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  /* Touch optimizations */
+  button,
+  a,
+  input[type="submit"],
+  input[type="button"],
+  .clickable {
+    touch-action: manipulation; /* Prevents double-tap zoom */
+  }
+
+  /* Larger tap areas for links */
+  a {
+    padding: 4px;
+    margin: -4px;
   }
 
   /* Grid layout */
