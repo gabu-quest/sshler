@@ -48,6 +48,10 @@ from .ssh import (
     sftp_list_directory,
     sftp_read_file,
 )
+from .ssh_pool import get_pool, initialize_pool, shutdown_pool
+from .config_cache import get_cache
+from .validation import PathValidator, InputValidator, ValidationError
+from .rate_limit import get_rate_limiter
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -436,6 +440,39 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
         return response
 
+    @application.middleware("http")
+    async def _rate_limit_middleware(request: Request, call_next):
+        """Rate limiting middleware to prevent abuse."""
+        # Skip rate limiting for static files and health checks
+        if request.url.path.startswith("/static/") or request.url.path in ["/", "/docs"]:
+            return await call_next(request)
+
+        # Get client identifier (IP address)
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Different rate limits for different endpoint types
+        if request.url.path.startswith("/box/") and "/upload" in request.url.path:
+            # File uploads: 10 per minute
+            limiter = get_rate_limiter("upload", rate=10, per=60)
+        elif request.url.path.startswith("/ws/"):
+            # WebSocket connections: 5 per minute
+            limiter = get_rate_limiter("websocket", rate=5, per=60)
+        elif request.method == "POST":
+            # POST requests: 60 per minute
+            limiter = get_rate_limiter("post", rate=60, per=60)
+        else:
+            # General requests: 100 per minute
+            limiter = get_rate_limiter("general", rate=100, per=60)
+
+        if not limiter.check(client_ip):
+            return Response(
+                status_code=429,
+                content="Rate limit exceeded. Please try again later.",
+                headers={"Retry-After": "60"},
+            )
+
+        return await call_next(request)
+
     def _require_token(request: Request) -> None:
         if not settings.csrf_token:
             return
@@ -505,10 +542,26 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
 
-        normalized_directory = _normalize_directory_path(directory_path)
-
+        # Validate and normalize path
         try:
-            connection = await connect(
+            normalized_directory = PathValidator.validate_remote_path(_normalize_directory_path(directory_path))
+        except ValidationError as exc:
+            context = {
+                "request": request,
+                "box": box,
+                "directory_path": directory_path,
+                "entries": [],
+                "error": error_override or f"Invalid path: {exc}",
+                "target_id": target_id,
+                "urls": _build_directory_urls(request, box.name),
+            }
+            return templates.TemplateResponse(request, "partials/dir_listing.html", context)
+
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -518,6 +571,26 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                try:
+                    entries = await sftp_list_directory(connection, normalized_directory)
+                    error_message = error_override
+                except Exception as exc:  # pragma: no cover - remote SFTP failures vary by host
+                    entries = []
+                    error_message = error_override or f"Directory listing failed: {exc}"
+
+                context = {
+                    "request": request,
+                    "box": box,
+                    "directory_path": normalized_directory,
+                    "entries": entries,
+                    "error": error_message,
+                    "target_id": target_id,
+                    "urls": _build_directory_urls(request, box.name),
+                }
+                return templates.TemplateResponse(request, "partials/dir_listing.html", context)
         except SSHError as exc:
             context = {
                 "request": request,
@@ -530,34 +603,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
 
-        try:
-            try:
-                entries = await sftp_list_directory(connection, normalized_directory)
-                error_message = error_override
-            except Exception as exc:  # pragma: no cover - remote SFTP failures vary by host
-                entries = []
-                error_message = error_override or f"Directory listing failed: {exc}"
-            context = {
-                "request": request,
-                "box": box,
-                "directory_path": normalized_directory,
-                "entries": entries,
-                "error": error_message,
-                "target_id": target_id,
-                "urls": _build_directory_urls(request, box.name),
-            }
-            return templates.TemplateResponse(request, "partials/dir_listing.html", context)
-        finally:
-            connection.close()
-
-    def _get_application_config() -> AppConfig:
-        """Dependency that loads the persisted configuration.
+    async def _get_application_config() -> AppConfig:
+        """Dependency that loads the persisted configuration with caching.
 
         Returns:
-            AppConfig: Configuration loaded from disk.
+            AppConfig: Configuration loaded from disk or cache.
         """
-
-        return load_config()
+        config_cache = get_cache(ttl=60)
+        return await config_cache.get(load_config)
 
     @application.get("/")
     async def root() -> RedirectResponse:
@@ -816,8 +869,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
             return response
 
+        # Validate filename and compose path
         try:
-            remote_path = _compose_remote_child_path(directory_path, filename)
+            validated_filename = PathValidator.validate_filename(filename)
+            remote_path = _compose_remote_child_path(directory_path, validated_filename)
+            # Additionally validate the complete path
+            PathValidator.validate_remote_path(remote_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=f"Invalid filename: {exc}",
+            )
         except ValueError as exc:
             return await _render_directory_listing(
                 request,
@@ -829,11 +895,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             )
 
         error_message = None
-        connection = None
-        sftp_client = None
         success_message: str | None = None
-        try:
-            connection = await connect(
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -843,38 +909,35 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
-            try:
-                sftp_client = await connection.start_sftp_client()
-            except Exception as exc:  # pragma: no cover - depends on remote server
-                error_message = f"SFTP session failed: {exc}"
-            else:
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
                 try:
+                    sftp_client = await connection.start_sftp_client()
                     try:
-                        await sftp_client.stat(remote_path)
-                    except Exception:
-                        pass
-                    else:
-                        error_message = (
-                            f"File already exists: {PurePosixPath(remote_path).name}"
-                        )
-                    if error_message is None:
-                        async with await sftp_client.open(
-                            remote_path, "w", encoding="utf-8"
-                        ) as remote_file:
-                            await remote_file.write("")
-                        success_message = f"Created {PurePosixPath(remote_path).name}"
-                except Exception as exc:  # pragma: no cover - remote host behavior varies
-                    error_message = f"Failed to create file: {exc}"
+                        try:
+                            await sftp_client.stat(remote_path)
+                            error_message = (
+                                f"File already exists: {PurePosixPath(remote_path).name}"
+                            )
+                        except Exception:
+                            # File doesn't exist, we can create it
+                            async with await sftp_client.open(
+                                remote_path, "w", encoding="utf-8"
+                            ) as remote_file:
+                                await remote_file.write("")
+                            success_message = f"Created {PurePosixPath(remote_path).name}"
+                    except Exception as exc:  # pragma: no cover - remote host behavior varies
+                        error_message = f"Failed to create file: {exc}"
+                    finally:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+                except Exception as exc:  # pragma: no cover - depends on remote server
+                    error_message = f"SFTP session failed: {exc}"
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
-        finally:
-            if sftp_client is not None:
-                try:
-                    await sftp_client.exit()
-                except Exception:
-                    pass
-            if connection is not None:
-                connection.close()
 
         response = await _render_directory_listing(
             request,
@@ -978,8 +1041,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
             return response
 
+        # Validate filename and compose path
         try:
-            remote_path = _compose_remote_child_path(directory_path, candidate_name)
+            validated_filename = PathValidator.validate_filename(candidate_name)
+            remote_path = _compose_remote_child_path(directory_path, validated_filename)
+            PathValidator.validate_remote_path(remote_path)
+        except ValidationError as exc:
+            await file.close()
+            return await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=f"Invalid filename: {exc}",
+            )
         except ValueError as exc:
             await file.close()
             return await _render_directory_listing(
@@ -1004,50 +1080,53 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             limit_kb = settings.max_upload_bytes // 1024
             error_message = f"Upload exceeds {limit_kb} KB limit"
 
-        connection = None
-        sftp_client = None
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
+            )
+
         if error_message is None:
             try:
-                connection = await connect(
-                    box.connect_host,
-                    box.user,
-                    box.port,
-                    box.keyfile,
-                    box.known_hosts,
-                    application_config.ssh_config_path,
-                    box.ssh_alias,
-                    allow_alias=settings.allow_ssh_alias,
-                )
-                try:
-                    sftp_client = await connection.start_sftp_client()
-                except Exception as exc:  # pragma: no cover - depends on remote server
-                    error_message = f"SFTP session failed: {exc}"
-                else:
+                async with ssh_pool.connection(box, connect_func) as connection:
+                    sftp_client = None
                     try:
+                        sftp_client = await connection.start_sftp_client()
+                    except Exception as exc:  # pragma: no cover - depends on remote server
+                        error_message = f"SFTP session failed: {exc}"
+                    else:
                         try:
-                            await sftp_client.stat(remote_path)
-                        except Exception:
-                            pass
-                        else:
-                            error_message = (
-                                f"File already exists: {PurePosixPath(remote_path).name}"
-                            )
-                        if error_message is None:
-                            async with await sftp_client.open(remote_path, "wb") as remote_file:
-                                await remote_file.write(contents)
-                            success_message = f"Uploaded {PurePosixPath(remote_path).name}"
-                    except Exception as exc:  # pragma: no cover - remote SFTP failures vary
-                        error_message = f"Failed to upload file: {exc}"
+                            try:
+                                await sftp_client.stat(remote_path)
+                            except Exception:
+                                pass
+                            else:
+                                error_message = (
+                                    f"File already exists: {PurePosixPath(remote_path).name}"
+                                )
+                            if error_message is None:
+                                async with await sftp_client.open(remote_path, "wb") as remote_file:
+                                    await remote_file.write(contents)
+                                success_message = f"Uploaded {PurePosixPath(remote_path).name}"
+                        except Exception as exc:  # pragma: no cover - remote SFTP failures vary
+                            error_message = f"Failed to upload file: {exc}"
+                        finally:
+                            if sftp_client is not None:
+                                try:
+                                    await sftp_client.exit()
+                                except Exception:
+                                    pass
             except SSHError as exc:
                 error_message = f"SSH connection failed: {exc}"
-            finally:
-                if sftp_client is not None:
-                    try:
-                        await sftp_client.exit()
-                    except Exception:
-                        pass
-                if connection is not None:
-                    connection.close()
 
         response = await _render_directory_listing(
             request,
@@ -1126,14 +1205,38 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
             return response
 
+        # Validate and normalize remote path
+        try:
+            validated_path = PathValidator.validate_remote_path(file_path)
+        except ValidationError as exc:
+            response = await _render_directory_listing(
+                request,
+                box,
+                directory_path,
+                target,
+                application_config,
+                error_override=f"Invalid path: {exc}",
+            )
+            trigger_payload = json.dumps(
+                {
+                    "dir-action": {
+                        "status": "error",
+                        "message": f"Invalid path: {exc}",
+                    }
+                }
+            )
+            response.headers["HX-Trigger"] = trigger_payload
+            return response
+
         # Remote file deletion
         error_message = None
         success_message: str | None = None
-        connection = None
-        sftp_client = None
 
-        try:
-            connection = await connect(
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -1143,28 +1246,30 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
-            try:
-                sftp_client = await connection.start_sftp_client()
-            except Exception as exc:
-                error_message = f"SFTP session failed: {exc}"
-            else:
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
                 try:
-                    await sftp_client.remove(file_path)
-                    success_message = f"Deleted {PurePosixPath(file_path).name}"
-                except FileNotFoundError:
-                    error_message = f"File not found: {PurePosixPath(file_path).name}"
+                    sftp_client = await connection.start_sftp_client()
                 except Exception as exc:
-                    error_message = f"Failed to delete file: {exc}"
+                    error_message = f"SFTP session failed: {exc}"
+                else:
+                    try:
+                        await sftp_client.remove(validated_path)
+                        success_message = f"Deleted {PurePosixPath(validated_path).name}"
+                    except FileNotFoundError:
+                        error_message = f"File not found: {PurePosixPath(validated_path).name}"
+                    except Exception as exc:
+                        error_message = f"Failed to delete file: {exc}"
+                    finally:
+                        if sftp_client is not None:
+                            try:
+                                await sftp_client.exit()
+                            except Exception:
+                                pass
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
-        finally:
-            if sftp_client is not None:
-                try:
-                    await sftp_client.exit()
-                except Exception:
-                    pass
-            if connection is not None:
-                connection.close()
 
         response = await _render_directory_listing(
             request,
@@ -1184,6 +1289,443 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     }
                 }
             )
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
+    @application.post("/box/{name}/rename", response_class=HTMLResponse)
+    async def rename_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        new_name: str = Form(...),
+        directory: str = Form(...),
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Rename a file or directory."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        # Validate new name
+        try:
+            validated_new_name = PathValidator.validate_filename(new_name)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid filename: {exc}"
+            )
+
+        if box.transport == "local":
+            old_path = _normalize_local_path(file_path)
+            new_path = str(Path(old_path).parent / validated_new_name)
+            error_message = None
+            success_message = None
+
+            try:
+                Path(old_path).rename(new_path)
+                success_message = f"Renamed to {validated_new_name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {Path(old_path).name}"
+            except Exception as exc:
+                error_message = f"Failed to rename: {exc}"
+
+            response = await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=error_message
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote rename
+        try:
+            validated_old_path = PathValidator.validate_remote_path(file_path)
+            old_dir = str(PurePosixPath(validated_old_path).parent)
+            new_path = f"{old_dir}/{validated_new_name}" if old_dir != "." else validated_new_name
+            PathValidator.validate_remote_path(new_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid path: {exc}"
+            )
+
+        error_message = None
+        success_message = None
+
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host, box.user, box.port, box.keyfile,
+                box.known_hosts, application_config.ssh_config_path,
+                box.ssh_alias, allow_alias=settings.allow_ssh_alias,
+            )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
+                try:
+                    sftp_client = await connection.start_sftp_client()
+                    await sftp_client.rename(validated_old_path, new_path)
+                    success_message = f"Renamed to {validated_new_name}"
+                except FileNotFoundError:
+                    error_message = f"File not found: {PurePosixPath(validated_old_path).name}"
+                except Exception as exc:
+                    error_message = f"Failed to rename: {exc}"
+                finally:
+                    if sftp_client:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+
+        response = await _render_directory_listing(
+            request, box, directory_path, target, application_config,
+            error_override=error_message
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps({
+                "dir-action": {
+                    "status": "error" if error_message else "success",
+                    "message": message,
+                }
+            })
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
+    @application.post("/box/{name}/copy", response_class=HTMLResponse)
+    async def copy_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        destination: str = Form(None),  # Optional destination path
+        directory: str = Form(...),
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Copy a file or directory."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        if box.transport == "local":
+            import shutil
+
+            source_path = _normalize_local_path(file_path)
+
+            # Generate destination path if not provided
+            if not destination:
+                source_path_obj = Path(source_path)
+                base_name = source_path_obj.stem
+                suffix = source_path_obj.suffix
+                counter = 1
+                dest_path = source_path_obj.parent / f"{base_name}_copy{suffix}"
+
+                # Find an available name
+                while dest_path.exists():
+                    dest_path = source_path_obj.parent / f"{base_name}_copy{counter}{suffix}"
+                    counter += 1
+            else:
+                dest_path = Path(_normalize_local_path(destination))
+
+            error_message = None
+            success_message = None
+
+            try:
+                if Path(source_path).is_dir():
+                    shutil.copytree(source_path, dest_path)
+                    success_message = f"Copied directory to {dest_path.name}"
+                else:
+                    shutil.copy2(source_path, dest_path)
+                    success_message = f"Copied file to {dest_path.name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {Path(source_path).name}"
+            except Exception as exc:
+                error_message = f"Failed to copy: {exc}"
+
+            response = await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=error_message
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote copy
+        try:
+            validated_source_path = PathValidator.validate_remote_path(file_path)
+
+            # Generate destination path if not provided
+            if not destination:
+                source_path_obj = PurePosixPath(validated_source_path)
+                base_name = source_path_obj.stem
+                suffix = source_path_obj.suffix
+                parent_dir = str(source_path_obj.parent)
+                dest_path = f"{parent_dir}/{base_name}_copy{suffix}" if parent_dir != "." else f"{base_name}_copy{suffix}"
+            else:
+                dest_path = destination
+                PathValidator.validate_remote_path(dest_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid path: {exc}"
+            )
+
+        error_message = None
+        success_message = None
+
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host, box.user, box.port, box.keyfile,
+                box.known_hosts, application_config.ssh_config_path,
+                box.ssh_alias, allow_alias=settings.allow_ssh_alias,
+            )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
+                try:
+                    sftp_client = await connection.start_sftp_client()
+
+                    # Check if source is a directory
+                    attrs = await sftp_client.stat(validated_source_path)
+                    is_dir = stat.S_ISDIR(attrs.permissions)
+
+                    if is_dir:
+                        # For directories, use shell commands for recursive copy
+                        result = await connection.run(
+                            f"cp -r {shlex.quote(validated_source_path)} {shlex.quote(dest_path)}",
+                            check=False
+                        )
+                        if result.exit_status != 0:
+                            error_message = f"Failed to copy directory: {result.stderr}"
+                        else:
+                            success_message = f"Copied directory to {PurePosixPath(dest_path).name}"
+                    else:
+                        # For files, use SFTP
+                        # Read the source file
+                        async with sftp_client.open(validated_source_path, 'rb') as src:
+                            content = await src.read()
+
+                        # Write to destination
+                        async with sftp_client.open(dest_path, 'wb') as dst:
+                            await dst.write(content)
+
+                        # Copy permissions
+                        await sftp_client.chmod(dest_path, attrs.permissions)
+                        success_message = f"Copied file to {PurePosixPath(dest_path).name}"
+
+                except FileNotFoundError:
+                    error_message = f"File not found: {PurePosixPath(validated_source_path).name}"
+                except Exception as exc:
+                    error_message = f"Failed to copy: {exc}"
+                finally:
+                    if sftp_client:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+
+        response = await _render_directory_listing(
+            request, box, directory_path, target, application_config,
+            error_override=error_message
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps({
+                "dir-action": {
+                    "status": "error" if error_message else "success",
+                    "message": message,
+                }
+            })
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
+    @application.post("/box/{name}/move", response_class=HTMLResponse)
+    async def move_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        destination_dir: str = Form(...),  # Destination directory
+        directory: str = Form(...),  # Current directory
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Move a file or directory to a different location."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        if box.transport == "local":
+            import shutil
+
+            source_path = _normalize_local_path(file_path)
+            dest_dir = _normalize_local_path(destination_dir)
+
+            # Generate destination path
+            source_path_obj = Path(source_path)
+            dest_path = Path(dest_dir) / source_path_obj.name
+
+            # Check for name collision
+            if dest_path.exists():
+                error_message = f"File already exists in destination: {dest_path.name}"
+                response = await _render_directory_listing(
+                    request, box, directory_path, target, application_config,
+                    error_override=error_message
+                )
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error",
+                        "message": error_message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+                return response
+
+            error_message = None
+            success_message = None
+
+            try:
+                shutil.move(source_path, dest_path)
+                success_message = f"Moved {source_path_obj.name} to {Path(dest_dir).name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {source_path_obj.name}"
+            except Exception as exc:
+                error_message = f"Failed to move: {exc}"
+
+            response = await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=error_message
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote move
+        try:
+            validated_source_path = PathValidator.validate_remote_path(file_path)
+            validated_dest_dir = PathValidator.validate_remote_path(destination_dir)
+
+            source_path_obj = PurePosixPath(validated_source_path)
+            dest_path = f"{validated_dest_dir}/{source_path_obj.name}"
+            PathValidator.validate_remote_path(dest_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid path: {exc}"
+            )
+
+        error_message = None
+        success_message = None
+
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host, box.user, box.port, box.keyfile,
+                box.known_hosts, application_config.ssh_config_path,
+                box.ssh_alias, allow_alias=settings.allow_ssh_alias,
+            )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
+                try:
+                    sftp_client = await connection.start_sftp_client()
+
+                    # Check if destination already exists
+                    try:
+                        await sftp_client.stat(dest_path)
+                        error_message = f"File already exists in destination: {source_path_obj.name}"
+                    except FileNotFoundError:
+                        # Destination doesn't exist, proceed with move
+                        # Use shell command for move (works for both files and directories)
+                        result = await connection.run(
+                            f"mv {shlex.quote(validated_source_path)} {shlex.quote(dest_path)}",
+                            check=False
+                        )
+                        if result.exit_status != 0:
+                            error_message = f"Failed to move: {result.stderr}"
+                        else:
+                            success_message = f"Moved {source_path_obj.name} to {PurePosixPath(validated_dest_dir).name}"
+
+                except Exception as exc:
+                    if not error_message:
+                        error_message = f"Failed to move: {exc}"
+                finally:
+                    if sftp_client:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+
+        response = await _render_directory_listing(
+            request, box, directory_path, target, application_config,
+            error_override=error_message
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps({
+                "dir-action": {
+                    "status": "error" if error_message else "success",
+                    "message": message,
+                }
+            })
             response.headers["HX-Trigger"] = trigger_payload
         return response
 
@@ -1259,9 +1801,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "file_view.html", context)
 
-        connection = None
+        # Validate and normalize remote path
         try:
-            connection = await connect(
+            validated_path = PathValidator.validate_remote_path(file_path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid path: {exc}")
+
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
                 box.connect_host,
                 box.user,
                 box.port,
@@ -1271,62 +1821,60 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 box.ssh_alias,
                 allow_alias=settings.allow_ssh_alias,
             )
-        except SSHError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         try:
-            suffix = Path(file_path).suffix.lower()
-            image_mime = IMAGE_CONTENT_TYPES.get(suffix)
-            image_data: str | None = None
-            image_too_large = False
-            if image_mime:
-                try:
-                    image_bytes, too_large = await _read_file_bytes(
-                        connection, file_path, MAX_IMAGE_PREVIEW_BYTES
-                    )
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
-                if too_large:
-                    image_too_large = True
-                else:
-                    image_data = base64.b64encode(image_bytes).decode("ascii")
+            async with ssh_pool.connection(box, connect_func) as connection:
+                suffix = Path(validated_path).suffix.lower()
+                image_mime = IMAGE_CONTENT_TYPES.get(suffix)
+                image_data: str | None = None
+                image_too_large = False
+                if image_mime:
+                    try:
+                        image_bytes, too_large = await _read_file_bytes(
+                            connection, validated_path, MAX_IMAGE_PREVIEW_BYTES
+                        )
+                    except Exception as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
+                    if too_large:
+                        image_too_large = True
+                    else:
+                        image_data = base64.b64encode(image_bytes).decode("ascii")
 
-            text_content: str | None = None
-            if not image_mime or image_too_large:
-                try:
-                    text_content = await _read_remote_text(
-                        connection, file_path, settings.max_upload_bytes
-                    )
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                text_content: str | None = None
+                if not image_mime or image_too_large:
+                    try:
+                        text_content = await _read_remote_text(
+                            connection, validated_path, settings.max_upload_bytes
+                        )
+                    except Exception as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-            # Get the directory containing the file
-            parent_dir = str(PurePosixPath(file_path).parent)
+                # Get the directory containing the file
+                parent_dir = str(PurePosixPath(validated_path).parent)
 
-            # Check if this is a markdown file and render it
-            is_markdown = _is_markdown_file(file_path)
-            markdown_html = None
-            if is_markdown and text_content:
-                markdown_html = _render_markdown(text_content)
+                # Check if this is a markdown file and render it
+                is_markdown = _is_markdown_file(validated_path)
+                markdown_html = None
+                if is_markdown and text_content:
+                    markdown_html = _render_markdown(text_content)
 
-            context = {
-                "box": box,
-                "path": file_path,
-                "parent_directory": parent_dir,
-                "content": text_content or "",
-                "syntax_class": _syntax_from_filename(file_path),
-                "app_version": app_version,
-                "image_data": image_data,
-                "image_mime": image_mime,
-                "image_too_large": image_too_large,
-                "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,
-                "is_markdown": is_markdown,
-                "markdown_html": markdown_html,
-            }
-            return templates.TemplateResponse(request, "file_view.html", context)
-        finally:
-            if connection is not None:
-                connection.close()
+                context = {
+                    "box": box,
+                    "path": validated_path,
+                    "parent_directory": parent_dir,
+                    "content": text_content or "",
+                    "syntax_class": _syntax_from_filename(validated_path),
+                    "app_version": app_version,
+                    "image_data": image_data,
+                    "image_mime": image_mime,
+                    "image_too_large": image_too_large,
+                    "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,
+                    "is_markdown": is_markdown,
+                    "markdown_html": markdown_html,
+                }
+                return templates.TemplateResponse(request, "file_view.html", context)
+        except SSHError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.api_route(
         "/box/{name}/edit",
@@ -1384,60 +1932,71 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "file_edit.html", context)
 
-        connection = await connect(
-            box.connect_host,
-            box.user,
-            box.port,
-            box.keyfile,
-            box.known_hosts,
-            application_config.ssh_config_path,
-            box.ssh_alias,
-            allow_alias=settings.allow_ssh_alias,
-        )
+        # Validate and normalize remote path
+        try:
+            validated_path = PathValidator.validate_remote_path(file_path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid path: {exc}")
+
+        # Use connection pool
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host,
+                box.user,
+                box.port,
+                box.keyfile,
+                box.known_hosts,
+                application_config.ssh_config_path,
+                box.ssh_alias,
+                allow_alias=settings.allow_ssh_alias,
+            )
 
         try:
-            if request.method == "GET":
-                try:
-                    content = await _read_remote_text(connection, file_path, 262144)
-                except Exception as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
-                context = {
-                    "box": box,
-                    "path": file_path,
-                    "content": content,
-                    "app_version": app_version,
-                }
-                return templates.TemplateResponse(request, "file_edit.html", context)
+            async with ssh_pool.connection(box, connect_func) as connection:
+                if request.method == "GET":
+                    try:
+                        content = await _read_remote_text(connection, validated_path, 262144)
+                    except Exception as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
+                    context = {
+                        "box": box,
+                        "path": validated_path,
+                        "content": content,
+                        "app_version": app_version,
+                    }
+                    return templates.TemplateResponse(request, "file_edit.html", context)
 
-            _require_token(request)
-            payload = await request.json()
-            content = payload.get("content")
-            if content is None:
-                raise HTTPException(status_code=400, detail="Missing content")
-            if len(content.encode("utf-8")) > 262144:
-                raise HTTPException(status_code=400, detail="File exceeds 256KB editing limit")
+                _require_token(request)
+                payload = await request.json()
+                content = payload.get("content")
+                if content is None:
+                    raise HTTPException(status_code=400, detail="Missing content")
+                if len(content.encode("utf-8")) > 262144:
+                    raise HTTPException(status_code=400, detail="File exceeds 256KB editing limit")
 
-            sftp_client = await connection.start_sftp_client()
-            try:
-                async with await sftp_client.open(file_path, "w", encoding="utf-8") as remote_file:
-                    await remote_file.write(content)
-            finally:
+                sftp_client = await connection.start_sftp_client()
                 try:
-                    await sftp_client.exit()
-                except Exception:
-                    pass
-            return templates.TemplateResponse(
-                request,
-                "file_edit.html",
-                {
-                    "box": box,
-                    "path": file_path,
-                    "content": content,
-                    "app_version": app_version,
-                },
-            )
-        finally:
-            connection.close()
+                    async with await sftp_client.open(validated_path, "w", encoding="utf-8") as remote_file:
+                        await remote_file.write(content)
+                finally:
+                    try:
+                        await sftp_client.exit()
+                    except Exception:
+                        pass
+                return templates.TemplateResponse(
+                    request,
+                    "file_edit.html",
+                    {
+                        "box": box,
+                        "path": validated_path,
+                        "content": content,
+                        "app_version": app_version,
+                    },
+                )
+        except SSHError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.post("/box/{name}/fav", response_class=PlainTextResponse)
     async def toggle_favorite(
@@ -1667,6 +2226,222 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         except Exception:
             return {"status": "offline", "latency_ms": None}
 
+    # Session Management API
+
+    @application.get("/box/{name}/sessions")
+    async def list_box_sessions(
+        request: Request,
+        name: str,
+        active_only: bool = Query(False),
+        limit: int = Query(50),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse | dict[str, object]:
+        """List all tracked sessions for a box.
+
+        English:
+            Returns recent and active tmux sessions with metadata.
+            Returns HTML for HTMX requests, JSON otherwise.
+
+        日本語:
+            最近のアクティブな tmux セッションとメタデータを返します。
+            HTMX リクエストには HTML、それ以外は JSON を返します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        sessions = await state.list_sessions_async(name, active_only=active_only, limit=limit)
+
+        # Return HTML for HTMX requests
+        is_htmx = request.headers.get("hx-request") == "true"
+        if is_htmx:
+            # Format timestamps for display
+            import time as time_module
+
+            def format_timestamp(ts: float) -> str:
+                """Format timestamp as relative time."""
+                now = time_module.time()
+                diff = now - ts
+
+                if diff < 60:
+                    return "just now"
+                elif diff < 3600:
+                    mins = int(diff / 60)
+                    return f"{mins}m ago"
+                elif diff < 86400:
+                    hours = int(diff / 3600)
+                    return f"{hours}h ago"
+                elif diff < 604800:
+                    days = int(diff / 86400)
+                    return f"{days}d ago"
+                else:
+                    weeks = int(diff / 604800)
+                    return f"{weeks}w ago"
+
+            formatted_sessions = [
+                {
+                    "id": s.id,
+                    "session_name": s.session_name,
+                    "working_directory": s.working_directory,
+                    "active": s.active,
+                    "window_count": s.window_count,
+                    "last_accessed": format_timestamp(s.last_accessed_at),
+                }
+                for s in sessions
+            ]
+
+            context = {
+                "box": box,
+                "sessions": formatted_sessions,
+            }
+            return templates.TemplateResponse(request, "session_list.html", context)
+
+        # Return JSON for API requests
+        return {
+            "box": name,
+            "sessions": [
+                {
+                    "id": s.id,
+                    "session_name": s.session_name,
+                    "working_directory": s.working_directory,
+                    "created_at": s.created_at,
+                    "last_accessed_at": s.last_accessed_at,
+                    "active": s.active,
+                    "window_count": s.window_count,
+                    "metadata": s.metadata,
+                }
+                for s in sessions
+            ],
+        }
+
+    @application.get("/box/{name}/sessions/{session_id}")
+    async def get_session_details(
+        name: str,
+        session_id: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, object]:
+        """Get details of a specific session.
+
+        English:
+            Returns full details of a tracked session.
+
+        日本語:
+            追跡されたセッションの詳細を返します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        session = await state.get_session_by_id_async(session_id)
+        if not session or session.box != name:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        return {
+            "id": session.id,
+            "box": session.box,
+            "session_name": session.session_name,
+            "working_directory": session.working_directory,
+            "created_at": session.created_at,
+            "last_accessed_at": session.last_accessed_at,
+            "active": session.active,
+            "window_count": session.window_count,
+            "metadata": session.metadata,
+        }
+
+    @application.post("/box/{name}/sessions/{session_id}/resume")
+    async def resume_session(
+        name: str,
+        session_id: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, str]:
+        """Generate terminal URL for resuming a session.
+
+        English:
+            Returns a URL to reconnect to an existing tmux session.
+
+        日本語:
+            既存の tmux セッションに再接続するための URL を返します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        session = await state.get_session_by_id_async(session_id)
+        if not session or session.box != name:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Build terminal URL
+        terminal_url = (
+            f"/term?host={name}"
+            f"&session={session.session_name}"
+            f"&dir={session.working_directory}"
+        )
+
+        return {"terminal_url": terminal_url, "session_name": session.session_name}
+
+    @application.delete("/box/{name}/sessions/{session_id}")
+    async def delete_box_session(
+        name: str,
+        session_id: str,
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> dict[str, str]:
+        """Delete a tmux session and its tracking record.
+
+        English:
+            Kills the tmux session on the remote server and removes tracking data.
+
+        日本語:
+            リモートサーバー上の tmux セッションを終了し、追跡データを削除します。
+        """
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        session = await state.get_session_by_id_async(session_id)
+        if not session or session.box != name:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Kill tmux session on server
+        transport = getattr(box, "transport", "ssh")
+        try:
+            if transport == "local":
+                # Kill local tmux session
+                result = await asyncio.create_subprocess_exec(
+                    "tmux",
+                    "kill-session",
+                    "-t",
+                    session.session_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
+            else:
+                # Kill remote tmux session
+                connection = await connect(
+                    box.connect_host,
+                    box.user,
+                    box.port,
+                    box.keyfile,
+                    box.known_hosts,
+                    application_config.ssh_config_path,
+                    box.ssh_alias,
+                )
+                try:
+                    await connection.run(
+                        f"tmux kill-session -t {shlex.quote(session.session_name)}",
+                        check=False,
+                    )
+                finally:
+                    connection.close()
+        except Exception:
+            # Continue even if tmux kill fails (session might already be dead)
+            pass
+
+        # Remove from database
+        await state.delete_session_async(session_id)
+
+        return {"status": "deleted", "session_id": session_id}
+
     @application.get("/term", response_class=HTMLResponse)
     async def term_page(
         request: Request,
@@ -1856,6 +2631,24 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     rows=rows,
                 )
 
+            # Track session in database
+            try:
+                tracked_session = await state.create_or_update_session_async(
+                    box_name=box.name,
+                    session_name=session,
+                    working_directory=normalized_directory,
+                    metadata={
+                        "columns": columns,
+                        "rows": rows,
+                        "transport": transport,
+                    },
+                )
+                session_id = tracked_session.id
+                logger.info(f"Session tracked: {session_id}")
+            except Exception as exc:
+                logger.warning(f"Failed to track session: {exc}")
+                session_id = None
+
             async def reader() -> None:
                 logger.info("Reader task started")
                 try:
@@ -1909,6 +2702,16 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             await websocket.send_text(
                                 json.dumps({"op": "windows", "windows": window_payload})
                             )
+                            # Update window count in session tracking
+                            if session_id:
+                                try:
+                                    await state.update_session_activity_async(
+                                        session_id,
+                                        active=True,
+                                        window_count=len(window_payload),
+                                    )
+                                except Exception:
+                                    pass
                         await asyncio.sleep(2)
                 except Exception:
                     pass
@@ -1918,6 +2721,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 await asyncio.gather(reader(), writer(), poller)
             finally:
                 poller.cancel()
+
+                # Mark session as inactive (detached) when WebSocket closes
+                if session_id:
+                    try:
+                        await state.update_session_activity_async(session_id, active=False)
+                        logger.info(f"Session marked inactive: {session_id}")
+                    except Exception as exc:
+                        logger.warning(f"Failed to mark session inactive: {exc}")
         finally:
             try:
                 if process:
@@ -1943,6 +2754,20 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     connection.close()
             except Exception:
                 pass
+
+    # Application lifecycle events
+    @application.on_event("startup")
+    async def startup_event():
+        """Initialize services on application startup."""
+        # Initialize SSH connection pool
+        await initialize_pool()
+        application.state.ssh_pool = get_pool()
+
+    @application.on_event("shutdown")
+    async def shutdown_event():
+        """Cleanup services on application shutdown."""
+        # Shutdown SSH connection pool
+        await shutdown_pool()
 
     return application
 

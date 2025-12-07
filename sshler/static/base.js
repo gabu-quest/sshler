@@ -143,6 +143,14 @@
     const toast = document.createElement("div");
     toast.className = `toast ${type || "info"}`;
     toast.textContent = message;
+
+    // Add ARIA role for screen readers
+    if (type === "error") {
+      toast.setAttribute("role", "alert");
+    } else {
+      toast.setAttribute("role", "status");
+    }
+
     container.appendChild(toast);
     requestAnimationFrame(() => toast.classList.add("visible"));
     setTimeout(() => {
@@ -154,6 +162,9 @@
       );
     }, 3600);
   }
+
+  // Export showToast globally for use in other scripts
+  window.showToast = showToast;
 
   function getStoredLang() {
     try {
@@ -243,6 +254,68 @@
     });
   }
 
+  // Theme management
+  const THEME_KEY = "sshler-theme";
+
+  function getStoredTheme() {
+    try {
+      return localStorage.getItem(THEME_KEY) || null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function setStoredTheme(theme) {
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch (err) {
+      // Ignore if localStorage is unavailable
+    }
+  }
+
+  function getSystemTheme() {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      return 'light';
+    }
+    return 'dark';
+  }
+
+  function applyTheme(theme) {
+    const root = document.documentElement;
+    if (theme === 'light' || theme === 'dark') {
+      root.setAttribute('data-theme', theme);
+    } else {
+      // Use system preference
+      root.removeAttribute('data-theme');
+    }
+  }
+
+  function updateThemeToggle(theme) {
+    const themeToggle = document.getElementById("theme-toggle");
+    if (!themeToggle) {
+      return;
+    }
+    const currentTheme = theme || getSystemTheme();
+    const spans = themeToggle.querySelectorAll("span");
+    spans.forEach((span) => {
+      if (span.dataset.themeIcon === currentTheme) {
+        span.classList.remove("hidden");
+      } else {
+        span.classList.add("hidden");
+      }
+    });
+  }
+
+  function switchTheme() {
+    const stored = getStoredTheme();
+    const currentTheme = stored || getSystemTheme();
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+    setStoredTheme(newTheme);
+    applyTheme(newTheme);
+    updateThemeToggle(newTheme);
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     const token = readToken();
     applyToken(token);
@@ -259,6 +332,37 @@
         const current = getStoredLang();
         const newLang = current === "en" ? "ja" : "en";
         switchLanguage(newLang);
+      });
+    }
+
+    // Initialize theme
+    const storedTheme = getStoredTheme();
+    if (storedTheme) {
+      applyTheme(storedTheme);
+      updateThemeToggle(storedTheme);
+    } else {
+      // Use system preference
+      const systemTheme = getSystemTheme();
+      updateThemeToggle(systemTheme);
+    }
+
+    // Theme toggle button handler
+    const themeToggle = document.getElementById("theme-toggle");
+    if (themeToggle) {
+      themeToggle.addEventListener("click", () => {
+        switchTheme();
+      });
+    }
+
+    // Listen for system theme changes
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+        const storedTheme = getStoredTheme();
+        if (!storedTheme) {
+          // Only update if user hasn't set a preference
+          const newTheme = e.matches ? 'light' : 'dark';
+          updateThemeToggle(newTheme);
+        }
       });
     }
 
@@ -365,6 +469,43 @@
       const fileName = deleteBtn.dataset.filename;
       deleteFile(boxName, filePath, directory, target, fileName);
     });
+
+    // Register service worker for PWA support
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/static/sw.js').then((registration) => {
+        console.log('[PWA] Service Worker registered:', registration.scope);
+
+        // Check for updates periodically
+        setInterval(() => {
+          registration.update();
+        }, 60000); // Check every minute
+
+        // Handle updates
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // New version available
+              if (confirm('A new version of sshler is available. Reload to update?')) {
+                newWorker.postMessage({ type: 'SKIP_WAITING' });
+                window.location.reload();
+              }
+            }
+          });
+        });
+      }).catch((error) => {
+        console.error('[PWA] Service Worker registration failed:', error);
+      });
+
+      // Reload page when new service worker takes control
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) {
+          refreshing = true;
+          window.location.reload();
+        }
+      });
+    }
   });
 
   function deleteFile(boxName, filePath, directory, target, fileName) {
@@ -408,39 +549,76 @@
   function showKeyboardShortcuts() {
     if (shortcutsModal) {
       shortcutsModal.classList.add('visible');
+      // Update categories based on current page
+      updateShortcutCategories();
       return;
     }
 
     const modalContainer = document.getElementById('modal-container');
     if (!modalContainer) return;
 
-    const shortcuts = [
-      { key: '?', desc: 'Show keyboard shortcuts' },
-      { key: '/', desc: 'Focus search (on boxes page)' },
-      { key: 'n', desc: 'New box (on boxes page)' },
-      { key: 'Ctrl/Cmd+F', desc: 'Search files in directory' },
-      { key: 'Esc', desc: 'Close modals / Clear search' },
-      { key: 'Right-click', desc: 'Context menu on files' },
-    ];
+    const shortcuts = {
+      'Global': [
+        { key: '?', desc: 'Show keyboard shortcuts' },
+        { key: 'Cmd/Ctrl+K', desc: 'Open command palette' },
+        { key: 'Cmd/Ctrl+/', desc: 'Open global search' },
+        { key: 'Esc', desc: 'Close modals / Clear search' },
+      ],
+      'Navigation': [
+        { key: '/', desc: 'Focus search (on boxes page)' },
+        { key: 'n', desc: 'New box (on boxes page)' },
+        { key: 'Click Recent Files', desc: 'View recent files and bookmarks' },
+      ],
+      'File Browser': [
+        { key: 'Ctrl/Cmd+F', desc: 'Search files in directory' },
+        { key: 'Right-click', desc: 'Context menu on files' },
+        { key: 'Double-click name', desc: 'Rename file' },
+        { key: 'Drag & Drop', desc: 'Move files to folders' },
+        { key: 'Checkbox + Delete', desc: 'Bulk delete files' },
+      ],
+      'Terminal': [
+        { key: 'Ctrl+F', desc: 'Search in terminal' },
+        { key: 'Ctrl+L', desc: 'Clear terminal' },
+        { key: '+/-', desc: 'Adjust font size' },
+        { key: 'Scroll Mode', desc: 'Enable mouse scrolling' },
+      ],
+      'Theme & Display': [
+        { key: 'Click Theme Toggle', desc: 'Switch light/dark theme' },
+        { key: 'Click Language', desc: 'Switch EN/JP' },
+      ],
+    };
 
     const html = `
       <div class="modal visible" id="shortcuts-modal">
-        <div class="modal-content">
+        <div class="modal-content shortcuts-modal-content">
           <div class="modal-header">
             <h2>⌨️ Keyboard Shortcuts</h2>
             <button class="modal-close" id="shortcuts-close">×</button>
           </div>
-          <div class="modal-body">
-            <table style="width: 100%; border-collapse: collapse;">
-              ${shortcuts.map(s => `
-                <tr style="border-bottom: 1px solid var(--border);">
-                  <td style="padding: 12px 16px;">
-                    <kbd style="background: var(--btn); border: 2px solid var(--btn-border); padding: 4px 12px; border-radius: 6px; font-family: var(--mono); font-size: 14px;">${s.key}</kbd>
-                  </td>
-                  <td style="padding: 12px 16px; color: var(--fg-muted);">${s.desc}</td>
-                </tr>
-              `).join('')}
-            </table>
+          <div class="shortcuts-search-container">
+            <input type="text"
+                   id="shortcuts-search"
+                   class="shortcuts-search-input"
+                   placeholder="Search shortcuts..."
+                   aria-label="Search shortcuts">
+          </div>
+          <div class="modal-body shortcuts-modal-body">
+            ${Object.entries(shortcuts).map(([category, items]) => `
+              <div class="shortcuts-category" data-category="${category}">
+                <h3 class="shortcuts-category-title">${category}</h3>
+                <div class="shortcuts-list">
+                  ${items.map(s => `
+                    <div class="shortcuts-item" data-search="${s.key.toLowerCase()} ${s.desc.toLowerCase()}">
+                      <kbd class="shortcuts-key">${s.key}</kbd>
+                      <span class="shortcuts-desc">${s.desc}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="shortcuts-footer">
+            <p>Tip: Most shortcuts work context-aware based on the current page</p>
           </div>
         </div>
       </div>
@@ -450,6 +628,8 @@
     shortcutsModal = modalContainer.querySelector('#shortcuts-modal');
 
     const closeBtn = shortcutsModal.querySelector('#shortcuts-close');
+    const searchInput = shortcutsModal.querySelector('#shortcuts-search');
+
     closeBtn?.addEventListener('click', () => {
       shortcutsModal.classList.remove('visible');
     });
@@ -457,6 +637,56 @@
     shortcutsModal.addEventListener('click', (e) => {
       if (e.target === shortcutsModal) {
         shortcutsModal.classList.remove('visible');
+      }
+    });
+
+    // Search functionality
+    searchInput?.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      const items = shortcutsModal.querySelectorAll('.shortcuts-item');
+      const categories = shortcutsModal.querySelectorAll('.shortcuts-category');
+
+      if (!query) {
+        items.forEach(item => item.style.display = 'flex');
+        categories.forEach(cat => cat.style.display = 'block');
+        return;
+      }
+
+      items.forEach(item => {
+        const searchText = item.dataset.search || '';
+        if (searchText.includes(query)) {
+          item.style.display = 'flex';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+
+      // Hide empty categories
+      categories.forEach(cat => {
+        const visibleItems = cat.querySelectorAll('.shortcuts-item[style="display: flex;"]');
+        cat.style.display = visibleItems.length > 0 ? 'block' : 'none';
+      });
+    });
+
+    updateShortcutCategories();
+  }
+
+  function updateShortcutCategories() {
+    if (!shortcutsModal) return;
+
+    const currentPath = window.location.pathname;
+    const categories = shortcutsModal.querySelectorAll('.shortcuts-category');
+
+    categories.forEach(cat => {
+      const category = cat.dataset.category;
+
+      // Show/hide based on context
+      if (category === 'File Browser' && !currentPath.includes('/box/')) {
+        cat.classList.add('context-hidden');
+      } else if (category === 'Terminal' && !currentPath.includes('/term')) {
+        cat.classList.add('context-hidden');
+      } else {
+        cat.classList.remove('context-hidden');
       }
     });
   }
@@ -504,5 +734,609 @@
       window.location.href = '/boxes/new';
       return;
     }
+  });
+
+  // === RECENT FILES & BOOKMARKS ===
+  const RECENT_FILES_KEY = 'sshler-recent-files';
+  const BOOKMARKS_KEY = 'sshler-bookmarks';
+  const MAX_RECENT_FILES = 10;
+
+  function getRecentFiles() {
+    try {
+      return JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function getBookmarks() {
+    try {
+      return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function addRecentFile(fileInfo) {
+    const recent = getRecentFiles();
+
+    // Remove if already exists
+    const filtered = recent.filter(f => f.path !== fileInfo.path);
+
+    // Add to front
+    filtered.unshift({
+      ...fileInfo,
+      timestamp: Date.now(),
+    });
+
+    // Keep only MAX_RECENT_FILES
+    const trimmed = filtered.slice(0, MAX_RECENT_FILES);
+
+    localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(trimmed));
+    updateRecentFilesUI();
+  }
+
+  function toggleBookmark(fileInfo) {
+    const bookmarks = getBookmarks();
+    const exists = bookmarks.findIndex(b => b.path === fileInfo.path);
+
+    if (exists >= 0) {
+      // Remove bookmark
+      bookmarks.splice(exists, 1);
+    } else {
+      // Add bookmark
+      bookmarks.push({
+        ...fileInfo,
+        timestamp: Date.now(),
+      });
+    }
+
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+    updateRecentFilesUI();
+  }
+
+  function clearRecentFiles() {
+    localStorage.removeItem(RECENT_FILES_KEY);
+    updateRecentFilesUI();
+  }
+
+  function updateRecentFilesUI() {
+    const dropdownContent = document.querySelector('.recent-files-dropdown-content');
+    if (!dropdownContent) return;
+
+    const recent = getRecentFiles();
+    const bookmarks = getBookmarks();
+
+    let html = '';
+
+    // Bookmarks section
+    if (bookmarks.length > 0) {
+      html += '<div class="recent-section-header">Bookmarks</div>';
+      bookmarks.forEach(file => {
+        html += `
+          <a href="${file.url}" class="recent-file-item" data-path="${file.path}">
+            <span class="recent-file-icon">⭐</span>
+            <span class="recent-file-name">${file.name}</span>
+            <span class="recent-file-box">${file.boxName}</span>
+          </a>
+        `;
+      });
+    }
+
+    // Recent files section
+    if (recent.length > 0) {
+      if (bookmarks.length > 0) {
+        html += '<div class="recent-section-divider"></div>';
+      }
+      html += '<div class="recent-section-header">Recent Files</div>';
+      recent.forEach(file => {
+        const timeAgo = formatTimeAgo(file.timestamp);
+        html += `
+          <a href="${file.url}" class="recent-file-item" data-path="${file.path}">
+            <span class="recent-file-icon">📄</span>
+            <span class="recent-file-name">${file.name}</span>
+            <span class="recent-file-time">${timeAgo}</span>
+          </a>
+        `;
+      });
+
+      html += '<div class="recent-section-divider"></div>';
+      html += `
+        <button class="recent-clear-btn" id="clear-recent-files">
+          Clear Recent Files
+        </button>
+      `;
+    }
+
+    if (html === '') {
+      html = '<div class="recent-empty">No recent files or bookmarks</div>';
+    }
+
+    dropdownContent.innerHTML = html;
+
+    // Add clear button handler
+    const clearBtn = document.getElementById('clear-recent-files');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        clearRecentFiles();
+      });
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+    return `${Math.floor(seconds / 604800)}w ago`;
+  }
+
+  function initRecentFiles() {
+    const header = document.querySelector('.topbar');
+    if (!header) return;
+
+    // Create recent files dropdown button
+    const recentBtn = document.createElement('button');
+    recentBtn.id = 'recent-files-btn';
+    recentBtn.className = 'link recent-files-btn';
+    recentBtn.setAttribute('aria-label', 'Recent files and bookmarks');
+    recentBtn.innerHTML = '📋';
+    recentBtn.title = 'Recent Files & Bookmarks';
+
+    // Create dropdown
+    const dropdown = document.createElement('div');
+    dropdown.className = 'recent-files-dropdown';
+    dropdown.innerHTML = `
+      <div class="recent-files-dropdown-content"></div>
+    `;
+
+    // Insert button before theme toggle
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      header.insertBefore(recentBtn, themeToggle);
+      header.insertBefore(dropdown, themeToggle);
+    }
+
+    // Toggle dropdown
+    recentBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle('visible');
+      updateRecentFilesUI();
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', () => {
+      dropdown.classList.remove('visible');
+    });
+
+    dropdown.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
+    updateRecentFilesUI();
+  }
+
+  // Track file views automatically
+  function trackFileView() {
+    // Check if we're viewing a file (preview or edit page)
+    const pathname = window.location.pathname;
+    const params = new URLSearchParams(window.location.search);
+    const filePath = params.get('path');
+
+    if (!filePath) return;
+
+    // Extract box name from pathname
+    let boxName = '';
+    let url = '';
+
+    if (pathname.includes('/box/') && pathname.includes('/cat')) {
+      // Preview page: /box/{name}/cat?path=...
+      const match = pathname.match(/\/box\/([^\/]+)\/cat/);
+      if (match) {
+        boxName = match[1];
+        url = pathname + '?' + params.toString();
+      }
+    } else if (pathname.includes('/box/') && pathname.includes('/edit')) {
+      // Edit page: /box/{name}/edit?path=...
+      const match = pathname.match(/\/box\/([^\/]+)\/edit/);
+      if (match) {
+        boxName = match[1];
+        url = pathname + '?' + params.toString();
+      }
+    }
+
+    if (boxName && url) {
+      const fileName = filePath.split('/').pop();
+      addRecentFile({
+        name: fileName,
+        path: filePath,
+        boxName: boxName,
+        url: url,
+      });
+    }
+  }
+
+  // Export functions for use in file browser
+  window.sshlerAddRecentFile = addRecentFile;
+  window.sshlerToggleBookmark = toggleBookmark;
+
+  // === GLOBAL SEARCH ===
+  function initGlobalSearch() {
+    const header = document.querySelector('.topbar');
+    if (!header) return;
+
+    // Create search input
+    const searchContainer = document.createElement('div');
+    searchContainer.className = 'global-search-container';
+    searchContainer.innerHTML = `
+      <input type="text"
+             id="global-search-input"
+             class="global-search-input"
+             placeholder="Search..."
+             aria-label="Global search">
+      <span class="global-search-icon">🔍</span>
+    `;
+
+    // Insert after spacer
+    const spacer = header.querySelector('.spacer');
+    if (spacer) {
+      spacer.parentNode.insertBefore(searchContainer, spacer.nextSibling);
+    }
+
+    // Create search results modal
+    const searchModal = document.createElement('div');
+    searchModal.id = 'global-search-modal';
+    searchModal.className = 'global-search-modal';
+    searchModal.innerHTML = `
+      <div class="global-search-backdrop"></div>
+      <div class="global-search-results">
+        <div class="global-search-header">
+          <input type="text"
+                 id="global-search-modal-input"
+                 class="global-search-modal-input"
+                 placeholder="Search across all boxes and files..."
+                 aria-label="Global search">
+          <button class="global-search-close" aria-label="Close search">✕</button>
+        </div>
+        <div class="global-search-results-container">
+          <div class="global-search-empty">Start typing to search...</div>
+        </div>
+        <div class="global-search-footer">
+          <span>↑↓ Navigate</span>
+          <span>Enter Select</span>
+          <span>Esc Close</span>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(searchModal);
+
+    const headerInput = document.getElementById('global-search-input');
+    const modalInput = document.getElementById('global-search-modal-input');
+    const resultsContainer = searchModal.querySelector('.global-search-results-container');
+    const closeBtn = searchModal.querySelector('.global-search-close');
+    const backdrop = searchModal.querySelector('.global-search-backdrop');
+
+    let searchTimeout = null;
+    let currentResults = [];
+    let selectedIndex = -1;
+
+    function showSearchModal() {
+      searchModal.classList.add('visible');
+      modalInput.value = headerInput.value;
+      modalInput.focus();
+      if (headerInput.value) {
+        performSearch(headerInput.value);
+      }
+    }
+
+    function hideSearchModal() {
+      searchModal.classList.remove('visible');
+      headerInput.value = '';
+      modalInput.value = '';
+      resultsContainer.innerHTML = '<div class="global-search-empty">Start typing to search...</div>';
+      currentResults = [];
+      selectedIndex = -1;
+    }
+
+    function performClientSideSearch(query) {
+      // Search through visible box names and links
+      const results = {
+        boxes: [],
+        files: []
+      };
+
+      const queryLower = query.toLowerCase();
+
+      // Search box cards on boxes page
+      const boxes = document.querySelectorAll('.box-card');
+      boxes.forEach(box => {
+        const nameEl = box.querySelector('.box-name');
+        const hostEl = box.querySelector('.box-host');
+
+        if (nameEl) {
+          const boxName = nameEl.textContent;
+          const boxHost = hostEl ? hostEl.textContent : '';
+
+          if (boxName.toLowerCase().includes(queryLower) ||
+              boxHost.toLowerCase().includes(queryLower)) {
+            results.boxes.push({
+              name: boxName,
+              host: boxHost,
+              url: `/box/${encodeURIComponent(boxName)}`
+            });
+          }
+        }
+      });
+
+      displaySearchResults(results, query);
+    }
+
+    function displaySearchResults(results, query) {
+      currentResults = [];
+      let html = '';
+
+      // Box results
+      if (results.boxes && results.boxes.length > 0) {
+        html += '<div class="search-section-header">Boxes</div>';
+        results.boxes.forEach((box, idx) => {
+          currentResults.push({ type: 'box', ...box });
+          html += `
+            <a href="${box.url || '/boxes'}" class="search-result-item" data-index="${idx}">
+              <span class="search-result-icon">📦</span>
+              <div class="search-result-content">
+                <div class="search-result-title">${highlightMatch(box.name, query)}</div>
+                ${box.host ? `<div class="search-result-meta">${box.host}</div>` : ''}
+              </div>
+            </a>
+          `;
+        });
+      }
+
+      // File results
+      if (results.files && results.files.length > 0) {
+        if (results.boxes && results.boxes.length > 0) {
+          html += '<div class="search-section-divider"></div>';
+        }
+        html += '<div class="search-section-header">Files</div>';
+        results.files.forEach((file, idx) => {
+          const resultIdx = currentResults.length;
+          currentResults.push({ type: 'file', ...file });
+          html += `
+            <a href="${file.url}" class="search-result-item" data-index="${resultIdx}">
+              <span class="search-result-icon">📄</span>
+              <div class="search-result-content">
+                <div class="search-result-title">${highlightMatch(file.name, query)}</div>
+                <div class="search-result-meta">${file.path} • ${file.boxName}</div>
+              </div>
+            </a>
+          `;
+        });
+      }
+
+      if (html === '') {
+        html = `<div class="global-search-empty">No results found for "${query}"</div>`;
+      }
+
+      resultsContainer.innerHTML = html;
+      selectedIndex = -1;
+    }
+
+    function highlightMatch(text, query) {
+      const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      return text.replace(regex, '<mark>$1</mark>');
+    }
+
+    function updateSelection() {
+      const items = resultsContainer.querySelectorAll('.search-result-item');
+      items.forEach((item, idx) => {
+        if (idx === selectedIndex) {
+          item.classList.add('selected');
+          item.scrollIntoView({ block: 'nearest' });
+        } else {
+          item.classList.remove('selected');
+        }
+      });
+    }
+
+    // Header input - focus opens modal
+    headerInput.addEventListener('focus', () => {
+      showSearchModal();
+    });
+
+    // Modal input - search on type
+    modalInput.addEventListener('input', (e) => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        const query = e.target.value;
+        if (query.length >= 2) {
+          performClientSideSearch(query);
+        } else if (query.length === 0) {
+          resultsContainer.innerHTML = '<div class="global-search-empty">Start typing to search...</div>';
+        } else {
+          resultsContainer.innerHTML = '<div class="global-search-empty">Type at least 2 characters...</div>';
+        }
+      }, 300);
+    });
+
+    // Keyboard navigation in modal
+    modalInput.addEventListener('keydown', (e) => {
+      const items = resultsContainer.querySelectorAll('.search-result-item');
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+        updateSelection();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, -1);
+        updateSelection();
+      } else if (e.key === 'Enter' && selectedIndex >= 0 && items[selectedIndex]) {
+        e.preventDefault();
+        items[selectedIndex].click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideSearchModal();
+      }
+    });
+
+    // Close handlers
+    closeBtn.addEventListener('click', hideSearchModal);
+    backdrop.addEventListener('click', hideSearchModal);
+
+    // Global keyboard shortcut: Ctrl+/ or Cmd+/
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === '/' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        showSearchModal();
+      }
+    });
+  }
+
+  // === CONNECTION STATUS INDICATORS ===
+  function initConnectionStatus() {
+    const header = document.querySelector('.topbar');
+    if (!header) return;
+
+    // Create status indicator
+    const statusIndicator = document.createElement('div');
+    statusIndicator.id = 'connection-status';
+    statusIndicator.className = 'connection-status';
+    statusIndicator.innerHTML = `
+      <div class="connection-indicator">
+        <span class="connection-dot"></span>
+        <span class="connection-text">Connected</span>
+      </div>
+    `;
+
+    // Insert before theme toggle
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      header.insertBefore(statusIndicator, themeToggle);
+    }
+
+    const indicator = statusIndicator.querySelector('.connection-indicator');
+    const dot = statusIndicator.querySelector('.connection-dot');
+    const text = statusIndicator.querySelector('.connection-text');
+
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+
+    function updateStatus(status, message) {
+      indicator.className = `connection-indicator connection-${status}`;
+      text.textContent = message || status;
+
+      // Auto-hide "Connected" status after 3 seconds
+      if (status === 'connected') {
+        setTimeout(() => {
+          if (indicator.classList.contains('connection-connected')) {
+            statusIndicator.classList.add('minimized');
+          }
+        }, 3000);
+      } else {
+        statusIndicator.classList.remove('minimized');
+      }
+    }
+
+    // Monitor network connectivity
+    window.addEventListener('online', () => {
+      updateStatus('connected', 'Connected');
+      reconnectAttempts = 0;
+    });
+
+    window.addEventListener('offline', () => {
+      updateStatus('disconnected', 'Offline');
+    });
+
+    // Monitor fetch/XHR errors
+    const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+      try {
+        const response = await originalFetch.apply(this, args);
+
+        if (response.ok) {
+          if (!indicator.classList.contains('connection-connected')) {
+            updateStatus('connected', 'Connected');
+            reconnectAttempts = 0;
+          }
+        } else if (response.status >= 500) {
+          updateStatus('error', 'Server Error');
+        }
+
+        return response;
+      } catch (error) {
+        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+          reconnectAttempts++;
+
+          if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+            updateStatus('reconnecting', `Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+          } else {
+            updateStatus('disconnected', 'Connection Lost');
+          }
+        }
+        throw error;
+      }
+    };
+
+    // Monitor WebSocket connections (for terminal sessions)
+    const originalWebSocket = window.WebSocket;
+    let activeWebSockets = 0;
+
+    window.WebSocket = function(...args) {
+      const ws = new originalWebSocket(...args);
+      activeWebSockets++;
+      updateSessionCount();
+
+      ws.addEventListener('open', () => {
+        updateStatus('connected', 'Connected');
+        reconnectAttempts = 0;
+        updateSessionCount();
+      });
+
+      ws.addEventListener('close', () => {
+        activeWebSockets = Math.max(0, activeWebSockets - 1);
+        updateSessionCount();
+
+        if (activeWebSockets === 0) {
+          // Last WebSocket closed, show reconnecting if unexpected
+          setTimeout(() => {
+            if (activeWebSockets === 0) {
+              updateStatus('idle', 'Connected');
+            }
+          }, 1000);
+        }
+      });
+
+      ws.addEventListener('error', () => {
+        updateStatus('error', 'Connection Error');
+      });
+
+      return ws;
+    };
+
+    function updateSessionCount() {
+      if (activeWebSockets > 0) {
+        text.textContent = `${activeWebSockets} active session${activeWebSockets !== 1 ? 's' : ''}`;
+        statusIndicator.classList.remove('minimized');
+      }
+    }
+
+    // Click to toggle minimized state
+    statusIndicator.addEventListener('click', () => {
+      statusIndicator.classList.toggle('minimized');
+    });
+
+    // Initial status
+    updateStatus('connected', 'Connected');
+  }
+
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', () => {
+    initRecentFiles();
+    trackFileView();
+    initGlobalSearch();
+    initConnectionStatus();
   });
 })();

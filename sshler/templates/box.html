@@ -16,6 +16,21 @@
 {% else %}
 <div class="muted small">{{ box.user }}@{{ box.display_host }} :{{ box.port }}</div>
 {% endif %}
+
+<!-- Session History Section -->
+<div class="session-history" style="margin: 2rem 0;">
+  <h2>Recent Sessions</h2>
+  <div id="session-list"
+       hx-get="/box/{{ box.name }}/sessions?active_only=false&limit=10"
+       hx-trigger="load, sessionUpdated from:body"
+       hx-target="#session-list"
+       hx-swap="innerHTML">
+    <!-- Loading skeleton -->
+    <div class="skeleton" style="height: 80px; margin-bottom: 12px;"></div>
+    <div class="skeleton" style="height: 80px; margin-bottom: 12px;"></div>
+  </div>
+</div>
+
 <div class="grid">
   <div>
     <h2>Favorites</h2>

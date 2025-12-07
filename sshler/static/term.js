@@ -1,10 +1,223 @@
 (function () {
+  // Terminal theme definitions
+  const TERMINAL_THEMES = {
+    default: {
+      background: '#0f1115',
+      foreground: '#e6e6e6',
+      cursor: '#6aa6ff',
+      cursorAccent: '#0f1115',
+      selectionBackground: '#4a86df80',
+      black: '#1a1a1a',
+      red: '#ff6a6a',
+      green: '#3ba86a',
+      yellow: '#f5c542',
+      blue: '#6aa6ff',
+      magenta: '#c678dd',
+      cyan: '#56b6c2',
+      white: '#e6e6e6',
+      brightBlack: '#6b7280',
+      brightRed: '#ff8787',
+      brightGreen: '#5fd75f',
+      brightYellow: '#ffd75f',
+      brightBlue: '#85b8ff',
+      brightMagenta: '#d19aff',
+      brightCyan: '#76d7c4',
+      brightWhite: '#ffffff',
+    },
+    solarized: {
+      background: '#002b36',
+      foreground: '#839496',
+      cursor: '#839496',
+      cursorAccent: '#002b36',
+      selectionBackground: '#073642',
+      black: '#073642',
+      red: '#dc322f',
+      green: '#859900',
+      yellow: '#b58900',
+      blue: '#268bd2',
+      magenta: '#d33682',
+      cyan: '#2aa198',
+      white: '#eee8d5',
+      brightBlack: '#002b36',
+      brightRed: '#cb4b16',
+      brightGreen: '#586e75',
+      brightYellow: '#657b83',
+      brightBlue: '#839496',
+      brightMagenta: '#6c71c4',
+      brightCyan: '#93a1a1',
+      brightWhite: '#fdf6e3',
+    },
+    dracula: {
+      background: '#282a36',
+      foreground: '#f8f8f2',
+      cursor: '#f8f8f2',
+      cursorAccent: '#282a36',
+      selectionBackground: '#44475a',
+      black: '#000000',
+      red: '#ff5555',
+      green: '#50fa7b',
+      yellow: '#f1fa8c',
+      blue: '#bd93f9',
+      magenta: '#ff79c6',
+      cyan: '#8be9fd',
+      white: '#bfbfbf',
+      brightBlack: '#4d4d4d',
+      brightRed: '#ff6e67',
+      brightGreen: '#5af78e',
+      brightYellow: '#f4f99d',
+      brightBlue: '#caa9fa',
+      brightMagenta: '#ff92d0',
+      brightCyan: '#9aedfe',
+      brightWhite: '#e6e6e6',
+    },
+    nord: {
+      background: '#2e3440',
+      foreground: '#d8dee9',
+      cursor: '#d8dee9',
+      cursorAccent: '#2e3440',
+      selectionBackground: '#4c566a',
+      black: '#3b4252',
+      red: '#bf616a',
+      green: '#a3be8c',
+      yellow: '#ebcb8b',
+      blue: '#81a1c1',
+      magenta: '#b48ead',
+      cyan: '#88c0d0',
+      white: '#e5e9f0',
+      brightBlack: '#4c566a',
+      brightRed: '#bf616a',
+      brightGreen: '#a3be8c',
+      brightYellow: '#ebcb8b',
+      brightBlue: '#81a1c1',
+      brightMagenta: '#b48ead',
+      brightCyan: '#8fbcbb',
+      brightWhite: '#eceff4',
+    },
+    monokai: {
+      background: '#272822',
+      foreground: '#f8f8f2',
+      cursor: '#f8f8f0',
+      cursorAccent: '#272822',
+      selectionBackground: '#49483e',
+      black: '#272822',
+      red: '#f92672',
+      green: '#a6e22e',
+      yellow: '#f4bf75',
+      blue: '#66d9ef',
+      magenta: '#ae81ff',
+      cyan: '#a1efe4',
+      white: '#f8f8f2',
+      brightBlack: '#75715e',
+      brightRed: '#f92672',
+      brightGreen: '#a6e22e',
+      brightYellow: '#f4bf75',
+      brightBlue: '#66d9ef',
+      brightMagenta: '#ae81ff',
+      brightCyan: '#a1efe4',
+      brightWhite: '#f9f8f5',
+    },
+  };
+
+  function getTerminalTheme(themeName) {
+    return TERMINAL_THEMES[themeName] || TERMINAL_THEMES.default;
+  }
+
   function getToken() {
     if (window.sshlerToken) {
       return window.sshlerToken;
     }
     const tokenMeta = document.querySelector('meta[name="sshler-token"]');
     return tokenMeta ? tokenMeta.getAttribute("content") || "" : "";
+  }
+
+  function showScrollModeIndicator() {
+    // Check if indicator already exists
+    let indicator = document.querySelector('.scroll-mode-indicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.className = 'scroll-mode-indicator';
+      indicator.innerHTML = `
+        <span class="scroll-icon">📜</span>
+        <div class="scroll-info">
+          <div class="scroll-title">SCROLL MODE</div>
+          <div class="scroll-hint">↑↓ navigate • PgUp/PgDn page • / search • q quit</div>
+        </div>
+      `;
+      document.body.appendChild(indicator);
+
+      // Add styles if not already present
+      if (!document.querySelector('#scroll-mode-styles')) {
+        const style = document.createElement('style');
+        style.id = 'scroll-mode-styles';
+        style.textContent = `
+          .scroll-mode-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 10000;
+            animation: slideIn 0.3s ease-out;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          }
+
+          @keyframes slideIn {
+            from {
+              transform: translateX(100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateX(0);
+              opacity: 1;
+            }
+          }
+
+          .scroll-icon {
+            font-size: 24px;
+          }
+
+          .scroll-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+          }
+
+          .scroll-title {
+            font-weight: 700;
+            font-size: 14px;
+            letter-spacing: 0.5px;
+          }
+
+          .scroll-hint {
+            font-size: 12px;
+            opacity: 0.9;
+            font-weight: 400;
+          }
+
+          .scroll-hint kbd {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    }
+    indicator.style.display = 'flex';
+  }
+
+  function hideScrollModeIndicator() {
+    const indicator = document.querySelector('.scroll-mode-indicator');
+    if (indicator) {
+      indicator.style.display = 'none';
+    }
   }
 
   function setupCommandButtons(ws) {
@@ -36,6 +249,13 @@
             ws.send(
               JSON.stringify({ op: "send", data: config.payload }),
             );
+
+            // Show scroll mode indicator when entering scroll mode
+            if (command === "scroll-mode") {
+              showScrollModeIndicator();
+              // Hide after a delay (user presses 'q' to exit, so we auto-hide after 30s)
+              setTimeout(hideScrollModeIndicator, 30000);
+            }
           } else if (config.type === "operation" && config.op === "rename-window") {
             const newName = prompt("Rename window to:");
             if (newName) {
@@ -73,6 +293,12 @@
       }
     });
 
+    // Terminal preferences from localStorage
+    const termPrefs = {
+      fontSize: parseInt(localStorage.getItem('sshler-term-fontsize') || '14'),
+      theme: localStorage.getItem('sshler-term-theme') || 'default',
+    };
+
     const term = new Terminal({
       cursorBlink: true,
       convertEol: true,
@@ -80,10 +306,19 @@
       fastScrollModifier: "shift",
       fastScrollSensitivity: 5,
       bellStyle: "sound",
+      fontSize: termPrefs.fontSize,
+      theme: getTerminalTheme(termPrefs.theme),
     });
     const fitAddon = new FitAddon.FitAddon();
+    const searchAddon = new SearchAddon.SearchAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
     term.open(document.getElementById("term"));
+
+    // Export instances globally for multi-session manager
+    window.termInstance = term;
+    window.fitAddonInstance = fitAddon;
+    window.searchAddonInstance = searchAddon;
 
     const notifyContext = {
       host: root.dataset.host || root.dataset.boxName || "",
@@ -265,15 +500,51 @@
             location.host +
             `/ws/term?host=${encodeURIComponent(host)}&dir=${encodeURIComponent(directory)}&session=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}&token=${encodeURIComponent(token)}`;
 
-          ws = new WebSocket(wsUrl);
-          ws.binaryType = "arraybuffer";
+          let reconnectAttempts = 0;
+          const MAX_RECONNECT_ATTEMPTS = 5;
+          const RECONNECT_BASE_DELAY = 1000; // 1 second
+          let reconnectTimeout = null;
+          let intentionalDisconnect = false;
 
-          setupWebSocket(ws, term, fitAddon);
+          function createWebSocket() {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = "arraybuffer";
+            return ws;
+          }
+
+          function attemptReconnect() {
+            if (intentionalDisconnect || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+              return;
+            }
+
+            reconnectAttempts++;
+            const delay = RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempts - 1); // Exponential backoff
+
+            term.write(`\r\n\u001b[33m[Connection lost. Reconnecting in ${delay / 1000}s... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})]\u001b[0m\r\n`);
+
+            reconnectTimeout = setTimeout(() => {
+              term.write(`\u001b[33m[Attempting to reconnect...]\u001b[0m\r\n`);
+              try {
+                const newWs = createWebSocket();
+                setupWebSocket(newWs, term, fitAddon, true);
+              } catch (error) {
+                term.write(`\u001b[31m[Reconnection failed: ${error.message}]\u001b[0m\r\n`);
+                attemptReconnect();
+              }
+            }, delay);
+          }
+
+          ws = createWebSocket();
+          setupWebSocket(ws, term, fitAddon, false);
+
+          // Export WebSocket instance globally for multi-session manager
+          window.wsInstance = ws;
         });
       });
     });
 
-    function setupWebSocket(ws, term, fitAddon) {
+    function setupWebSocket(ws, term, fitAddon, isReconnect) {
+      isReconnect = isReconnect || false;
       const encoder = new TextEncoder();
       const termToolbar = document.getElementById("term-toolbar");
       const termWrapper = document.getElementById("term-wrapper");
@@ -286,7 +557,37 @@
       let fileTabButton = null;
       let latestWindows = [];
 
+      // Throttled resize to prevent flooding WebSocket
+      let resizeTimeout = null;
+      let lastResizeTime = 0;
+      const RESIZE_THROTTLE_MS = 100; // Minimum 100ms between resize messages
+
       function sendResize() {
+        const now = Date.now();
+        const timeSinceLastResize = now - lastResizeTime;
+
+        // Clear any pending resize
+        if (resizeTimeout) {
+          clearTimeout(resizeTimeout);
+          resizeTimeout = null;
+        }
+
+        // If enough time has passed, resize immediately
+        if (timeSinceLastResize >= RESIZE_THROTTLE_MS) {
+          performResize();
+          lastResizeTime = now;
+        } else {
+          // Otherwise, schedule resize after throttle period
+          const delay = RESIZE_THROTTLE_MS - timeSinceLastResize;
+          resizeTimeout = setTimeout(() => {
+            performResize();
+            lastResizeTime = Date.now();
+            resizeTimeout = null;
+          }, delay);
+        }
+      }
+
+      function performResize() {
         // Use requestAnimationFrame to ensure DOM is updated before fitting
         requestAnimationFrame(() => {
           fitAddon.fit();
@@ -404,6 +705,13 @@
     }
 
     ws.onopen = () => {
+      if (isReconnect) {
+        // Successfully reconnected
+        reconnectAttempts = 0;
+        term.write(`\r\n\u001b[32m[✓ Reconnected successfully!]\u001b[0m\r\n`);
+        // Send resize to ensure terminal is properly sized
+        performResize();
+      }
       term.focus();
     };
 
@@ -425,8 +733,24 @@
       }
     };
 
-    ws.onclose = () => {
-      term.write("\r\n\u001b[31m[Connection closed — refresh to reconnect]\u001b[0m\r\n");
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    ws.onclose = (event) => {
+      // Check if this was an intentional disconnect (user detached)
+      const wasClean = event.wasClean;
+      const code = event.code;
+
+      // Code 1000 = normal closure, 1001 = going away (refresh)
+      if (wasClean || code === 1000 || code === 1001) {
+        intentionalDisconnect = true;
+        term.write("\r\n\u001b[33m[Connection closed]\u001b[0m\r\n");
+      } else {
+        // Unexpected disconnect, try to reconnect
+        term.write(`\r\n\u001b[31m[Connection lost unexpectedly (code: ${code})]\u001b[0m\r\n`);
+        attemptReconnect();
+      }
       restoreTitle();
     };
 
@@ -435,10 +759,26 @@
     });
 
     term.attachCustomKeyEventHandler((ev) => {
+      // Ctrl+T
       if (ev.ctrlKey && ev.key && ev.key.toLowerCase() === "t") {
         ws.send(JSON.stringify({ op: "send", data: "\u0014" }));
         return false;
       }
+
+      // Shift+PageUp to enter scroll mode
+      if (ev.shiftKey && ev.key === "PageUp" && !ev.ctrlKey && !ev.altKey) {
+        ws.send(JSON.stringify({ op: "send", data: "\u0002[" })); // Ctrl+B [
+        showScrollModeIndicator();
+        setTimeout(hideScrollModeIndicator, 30000);
+        return false;
+      }
+
+      // Detect 'q' to hide scroll mode indicator (user exiting scroll mode)
+      if (ev.key === "q" && !ev.ctrlKey && !ev.shiftKey && !ev.altKey) {
+        // Hide indicator after a small delay to ensure user pressed 'q' in scroll mode
+        setTimeout(hideScrollModeIndicator, 200);
+      }
+
       return true;
     });
 
@@ -488,6 +828,104 @@
 
       setupCommandButtons(ws);
       renderTabs([]);
+
+      // Terminal enhancements: Search
+      const searchBtn = document.getElementById('term-search-btn');
+      if (searchBtn && searchAddon) {
+        searchBtn.addEventListener('click', () => {
+          const searchTerm = prompt('Search in terminal:');
+          if (searchTerm) {
+            searchAddon.findNext(searchTerm);
+          }
+        });
+      }
+
+      // Keyboard shortcut for search (Ctrl+F)
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.ctrlKey && ev.key === 'f' && !ev.shiftKey && !ev.altKey && !ev.metaKey) {
+          ev.preventDefault();
+          const searchTerm = prompt('Search in terminal:');
+          if (searchTerm && searchAddon) {
+            searchAddon.findNext(searchTerm);
+          }
+          return false;
+        }
+        return true;
+      });
+
+      // Terminal enhancements: Font size controls
+      const fontIncreaseBtn = document.getElementById('term-font-increase');
+      const fontDecreaseBtn = document.getElementById('term-font-decrease');
+
+      if (fontIncreaseBtn) {
+        fontIncreaseBtn.addEventListener('click', () => {
+          const currentSize = term.options.fontSize || 14;
+          const newSize = Math.min(currentSize + 1, 32);
+          term.options.fontSize = newSize;
+          localStorage.setItem('sshler-term-fontsize', newSize);
+          fitAddon.fit();
+        });
+      }
+
+      if (fontDecreaseBtn) {
+        fontDecreaseBtn.addEventListener('click', () => {
+          const currentSize = term.options.fontSize || 14;
+          const newSize = Math.max(currentSize - 1, 8);
+          term.options.fontSize = newSize;
+          localStorage.setItem('sshler-term-fontsize', newSize);
+          fitAddon.fit();
+        });
+      }
+
+      // Terminal enhancements: Theme selector
+      const themeBtn = document.getElementById('term-theme-btn');
+      if (themeBtn) {
+        themeBtn.addEventListener('click', () => {
+          const themes = Object.keys(TERMINAL_THEMES);
+          const currentTheme = localStorage.getItem('sshler-term-theme') || 'default';
+          const currentIndex = themes.indexOf(currentTheme);
+          const nextIndex = (currentIndex + 1) % themes.length;
+          const nextTheme = themes[nextIndex];
+
+          term.options.theme = getTerminalTheme(nextTheme);
+          localStorage.setItem('sshler-term-theme', nextTheme);
+
+          // Show toast notification
+          if (window.showToast) {
+            window.showToast(`Theme changed to: ${nextTheme}`, 'success');
+          }
+        });
+      }
+
+      // Terminal enhancements: Export output
+      const exportBtn = document.getElementById('term-export-btn');
+      if (exportBtn) {
+        exportBtn.addEventListener('click', () => {
+          const buffer = term.buffer.active;
+          let output = '';
+
+          for (let i = 0; i < buffer.length; i++) {
+            const line = buffer.getLine(i);
+            if (line) {
+              output += line.translateToString(true) + '\n';
+            }
+          }
+
+          const blob = new Blob([output], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `terminal-${Date.now()}.txt`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          if (window.showToast) {
+            window.showToast('Terminal output exported', 'success');
+          }
+        });
+      }
     }
   });
 })();
