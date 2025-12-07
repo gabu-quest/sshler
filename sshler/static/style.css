@@ -1782,6 +1782,82 @@ details[open] .favorite-toggle::after {
   border-color: transparent;
 }
 
+/* Upload Progress Indicator */
+.upload-progress-container {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+  box-shadow: var(--shadow);
+}
+
+.upload-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+
+.upload-filename {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-cancel-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: var(--space-xs);
+  font-size: var(--text-lg);
+  line-height: 1;
+  transition: color var(--transition-fast);
+}
+
+.upload-cancel-btn:hover {
+  color: var(--danger);
+}
+
+.upload-progress-bar {
+  height: 24px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: var(--space-sm);
+  border: 1px solid var(--border);
+}
+
+.upload-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+  transition: width 0.3s ease;
+  border-radius: var(--radius);
+}
+
+.upload-progress-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.upload-progress-percent {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.upload-progress-speed,
+.upload-progress-eta {
+  color: var(--muted);
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   /* Base adjustments */

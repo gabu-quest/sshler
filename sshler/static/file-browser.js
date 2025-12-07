@@ -609,6 +609,147 @@
     });
   }
 
+  // === UPLOAD PROGRESS ===
+  function initUploadProgress() {
+    const uploadForm = document.querySelector('form[hx-post*="/upload"]');
+    if (!uploadForm) return;
+
+    // Intercept form submission to add progress tracking
+    uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const fileInput = uploadForm.querySelector('input[type="file"]');
+      const file = fileInput?.files?.[0];
+
+      if (!file) return;
+
+      // Only show progress for files >100KB
+      if (file.size < 100 * 1024) {
+        // For small files, use default HTMX submission
+        uploadForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: false }));
+        return;
+      }
+
+      const formData = new FormData(uploadForm);
+      const boxName = window.location.pathname.split('/')[2];
+      const directory = uploadForm.querySelector('input[name="directory"]').value;
+      const target = uploadForm.querySelector('input[name="target"]').value;
+
+      // Create progress UI
+      const progressContainer = document.createElement('div');
+      progressContainer.className = 'upload-progress-container';
+      progressContainer.innerHTML = `
+        <div class="upload-progress-header">
+          <span class="upload-filename">${file.name}</span>
+          <button class="upload-cancel-btn" title="Cancel upload">✕</button>
+        </div>
+        <div class="upload-progress-bar">
+          <div class="upload-progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="upload-progress-details">
+          <span class="upload-progress-percent">0%</span>
+          <span class="upload-progress-speed">0 KB/s</span>
+          <span class="upload-progress-eta">Calculating...</span>
+        </div>
+      `;
+
+      // Insert before the form
+      uploadForm.parentElement.insertBefore(progressContainer, uploadForm);
+
+      const progressFill = progressContainer.querySelector('.upload-progress-fill');
+      const progressPercent = progressContainer.querySelector('.upload-progress-percent');
+      const progressSpeed = progressContainer.querySelector('.upload-progress-speed');
+      const progressEta = progressContainer.querySelector('.upload-progress-eta');
+      const cancelBtn = progressContainer.querySelector('.upload-cancel-btn');
+
+      // Upload with progress tracking
+      const xhr = new XMLHttpRequest();
+      let startTime = Date.now();
+      let lastLoaded = 0;
+      let lastTime = startTime;
+
+      cancelBtn.addEventListener('click', () => {
+        xhr.abort();
+        progressContainer.remove();
+        window.sshlerShowToast?.('Upload cancelled', 'info');
+      });
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (!e.lengthComputable) return;
+
+        const percent = Math.round((e.loaded / e.total) * 100);
+        progressFill.style.width = `${percent}%`;
+        progressPercent.textContent = `${percent}%`;
+
+        // Calculate speed
+        const now = Date.now();
+        const timeDiff = (now - lastTime) / 1000; // seconds
+        const bytesDiff = e.loaded - lastLoaded;
+
+        if (timeDiff > 0.5) { // Update every 500ms
+          const speed = bytesDiff / timeDiff; // bytes per second
+          lastLoaded = e.loaded;
+          lastTime = now;
+
+          // Format speed
+          let speedText;
+          if (speed < 1024) {
+            speedText = `${speed.toFixed(0)} B/s`;
+          } else if (speed < 1024 * 1024) {
+            speedText = `${(speed / 1024).toFixed(1)} KB/s`;
+          } else {
+            speedText = `${(speed / (1024 * 1024)).toFixed(1)} MB/s`;
+          }
+          progressSpeed.textContent = speedText;
+
+          // Calculate ETA
+          const remaining = e.total - e.loaded;
+          const eta = remaining / speed; // seconds
+
+          if (eta < 60) {
+            progressEta.textContent = `${Math.ceil(eta)}s remaining`;
+          } else if (eta < 3600) {
+            progressEta.textContent = `${Math.ceil(eta / 60)}m remaining`;
+          } else {
+            progressEta.textContent = `${Math.ceil(eta / 3600)}h remaining`;
+          }
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          progressContainer.remove();
+          // Update the file browser with the response
+          const browserEl = document.getElementById(target);
+          if (browserEl) {
+            browserEl.innerHTML = xhr.responseText;
+            init(); // Re-initialize
+          }
+          window.sshlerShowToast?.(`Uploaded ${file.name}`, 'success');
+          fileInput.value = ''; // Clear the input
+        } else {
+          progressContainer.remove();
+          window.sshlerShowToast?.('Upload failed', 'error');
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        progressContainer.remove();
+        window.sshlerShowToast?.('Upload failed', 'error');
+      });
+
+      xhr.addEventListener('abort', () => {
+        progressContainer.remove();
+      });
+
+      const token = window.sshlerToken || '';
+      xhr.open('POST', `/box/${boxName}/upload`);
+      xhr.setRequestHeader('X-SSHLER-TOKEN', token);
+      xhr.send(formData);
+    });
+  }
+
   // === INITIALIZATION ===
   function init() {
     initDragAndDrop();
@@ -618,6 +759,7 @@
     initBulkSelection();
     initInlineRename();
     initFileDragDrop();
+    initUploadProgress();
   }
 
   // Run on page load
