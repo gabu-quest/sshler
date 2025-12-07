@@ -1,8 +1,12 @@
 # SSHler Backend Improvement Plan
 
+> **Note:** Frontend modernization (PWA, dark/light theme, command palette, keyboard shortcuts, touch gestures, file preview enhancements, multi-pane terminals, session persistence) has been **completed** as of 2025. See [MODERNIZATION_TODO.md](MODERNIZATION_TODO.md) for details.
+>
+> This document focuses on **backend** improvements (architecture, performance, security).
+
 ## Executive Summary
 
-This document outlines a comprehensive refactoring and improvement plan for the SSHler application, addressing UX, DevX, and backend quality issues identified through codebase analysis.
+This document outlines a comprehensive refactoring and improvement plan for the SSHler application, addressing backend architecture, DevX, performance, and security issues identified through codebase analysis.
 
 ## Current State Analysis
 
