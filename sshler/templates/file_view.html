@@ -8,6 +8,10 @@
       {% if is_markdown %}
       <button id="toggle-view-btn" class="btn secondary small">View Source</button>
       {% endif %}
+      {% if content and not image_data %}
+      <button id="toggle-line-numbers" class="btn secondary small" title="Toggle line numbers">Line #</button>
+      <button id="toggle-word-wrap" class="btn secondary small" title="Toggle word wrap">Wrap</button>
+      {% endif %}
       <a class="btn small" href="/box/{{ box.name }}/edit?path={{ path|urlencode }}">Edit</a>
       <button id="delete-btn" class="btn small danger"
               data-box="{{ box.name }}"
