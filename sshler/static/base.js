@@ -163,6 +163,9 @@
     }, 3600);
   }
 
+  // Export showToast globally for use in other scripts
+  window.showToast = showToast;
+
   function getStoredLang() {
     try {
       return localStorage.getItem(LANG_KEY) || "en";

@@ -1,4 +1,127 @@
 (function () {
+  // Terminal theme definitions
+  const TERMINAL_THEMES = {
+    default: {
+      background: '#0f1115',
+      foreground: '#e6e6e6',
+      cursor: '#6aa6ff',
+      cursorAccent: '#0f1115',
+      selectionBackground: '#4a86df80',
+      black: '#1a1a1a',
+      red: '#ff6a6a',
+      green: '#3ba86a',
+      yellow: '#f5c542',
+      blue: '#6aa6ff',
+      magenta: '#c678dd',
+      cyan: '#56b6c2',
+      white: '#e6e6e6',
+      brightBlack: '#6b7280',
+      brightRed: '#ff8787',
+      brightGreen: '#5fd75f',
+      brightYellow: '#ffd75f',
+      brightBlue: '#85b8ff',
+      brightMagenta: '#d19aff',
+      brightCyan: '#76d7c4',
+      brightWhite: '#ffffff',
+    },
+    solarized: {
+      background: '#002b36',
+      foreground: '#839496',
+      cursor: '#839496',
+      cursorAccent: '#002b36',
+      selectionBackground: '#073642',
+      black: '#073642',
+      red: '#dc322f',
+      green: '#859900',
+      yellow: '#b58900',
+      blue: '#268bd2',
+      magenta: '#d33682',
+      cyan: '#2aa198',
+      white: '#eee8d5',
+      brightBlack: '#002b36',
+      brightRed: '#cb4b16',
+      brightGreen: '#586e75',
+      brightYellow: '#657b83',
+      brightBlue: '#839496',
+      brightMagenta: '#6c71c4',
+      brightCyan: '#93a1a1',
+      brightWhite: '#fdf6e3',
+    },
+    dracula: {
+      background: '#282a36',
+      foreground: '#f8f8f2',
+      cursor: '#f8f8f2',
+      cursorAccent: '#282a36',
+      selectionBackground: '#44475a',
+      black: '#000000',
+      red: '#ff5555',
+      green: '#50fa7b',
+      yellow: '#f1fa8c',
+      blue: '#bd93f9',
+      magenta: '#ff79c6',
+      cyan: '#8be9fd',
+      white: '#bfbfbf',
+      brightBlack: '#4d4d4d',
+      brightRed: '#ff6e67',
+      brightGreen: '#5af78e',
+      brightYellow: '#f4f99d',
+      brightBlue: '#caa9fa',
+      brightMagenta: '#ff92d0',
+      brightCyan: '#9aedfe',
+      brightWhite: '#e6e6e6',
+    },
+    nord: {
+      background: '#2e3440',
+      foreground: '#d8dee9',
+      cursor: '#d8dee9',
+      cursorAccent: '#2e3440',
+      selectionBackground: '#4c566a',
+      black: '#3b4252',
+      red: '#bf616a',
+      green: '#a3be8c',
+      yellow: '#ebcb8b',
+      blue: '#81a1c1',
+      magenta: '#b48ead',
+      cyan: '#88c0d0',
+      white: '#e5e9f0',
+      brightBlack: '#4c566a',
+      brightRed: '#bf616a',
+      brightGreen: '#a3be8c',
+      brightYellow: '#ebcb8b',
+      brightBlue: '#81a1c1',
+      brightMagenta: '#b48ead',
+      brightCyan: '#8fbcbb',
+      brightWhite: '#eceff4',
+    },
+    monokai: {
+      background: '#272822',
+      foreground: '#f8f8f2',
+      cursor: '#f8f8f0',
+      cursorAccent: '#272822',
+      selectionBackground: '#49483e',
+      black: '#272822',
+      red: '#f92672',
+      green: '#a6e22e',
+      yellow: '#f4bf75',
+      blue: '#66d9ef',
+      magenta: '#ae81ff',
+      cyan: '#a1efe4',
+      white: '#f8f8f2',
+      brightBlack: '#75715e',
+      brightRed: '#f92672',
+      brightGreen: '#a6e22e',
+      brightYellow: '#f4bf75',
+      brightBlue: '#66d9ef',
+      brightMagenta: '#ae81ff',
+      brightCyan: '#a1efe4',
+      brightWhite: '#f9f8f5',
+    },
+  };
+
+  function getTerminalTheme(themeName) {
+    return TERMINAL_THEMES[themeName] || TERMINAL_THEMES.default;
+  }
+
   function getToken() {
     if (window.sshlerToken) {
       return window.sshlerToken;
@@ -170,6 +293,12 @@
       }
     });
 
+    // Terminal preferences from localStorage
+    const termPrefs = {
+      fontSize: parseInt(localStorage.getItem('sshler-term-fontsize') || '14'),
+      theme: localStorage.getItem('sshler-term-theme') || 'default',
+    };
+
     const term = new Terminal({
       cursorBlink: true,
       convertEol: true,
@@ -177,14 +306,19 @@
       fastScrollModifier: "shift",
       fastScrollSensitivity: 5,
       bellStyle: "sound",
+      fontSize: termPrefs.fontSize,
+      theme: getTerminalTheme(termPrefs.theme),
     });
     const fitAddon = new FitAddon.FitAddon();
+    const searchAddon = new SearchAddon.SearchAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
     term.open(document.getElementById("term"));
 
     // Export instances globally for multi-session manager
     window.termInstance = term;
     window.fitAddonInstance = fitAddon;
+    window.searchAddonInstance = searchAddon;
 
     const notifyContext = {
       host: root.dataset.host || root.dataset.boxName || "",
@@ -694,6 +828,104 @@
 
       setupCommandButtons(ws);
       renderTabs([]);
+
+      // Terminal enhancements: Search
+      const searchBtn = document.getElementById('term-search-btn');
+      if (searchBtn && searchAddon) {
+        searchBtn.addEventListener('click', () => {
+          const searchTerm = prompt('Search in terminal:');
+          if (searchTerm) {
+            searchAddon.findNext(searchTerm);
+          }
+        });
+      }
+
+      // Keyboard shortcut for search (Ctrl+F)
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.ctrlKey && ev.key === 'f' && !ev.shiftKey && !ev.altKey && !ev.metaKey) {
+          ev.preventDefault();
+          const searchTerm = prompt('Search in terminal:');
+          if (searchTerm && searchAddon) {
+            searchAddon.findNext(searchTerm);
+          }
+          return false;
+        }
+        return true;
+      });
+
+      // Terminal enhancements: Font size controls
+      const fontIncreaseBtn = document.getElementById('term-font-increase');
+      const fontDecreaseBtn = document.getElementById('term-font-decrease');
+
+      if (fontIncreaseBtn) {
+        fontIncreaseBtn.addEventListener('click', () => {
+          const currentSize = term.options.fontSize || 14;
+          const newSize = Math.min(currentSize + 1, 32);
+          term.options.fontSize = newSize;
+          localStorage.setItem('sshler-term-fontsize', newSize);
+          fitAddon.fit();
+        });
+      }
+
+      if (fontDecreaseBtn) {
+        fontDecreaseBtn.addEventListener('click', () => {
+          const currentSize = term.options.fontSize || 14;
+          const newSize = Math.max(currentSize - 1, 8);
+          term.options.fontSize = newSize;
+          localStorage.setItem('sshler-term-fontsize', newSize);
+          fitAddon.fit();
+        });
+      }
+
+      // Terminal enhancements: Theme selector
+      const themeBtn = document.getElementById('term-theme-btn');
+      if (themeBtn) {
+        themeBtn.addEventListener('click', () => {
+          const themes = Object.keys(TERMINAL_THEMES);
+          const currentTheme = localStorage.getItem('sshler-term-theme') || 'default';
+          const currentIndex = themes.indexOf(currentTheme);
+          const nextIndex = (currentIndex + 1) % themes.length;
+          const nextTheme = themes[nextIndex];
+
+          term.options.theme = getTerminalTheme(nextTheme);
+          localStorage.setItem('sshler-term-theme', nextTheme);
+
+          // Show toast notification
+          if (window.showToast) {
+            window.showToast(`Theme changed to: ${nextTheme}`, 'success');
+          }
+        });
+      }
+
+      // Terminal enhancements: Export output
+      const exportBtn = document.getElementById('term-export-btn');
+      if (exportBtn) {
+        exportBtn.addEventListener('click', () => {
+          const buffer = term.buffer.active;
+          let output = '';
+
+          for (let i = 0; i < buffer.length; i++) {
+            const line = buffer.getLine(i);
+            if (line) {
+              output += line.translateToString(true) + '\n';
+            }
+          }
+
+          const blob = new Blob([output], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `terminal-${Date.now()}.txt`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          if (window.showToast) {
+            window.showToast('Terminal output exported', 'success');
+          }
+        });
+      }
     }
   });
 })();

@@ -4,6 +4,7 @@
 <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
 <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
 <script src="https://unpkg.com/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+<script src="https://unpkg.com/xterm-addon-search/lib/xterm-addon-search.js"></script>
 {% endblock %}
 {% block content %}
 {% set raw_dir = directory.rstrip('/') %}
@@ -84,6 +85,14 @@
         <div class="term-toolbar-group-title">View</div>
         <button class="btn secondary small" data-command="scroll-mode" data-i18n="term.scrollMode" title="Enter scroll mode to navigate terminal history">Scroll Mode</button>
         <button class="btn secondary small" data-command="escape" data-i18n="term.escape" title="Send Escape key">Escape</button>
+      </div>
+      <div class="term-toolbar-group">
+        <div class="term-toolbar-group-title">Terminal</div>
+        <button class="btn secondary small" id="term-search-btn" title="Search in terminal (Ctrl+F)">🔍 Search</button>
+        <button class="btn secondary small" id="term-font-decrease" title="Decrease font size">A−</button>
+        <button class="btn secondary small" id="term-font-increase" title="Increase font size">A+</button>
+        <button class="btn secondary small" id="term-theme-btn" title="Change terminal theme">🎨 Theme</button>
+        <button class="btn secondary small" id="term-export-btn" title="Export terminal output">💾 Export</button>
       </div>
       <div class="term-toolbar-group">
         <div class="term-toolbar-group-title">Keys</div>
