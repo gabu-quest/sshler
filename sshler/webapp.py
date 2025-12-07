@@ -1412,6 +1412,173 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             response.headers["HX-Trigger"] = trigger_payload
         return response
 
+    @application.post("/box/{name}/copy", response_class=HTMLResponse)
+    async def copy_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        destination: str = Form(None),  # Optional destination path
+        directory: str = Form(...),
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Copy a file or directory."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        if box.transport == "local":
+            import shutil
+
+            source_path = _normalize_local_path(file_path)
+
+            # Generate destination path if not provided
+            if not destination:
+                source_path_obj = Path(source_path)
+                base_name = source_path_obj.stem
+                suffix = source_path_obj.suffix
+                counter = 1
+                dest_path = source_path_obj.parent / f"{base_name}_copy{suffix}"
+
+                # Find an available name
+                while dest_path.exists():
+                    dest_path = source_path_obj.parent / f"{base_name}_copy{counter}{suffix}"
+                    counter += 1
+            else:
+                dest_path = Path(_normalize_local_path(destination))
+
+            error_message = None
+            success_message = None
+
+            try:
+                if Path(source_path).is_dir():
+                    shutil.copytree(source_path, dest_path)
+                    success_message = f"Copied directory to {dest_path.name}"
+                else:
+                    shutil.copy2(source_path, dest_path)
+                    success_message = f"Copied file to {dest_path.name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {Path(source_path).name}"
+            except Exception as exc:
+                error_message = f"Failed to copy: {exc}"
+
+            response = await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=error_message
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote copy
+        try:
+            validated_source_path = PathValidator.validate_remote_path(file_path)
+
+            # Generate destination path if not provided
+            if not destination:
+                source_path_obj = PurePosixPath(validated_source_path)
+                base_name = source_path_obj.stem
+                suffix = source_path_obj.suffix
+                parent_dir = str(source_path_obj.parent)
+                dest_path = f"{parent_dir}/{base_name}_copy{suffix}" if parent_dir != "." else f"{base_name}_copy{suffix}"
+            else:
+                dest_path = destination
+                PathValidator.validate_remote_path(dest_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid path: {exc}"
+            )
+
+        error_message = None
+        success_message = None
+
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host, box.user, box.port, box.keyfile,
+                box.known_hosts, application_config.ssh_config_path,
+                box.ssh_alias, allow_alias=settings.allow_ssh_alias,
+            )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
+                try:
+                    sftp_client = await connection.start_sftp_client()
+
+                    # Check if source is a directory
+                    attrs = await sftp_client.stat(validated_source_path)
+                    is_dir = stat.S_ISDIR(attrs.permissions)
+
+                    if is_dir:
+                        # For directories, use shell commands for recursive copy
+                        result = await connection.run(
+                            f"cp -r {shlex.quote(validated_source_path)} {shlex.quote(dest_path)}",
+                            check=False
+                        )
+                        if result.exit_status != 0:
+                            error_message = f"Failed to copy directory: {result.stderr}"
+                        else:
+                            success_message = f"Copied directory to {PurePosixPath(dest_path).name}"
+                    else:
+                        # For files, use SFTP
+                        # Read the source file
+                        async with sftp_client.open(validated_source_path, 'rb') as src:
+                            content = await src.read()
+
+                        # Write to destination
+                        async with sftp_client.open(dest_path, 'wb') as dst:
+                            await dst.write(content)
+
+                        # Copy permissions
+                        await sftp_client.chmod(dest_path, attrs.permissions)
+                        success_message = f"Copied file to {PurePosixPath(dest_path).name}"
+
+                except FileNotFoundError:
+                    error_message = f"File not found: {PurePosixPath(validated_source_path).name}"
+                except Exception as exc:
+                    error_message = f"Failed to copy: {exc}"
+                finally:
+                    if sftp_client:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+
+        response = await _render_directory_listing(
+            request, box, directory_path, target, application_config,
+            error_override=error_message
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps({
+                "dir-action": {
+                    "status": "error" if error_message else "success",
+                    "message": message,
+                }
+            })
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
     @application.get("/box/{name}/cat", response_class=HTMLResponse)
     async def view_file(
         name: str,

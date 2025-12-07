@@ -80,6 +80,7 @@
       <div class="context-menu-item" data-action="preview">👁️ Preview</div>
       <div class="context-menu-item" data-action="edit">✏️ Edit</div>
       <div class="context-menu-item" data-action="rename">✍️ Rename</div>
+      <div class="context-menu-item" data-action="copy">📄 Copy</div>
       <div class="context-menu-item" data-action="copy-path">📋 Copy Path</div>
       <div class="context-menu-separator"></div>
       <div class="context-menu-item danger" data-action="delete">🗑️ Delete</div>
@@ -138,6 +139,42 @@
             if (nameCell) {
               nameCell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
             }
+            break;
+          case 'copy':
+            // Copy the file
+            const copyFilePath = fileRow.dataset.path;
+            const boxName = window.location.pathname.split('/')[2];
+            const directory = new URLSearchParams(window.location.search).get('path') || '/';
+            const token = window.sshlerToken || '';
+
+            if (!copyFilePath) return;
+
+            window.sshlerShowToast?.('Copying...', 'info');
+
+            fetch(`/box/${boxName}/copy`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-SSHLER-TOKEN': token,
+              },
+              body: new URLSearchParams({
+                path: copyFilePath,
+                directory: directory,
+                target: 'browser',
+              }),
+            })
+            .then(response => response.text())
+            .then(html => {
+              const browserEl = document.getElementById('browser');
+              if (browserEl) {
+                browserEl.innerHTML = html;
+                init(); // Re-initialize after reload
+              }
+            })
+            .catch(error => {
+              console.error('Copy error:', error);
+              window.sshlerShowToast?.('Failed to copy file', 'error');
+            });
             break;
           case 'copy-path':
             const pathText = fileRow.closest('table')?.parentElement?.querySelector('.breadcrumb-item.active')?.textContent || '';
