@@ -55,8 +55,8 @@ Implementation roadmap for UX improvements and modernization features.
 
 ## Phase 2: File Management & Navigation (High Value Features)
 
-### 5. Enhanced File Operations
-- [ ] Implement inline rename (double-click filename)
+### 5. Enhanced File Operations (In Progress)
+- [x] Implement inline rename (double-click filename)
 - [ ] Add file copy operation
 - [ ] Add file move operation (drag-drop between dirs)
 - [ ] Add download multiple files as ZIP
@@ -92,17 +92,17 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Quick access to frequently used files improves productivity.
 **Files:** `static/base.js`, `templates/base.html`
 
-### 8. Command Palette (Cmd/Ctrl+K)
-- [ ] Create command palette modal component
-- [ ] Implement fuzzy search for commands
-- [ ] Add keyboard shortcut registration system
-- [ ] Register file operations (new, upload, download, etc.)
-- [ ] Register session operations (switch, new, close)
-- [ ] Register navigation commands (go to box, search)
-- [ ] Register theme toggle, settings
-- [ ] Add recently used commands
-- [ ] Show keyboard shortcuts in palette
-- [ ] Implement command execution
+### 8. Command Palette (Cmd/Ctrl+K) ✅
+- [x] Create command palette modal component
+- [x] Implement fuzzy search for commands
+- [x] Add keyboard shortcut registration system
+- [x] Register file operations (new, upload, download, etc.)
+- [x] Register session operations (switch, new, close)
+- [x] Register navigation commands (go to box, search)
+- [x] Register theme toggle, settings
+- [ ] Add recently used commands - *Deferred*
+- [x] Show keyboard shortcuts in palette
+- [x] Implement command execution
 
 **Why:** Power user feature that drastically improves productivity. Modern UX pattern.
 **Files:** `static/base.js`, `templates/base.html`, `static/command-palette.js` (new)
@@ -192,15 +192,17 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 4 (Light/Dark Theme, Accessibility, PWA Support, Terminal Enhancements)
-**In Progress:** 0
-**Remaining:** 10
+**Completed:** 5 (Light/Dark Theme, Accessibility, PWA Support, Terminal Enhancements, Command Palette)
+**In Progress:** 1 (Enhanced File Operations - 1/8 complete)
+**Remaining:** 8
 
 ### Recently Completed:
 - ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
 - ✅ Feature #2: Accessibility Improvements (commit: 26d1ce6)
 - ✅ Feature #3: PWA Support (commit: 6c3d257)
 - ✅ Feature #4: Terminal Enhancements (commit: c9aa347)
+- ✅ Feature #5: Enhanced File Operations - Inline Rename (commit: a20a2b7)
+- ✅ Feature #8: Command Palette (Cmd/Ctrl+K) (commit: e7c7d9d)
 
 ---
 
