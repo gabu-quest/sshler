@@ -1763,6 +1763,25 @@ details[open] .favorite-toggle::after {
   margin: 0 4px;
 }
 
+/* File Drag-Drop for Moving */
+.fs-row[draggable="true"] {
+  cursor: move;
+}
+
+.fs-row.dragging {
+  opacity: 0.5;
+  background: var(--accent-bg);
+}
+
+.fs-row.drop-target {
+  background: var(--accent-bg);
+  border: 2px dashed var(--accent);
+}
+
+.fs-row.drop-target td {
+  border-color: transparent;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   /* Base adjustments */

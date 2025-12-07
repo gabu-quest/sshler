@@ -509,6 +509,106 @@
     });
   }
 
+  // === DRAG-DROP FILE MOVE ===
+  function initFileDragDrop() {
+    const table = document.querySelector('.dir-table');
+    if (!table) return;
+
+    const rows = table.querySelectorAll('.fs-row');
+
+    rows.forEach(row => {
+      // Make all file/folder rows draggable
+      if (row.dataset.path) {
+        row.setAttribute('draggable', 'true');
+
+        row.addEventListener('dragstart', (e) => {
+          const filePath = row.dataset.path;
+          const fileName = row.dataset.name;
+
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', filePath);
+          e.dataTransfer.setData('application/x-sshler-file', JSON.stringify({
+            path: filePath,
+            name: fileName,
+          }));
+
+          row.classList.add('dragging');
+        });
+
+        row.addEventListener('dragend', (e) => {
+          row.classList.remove('dragging');
+          // Remove all drop-target classes
+          document.querySelectorAll('.drop-target').forEach(el => {
+            el.classList.remove('drop-target');
+          });
+        });
+      }
+
+      // Make folder rows drop targets
+      const isFolder = row.dataset.isDirectory === 'true';
+      if (isFolder) {
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          row.classList.add('drop-target');
+        });
+
+        row.addEventListener('dragleave', (e) => {
+          // Only remove if we're actually leaving the row
+          if (!row.contains(e.relatedTarget)) {
+            row.classList.remove('drop-target');
+          }
+        });
+
+        row.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          row.classList.remove('drop-target');
+
+          const data = e.dataTransfer.getData('application/x-sshler-file');
+          if (!data) return;
+
+          const { path: sourcePath, name: fileName } = JSON.parse(data);
+          const destPath = row.dataset.path;
+
+          // Don't allow dropping on itself
+          if (sourcePath === destPath) return;
+
+          const boxName = window.location.pathname.split('/')[2];
+          const directory = new URLSearchParams(window.location.search).get('path') || '/';
+          const token = window.sshlerToken || '';
+
+          window.sshlerShowToast?.(`Moving ${fileName}...`, 'info');
+
+          try {
+            const response = await fetch(`/box/${boxName}/move`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-SSHLER-TOKEN': token,
+              },
+              body: new URLSearchParams({
+                path: sourcePath,
+                destination_dir: destPath,
+                directory: directory,
+                target: 'browser',
+              }),
+            });
+
+            const html = await response.text();
+            const browserEl = document.getElementById('browser');
+            if (browserEl) {
+              browserEl.innerHTML = html;
+              init(); // Re-initialize after reload
+            }
+          } catch (error) {
+            console.error('Move error:', error);
+            window.sshlerShowToast?.('Failed to move file', 'error');
+          }
+        });
+      }
+    });
+  }
+
   // === INITIALIZATION ===
   function init() {
     initDragAndDrop();
@@ -517,6 +617,7 @@
     initKeyboardShortcuts();
     initBulkSelection();
     initInlineRename();
+    initFileDragDrop();
   }
 
   // Run on page load

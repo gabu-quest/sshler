@@ -1579,6 +1579,156 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             response.headers["HX-Trigger"] = trigger_payload
         return response
 
+    @application.post("/box/{name}/move", response_class=HTMLResponse)
+    async def move_file(
+        name: str,
+        request: Request,
+        file_path: str = Form(..., alias="path"),
+        destination_dir: str = Form(...),  # Destination directory
+        directory: str = Form(...),  # Current directory
+        target: str = Form("browser"),
+        application_config: AppConfig = Depends(_get_application_config),
+    ) -> HTMLResponse:
+        """Move a file or directory to a different location."""
+        box = find_box(application_config, name)
+        if not box:
+            raise HTTPException(status_code=404, detail="Unknown box")
+
+        _require_token(request)
+
+        directory_path = (
+            _normalize_local_path(directory)
+            if box.transport == "local"
+            else _normalize_directory_path(directory)
+        )
+
+        if box.transport == "local":
+            import shutil
+
+            source_path = _normalize_local_path(file_path)
+            dest_dir = _normalize_local_path(destination_dir)
+
+            # Generate destination path
+            source_path_obj = Path(source_path)
+            dest_path = Path(dest_dir) / source_path_obj.name
+
+            # Check for name collision
+            if dest_path.exists():
+                error_message = f"File already exists in destination: {dest_path.name}"
+                response = await _render_directory_listing(
+                    request, box, directory_path, target, application_config,
+                    error_override=error_message
+                )
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error",
+                        "message": error_message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+                return response
+
+            error_message = None
+            success_message = None
+
+            try:
+                shutil.move(source_path, dest_path)
+                success_message = f"Moved {source_path_obj.name} to {Path(dest_dir).name}"
+            except FileNotFoundError:
+                error_message = f"File not found: {source_path_obj.name}"
+            except Exception as exc:
+                error_message = f"Failed to move: {exc}"
+
+            response = await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=error_message
+            )
+            message = error_message or success_message
+            if message:
+                trigger_payload = json.dumps({
+                    "dir-action": {
+                        "status": "error" if error_message else "success",
+                        "message": message,
+                    }
+                })
+                response.headers["HX-Trigger"] = trigger_payload
+            return response
+
+        # Remote move
+        try:
+            validated_source_path = PathValidator.validate_remote_path(file_path)
+            validated_dest_dir = PathValidator.validate_remote_path(destination_dir)
+
+            source_path_obj = PurePosixPath(validated_source_path)
+            dest_path = f"{validated_dest_dir}/{source_path_obj.name}"
+            PathValidator.validate_remote_path(dest_path)
+        except ValidationError as exc:
+            return await _render_directory_listing(
+                request, box, directory_path, target, application_config,
+                error_override=f"Invalid path: {exc}"
+            )
+
+        error_message = None
+        success_message = None
+
+        ssh_pool = get_pool()
+
+        async def connect_func():
+            return await connect(
+                box.connect_host, box.user, box.port, box.keyfile,
+                box.known_hosts, application_config.ssh_config_path,
+                box.ssh_alias, allow_alias=settings.allow_ssh_alias,
+            )
+
+        try:
+            async with ssh_pool.connection(box, connect_func) as connection:
+                sftp_client = None
+                try:
+                    sftp_client = await connection.start_sftp_client()
+
+                    # Check if destination already exists
+                    try:
+                        await sftp_client.stat(dest_path)
+                        error_message = f"File already exists in destination: {source_path_obj.name}"
+                    except FileNotFoundError:
+                        # Destination doesn't exist, proceed with move
+                        # Use shell command for move (works for both files and directories)
+                        result = await connection.run(
+                            f"mv {shlex.quote(validated_source_path)} {shlex.quote(dest_path)}",
+                            check=False
+                        )
+                        if result.exit_status != 0:
+                            error_message = f"Failed to move: {result.stderr}"
+                        else:
+                            success_message = f"Moved {source_path_obj.name} to {PurePosixPath(validated_dest_dir).name}"
+
+                except Exception as exc:
+                    if not error_message:
+                        error_message = f"Failed to move: {exc}"
+                finally:
+                    if sftp_client:
+                        try:
+                            await sftp_client.exit()
+                        except Exception:
+                            pass
+        except SSHError as exc:
+            error_message = f"SSH connection failed: {exc}"
+
+        response = await _render_directory_listing(
+            request, box, directory_path, target, application_config,
+            error_override=error_message
+        )
+        message = error_message or success_message
+        if message:
+            trigger_payload = json.dumps({
+                "dir-action": {
+                    "status": "error" if error_message else "success",
+                    "message": message,
+                }
+            })
+            response.headers["HX-Trigger"] = trigger_payload
+        return response
+
     @application.get("/box/{name}/cat", response_class=HTMLResponse)
     async def view_file(
         name: str,
