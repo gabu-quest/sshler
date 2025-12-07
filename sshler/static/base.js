@@ -874,9 +874,242 @@
   window.sshlerAddRecentFile = addRecentFile;
   window.sshlerToggleBookmark = toggleBookmark;
 
+  // === GLOBAL SEARCH ===
+  function initGlobalSearch() {
+    const header = document.querySelector('.topbar');
+    if (!header) return;
+
+    // Create search input
+    const searchContainer = document.createElement('div');
+    searchContainer.className = 'global-search-container';
+    searchContainer.innerHTML = `
+      <input type="text"
+             id="global-search-input"
+             class="global-search-input"
+             placeholder="Search..."
+             aria-label="Global search">
+      <span class="global-search-icon">🔍</span>
+    `;
+
+    // Insert after spacer
+    const spacer = header.querySelector('.spacer');
+    if (spacer) {
+      spacer.parentNode.insertBefore(searchContainer, spacer.nextSibling);
+    }
+
+    // Create search results modal
+    const searchModal = document.createElement('div');
+    searchModal.id = 'global-search-modal';
+    searchModal.className = 'global-search-modal';
+    searchModal.innerHTML = `
+      <div class="global-search-backdrop"></div>
+      <div class="global-search-results">
+        <div class="global-search-header">
+          <input type="text"
+                 id="global-search-modal-input"
+                 class="global-search-modal-input"
+                 placeholder="Search across all boxes and files..."
+                 aria-label="Global search">
+          <button class="global-search-close" aria-label="Close search">✕</button>
+        </div>
+        <div class="global-search-results-container">
+          <div class="global-search-empty">Start typing to search...</div>
+        </div>
+        <div class="global-search-footer">
+          <span>↑↓ Navigate</span>
+          <span>Enter Select</span>
+          <span>Esc Close</span>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(searchModal);
+
+    const headerInput = document.getElementById('global-search-input');
+    const modalInput = document.getElementById('global-search-modal-input');
+    const resultsContainer = searchModal.querySelector('.global-search-results-container');
+    const closeBtn = searchModal.querySelector('.global-search-close');
+    const backdrop = searchModal.querySelector('.global-search-backdrop');
+
+    let searchTimeout = null;
+    let currentResults = [];
+    let selectedIndex = -1;
+
+    function showSearchModal() {
+      searchModal.classList.add('visible');
+      modalInput.value = headerInput.value;
+      modalInput.focus();
+      if (headerInput.value) {
+        performSearch(headerInput.value);
+      }
+    }
+
+    function hideSearchModal() {
+      searchModal.classList.remove('visible');
+      headerInput.value = '';
+      modalInput.value = '';
+      resultsContainer.innerHTML = '<div class="global-search-empty">Start typing to search...</div>';
+      currentResults = [];
+      selectedIndex = -1;
+    }
+
+    function performClientSideSearch(query) {
+      // Search through visible box names and links
+      const results = {
+        boxes: [],
+        files: []
+      };
+
+      const queryLower = query.toLowerCase();
+
+      // Search box cards on boxes page
+      const boxes = document.querySelectorAll('.box-card');
+      boxes.forEach(box => {
+        const nameEl = box.querySelector('.box-name');
+        const hostEl = box.querySelector('.box-host');
+
+        if (nameEl) {
+          const boxName = nameEl.textContent;
+          const boxHost = hostEl ? hostEl.textContent : '';
+
+          if (boxName.toLowerCase().includes(queryLower) ||
+              boxHost.toLowerCase().includes(queryLower)) {
+            results.boxes.push({
+              name: boxName,
+              host: boxHost,
+              url: `/box/${encodeURIComponent(boxName)}`
+            });
+          }
+        }
+      });
+
+      displaySearchResults(results, query);
+    }
+
+    function displaySearchResults(results, query) {
+      currentResults = [];
+      let html = '';
+
+      // Box results
+      if (results.boxes && results.boxes.length > 0) {
+        html += '<div class="search-section-header">Boxes</div>';
+        results.boxes.forEach((box, idx) => {
+          currentResults.push({ type: 'box', ...box });
+          html += `
+            <a href="${box.url || '/boxes'}" class="search-result-item" data-index="${idx}">
+              <span class="search-result-icon">📦</span>
+              <div class="search-result-content">
+                <div class="search-result-title">${highlightMatch(box.name, query)}</div>
+                ${box.host ? `<div class="search-result-meta">${box.host}</div>` : ''}
+              </div>
+            </a>
+          `;
+        });
+      }
+
+      // File results
+      if (results.files && results.files.length > 0) {
+        if (results.boxes && results.boxes.length > 0) {
+          html += '<div class="search-section-divider"></div>';
+        }
+        html += '<div class="search-section-header">Files</div>';
+        results.files.forEach((file, idx) => {
+          const resultIdx = currentResults.length;
+          currentResults.push({ type: 'file', ...file });
+          html += `
+            <a href="${file.url}" class="search-result-item" data-index="${resultIdx}">
+              <span class="search-result-icon">📄</span>
+              <div class="search-result-content">
+                <div class="search-result-title">${highlightMatch(file.name, query)}</div>
+                <div class="search-result-meta">${file.path} • ${file.boxName}</div>
+              </div>
+            </a>
+          `;
+        });
+      }
+
+      if (html === '') {
+        html = `<div class="global-search-empty">No results found for "${query}"</div>`;
+      }
+
+      resultsContainer.innerHTML = html;
+      selectedIndex = -1;
+    }
+
+    function highlightMatch(text, query) {
+      const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      return text.replace(regex, '<mark>$1</mark>');
+    }
+
+    function updateSelection() {
+      const items = resultsContainer.querySelectorAll('.search-result-item');
+      items.forEach((item, idx) => {
+        if (idx === selectedIndex) {
+          item.classList.add('selected');
+          item.scrollIntoView({ block: 'nearest' });
+        } else {
+          item.classList.remove('selected');
+        }
+      });
+    }
+
+    // Header input - focus opens modal
+    headerInput.addEventListener('focus', () => {
+      showSearchModal();
+    });
+
+    // Modal input - search on type
+    modalInput.addEventListener('input', (e) => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        const query = e.target.value;
+        if (query.length >= 2) {
+          performClientSideSearch(query);
+        } else if (query.length === 0) {
+          resultsContainer.innerHTML = '<div class="global-search-empty">Start typing to search...</div>';
+        } else {
+          resultsContainer.innerHTML = '<div class="global-search-empty">Type at least 2 characters...</div>';
+        }
+      }, 300);
+    });
+
+    // Keyboard navigation in modal
+    modalInput.addEventListener('keydown', (e) => {
+      const items = resultsContainer.querySelectorAll('.search-result-item');
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+        updateSelection();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, -1);
+        updateSelection();
+      } else if (e.key === 'Enter' && selectedIndex >= 0 && items[selectedIndex]) {
+        e.preventDefault();
+        items[selectedIndex].click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideSearchModal();
+      }
+    });
+
+    // Close handlers
+    closeBtn.addEventListener('click', hideSearchModal);
+    backdrop.addEventListener('click', hideSearchModal);
+
+    // Global keyboard shortcut: Ctrl+/ or Cmd+/
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === '/' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        showSearchModal();
+      }
+    });
+  }
+
   // Initialize on page load
   document.addEventListener('DOMContentLoaded', () => {
     initRecentFiles();
     trackFileView();
+    initGlobalSearch();
   });
 })();
