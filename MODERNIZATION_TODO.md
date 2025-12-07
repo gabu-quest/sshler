@@ -41,14 +41,14 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Makes sshler installable as a native-feeling app on desktop and mobile.
 **Files:** `manifest.json` (new), `static/sw.js` (new), `templates/base.html`
 
-### 4. Terminal Enhancements
-- [ ] Add terminal search (Ctrl+F in terminal)
-- [ ] Implement font size controls (+/- buttons)
-- [ ] Add terminal theme selector (Solarized, Dracula, Nord, etc.)
-- [ ] Add export terminal output to file button
-- [ ] Display copy/paste keyboard hints in terminal
-- [ ] Add font family selector
-- [ ] Persist terminal preferences in localStorage
+### 4. Terminal Enhancements ✅
+- [x] Add terminal search (Ctrl+F in terminal)
+- [x] Implement font size controls (+/- buttons)
+- [x] Add terminal theme selector (Solarized, Dracula, Nord, Monokai)
+- [x] Add export terminal output to file button
+- [ ] Display copy/paste keyboard hints in terminal - *Existing scroll mode indicator has hints*
+- [ ] Add font family selector - *Deferred*
+- [x] Persist terminal preferences in localStorage
 
 **Why:** Essential features for power users who spend lots of time in terminals.
 **Files:** `static/term.js`, `templates/term.html`
@@ -192,14 +192,15 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 3 (Light/Dark Theme, Accessibility, PWA Support)
+**Completed:** 4 (Light/Dark Theme, Accessibility, PWA Support, Terminal Enhancements)
 **In Progress:** 0
-**Remaining:** 11
+**Remaining:** 10
 
 ### Recently Completed:
 - ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
 - ✅ Feature #2: Accessibility Improvements (commit: 26d1ce6)
 - ✅ Feature #3: PWA Support (commit: 6c3d257)
+- ✅ Feature #4: Terminal Enhancements (commit: c9aa347)
 
 ---
 
