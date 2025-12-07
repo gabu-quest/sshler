@@ -216,7 +216,7 @@ Implementation roadmap for UX improvements and modernization features.
 - ✅ Feature #13: File Preview Improvements (commit: cd98bed)
 
 ### Phase 4: Mobile & Touch Optimization ✅ COMPLETE
-- ✅ Feature #14: Touch-Friendly Improvements (commit: TBD)
+- ✅ Feature #14: Touch-Friendly Improvements (commit: 887fe46)
 
 ---
 
