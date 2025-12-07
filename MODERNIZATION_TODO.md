@@ -123,17 +123,17 @@ Implementation roadmap for UX improvements and modernization features.
 **Why:** Find anything across all boxes quickly. Core search complete.
 **Files:** `static/base.js`, `webapp.py`, `templates/base.html`
 
-### 10. Session Persistence
-- [ ] Save current pane layout to localStorage
-- [ ] Save active sessions in each pane
-- [ ] Save terminal scroll position
-- [ ] Restore layout on page load
-- [ ] Add "Restore previous session" prompt
-- [ ] Save working directory per session
-- [ ] Add session snapshots (save/load named layouts)
+### 10. Session Persistence ✅
+- [x] Save current pane layout to localStorage
+- [x] Save active sessions in each pane
+- [ ] Save terminal scroll position - *Future enhancement*
+- [x] Restore layout on page load
+- [x] Add "Restore previous session" prompt
+- [x] Save working directory per session
+- [ ] Add session snapshots (save/load named layouts) - *Future enhancement*
 
-**Why:** Don't lose your workspace on browser refresh.
-**Files:** `static/multi-session.js`, `static/term.js`
+**Why:** Don't lose your workspace on browser refresh. Core functionality complete.
+**Files:** `static/multi-session.js`, `static/style.css`
 
 ### 11. Connection Status Indicators ✅
 - [x] Add connection status indicator in header
@@ -192,9 +192,9 @@ Implementation roadmap for UX improvements and modernization features.
 ## Implementation Status
 
 **Total Items:** 14 major features (80+ individual tasks)
-**Completed:** 11 (All of Phase 1, Phase 2, and 3 from Phase 3!)
+**Completed:** 12 (86%! - All of Phase 1, Phase 2, and 4 from Phase 3!)
 **In Progress:** 0
-**Remaining:** 3
+**Remaining:** 2
 
 ### Phase 1: Foundation & Core UX ✅ COMPLETE
 - ✅ Feature #1: Light/Dark Theme Toggle (commit: 69cfe96)
@@ -208,8 +208,9 @@ Implementation roadmap for UX improvements and modernization features.
 - ✅ Feature #7: Recent Files & Bookmarks (commit: c972ebb)
 - ✅ Feature #8: Command Palette (Cmd/Ctrl+K) (commit: e7c7d9d)
 
-### Phase 3: Advanced Features & Polish (In Progress - 3/5)
+### Phase 3: Advanced Features & Polish (80% Complete - 4/5)
 - ✅ Feature #9: Global Search (commit: a192deb)
+- ✅ Feature #10: Session Persistence (commit: 884ca17)
 - ✅ Feature #11: Connection Status Indicators (commit: 3876553)
 - ✅ Feature #12: Keyboard Shortcuts Overlay (commit: b166f0a)
 
