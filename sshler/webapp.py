@@ -315,12 +315,12 @@ async def _open_local_tmux(
                 target_dir = converted
         command.extend(["-c", target_dir])
 
-    # On Windows, we need to use winpty or conpty to provide a PTY for tmux
-    # For now, let's try using script to provide a PTY
+    # tmux requires a PTY to work properly. Use 'script' to provide one.
+    # This is necessary on both Windows and Linux for proper terminal I/O.
     if LOCAL_IS_WINDOWS:
         # Use 'script' command in WSL to create a PTY
         cmd_str = " ".join(f"'{arg}'" if " " in arg else arg for arg in command[2:])
-        script_command = ["wsl", "--", "script", "-qfc", cmd_str, "/dev/null"]
+        script_command = ["wsl", "--", "script", "-qefc", cmd_str, "/dev/null"]
         return await asyncio.create_subprocess_exec(
             *script_command,
             stdin=asyncio.subprocess.PIPE,
@@ -328,8 +328,15 @@ async def _open_local_tmux(
             stderr=asyncio.subprocess.PIPE,
         )
 
+    # On Linux, also use script to create a PTY
+    # -q: quiet (no start/done messages)
+    # -e: return exit code of child process
+    # -f: flush output immediately
+    # -c: run command directly
+    cmd_str = " ".join(shlex.quote(arg) for arg in command)
+    script_command = ["script", "-qefc", cmd_str, "/dev/null"]
     return await asyncio.create_subprocess_exec(
-        *command,
+        *script_command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
