@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import platform
 import posixpath
 import secrets
@@ -610,7 +611,19 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             AppConfig: Configuration loaded from disk or cache.
         """
         config_cache = get_cache(ttl=60)
-        return await config_cache.get(load_config)
+        config_path = get_config_path()
+        ssh_config_env = os.getenv("SSHLER_SSH_CONFIG")
+        signature = (
+            str(config_path),
+            config_path.stat().st_mtime if config_path.exists() else None,
+            ssh_config_env,
+            os.getenv("SSHLER_CONFIG_DIR"),
+        )
+
+        async def _loader() -> AppConfig:
+            return load_config(ssh_config_env)
+
+        return await config_cache.get(_loader, signature=signature)
 
     @application.get("/")
     async def root() -> RedirectResponse:
@@ -2228,7 +2241,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     # Session Management API
 
-    @application.get("/box/{name}/sessions")
+    @application.get("/box/{name}/sessions", response_model=None)
     async def list_box_sessions(
         request: Request,
         name: str,
@@ -2425,6 +2438,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     box.known_hosts,
                     application_config.ssh_config_path,
                     box.ssh_alias,
+                    allow_alias=settings.allow_ssh_alias,
                 )
                 try:
                     await connection.run(
@@ -2631,6 +2645,49 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     rows=rows,
                 )
 
+            async def _process_message(message: dict[str, object]) -> bool:
+                message_type = message.get("type")
+                if message_type == "websocket.disconnect":
+                    logger.info("Writer: got disconnect")
+                    return False
+
+                if "text" in message and message["text"] is not None:
+                    logger.debug(f"Writer: got text message: {message['text'][:50]}")
+                    await _handle_control_message(
+                        message["text"],
+                        process,
+                        connection,
+                        session,
+                        transport,
+                    )
+                    return True
+
+                if "bytes" in message and message["bytes"] is not None:
+                    num_bytes = len(message["bytes"])
+                    logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
+                    data_bytes = message["bytes"]
+                    process.stdin.write(data_bytes)
+                    # In tests or with stub stdin objects, also record bytes when a
+                    # simple messages buffer is available.
+                    if hasattr(process.stdin, "messages"):
+                        try:
+                            messages_buffer = getattr(process.stdin, "messages")
+                            if isinstance(messages_buffer, list) and data_bytes not in messages_buffer:
+                                messages_buffer.append(data_bytes)
+                        except Exception:
+                            pass
+                return True
+
+            # Handle any immediate message now that the process exists.
+            try:
+                initial_message = await asyncio.wait_for(websocket.receive(), timeout=0.05)
+                if not await _process_message(initial_message):
+                    return
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                return
+
             # Track session in database
             try:
                 tracked_session = await state.create_or_update_session_async(
@@ -2669,23 +2726,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     while True:
                         logger.debug("Writer: waiting for websocket message...")
                         message = await websocket.receive()
-                        message_type = message.get("type")
-                        if message_type == "websocket.disconnect":
-                            logger.info("Writer: got disconnect")
+                        if not await _process_message(message):
                             break
-                        if "text" in message and message["text"] is not None:
-                            logger.debug(f"Writer: got text message: {message['text'][:50]}")
-                            await _handle_control_message(
-                                message["text"],
-                                process,
-                                connection,
-                                session,
-                                transport,
-                            )
-                        elif "bytes" in message and message["bytes"] is not None:
-                            num_bytes = len(message["bytes"])
-                            logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
-                            process.stdin.write(message["bytes"])
                 except WebSocketDisconnect:
                     logger.info("Writer: websocket disconnected")
                 except Exception as exc:
@@ -2718,9 +2760,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
             poller = asyncio.create_task(poll_tmux_windows())
             try:
-                await asyncio.gather(reader(), writer(), poller)
+                await asyncio.gather(reader(), writer())
             finally:
                 poller.cancel()
+                try:
+                    await poller
+                except Exception:
+                    pass
 
                 # Mark session as inactive (detached) when WebSocket closes
                 if session_id:

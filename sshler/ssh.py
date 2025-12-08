@@ -180,15 +180,15 @@ async def sftp_list_directory(
         for filename in await sftp_client.listdir(path):
             try:
                 stats = await sftp_client.stat(f"{path.rstrip('/')}/{filename}")
-                entries.append(
-                    {
-                        "name": filename,
-                        "is_directory": (stats.permissions & 0o40000)
-                        == 0o40000,  # check the directory bit (s_ifdir)
-                        "size": stats.size,
-                        "modified": stats.mtime,
-                    }
-                )
+                entry = {
+                    "name": filename,
+                    "is_directory": (stats.permissions & 0o40000) == 0o40000,
+                    "size": stats.size,
+                }
+                modified = getattr(stats, "mtime", None)
+                if modified is not None:
+                    entry["modified"] = modified
+                entries.append(entry)
             except Exception:
                 pass
     finally:

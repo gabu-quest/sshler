@@ -9,6 +9,15 @@ import uvicorn
 
 from .webapp import ServerSettings, make_app
 
+_RELOAD_SETTINGS: ServerSettings | None = None
+
+
+def _reload_app():
+    """Factory used by uvicorn --reload to rebuild the app with stored settings."""
+    if _RELOAD_SETTINGS is None:
+        raise RuntimeError("Reload settings not initialised")
+    return make_app(_RELOAD_SETTINGS)
+
 
 # open the user's browser after uvicorn starts listening
 def _open_browser_later(application_url: str, delay: float = 0.8) -> None:
@@ -66,13 +75,25 @@ def serve(
     if settings.allow_origins:
         print(f"[sshler] Additional allowed origins: {', '.join(settings.allow_origins)}")
 
-    uvicorn.run(
-        fastapi_application,
-        host=host,
-        port=port,
-        reload=reload,
-        log_level=log_level,
-    )
+    if reload:
+        global _RELOAD_SETTINGS
+        _RELOAD_SETTINGS = settings
+        uvicorn.run(
+            "sshler.cli:_reload_app",
+            host=host,
+            port=port,
+            reload=True,
+            log_level=log_level,
+            factory=True,
+        )
+    else:
+        uvicorn.run(
+            fastapi_application,
+            host=host,
+            port=port,
+            reload=False,
+            log_level=log_level,
+        )
 
 
 def main() -> None:

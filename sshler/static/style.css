@@ -2606,11 +2606,15 @@ details[open] .favorite-toggle::after {
   .fs-modified {
     display: none;
   }
+  .fs-actions {
+    flex-wrap: wrap;
+  }
   .action-btn {
-    width: 100%;
+    flex: 1 1 48%;
+    min-width: 140px;
     justify-content: center;
-    min-height: 44px;
-    padding: 10px;
+    min-height: 38px;
+    padding: 8px 10px;
   }
 
   /* Terminal */
@@ -2619,6 +2623,8 @@ details[open] .favorite-toggle::after {
     grid-template-rows: auto auto auto auto;
     padding: var(--space-md);
     gap: var(--space-sm);
+    border-width: 1px;
+    box-shadow: var(--shadow);
   }
   .term-banner__host {
     grid-column: 1;
@@ -2627,7 +2633,7 @@ details[open] .favorite-toggle::after {
   .term-banner__primary {
     grid-column: 1;
     grid-row: 2;
-    font-size: var(--text-xl);
+    font-size: var(--text-lg);
   }
   .term-banner__meta {
     grid-column: 1;
@@ -2646,21 +2652,27 @@ details[open] .favorite-toggle::after {
 
   .term-shell {
     flex-direction: column;
+    gap: var(--space-sm);
   }
   .term-toolbar {
     min-width: auto;
     flex-direction: row;
     flex-wrap: wrap;
+    gap: var(--space-sm);
     padding: var(--space-sm);
+    border-radius: var(--radius);
   }
   .term-toolbar-group {
-    flex: 1;
+    flex: 1 1 48%;
     min-width: 140px;
   }
   .term-toolbar .btn {
     font-size: var(--text-xs);
-    min-height: 44px;
-    padding: 10px 12px;
+    min-height: 38px;
+    padding: 8px 10px;
+  }
+  .term-wrapper {
+    width: 100%;
   }
 
   /* Touch optimizations */
@@ -2730,5 +2742,12 @@ details[open] .favorite-toggle::after {
   }
   .term-toolbar-group {
     min-width: auto;
+    width: 100%;
+  }
+  .term-banner {
+    padding: var(--space-sm);
+  }
+  .term-banner__primary {
+    font-size: var(--text-base);
   }
 }

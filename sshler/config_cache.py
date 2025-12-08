@@ -25,21 +25,24 @@ class ConfigCache:
         self._cached_at: float | None = None
         self._ttl = ttl
         self._load_func = None
+        self._signature: object | None = None
 
-    async def get(self, load_func) -> AppConfig:
+    async def get(self, load_func, *, signature: object | None = None) -> AppConfig:
         """Get cached config or reload if expired.
 
         Args:
             load_func: Function to load configuration
+            signature: Optional value used to invalidate the cache when it changes
 
         Returns:
             Cached or freshly loaded AppConfig
         """
         async with self._lock:
             now = time.time()
+            signature_changed = signature is not None and signature != self._signature
 
             # Check if cache is still valid
-            if self._cache and self._cached_at:
+            if self._cache and self._cached_at and not signature_changed:
                 if now - self._cached_at < self._ttl:
                     return self._cache
 
@@ -51,17 +54,19 @@ class ConfigCache:
 
             self._cached_at = now
             self._load_func = load_func
+            self._signature = signature
             return self._cache
 
     def invalidate(self):
         """Force cache refresh on next request."""
         self._cache = None
         self._cached_at = None
+        self._signature = None
 
     async def refresh(self):
         """Manually refresh the cache."""
         if self._load_func:
-            await self.get(self._load_func)
+            await self.get(self._load_func, signature=self._signature)
 
 
 # Global cache instance

@@ -81,6 +81,13 @@ uv run ruff check .
 uv run pytest
 ```
 
+E2E smoke test (Playwright):
+
+```bash
+uv run playwright install chromium   # one-time browser download
+uv run pytest tests/e2e
+```
+
 ## Run
 
 ```bash
