@@ -762,6 +762,10 @@
             renderTabs(message.windows);
             return;
           }
+          if (message.op === "ping") {
+            // Ignore keepalive pings from server
+            return;
+          }
         } catch (err) {
           term.write(event.data);
           return;

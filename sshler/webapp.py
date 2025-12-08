@@ -2768,13 +2768,31 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 except Exception:
                     pass
 
+            async def websocket_pinger() -> None:
+                """Send WebSocket pings to keep connection alive through proxies/NAT."""
+                try:
+                    while True:
+                        await asyncio.sleep(30)  # Ping every 30 seconds
+                        try:
+                            await websocket.send_text(json.dumps({"op": "ping"}))
+                            logger.debug("Sent WebSocket ping")
+                        except Exception as exc:
+                            logger.warning(f"Failed to send WebSocket ping: {exc}")
+                            break
+                except Exception:
+                    pass
+
             poller = asyncio.create_task(poll_tmux_windows())
+            pinger = asyncio.create_task(websocket_pinger())
             try:
                 await asyncio.gather(reader(), writer())
             finally:
                 poller.cancel()
+                pinger.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await poller
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await pinger
 
                 # Mark session as inactive (detached) when WebSocket closes
                 if session_id:

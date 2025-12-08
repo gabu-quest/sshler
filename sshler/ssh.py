@@ -102,6 +102,8 @@ async def connect(
             client_keys=[connect_keyfile] if connect_keyfile else None,
             known_hosts=known_hosts_path,
             config=[ssh_config_path] if ssh_config_path else None,
+            keepalive_interval=30,  # Send keepalive every 30 seconds
+            keepalive_count_max=3,  # Give up after 3 failed keepalives (90s total)
         )
     except (OSError, asyncssh.Error) as exc:
         raise SSHError(str(exc)) from exc
