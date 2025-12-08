@@ -284,6 +284,32 @@
       });
     }
 
+    // Fullscreen toggle
+    const fullscreenBtn = document.getElementById("term-fullscreen-btn");
+    const termPage = document.querySelector(".term-page");
+    const topbar = document.querySelector(".topbar");
+    if (fullscreenBtn && termPage) {
+      fullscreenBtn.addEventListener("click", () => {
+        const isActive = termPage.classList.toggle("is-fullscreen");
+        document.body.classList.toggle("term-fullscreen", isActive);
+        if (topbar) {
+          topbar.classList.toggle("term-fullscreen-hide", isActive);
+        }
+        fullscreenBtn.textContent = isActive ? "Close Fullscreen" : "Fullscreen";
+        if (toolbar && isActive) {
+          toolbar.classList.add("is-open");
+          toolbarToggle?.setAttribute("aria-expanded", "true");
+        }
+        if (!isActive && toolbar) {
+          toolbar.classList.remove("is-open");
+          toolbarToggle?.setAttribute("aria-expanded", "false");
+        }
+        setTimeout(() => {
+          window.fitAddonInstance?.fit();
+        }, 50);
+      });
+    }
+
     const transport = root.dataset.transport || "ssh";
     const isLocal = transport === "local";
 
