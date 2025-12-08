@@ -281,6 +281,7 @@
       toolbarToggle.addEventListener("click", () => {
         const isOpen = toolbar.classList.toggle("is-open");
         toolbarToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        window.fitAddonInstance?.fit();
       });
     }
 
@@ -514,6 +515,8 @@
         requestAnimationFrame(() => {
           // Now the layout should be fully calculated
           fitAddon.fit();
+          window.addEventListener("resize", () => fitAddon.fit());
+          window.addEventListener("resize", () => fitAddon.fit());
 
           const url = new URL(window.location.href);
           const host = url.searchParams.get("host") || root.dataset.host || "";
@@ -771,6 +774,9 @@
 
     ws.onerror = (error) => {
       console.error("WebSocket error:", error);
+      if (window.showToast) {
+        window.showToast("Terminal connection error", "error");
+      }
     };
 
     ws.onclose = (event) => {
@@ -782,9 +788,15 @@
       if (wasClean || code === 1000 || code === 1001) {
         intentionalDisconnect = true;
         term.write("\r\n\u001b[33m[Connection closed]\u001b[0m\r\n");
+        if (window.showToast) {
+          window.showToast("Terminal disconnected", "warning");
+        }
       } else {
         // Unexpected disconnect, try to reconnect
         term.write(`\r\n\u001b[31m[Connection lost unexpectedly (code: ${code})]\u001b[0m\r\n`);
+        if (window.showToast) {
+          window.showToast("Terminal connection lost, retrying...", "warning");
+        }
         attemptReconnect();
       }
       restoreTitle();

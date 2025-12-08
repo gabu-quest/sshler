@@ -1071,6 +1071,22 @@ details[open] .favorite-toggle::after {
   background: var(--bg);
   padding: var(--space-sm);
 }
+.term-page.is-fullscreen .term-shell {
+  height: calc(100vh - 100px);
+  max-height: calc(100vh - 100px);
+}
+.term-page.is-fullscreen .term-wrapper,
+.term-page.is-fullscreen .term-panes-container,
+.term-page.is-fullscreen #term {
+  min-height: calc(100vh - 140px);
+  max-height: calc(100vh - 140px);
+  height: calc(100vh - 140px);
+}
+.term-page.is-fullscreen .xterm,
+.term-page.is-fullscreen .xterm-viewport,
+.term-page.is-fullscreen .xterm-screen {
+  height: 100% !important;
+}
 .term-header {
   display: flex;
   align-items: stretch;
