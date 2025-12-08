@@ -297,17 +297,29 @@
           topbar.classList.toggle("term-fullscreen-hide", isActive);
         }
         fullscreenBtn.textContent = isActive ? "Close Fullscreen" : "Fullscreen";
-        if (toolbar && isActive) {
-          toolbar.classList.add("is-open");
-          toolbarToggle?.setAttribute("aria-expanded", "true");
+
+        // On mobile, hide toolbar in fullscreen mode
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile) {
+          if (toolbar && isActive) {
+            toolbar.classList.remove("is-open");
+            toolbarToggle?.setAttribute("aria-expanded", "false");
+          }
+        } else {
+          if (toolbar && isActive) {
+            toolbar.classList.add("is-open");
+            toolbarToggle?.setAttribute("aria-expanded", "true");
+          }
+          if (!isActive && toolbar) {
+            toolbar.classList.remove("is-open");
+            toolbarToggle?.setAttribute("aria-expanded", "false");
+          }
         }
-        if (!isActive && toolbar) {
-          toolbar.classList.remove("is-open");
-          toolbarToggle?.setAttribute("aria-expanded", "false");
-        }
+
+        // Single refit with minimal delay - let throttling handle the rest
         setTimeout(() => {
           window.fitAddonInstance?.fit();
-        }, 50);
+        }, 100);
       });
     }
 
@@ -516,7 +528,6 @@
           // Now the layout should be fully calculated
           fitAddon.fit();
           window.addEventListener("resize", () => fitAddon.fit());
-          window.addEventListener("resize", () => fitAddon.fit());
 
           const url = new URL(window.location.href);
           const host = url.searchParams.get("host") || root.dataset.host || "";
@@ -629,8 +640,12 @@
       function performResize() {
         // Use requestAnimationFrame to ensure DOM is updated before fitting
         requestAnimationFrame(() => {
+          const oldCols = term.cols;
+          const oldRows = term.rows;
           fitAddon.fit();
-          if (ws.readyState === WebSocket.OPEN) {
+
+          // Only send resize if dimensions actually changed
+          if (ws.readyState === WebSocket.OPEN && (term.cols !== oldCols || term.rows !== oldRows)) {
             ws.send(
               JSON.stringify({ op: "resize", cols: term.cols, rows: term.rows }),
             );
@@ -836,9 +851,43 @@
 
     window.addEventListener("resize", sendResize);
     window.addEventListener("focus", () => term.focus());
+
+    // Mobile orientation change - handle rotation smoothly
+    window.addEventListener("orientationchange", () => {
+      setTimeout(() => {
+        sendResize();
+      }, 200); // Longer delay for orientation changes
+    });
+
+    // Virtual keyboard compensation for mobile
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", () => {
+        // Virtual keyboard opened/closed - refit terminal if needed
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile) {
+          setTimeout(() => {
+            sendResize();
+          }, 100);
+        }
+      });
+    }
+
+    // On visibilitychange, only resize if dimensions actually changed
+    // This prevents excessive resizes on mobile when switching apps
+    let lastKnownCols = term.cols;
+    let lastKnownRows = term.rows;
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
-        sendResize();
+        // Check if terminal dimensions actually changed before resizing
+        setTimeout(() => {
+          const currentCols = term.cols;
+          const currentRows = term.rows;
+          if (currentCols !== lastKnownCols || currentRows !== lastKnownRows) {
+            sendResize();
+            lastKnownCols = currentCols;
+            lastKnownRows = currentRows;
+          }
+        }, 150); // Small delay to let browser settle
       }
     });
 

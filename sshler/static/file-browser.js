@@ -791,7 +791,7 @@
         });
         row.dispatchEvent(contextEvent);
       }, longPressDuration);
-    });
+    }, { passive: true });
 
     browserContainer.addEventListener('touchmove', (e) => {
       // Cancel long-press if finger moves too much
@@ -800,26 +800,26 @@
         const deltaX = Math.abs(touch.clientX - touchStartX);
         const deltaY = Math.abs(touch.clientY - touchStartY);
 
-        if (deltaX > 10 || deltaY > 10) {
+        if (deltaX > 15 || deltaY > 15) {
           clearTimeout(longPressTimer);
           longPressTimer = null;
         }
       }
-    });
+    }, { passive: true });
 
     browserContainer.addEventListener('touchend', () => {
       if (longPressTimer) {
         clearTimeout(longPressTimer);
         longPressTimer = null;
       }
-    });
+    }, { passive: true });
 
     browserContainer.addEventListener('touchcancel', () => {
       if (longPressTimer) {
         clearTimeout(longPressTimer);
         longPressTimer = null;
       }
-    });
+    }, { passive: true });
   }
 
   function initPullToRefresh() {

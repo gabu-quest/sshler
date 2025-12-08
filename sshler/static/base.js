@@ -476,9 +476,10 @@
         console.log('[PWA] Service Worker registered:', registration.scope);
 
         // Check for updates periodically
+        // Use longer interval to avoid issues on mobile/flaky connections
         setInterval(() => {
           registration.update();
-        }, 60000); // Check every minute
+        }, 5 * 60000); // Check every 5 minutes
 
         // Handle updates
         registration.addEventListener('updatefound', () => {
@@ -497,14 +498,8 @@
         console.error('[PWA] Service Worker registration failed:', error);
       });
 
-      // Reload page when new service worker takes control
-      let refreshing = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (!refreshing) {
-          refreshing = true;
-          window.location.reload();
-        }
-      });
+      // Note: We rely on the user confirming updates via the 'updatefound' prompt above.
+      // No automatic reload on controllerchange to avoid unwanted refreshes on flaky connections.
     }
   });
 
