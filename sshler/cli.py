@@ -4,19 +4,30 @@ import argparse
 import secrets
 import threading
 import webbrowser
+import json
+import os
 
 import uvicorn
 
 from .webapp import ServerSettings, make_app
 
-_RELOAD_SETTINGS: ServerSettings | None = None
+_RELOAD_ENV_KEY = "SSHLER_RELOAD_SETTINGS"
 
 
 def _reload_app():
     """Factory used by uvicorn --reload to rebuild the app with stored settings."""
-    if _RELOAD_SETTINGS is None:
+    raw = os.environ.get(_RELOAD_ENV_KEY)
+    if not raw:
         raise RuntimeError("Reload settings not initialised")
-    return make_app(_RELOAD_SETTINGS)
+    payload = json.loads(raw)
+    settings = ServerSettings(
+        allow_origins=payload.get("allow_origins") or [],
+        csrf_token=payload.get("csrf_token"),
+        max_upload_bytes=payload.get("max_upload_bytes", 50 * 1024 * 1024),
+        allow_ssh_alias=payload.get("allow_ssh_alias", True),
+        basic_auth=tuple(payload["basic_auth"]) if payload.get("basic_auth") else None,
+    )
+    return make_app(settings)
 
 
 # open the user's browser after uvicorn starts listening
@@ -76,8 +87,14 @@ def serve(
         print(f"[sshler] Additional allowed origins: {', '.join(settings.allow_origins)}")
 
     if reload:
-        global _RELOAD_SETTINGS
-        _RELOAD_SETTINGS = settings
+        payload = {
+            "allow_origins": settings.allow_origins,
+            "csrf_token": settings.csrf_token,
+            "max_upload_bytes": settings.max_upload_bytes,
+            "allow_ssh_alias": settings.allow_ssh_alias,
+            "basic_auth": list(settings.basic_auth) if settings.basic_auth else None,
+        }
+        os.environ[_RELOAD_ENV_KEY] = json.dumps(payload)
         uvicorn.run(
             "sshler.cli:_reload_app",
             host=host,
