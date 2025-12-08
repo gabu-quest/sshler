@@ -274,6 +274,16 @@
       return;
     }
 
+    // Mobile toolbar toggle
+    const toolbar = document.getElementById("term-toolbar");
+    const toolbarToggle = document.getElementById("term-toolbar-toggle");
+    if (toolbar && toolbarToggle) {
+      toolbarToggle.addEventListener("click", () => {
+        const isOpen = toolbar.classList.toggle("is-open");
+        toolbarToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      });
+    }
+
     const transport = root.dataset.transport || "ssh";
     const isLocal = transport === "local";
 

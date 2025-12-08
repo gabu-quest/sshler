@@ -1162,8 +1162,46 @@ details[open] .favorite-toggle::after {
   justify-content: flex-start;
   font-size: var(--text-xs);
 }
-.term-wrapper { flex: 1; display: flex; min-width: 0; min-height: 0; }
-.term-wrapper #term { flex: 1; border: 1px solid #2a2f3f; border-radius: 8px; padding: 0; height: 100%; }
+.term-toolbar-toggle {
+  display: none;
+}
+.term-wrapper {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+.term-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+.term-panes-container {
+  width: 100%;
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.term-wrapper #term {
+  flex: 1;
+  border: 1px solid #2a2f3f;
+  border-radius: 8px;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+.xterm {
+  width: 100% !important;
+  max-width: 100%;
+}
 .file-panel { flex: 1; border: 1px solid #2a2f3f; border-radius: 8px; background: #11141f; padding: 10px; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .file-panel.hidden { display: none; }
 .file-browser-content { flex: 1; overflow: auto; min-height: 0; }
@@ -2613,31 +2651,34 @@ details[open] .favorite-toggle::after {
     flex: 1 1 48%;
     min-width: 140px;
     justify-content: center;
-    min-height: 38px;
-    padding: 8px 10px;
+    min-height: 34px;
+    padding: 6px 8px;
+    font-size: var(--text-xs);
   }
 
   /* Terminal */
   .term-banner {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto auto;
-    padding: var(--space-md);
-    gap: var(--space-sm);
+    padding: var(--space-sm);
+    gap: var(--space-xs);
     border-width: 1px;
-    box-shadow: var(--shadow);
+    box-shadow: none;
   }
   .term-banner__host {
     grid-column: 1;
     grid-row: 1;
+    font-size: var(--text-xs);
   }
   .term-banner__primary {
     grid-column: 1;
     grid-row: 2;
-    font-size: var(--text-lg);
+    font-size: var(--text-base);
   }
   .term-banner__meta {
     grid-column: 1;
     grid-row: 3;
+    font-size: var(--text-xs);
   }
   .term-banner__path {
     grid-column: 1;
@@ -2648,31 +2689,70 @@ details[open] .favorite-toggle::after {
     grid-column: 1;
     grid-row: 1;
     justify-self: end;
+    display: flex;
+    gap: var(--space-xs);
   }
 
   .term-shell {
     flex-direction: column;
-    gap: var(--space-sm);
+    gap: var(--space-xs);
+  }
+  .term-toolbar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--btn);
+    color: var(--fg);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    width: fit-content;
   }
   .term-toolbar {
+    display: none; /* collapsed by default on mobile */
     min-width: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: var(--space-sm);
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-xs);
     padding: var(--space-sm);
     border-radius: var(--radius);
+  }
+  .term-toolbar.is-open {
+    display: grid;
   }
   .term-toolbar-group {
     flex: 1 1 48%;
     min-width: 140px;
+    gap: var(--space-xs);
+  }
+  .term-toolbar-group-title {
+    display: none;
   }
   .term-toolbar .btn {
     font-size: var(--text-xs);
-    min-height: 38px;
-    padding: 8px 10px;
+    min-height: 32px;
+    padding: 6px 8px;
+    justify-content: center;
   }
   .term-wrapper {
     width: 100%;
+    min-height: 60vh;
+  }
+
+  /* Toggle for toolbar */
+  .term-toolbar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--btn);
+    color: var(--fg);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    width: fit-content;
   }
 
   /* Touch optimizations */
@@ -2746,6 +2826,8 @@ details[open] .favorite-toggle::after {
   }
   .term-banner {
     padding: var(--space-sm);
+    border-width: 1px;
+    box-shadow: none;
   }
   .term-banner__primary {
     font-size: var(--text-base);
