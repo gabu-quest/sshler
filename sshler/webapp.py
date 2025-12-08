@@ -2763,10 +2763,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 await asyncio.gather(reader(), writer())
             finally:
                 poller.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await poller
-                except Exception:
-                    pass
 
                 # Mark session as inactive (detached) when WebSocket closes
                 if session_id:
