@@ -2951,11 +2951,19 @@ async def _handle_control_message(
     if operation == "resize":
         cols = int(message.get("cols", 0) or 0)
         rows = int(message.get("rows", 0) or 0)
-        if cols > 0 and rows > 0 and transport != "local":
-            try:
-                process.set_pty_size(cols, rows)
-            except Exception:
-                pass
+        if cols > 0 and rows > 0:
+            if transport == "local":
+                # Resize local tmux client
+                try:
+                    await _run_local_tmux_command(["refresh-client", "-C", f"{cols}x{rows}"])
+                except Exception:
+                    pass
+            else:
+                # Resize SSH PTY
+                try:
+                    process.set_pty_size(cols, rows)
+                except Exception:
+                    pass
     elif operation == "select-window":
         target = message.get("target")
         if target is not None:

@@ -852,6 +852,26 @@
     window.addEventListener("resize", sendResize);
     window.addEventListener("focus", () => term.focus());
 
+    // Mobile orientation change - handle rotation smoothly
+    window.addEventListener("orientationchange", () => {
+      setTimeout(() => {
+        sendResize();
+      }, 200); // Longer delay for orientation changes
+    });
+
+    // Virtual keyboard compensation for mobile
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", () => {
+        // Virtual keyboard opened/closed - refit terminal if needed
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile) {
+          setTimeout(() => {
+            sendResize();
+          }, 100);
+        }
+      });
+    }
+
     // On visibilitychange, only resize if dimensions actually changed
     // This prevents excessive resizes on mobile when switching apps
     let lastKnownCols = term.cols;

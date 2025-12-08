@@ -2808,14 +2808,44 @@ details[open] .favorite-toggle::after {
   a,
   input[type="submit"],
   input[type="button"],
-  .clickable {
+  .clickable,
+  .btn,
+  .term-toolbar button,
+  .topbar .link {
     touch-action: manipulation; /* Prevents double-tap zoom */
+    -webkit-tap-highlight-color: rgba(51, 93, 255, 0.2); /* Visual feedback */
+  }
+
+  /* Mobile input optimizations */
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+    -webkit-appearance: none;
+    appearance: none;
   }
 
   /* Larger tap areas for links */
   a {
     padding: 4px;
     margin: -4px;
+  }
+
+  /* User selection */
+  .btn,
+  .topbar,
+  .term-banner,
+  .term-toolbar {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .terminal,
+  .xterm,
+  pre,
+  code {
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   /* Grid layout */
