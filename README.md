@@ -46,6 +46,11 @@ sshler is a lightweight, local-only web UI that lets you browse remote files ove
 - **Long-Press Context Menu** - Long-press files for quick actions (500ms)
 - **Pull-to-Refresh** - Pull down to reload the current directory
 - **Responsive Design** - Optimized layouts for tablets and phones
+- **Virtual Keyboard Support** - Terminal automatically adjusts when mobile keyboard appears
+- **Orientation Change** - Smooth terminal resize when rotating device
+- **iOS Input Optimization** - 16px font size prevents auto-zoom on focus
+- **Passive Touch Events** - Smooth scrolling with no jank
+- **Mobile Fullscreen** - Minimal UI in fullscreen for maximum typing space
 
 **♿ Accessibility**
 - **WCAG 2.1 AA Compliant** - Semantic HTML, ARIA labels, keyboard navigation
@@ -269,6 +274,11 @@ sshler はローカル専用の軽量 Web UI で、リモートファイルを S
 - **ロングプレスコンテキストメニュー** - ファイルを長押し（500ms）でクイックアクション
 - **プルトゥリフレッシュ** - 下に引っ張って現在のディレクトリをリロード
 - **レスポンシブデザイン** - タブレットやスマートフォン向けに最適化されたレイアウト
+- **仮想キーボード対応** - モバイルキーボード表示時にターミナルが自動調整
+- **画面回転対応** - デバイス回転時にターミナルがスムーズにリサイズ
+- **iOS 入力最適化** - 16px フォントサイズでフォーカス時の自動ズームを防止
+- **パッシブタッチイベント** - スクロールがスムーズでジャンクなし
+- **モバイルフルスクリーン** - フルスクリーン時は最小限の UI で最大のタイピングスペース
 
 **♿ アクセシビリティ**
 - **WCAG 2.1 AA 準拠** - セマンティック HTML、ARIA ラベル、キーボードナビゲーション

@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import contextlib
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -406,8 +407,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     settings = settings or ServerSettings()
 
+    # Application lifespan handler
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Manage application lifecycle: startup and shutdown."""
+        # Startup: Initialize SSH connection pool
+        await initialize_pool()
+        app.state.ssh_pool = get_pool()
+        yield
+        # Shutdown: Cleanup SSH connection pool
+        await shutdown_pool()
+
     # Disable automatic /docs and /redoc endpoints
-    application = FastAPI(title="sshler", version="0.1.0", docs_url=None, redoc_url=None)
+    application = FastAPI(
+        title="sshler", version="0.1.0", docs_url=None, redoc_url=None, lifespan=lifespan
+    )
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     app_version = _compute_app_version()
@@ -2833,20 +2847,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     connection.close()
             except Exception:
                 pass
-
-    # Application lifecycle events
-    @application.on_event("startup")
-    async def startup_event():
-        """Initialize services on application startup."""
-        # Initialize SSH connection pool
-        await initialize_pool()
-        application.state.ssh_pool = get_pool()
-
-    @application.on_event("shutdown")
-    async def shutdown_event():
-        """Cleanup services on application shutdown."""
-        # Shutdown SSH connection pool
-        await shutdown_pool()
 
     return application
 
