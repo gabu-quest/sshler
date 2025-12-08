@@ -498,21 +498,8 @@
         console.error('[PWA] Service Worker registration failed:', error);
       });
 
-      // Reload page when new service worker takes control
-      // Add delay to prevent rapid refreshes on flaky mobile connections
-      let refreshing = false;
-      let lastRefreshTime = 0;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        const now = Date.now();
-        const timeSinceLastRefresh = now - lastRefreshTime;
-
-        // Don't refresh if we just refreshed within the last 30 seconds
-        if (!refreshing && timeSinceLastRefresh > 30000) {
-          refreshing = true;
-          lastRefreshTime = now;
-          window.location.reload();
-        }
-      });
+      // Note: We rely on the user confirming updates via the 'updatefound' prompt above.
+      // No automatic reload on controllerchange to avoid unwanted refreshes on flaky connections.
     }
   });
 
