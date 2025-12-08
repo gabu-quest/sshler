@@ -9,6 +9,7 @@ import posixpath
 import secrets
 import shlex
 import subprocess
+import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
