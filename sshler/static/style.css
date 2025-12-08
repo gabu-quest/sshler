@@ -1070,17 +1070,19 @@ details[open] .favorite-toggle::after {
   z-index: 3000;
   background: var(--bg);
   padding: var(--space-sm);
+  /* Use custom property for dynamic height calculation */
+  --fullscreen-header-height: 140px;
 }
 .term-page.is-fullscreen .term-shell {
-  height: calc(100vh - 100px);
-  max-height: calc(100vh - 100px);
+  height: calc(100vh - var(--fullscreen-header-height));
+  max-height: calc(100vh - var(--fullscreen-header-height));
 }
 .term-page.is-fullscreen .term-wrapper,
 .term-page.is-fullscreen .term-panes-container,
 .term-page.is-fullscreen #term {
-  min-height: calc(100vh - 140px);
-  max-height: calc(100vh - 140px);
-  height: calc(100vh - 140px);
+  min-height: calc(100vh - var(--fullscreen-header-height) - 40px);
+  max-height: calc(100vh - var(--fullscreen-header-height) - 40px);
+  height: calc(100vh - var(--fullscreen-header-height) - 40px);
 }
 .term-page.is-fullscreen .xterm,
 .term-page.is-fullscreen .xterm-viewport,
@@ -2843,6 +2845,55 @@ details[open] .favorite-toggle::after {
   .toast {
     min-width: auto;
     width: 100%;
+  }
+
+  /* Mobile fullscreen optimizations */
+  .term-page.is-fullscreen {
+    padding: 0;
+    /* Reduce header height on mobile */
+    --fullscreen-header-height: 60px;
+  }
+  .term-page.is-fullscreen .term-banner {
+    padding: var(--space-xs);
+    gap: 4px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg);
+    box-shadow: none;
+  }
+  .term-page.is-fullscreen .term-banner__host,
+  .term-page.is-fullscreen .term-banner__path,
+  .term-page.is-fullscreen .term-banner__meta {
+    display: none;
+  }
+  .term-page.is-fullscreen .term-banner__primary {
+    font-size: var(--text-sm);
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .term-page.is-fullscreen .term-banner__actions {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .term-page.is-fullscreen .term-shell {
+    /* Account for minimal header on mobile */
+    height: calc(100vh - 60px);
+    max-height: calc(100vh - 60px);
+  }
+  .term-page.is-fullscreen .term-wrapper,
+  .term-page.is-fullscreen .term-panes-container,
+  .term-page.is-fullscreen #term {
+    min-height: calc(100vh - 60px);
+    max-height: calc(100vh - 60px);
+    height: calc(100vh - 60px);
+  }
+  .term-page.is-fullscreen .term-toolbar-toggle {
+    display: none;
+  }
+  .term-page.is-fullscreen .term-toolbar {
+    display: none !important;
   }
 }
 

@@ -297,17 +297,37 @@
           topbar.classList.toggle("term-fullscreen-hide", isActive);
         }
         fullscreenBtn.textContent = isActive ? "Close Fullscreen" : "Fullscreen";
-        if (toolbar && isActive) {
-          toolbar.classList.add("is-open");
-          toolbarToggle?.setAttribute("aria-expanded", "true");
+
+        // On mobile, hide toolbar in fullscreen mode
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile) {
+          if (toolbar && isActive) {
+            toolbar.classList.remove("is-open");
+            toolbarToggle?.setAttribute("aria-expanded", "false");
+          }
+        } else {
+          if (toolbar && isActive) {
+            toolbar.classList.add("is-open");
+            toolbarToggle?.setAttribute("aria-expanded", "true");
+          }
+          if (!isActive && toolbar) {
+            toolbar.classList.remove("is-open");
+            toolbarToggle?.setAttribute("aria-expanded", "false");
+          }
         }
-        if (!isActive && toolbar) {
-          toolbar.classList.remove("is-open");
-          toolbarToggle?.setAttribute("aria-expanded", "false");
-        }
+
+        // Use longer delay on mobile for browser UI to settle
+        const refitDelay = isMobile ? 200 : 50;
         setTimeout(() => {
           window.fitAddonInstance?.fit();
-        }, 50);
+        }, refitDelay);
+
+        // On mobile, refit again after a longer delay to handle address bar changes
+        if (isMobile) {
+          setTimeout(() => {
+            window.fitAddonInstance?.fit();
+          }, 500);
+        }
       });
     }
 
