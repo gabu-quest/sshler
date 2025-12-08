@@ -2744,13 +2744,16 @@ details[open] .favorite-toggle::after {
   .term-wrapper {
     width: 100%;
     min-height: 70vh;
-    overflow: hidden;
+    max-height: 80vh;
+    overflow: auto;
   }
   .term-panes-container {
     min-height: 70vh;
+    max-height: 80vh;
   }
   #term {
     min-height: 70vh;
+    max-height: 80vh;
   }
 
   /* Toggle for toolbar */
