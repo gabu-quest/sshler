@@ -10,6 +10,7 @@ import secrets
 import shlex
 import subprocess
 import contextlib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -2545,49 +2546,57 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         """
 
         settings: ServerSettings = websocket.app.state.settings  # type: ignore[attr-defined]
-
-        if settings.basic_auth_header:
-            auth_header = websocket.headers.get("authorization")
-            if auth_header != settings.basic_auth_header:
-                await websocket.close(code=4401, reason="Unauthorized")
-                return
-
-        token_param = websocket.query_params.get("token")
-        if settings.csrf_token and token_param != settings.csrf_token:
-            await websocket.close(code=4403, reason="Invalid token")
-            return
-
-        await websocket.accept()
-        application_config = load_config()
-        box = find_box(application_config, host)
-        if not box:
-            await websocket.close()
-            return
-
-        transport = getattr(box, "transport", "ssh")
-        normalized_directory = (
-            _normalize_local_path(directory)
-            if transport == "local"
-            else _normalize_directory_path(directory)
-        )
-
-        # Set up logging
-        import logging
         logger = logging.getLogger("sshler.webapp")
 
-        # Configure file logging if not already configured
-        if not logger.handlers:
-            logger.setLevel(logging.DEBUG)
-            file_handler = logging.FileHandler("debug.log")
-            file_handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-
-        connection: asyncssh.SSHClientConnection | None = None
-        process = None
-
         try:
+            if settings.basic_auth_header:
+                auth_header = websocket.headers.get("authorization")
+                if auth_header != settings.basic_auth_header:
+                    await websocket.close(code=4401, reason="Unauthorized")
+                    return
+
+            token_param = websocket.query_params.get("token")
+            if settings.csrf_token and token_param != settings.csrf_token:
+                await websocket.close(code=4403, reason="Invalid token")
+                return
+
+            await websocket.accept()
+            application_config = load_config()
+            box = find_box(application_config, host)
+            if not box:
+                await websocket.close()
+                return
+
+            transport = getattr(box, "transport", "ssh")
+            normalized_directory = (
+                _normalize_local_path(directory)
+                if transport == "local"
+                else _normalize_directory_path(directory)
+            )
+
+            logger.info(
+                "Terminal websocket connected",
+                extra={
+                    "box": box.name,
+                    "transport": transport,
+                    "dir": normalized_directory,
+                    "session": session,
+                    "client": websocket.client.host if websocket.client else None,  # type: ignore[attr-defined]
+                },
+            )
+
+            # Configure file logging if not already configured
+            if not logger.handlers:
+                logger.setLevel(logging.DEBUG)
+                file_handler = logging.FileHandler("debug.log")
+                file_handler.setLevel(logging.DEBUG)
+                formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                file_handler.setFormatter(formatter)
+                logger.addHandler(file_handler)
+
+            connection: asyncssh.SSHClientConnection | None = None
+            process = None
+
             if transport == "local":
                 try:
                     is_directory = await _local_is_directory(normalized_directory)
@@ -2876,8 +2885,12 @@ async def _read_file_bytes(
     finally:
         try:
             await sftp_client.exit()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception(f"terminal_socket error for host={host}", exc_info=exc)
+            try:
+                await websocket.close(code=1011, reason="Internal error")
+            except Exception:
+                pass
     too_large = len(data) > limit
     if too_large:
         return b"", True
