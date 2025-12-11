@@ -123,30 +123,30 @@
   - **Property 14: File search functionality**
   - **Validates: Requirements 4.5**
 
-- [-] 5. Implement terminal interface and WebSocket integration
-- [ ] 5.1 Create terminal component with xterm.js integration
+- [x] 5. Implement terminal interface and WebSocket integration
+- [x] 5.1 Create terminal component with xterm.js integration
   - Build TerminalView component with xterm.js
   - Implement WebSocket connection management
   - Add terminal session creation and management
   - Configure terminal themes and font settings
   - _Requirements: 5.1_
 
-- [ ] 5.2 Write property test for terminal WebSocket connection
+- [x] 5.2 Write property test for terminal WebSocket connection
   - **Property 15: Terminal WebSocket connection**
   - **Validates: Requirements 5.1, 5.2, 5.3**
 
-- [ ] 5.3 Implement terminal resize and window management
+- [x] 5.3 Implement terminal resize and window management
   - Add terminal resize handling with proper dimension updates
   - Implement window switching and session management
   - Add terminal disconnection detection and reconnection
   - Create terminal toolbar with session controls
   - _Requirements: 5.4, 5.5_
 
-- [ ] 5.4 Write property test for terminal resize
+- [x] 5.4 Write property test for terminal resize
   - **Property 16: Terminal resize handling**
   - **Validates: Requirements 5.4**
 
-- [ ] 5.5 Write property test for disconnection handling
+- [x] 5.5 Write property test for disconnection handling
   - **Property 17: Terminal disconnection handling**
   - **Validates: Requirements 5.5**
 
