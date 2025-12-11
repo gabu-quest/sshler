@@ -23,7 +23,7 @@ Classifier: Framework :: FastAPI
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: fastapi>=0.115.0
+Requires-Dist: fastapi>=0.115.6
 Requires-Dist: uvicorn[standard]>=0.30.0
 Requires-Dist: jinja2>=3.1
 Requires-Dist: pyyaml>=6.0
@@ -38,6 +38,8 @@ Requires-Dist: anyio>=4.4; extra == "dev"
 Requires-Dist: httpx>=0.27.0; extra == "dev"
 Requires-Dist: pytest>=8.2; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: playwright>=1.48.0; extra == "dev"
+Requires-Dist: pytest-playwright>=0.5.0; extra == "dev"
 Requires-Dist: ruff>=0.5.6; extra == "dev"
 Dynamic: license-file
 
@@ -47,6 +49,7 @@ sshler is a lightweight, local-only web UI that lets you browse remote files ove
 
 ## Features
 
+### Core Features
 - **Cross-platform**: Runs on Windows 11, macOS, and Linux (anywhere with Python 3.12+)
 - **Local workspace**: Browse your own filesystem and launch native tmux sessions alongside remote hosts (uses WSL tmux on Windows, native tmux on Linux/macOS)
 - **SSH integration**: Uses your existing SSH keys and honors OpenSSH aliases
@@ -56,6 +59,49 @@ sshler is a lightweight, local-only web UI that lets you browse remote files ove
 - **Alias resolution**: Falls back to `ssh -G` when DNS fails; reset overrides with one click
 - **File operations**: Preview, edit (≤256 KB), and delete files with CodeMirror editor
 - **Bilingual UI**: Full English and Japanese language support
+
+### Modern UI Features
+
+**🎨 Theme & Appearance**
+- **Dark/Light Theme Toggle** - Seamless theme switching with system preference detection
+- **PWA Support** - Install as a standalone app with offline capabilities and app icons
+
+**⌨️ Keyboard & Navigation**
+- **Command Palette (Cmd/Ctrl+K)** - Quick access to all features with fuzzy search
+- **Keyboard Shortcuts** - Press `?` to see all available shortcuts
+- **Global Search (Cmd/Ctrl+Shift+F)** - Search across all files in all boxes
+
+**📁 Enhanced File Management**
+- **Drag & Drop Upload** - Drop files directly into the file browser
+- **Bulk Operations** - Select multiple files with Shift+Click and Cmd/Ctrl+Click
+- **Inline Rename (F2)** - Rename files without opening a modal
+- **Context Menus** - Right-click for quick actions
+- **Recent Files & Bookmarks** - Quick access to frequently used locations
+- **File Preview Enhancements** - Toggle line numbers and word wrap in file viewer
+
+**🖥️ Terminal Features**
+- **Multi-pane Layouts** - Split terminal horizontally, vertically, or in a grid
+- **Session Persistence** - Restore your terminal layout on reload
+- **Terminal Notifications** - Desktop notifications for long-running commands
+- **Connection Status** - Real-time connection health indicators
+
+**📱 Mobile & Touch Support**
+- **Touch-Optimized** - 44px minimum touch targets for easy tapping
+- **Swipe Gestures** - Swipe right to navigate back in file browser
+- **Long-Press Context Menu** - Long-press files for quick actions (500ms)
+- **Pull-to-Refresh** - Pull down to reload the current directory
+- **Responsive Design** - Optimized layouts for tablets and phones
+- **Virtual Keyboard Support** - Terminal automatically adjusts when mobile keyboard appears
+- **Orientation Change** - Smooth terminal resize when rotating device
+- **iOS Input Optimization** - 16px font size prevents auto-zoom on focus
+- **Passive Touch Events** - Smooth scrolling with no jank
+- **Mobile Fullscreen** - Minimal UI in fullscreen for maximum typing space
+
+**♿ Accessibility**
+- **WCAG 2.1 AA Compliant** - Semantic HTML, ARIA labels, keyboard navigation
+- **Screen Reader Support** - Proper focus management and announcements
+- **Reduced Motion** - Respects `prefers-reduced-motion` system setting
+- **High Contrast** - Clear visual hierarchy and color contrast
 
 ## Install
 
@@ -85,6 +131,14 @@ uv run ruff check .
 uv run pytest
 ```
 
+E2E smoke test (Playwright):
+
+```bash
+uv run playwright install chromium   # one-time browser download
+uv run pytest tests/e2e
+# or reuse the project venv: .venv/bin/pytest tests/e2e/test_vue_app.py
+```
+
 ## Run
 
 ```bash
@@ -92,6 +146,18 @@ sshler serve
 ```
 
 The app will open `http://127.0.0.1:8822` in your default browser.
+Use `--ui=legacy|vue|both` to control whether the SPA at `/app` is served.
+
+### Vue SPA (new)
+
+- SPA is served at `/app` when the frontend dist exists. Build once with `pnpm install && pnpm run build` in `frontend/` (dist emitted to `sshler/static/dist`).
+- Dev server: `cd frontend && pnpm dev -- --host --base /app/` (proxy hits backend at `http://127.0.0.1:8822`).
+- Build check for packaging: run `make frontend-build` (pnpm build + dist check).
+- Playwright E2E (SPA): `uv run playwright install chromium` once, then `uv run pytest tests/e2e/test_vue_app.py`.
+- Command palette: `Cmd/Ctrl+K` to jump to Files/Terminal/Settings, `Alt+F`/`Alt+T` for quick nav.
+- Favorites/pins/status: Boxes view lets you pin boxes and favorite defaults; Files view shows favorites panel with persisted favorites per box.
+- Legacy HTMX UI remains at `/` while the SPA reaches parity.
+- See `docs/dev-workflow.md` for a quickstart covering dev server, pnpm build, E2E, and the `--ui` toggle.
 
 ## Configuration
 
@@ -224,6 +290,7 @@ sshler はローカル専用の軽量 Web UI で、リモートファイルを S
 
 ## 特徴
 
+### コア機能
 - **クロスプラットフォーム**: Windows 11、macOS、Linux で動作（Python 3.12+ が必要）
 - **ローカルワークスペース**: ローカルファイルシステムを閲覧し、リモートホストと並べてネイティブの tmux セッションを起動（Windows では WSL tmux、Linux/macOS ではネイティブ tmux を使用）
 - **SSH 統合**: 既存の SSH 鍵を使用し、OpenSSH エイリアスに対応
@@ -233,6 +300,49 @@ sshler はローカル専用の軽量 Web UI で、リモートファイルを S
 - **エイリアス解決**: DNS 失敗時は `ssh -G` にフォールバック。ワンクリックで上書きをリセット
 - **ファイル操作**: CodeMirror エディタでファイルのプレビュー、編集（256 KB 以下）、削除が可能
 - **バイリンガル UI**: 英語と日本語の完全サポート
+
+### モダン UI 機能
+
+**🎨 テーマと外観**
+- **ダーク/ライトテーマ切替** - システム設定を検出してシームレスにテーマを切り替え
+- **PWA サポート** - オフライン機能とアプリアイコンでスタンドアロンアプリとしてインストール可能
+
+**⌨️ キーボードとナビゲーション**
+- **コマンドパレット (Cmd/Ctrl+K)** - あいまい検索で全機能に素早くアクセス
+- **キーボードショートカット** - `?` を押すと利用可能なショートカットを表示
+- **グローバル検索 (Cmd/Ctrl+Shift+F)** - 全ボックスの全ファイルを横断検索
+
+**📁 強化されたファイル管理**
+- **ドラッグ&ドロップアップロード** - ファイルブラウザに直接ファイルをドロップ
+- **一括操作** - Shift+Click や Cmd/Ctrl+Click で複数ファイルを選択
+- **インライン名前変更 (F2)** - モーダルを開かずにファイル名を変更
+- **コンテキストメニュー** - 右クリックでクイックアクション
+- **最近使ったファイルとブックマーク** - よく使う場所へのクイックアクセス
+- **ファイルプレビュー強化** - ファイルビューアで行番号とワードラップを切り替え
+
+**🖥️ ターミナル機能**
+- **マルチペインレイアウト** - ターミナルを水平、垂直、グリッドに分割
+- **セッション永続化** - リロード時にターミナルレイアウトを復元
+- **ターミナル通知** - 長時間実行コマンドのデスクトップ通知
+- **接続状態表示** - リアルタイムの接続状態インジケーター
+
+**📱 モバイル & タッチサポート**
+- **タッチ最適化** - 簡単にタップできる 44px 以上のタッチターゲット
+- **スワイプジェスチャー** - ファイルブラウザで右スワイプして戻る
+- **ロングプレスコンテキストメニュー** - ファイルを長押し（500ms）でクイックアクション
+- **プルトゥリフレッシュ** - 下に引っ張って現在のディレクトリをリロード
+- **レスポンシブデザイン** - タブレットやスマートフォン向けに最適化されたレイアウト
+- **仮想キーボード対応** - モバイルキーボード表示時にターミナルが自動調整
+- **画面回転対応** - デバイス回転時にターミナルがスムーズにリサイズ
+- **iOS 入力最適化** - 16px フォントサイズでフォーカス時の自動ズームを防止
+- **パッシブタッチイベント** - スクロールがスムーズでジャンクなし
+- **モバイルフルスクリーン** - フルスクリーン時は最小限の UI で最大のタイピングスペース
+
+**♿ アクセシビリティ**
+- **WCAG 2.1 AA 準拠** - セマンティック HTML、ARIA ラベル、キーボードナビゲーション
+- **スクリーンリーダー対応** - 適切なフォーカス管理とアナウンス
+- **モーション軽減** - システムの `prefers-reduced-motion` 設定を尊重
+- **高コントラスト** - 明確な視覚的階層と色のコントラスト
 
 ## インストール
 

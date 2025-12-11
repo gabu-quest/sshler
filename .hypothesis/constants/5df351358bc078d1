@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/spa.py
+# hypothesis_version: 6.148.7
+
+[404, '/app', '/app/', '/app/assets', '/app/{path:path}', 'assets', 'dist', 'index.html', 'spa-assets', 'static']

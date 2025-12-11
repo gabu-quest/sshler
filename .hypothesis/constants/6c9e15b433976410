@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/rate_limit.py
+# hypothesis_version: 6.148.7
+
+[1.5, 300, 600]

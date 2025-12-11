@@ -189,8 +189,35 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
     _remove_legacy_seed(stored)
 
     resolved_path = _resolve_ssh_config_path(ssh_config_path)
-    boxes = _build_boxes(stored, load_ssh_config(resolved_path))
-    boxes.insert(0, _build_local_box())
+    local_override = stored.get("local")
+    stored_without_local = dict(stored)
+    stored_without_local.pop("local", None)
+
+    boxes = _build_boxes(stored_without_local, load_ssh_config(resolved_path))
+    local_box = _build_local_box()
+    if local_override:
+        if local_override.host:
+            local_box.connect_host = local_override.host
+            local_box.display_host = local_override.host
+        if local_override.user:
+            local_box.user = local_override.user
+        if local_override.port:
+            local_box.port = local_override.port
+        if local_override.keyfile:
+            local_box.keyfile = local_override.keyfile
+        if local_override.default_dir:
+            local_box.default_dir = local_override.default_dir
+        if local_override.known_hosts:
+            local_box.known_hosts = local_override.known_hosts
+        if local_override.ssh_alias:
+            local_box.ssh_alias = local_override.ssh_alias
+        local_box.agent = bool(local_override.agent)
+        local_box.pinned = bool(local_override.pinned)
+        if local_override.favorites:
+            local_box.favorites = list(local_override.favorites)
+        local_box.last_accessed = local_override.last_accessed
+
+    boxes.insert(0, local_box)
     _apply_favorites(boxes)
     app_config = AppConfig(
         boxes=boxes,

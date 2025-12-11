@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/ssh.py
+# hypothesis_version: 6.148.7
+
+[120, 16384, 65536, '-G', '-_.', 'C:\\Windows', 'OpenSSH', 'System32', 'SystemRoot', '_', 'hostname', 'identityfile', 'ignore', 'is_directory', 'modified', 'mtime', 'name', 'nt', 'port', 'r', 'replace', 'size', 'ssh', 'ssh.exe', 'sshler', 'user', 'utf-8', 'xterm-256color']

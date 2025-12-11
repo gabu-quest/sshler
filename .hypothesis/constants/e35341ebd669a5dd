@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/ssh_config.py
+# hypothesis_version: 6.148.7
+
+['#', '*? ', '.ssh', 'SSHLER_SSH_CONFIG', 'config', 'host', 'hostname', 'identityfile', 'include', 'match', 'port', 'r', 'user', 'utf-8']

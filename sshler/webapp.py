@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
-import os
-import platform
-import posixpath
+import logging
 import secrets
 import shlex
 import subprocess
-import contextlib
-import logging
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -35,8 +33,32 @@ from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
 from . import __version__, state
+from .api import APIDependencies, create_api_router
+from .api.helpers import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    IMAGE_CONTENT_TYPES,
+    LOCAL_IS_WINDOWS,
+    MAX_IMAGE_PREVIEW_BYTES,
+    _compose_local_child_path,
+    _compose_remote_child_path,
+    _is_markdown_file,
+    _local_create_file,
+    _local_delete_file,
+    _local_is_directory,
+    _local_list_directory,
+    _local_read_bytes,
+    _local_read_text,
+    _local_write_bytes,
+    _local_write_text,
+    _normalize_directory_path,
+    _normalize_local_path,
+    _read_file_bytes,
+    _read_remote_text,
+    _syntax_from_filename,
+)
 from .config import (
     AppConfig,
+    Box,
     StoredBox,
     find_box,
     get_config_path,
@@ -44,34 +66,15 @@ from .config import (
     rebuild_boxes,
     save_config,
 )
-from .ssh import (
-    SSHError,
-    connect,
-    open_tmux,
-    sftp_is_directory,
-    sftp_list_directory,
-    sftp_read_file,
-)
+from .spa import mount_spa
+from .ssh import SSHError, connect, open_tmux, sftp_is_directory, sftp_list_directory
 from .ssh_pool import get_pool, initialize_pool, shutdown_pool
-from .config_cache import get_cache
-from .validation import PathValidator, InputValidator, ValidationError
+from .validation import PathValidator, ValidationError
 from .rate_limit import get_rate_limiter
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
-
-DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-MAX_IMAGE_PREVIEW_BYTES = 2 * 1024 * 1024
-IMAGE_CONTENT_TYPES: dict[str, str] = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".svg": "image/svg+xml",
-}
-LOCAL_IS_WINDOWS = platform.system().lower().startswith("windows")
-
+SPA_DIST_DIR = STATIC_DIR / "dist"
 
 @dataclass
 class ServerSettings:
@@ -81,6 +84,7 @@ class ServerSettings:
     allow_ssh_alias: bool = True
     basic_auth: tuple[str, str] | None = None
     basic_auth_header: str | None = field(init=False, default=None)
+    serve_spa: bool = True
 
     def __post_init__(self) -> None:
         # normalise origins without trailing slashes and drop duplicates while preserving order
@@ -144,139 +148,6 @@ def _format_timestamp(timestamp: float | None) -> str:
     else:
         dt = datetime.fromtimestamp(timestamp)
         return dt.strftime("%Y-%m-%d")
-
-
-def _normalize_directory_path(directory: str | None) -> str:
-    raw = (directory or "/").strip()
-    if not raw:
-        raw = "/"
-    if not raw.startswith("/"):
-        raw = "/" + raw.lstrip("/")
-
-    normalized = posixpath.normpath(raw)
-    if normalized == ".":
-        return "/"
-    if not normalized.startswith("/"):
-        normalized = "/" + normalized.lstrip("/")
-    return normalized or "/"
-
-
-def _compose_remote_child_path(directory: str, filename: str) -> str:
-    cleaned = (filename or "").strip()
-    if not cleaned:
-        raise ValueError("Filename is required")
-    if cleaned in {".", ".."} or "/" in cleaned:
-        raise ValueError("Filename cannot contain path separators")
-    if "\x00" in cleaned:
-        raise ValueError("Filename contains unsupported characters")
-    parent = PurePosixPath(_normalize_directory_path(directory))
-    return (parent / cleaned).as_posix()
-
-
-def _normalize_local_path(directory: str | None) -> str:
-    if directory:
-        base = Path(directory).expanduser()
-    else:
-        base = Path.home()
-    try:
-        resolved = base.resolve()
-    except Exception:
-        resolved = base
-    if LOCAL_IS_WINDOWS:
-        return resolved.as_posix()
-    return str(resolved)
-
-
-def _compose_local_child_path(directory: str, filename: str) -> str:
-    cleaned = (filename or "").strip()
-    if not cleaned:
-        raise ValueError("Filename is required")
-    if cleaned in {".", ".."} or any(sep in cleaned for sep in ("/", "\\")):
-        raise ValueError("Filename cannot contain path separators")
-    parent = Path(directory or Path.home())
-    target = parent / cleaned
-    if LOCAL_IS_WINDOWS:
-        return target.expanduser().as_posix()
-    return str(target.expanduser())
-
-
-async def _local_list_directory(path: str) -> list[dict[str, object]]:
-    def _worker() -> list[dict[str, object]]:
-        entries: list[dict[str, object]] = []
-        base_path = Path(path)
-        for child in base_path.iterdir():
-            try:
-                stats = child.stat()
-            except Exception:
-                continue
-            entries.append(
-                {
-                    "name": child.name,
-                    "is_directory": child.is_dir(),
-                    "size": stats.st_size if child.is_file() else None,
-                    "modified": stats.st_mtime,
-                }
-            )
-        entries.sort(key=lambda entry: (not entry["is_directory"], entry["name"].lower()))
-        return entries
-
-    return await asyncio.to_thread(_worker)
-
-
-async def _local_is_directory(path: str) -> bool:
-    return await asyncio.to_thread(lambda: Path(path).is_dir())
-
-
-async def _local_read_text(path: str, max_bytes: int) -> str:
-    def _worker() -> str:
-        with open(Path(path), "rb") as handle:
-            data = handle.read(max_bytes)
-        return data.decode("utf-8", errors="replace")
-
-    return await asyncio.to_thread(_worker)
-
-
-async def _local_write_text(path: str, content: str) -> None:
-    def _worker() -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(Path(path), "w", encoding="utf-8") as handle:
-            handle.write(content)
-
-    await asyncio.to_thread(_worker)
-
-
-async def _local_read_bytes(path: str, limit: int) -> tuple[bytes, bool]:
-    def _worker() -> tuple[bytes, bool]:
-        with open(Path(path), "rb") as handle:
-            data = handle.read(limit + 1)
-        return (data[:limit], len(data) > limit)
-
-    return await asyncio.to_thread(_worker)
-
-
-async def _local_write_bytes(path: str, data: bytes) -> None:
-    def _worker() -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(Path(path), "wb") as handle:
-            handle.write(data)
-
-    await asyncio.to_thread(_worker)
-
-
-async def _local_create_file(path: str) -> None:
-    def _worker() -> None:
-        file_path = Path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.touch(exist_ok=False)
-
-    await asyncio.to_thread(_worker)
-
-
-async def _local_delete_file(path: str) -> None:
-    def _worker() -> None:
-        Path(path).unlink()
-
-    await asyncio.to_thread(_worker)
 
 
 def _local_tmux_base_command() -> list[str]:
@@ -406,6 +277,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     """
 
     settings = settings or ServerSettings()
+    deps = APIDependencies(settings)
 
     # Application lifespan handler
     @asynccontextmanager
@@ -423,6 +295,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         title="sshler", version="0.1.0", docs_url=None, redoc_url=None, lifespan=lifespan
     )
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    mount_spa(application, settings.serve_spa)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     app_version = _compute_app_version()
 
@@ -467,8 +340,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     @application.middleware("http")
     async def _rate_limit_middleware(request: Request, call_next):
         """Rate limiting middleware to prevent abuse."""
-        # Skip rate limiting for static files and health checks
-        if request.url.path.startswith("/static/") or request.url.path in ["/", "/docs"]:
+        # Skip rate limiting for static files, spa assets, and health checks
+        path = request.url.path
+        if path.startswith("/static/") or path.startswith("/app") or path in ["/", "/docs"]:
             return await call_next(request)
 
         # Get client identifier (IP address)
@@ -497,12 +371,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         return await call_next(request)
 
-    def _require_token(request: Request) -> None:
-        if not settings.csrf_token:
-            return
-        supplied = request.headers.get("x-sshler-token")
-        if supplied != settings.csrf_token:
-            raise HTTPException(status_code=403, detail="Missing or invalid X-SSHLER-TOKEN header")
+    _require_token = deps.require_token
+
+    async def _get_application_config() -> AppConfig:
+        """Dependency that loads the persisted configuration with caching."""
+
+        return await deps.get_application_config()
 
     def _build_directory_urls(request: Request, box_name: str) -> dict[str, str]:
         def _resolve(endpoint: str, **params: str) -> str:
@@ -627,42 +501,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             }
             return templates.TemplateResponse(request, "partials/dir_listing.html", context)
 
-    async def _get_application_config() -> AppConfig:
-        """Dependency that loads the persisted configuration with caching.
-
-        Returns:
-            AppConfig: Configuration loaded from disk or cache.
-        """
-        config_cache = get_cache(ttl=60)
-        config_path = get_config_path()
-        ssh_config_env = os.getenv("SSHLER_SSH_CONFIG")
-        signature = (
-            str(config_path),
-            config_path.stat().st_mtime if config_path.exists() else None,
-            ssh_config_env,
-            os.getenv("SSHLER_CONFIG_DIR"),
-        )
-
-        async def _loader() -> AppConfig:
-            return load_config(ssh_config_env)
-
-        return await config_cache.get(_loader, signature=signature)
-
     @application.get("/")
     async def root() -> RedirectResponse:
         """Redirect the index page to the boxes list.
 
         English:
-            Visiting ``/`` immediately sends the browser to ``/boxes``.
+            Visiting ``/`` immediately sends the browser to the SPA or legacy boxes view.
 
         日本語:
-            ルート ``/`` にアクセスした際に ``/boxes`` へリダイレクトします。
+            ルート ``/`` にアクセスした際に SPA または従来のボックス一覧へリダイレクトします。
 
         Returns:
             RedirectResponse: HTTP redirect to ``/boxes``.
         """
 
-        return RedirectResponse(url="/boxes")
+        return RedirectResponse(url="/app/" if settings.serve_spa else "/boxes")
 
     @application.get("/docs", response_class=HTMLResponse)
     async def docs(request: Request, lang: str = Query("en")) -> HTMLResponse:
@@ -2848,6 +2701,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             except Exception:
                 pass
 
+    application.include_router(create_api_router(deps))
     return application
 
 
@@ -2868,71 +2722,10 @@ def _compute_app_version() -> str:
     return " ".join(part for part in parts if part)
 
 
-def _syntax_from_filename(path: str) -> str:
-    suffix = Path(path).suffix.lower()
-    mapping = {
-        ".py": "python",
-        ".js": "javascript",
-        ".ts": "typescript",
-        ".json": "json",
-        ".yaml": "yaml",
-        ".yml": "yaml",
-        ".md": "markdown",
-        ".sh": "bash",
-        ".bash": "bash",
-        ".html": "markup",
-        ".css": "css",
-        ".toml": "toml",
-        ".ini": "ini",
-    }
-    return mapping.get(suffix, "").strip()
-
-
-def _is_markdown_file(path: str) -> bool:
-    """Check if a file is a markdown file based on its extension."""
-    suffix = Path(path).suffix.lower()
-    return suffix in [".md", ".markdown"]
-
-
 def _render_markdown(content: str) -> str:
     """Convert markdown content to HTML."""
     md = MarkdownIt()
     return md.render(content)
-
-
-async def _read_file_bytes(
-    connection: asyncssh.SSHClientConnection, path: str, limit: int
-) -> tuple[bytes, bool]:
-    sftp_client = await connection.start_sftp_client()
-    try:
-        async with await sftp_client.open(path, "rb") as remote_file:
-            data = await remote_file.read(limit + 1)
-    finally:
-        try:
-            await sftp_client.exit()
-        except Exception as exc:
-            logger.exception(f"terminal_socket error for host={host}", exc_info=exc)
-            try:
-                await websocket.close(code=1011, reason="Internal error")
-            except Exception:
-                pass
-    too_large = len(data) > limit
-    if too_large:
-        return b"", True
-    return data, False
-
-
-async def _read_remote_text(
-    connection: asyncssh.SSHClientConnection, path: str, limit: int
-) -> str:
-    """Retrieve UTF-8 text from an SFTP connection with graceful fallback."""
-
-    try:
-        return await sftp_read_file(connection, path, max_bytes=limit)
-    except TypeError as exc:
-        if "max_bytes" not in str(exc):
-            raise
-        return await sftp_read_file(connection, path)
 
 
 async def _handle_control_message(

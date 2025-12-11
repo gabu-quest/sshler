@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/terminal.py
+# hypothesis_version: 6.148.7
+
+['/terminal/handshake', 'X-SSHLER-TOKEN', 'https', 'localhost', 'ws', 'wss']

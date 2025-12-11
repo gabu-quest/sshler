@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/boxes.py
+# hypothesis_version: 6.148.7
+
+[1000, '/boxes', '/boxes/{name}', '/boxes/{name}/fav', '/boxes/{name}/pin', '/boxes/{name}/status', 'local', 'offline', 'online', 'ssh', 'true']

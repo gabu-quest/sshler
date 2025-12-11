@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/sessions.py
+# hypothesis_version: 6.148.7
+
+[200, 404, 500, '/sessions', 'Session not found', 'deleted', 'ok']

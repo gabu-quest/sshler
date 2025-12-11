@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/config.py
+# hypothesis_version: 6.148.7
+
+['/app/', '/bootstrap', 'X-SSHLER-TOKEN']

@@ -2,3 +2,6 @@ debug.log
 __pycache__/
 *.pyc
 .venv/
+frontend/node_modules
+sshler/static/dist
+.pnpm-store

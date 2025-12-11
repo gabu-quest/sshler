@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/__init__.py
+# hypothesis_version: 6.148.7
+
+['/api/v1', 'APIDependencies', 'api', 'create_api_router']

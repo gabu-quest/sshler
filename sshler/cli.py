@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import secrets
+import signal
+import subprocess
+import sys
 import threading
+import time
 import webbrowser
 import json
 import os
+from pathlib import Path
 
 import uvicorn
 
@@ -43,6 +49,151 @@ def _open_browser_later(application_url: str, delay: float = 0.8) -> None:
     timer.start()
 
 
+def _start_vite_dev_server(frontend_dir: Path) -> subprocess.Popen:
+    """Start the Vite development server for the frontend."""
+    if not frontend_dir.exists():
+        raise RuntimeError(f"Frontend directory not found: {frontend_dir}")
+    
+    package_json = frontend_dir / "package.json"
+    if not package_json.exists():
+        raise RuntimeError(f"package.json not found in {frontend_dir}")
+    
+    # Check if pnpm is available, fall back to npm
+    try:
+        subprocess.run(["pnpm", "--version"], capture_output=True, check=True)
+        cmd = ["pnpm", "dev"]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        cmd = ["npm", "run", "dev"]
+    
+    print(f"[sshler] Starting Vite dev server: {' '.join(cmd)}")
+    
+    # Start Vite dev server
+    process = subprocess.Popen(
+        cmd,
+        cwd=frontend_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        bufsize=1
+    )
+    
+    return process
+
+
+def _monitor_vite_process(process: subprocess.Popen) -> None:
+    """Monitor Vite process output and print relevant messages."""
+    if not process.stdout:
+        return
+        
+    for line in iter(process.stdout.readline, ''):
+        if line.strip():
+            # Filter and format Vite output
+            if any(keyword in line.lower() for keyword in ['local:', 'ready', 'hmr', 'error']):
+                print(f"[vite] {line.strip()}")
+
+
+def _cleanup_processes(*processes: subprocess.Popen) -> None:
+    """Gracefully terminate processes."""
+    for process in processes:
+        if process.poll() is None:  # Process is still running
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+def serve_dev(
+    host: str = "127.0.0.1",
+    port: int = 8822,
+    allow_origins: list[str] | None = None,
+    basic_auth: tuple[str, str] | None = None,
+    max_upload_mb: int = 50,
+    allow_ssh_alias: bool = True,
+    log_level: str = "info",
+    open_browser: bool = True,
+    token: str | None = None,
+) -> None:
+    """Start both FastAPI and Vite dev servers for development.
+    
+    English:
+        Starts the FastAPI backend with auto-reload and the Vite frontend dev server
+        concurrently. Provides hot module replacement for frontend changes and
+        automatic restart for backend changes.
+    
+    日本語:
+        FastAPI バックエンドを自動リロード付きで起動し、同時に Vite フロントエンド
+        開発サーバーも起動します。フロントエンドの変更にはホットモジュール置換、
+        バックエンドの変更には自動再起動を提供します。
+    """
+    
+    # Find frontend directory
+    current_dir = Path.cwd()
+    frontend_dir = current_dir / "frontend"
+    
+    if not frontend_dir.exists():
+        print("[sshler] Error: frontend/ directory not found")
+        print("[sshler] Make sure you're running from the project root")
+        sys.exit(1)
+    
+    # Start Vite dev server
+    try:
+        vite_process = _start_vite_dev_server(frontend_dir)
+    except RuntimeError as e:
+        print(f"[sshler] Error starting Vite: {e}")
+        sys.exit(1)
+    
+    # Start monitoring Vite output in a separate thread
+    vite_monitor_thread = threading.Thread(
+        target=_monitor_vite_process, 
+        args=(vite_process,), 
+        daemon=True
+    )
+    vite_monitor_thread.start()
+    
+    # Add localhost:5173 to allowed origins for Vite dev server
+    dev_origins = (allow_origins or []) + ["http://localhost:5173", "http://127.0.0.1:5173"]
+    
+    # Setup signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        print("\n[sshler] Shutting down development servers...")
+        _cleanup_processes(vite_process)
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Wait a moment for Vite to start
+    time.sleep(2)
+    
+    # Open browser to Vite dev server URL
+    if open_browser:
+        vite_url = "http://localhost:5173/app/"
+        print(f"[sshler] Opening browser to {vite_url}")
+        _open_browser_later(vite_url, delay=1.0)
+    
+    try:
+        # Start FastAPI with reload
+        serve(
+            host=host,
+            port=port,
+            reload=True,  # Always enable reload in dev mode
+            allow_origins=dev_origins,
+            basic_auth=basic_auth,
+            max_upload_mb=max_upload_mb,
+            allow_ssh_alias=allow_ssh_alias,
+            log_level=log_level,
+            open_browser=False,  # We already opened to Vite
+            token=token,
+            ui="vue",  # Force Vue UI in dev mode
+        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _cleanup_processes(vite_process)
+
+
 def serve(
     host: str = "127.0.0.1",
     port: int = 8822,
@@ -54,6 +205,7 @@ def serve(
     log_level: str = "info",
     open_browser: bool = True,
     token: str | None = None,
+    ui: str = "vue",
 ) -> None:
     """Start the sshler FastAPI application via uvicorn.
 
@@ -72,6 +224,7 @@ def serve(
         max_upload_bytes=max_upload_mb * 1024 * 1024,
         allow_ssh_alias=allow_ssh_alias,
         basic_auth=basic_auth,
+        serve_spa=ui in {"both", "vue"},
     )
 
     fastapi_application = make_app(settings)
@@ -138,6 +291,11 @@ def main() -> None:
     serve_parser.add_argument("--port", type=int, default=8822)
     serve_parser.add_argument("--reload", action="store_true")
     serve_parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Start in development mode with both FastAPI and Vite dev servers"
+    )
+    serve_parser.add_argument(
         "--allow-origin",
         action="append",
         dest="allow_origins",
@@ -167,6 +325,12 @@ def main() -> None:
     )
     serve_parser.add_argument("--token", help="Provide a fixed X-SSHLER-TOKEN value")
     serve_parser.add_argument(
+        "--ui",
+        choices=["both", "vue", "legacy"],
+        default="vue",
+        help="Serve the Vue SPA, legacy templates, or both (default: vue)",
+    )
+    serve_parser.add_argument(
         "--no-browser",
         dest="open_browser",
         action="store_false",
@@ -183,17 +347,33 @@ def main() -> None:
             if ":" not in auth_value:
                 parser.error("--auth must be in the form username:password")
             basic_auth = tuple(auth_value.split(":", 1))  # type: ignore[assignment]
-        serve(
-            host=bind_host,
-            port=getattr(parsed_args, "port", 8822),
-            reload=getattr(parsed_args, "reload", False),
-            allow_origins=getattr(parsed_args, "allow_origins", []) or [],
-            basic_auth=basic_auth,
-            max_upload_mb=getattr(parsed_args, "max_upload_mb", 50),
-            allow_ssh_alias=not getattr(parsed_args, "no_ssh_alias", False),
-            log_level=getattr(parsed_args, "log_level", "info"),
-            open_browser=getattr(parsed_args, "open_browser", True),
-            token=getattr(parsed_args, "token", None),
-        )
+        
+        # Check if dev mode is requested
+        if getattr(parsed_args, "dev", False):
+            serve_dev(
+                host=bind_host,
+                port=getattr(parsed_args, "port", 8822),
+                allow_origins=getattr(parsed_args, "allow_origins", []) or [],
+                basic_auth=basic_auth,
+                max_upload_mb=getattr(parsed_args, "max_upload_mb", 50),
+                allow_ssh_alias=not getattr(parsed_args, "no_ssh_alias", False),
+                log_level=getattr(parsed_args, "log_level", "info"),
+                open_browser=getattr(parsed_args, "open_browser", True),
+                token=getattr(parsed_args, "token", None),
+            )
+        else:
+            serve(
+                host=bind_host,
+                port=getattr(parsed_args, "port", 8822),
+                reload=getattr(parsed_args, "reload", False),
+                allow_origins=getattr(parsed_args, "allow_origins", []) or [],
+                basic_auth=basic_auth,
+                max_upload_mb=getattr(parsed_args, "max_upload_mb", 50),
+                allow_ssh_alias=not getattr(parsed_args, "no_ssh_alias", False),
+                log_level=getattr(parsed_args, "log_level", "info"),
+                open_browser=getattr(parsed_args, "open_browser", True),
+                token=getattr(parsed_args, "token", None),
+                ui=getattr(parsed_args, "ui", "both"),
+            )
     else:
         parser.print_help()

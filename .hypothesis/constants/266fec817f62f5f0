@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/cli.py
+# hypothesis_version: 6.148.7
+
+[0.8, 1.0, 1024, 8822, '--allow-origin', '--auth', '--bind', '--dev', '--host', '--log-level', '--max-upload-mb', '--no-browser', '--no-ssh-alias', '--port', '--reload', '--token', '--ui', '--version', '127.0.0.1', ':', 'Alias for --host', 'Uvicorn log level', 'allow_origins', 'allow_ssh_alias', 'append', 'auth', 'basic_auth', 'bind', 'both', 'command', 'critical', 'csrf_token', 'debug', 'dev', 'error', 'frontend', 'hmr', 'host', 'info', 'legacy', 'local:', 'localhost', 'log_level', 'max_upload_bytes', 'max_upload_mb', 'no_ssh_alias', 'npm', 'open_browser', 'package.json', 'pnpm', 'port', 'ready', 'reload', 'run', 'serve', 'sshler', 'store_false', 'store_true', 'token', 'trace', 'ui', 'vue', 'warning']

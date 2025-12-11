@@ -1,0 +1,33 @@
+{
+  "name": "sshler-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vue 3 SPA for sshler served from FastAPI /app",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "test": "vitest run",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@phosphor-icons/vue": "^2.2.1",
+    "@xterm/xterm": "^5.5.0",
+    "naive-ui": "^2.43.2",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.24",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/vue": "^8.1.0",
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/tsconfig": "^0.8.1",
+    "jsdom": "^27.3.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.15",
+    "vue-tsc": "^3.1.4"
+  }
+}

@@ -13,9 +13,40 @@ jobs:
         python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
+      - name: Detect frontend changes
+        id: frontend_changed
+        run: |
+          BASE=${{ github.event.pull_request.base.sha || 'HEAD^' }}
+          if git diff --name-only "$BASE" | grep -E '^(frontend/|sshler/static/|docs/|Makefile|scripts/)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install frontend deps
+        if: steps.frontend_changed.outputs.changed == 'true'
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+      - name: Frontend build + tests
+        if: steps.frontend_changed.outputs.changed == 'true'
+        working-directory: frontend
+        run: |
+          pnpm run build
+          pnpm run test -- --runInBand
+      - name: Verify frontend dist
+        if: steps.frontend_changed.outputs.changed == 'true'
+        run: python scripts/check_frontend_dist.py
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

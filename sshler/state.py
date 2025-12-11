@@ -418,6 +418,64 @@ def delete_session(session_id: str) -> bool:
         return True
 
 
+def create_session(
+    box_name: str,
+    session_name: str,
+    working_directory: str,
+    metadata: dict | None = None,
+) -> Session:
+    """Create and persist a session record."""
+
+    _require_db()
+    with _DB_LOCK:
+        record = Session(
+            box=box_name,
+            session_name=session_name,
+            working_directory=working_directory,
+            metadata_json=json.dumps(metadata or {}),
+        )
+        record.save()
+        return record
+
+
+async def create_session_async(
+    box_name: str,
+    session_name: str,
+    working_directory: str,
+    metadata: dict | None = None,
+) -> Session:
+    return await asyncio.to_thread(create_session, box_name, session_name, working_directory, metadata)
+
+
+async def delete_session_async(session_id: str) -> bool:
+    return await asyncio.to_thread(delete_session, session_id)
+
+
+def update_session_metadata(
+    session_id: str, metadata: dict | None = None, window_count: int | None = None
+) -> bool:
+    """Update metadata and optionally window count."""
+
+    _require_db()
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+        if metadata is not None:
+            session.metadata = metadata
+        if window_count is not None:
+            session.window_count = window_count
+        session.last_accessed_at = time.time()
+        session.save()
+        return True
+
+
+async def update_session_metadata_async(
+    session_id: str, metadata: dict | None = None, window_count: int | None = None
+) -> bool:
+    return await asyncio.to_thread(update_session_metadata, session_id, metadata, window_count)
+
+
 async def delete_session_async(session_id: str) -> bool:
     return await asyncio.to_thread(delete_session, session_id)
 

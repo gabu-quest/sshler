@@ -91,6 +91,7 @@ E2E smoke test (Playwright):
 ```bash
 uv run playwright install chromium   # one-time browser download
 uv run pytest tests/e2e
+# or reuse the project venv: .venv/bin/pytest tests/e2e/test_vue_app.py
 ```
 
 ## Run
@@ -100,6 +101,18 @@ sshler serve
 ```
 
 The app will open `http://127.0.0.1:8822` in your default browser.
+Use `--ui=legacy|vue|both` to control whether the SPA at `/app` is served.
+
+### Vue SPA (new)
+
+- SPA is served at `/app` when the frontend dist exists. Build once with `pnpm install && pnpm run build` in `frontend/` (dist emitted to `sshler/static/dist`).
+- Dev server: `cd frontend && pnpm dev -- --host --base /app/` (proxy hits backend at `http://127.0.0.1:8822`).
+- Build check for packaging: run `make frontend-build` (pnpm build + dist check).
+- Playwright E2E (SPA): `uv run playwright install chromium` once, then `uv run pytest tests/e2e/test_vue_app.py`.
+- Command palette: `Cmd/Ctrl+K` to jump to Files/Terminal/Settings, `Alt+F`/`Alt+T` for quick nav.
+- Favorites/pins/status: Boxes view lets you pin boxes and favorite defaults; Files view shows favorites panel with persisted favorites per box.
+- Legacy HTMX UI remains at `/` while the SPA reaches parity.
+- See `docs/dev-workflow.md` for a quickstart covering dev server, pnpm build, E2E, and the `--ui` toggle.
 
 ## Configuration
 
