@@ -150,28 +150,28 @@
   - **Property 17: Terminal disconnection handling**
   - **Validates: Requirements 5.5**
 
-- [ ] 6. Optimize mobile experience and touch interactions
-- [ ] 6.1 Implement mobile-specific UI adaptations
+- [x] 6. Optimize mobile experience and touch interactions
+- [x] 6.1 Implement mobile-specific UI adaptations
   - Add mobile viewport handling and keyboard adjustments
   - Implement touch gesture support (swipe, long press)
   - Create mobile-optimized terminal interface
   - Add device orientation change handling
   - _Requirements: 6.3, 6.4, 6.5_
 
-- [ ] 6.2 Write property test for mobile keyboard adjustment
+- [x] 6.2 Write property test for mobile keyboard adjustment
   - **Property 18: Mobile keyboard viewport adjustment**
   - **Validates: Requirements 6.3**
 
-- [ ] 6.3 Write property test for orientation adaptation
+- [x] 6.3 Write property test for orientation adaptation
   - **Property 19: Device orientation adaptation**
   - **Validates: Requirements 6.4**
 
-- [ ] 6.4 Write property test for mobile terminal optimization
+- [x] 6.4 Write property test for mobile terminal optimization
   - **Property 20: Mobile terminal optimization**
   - **Validates: Requirements 6.5**
 
-- [ ] 7. Implement Pinia stores for state management
-- [ ] 7.1 Create core application stores
+- [x] 7. Implement Pinia stores for state management
+- [x] 7.1 Create core application stores
   - Implement appStore for global state and configuration
   - Create boxesStore for SSH server management
   - Build filesStore for file browser state
@@ -179,100 +179,100 @@
   - Add localStorage persistence for user preferences
   - _Requirements: 2.1, 4.1, 5.1_
 
-- [ ] 7.2 Write unit tests for Pinia stores
+- [x] 7.2 Write unit tests for Pinia stores
   - Create unit tests for all store actions and getters
   - Test state persistence and hydration
   - Verify store reactivity and computed properties
   - _Requirements: 9.1_
 
-- [ ] 8. Set up production build and static file serving
-- [ ] 8.1 Configure production build pipeline
+- [x] 8. Set up production build and static file serving
+- [x] 8.1 Configure production build pipeline
   - Optimize Vite build configuration for production
   - Set up static file serving in FastAPI
   - Implement SPA routing fallback for direct URL access
   - Add caching headers and compression for static assets
   - _Requirements: 8.1, 8.3, 8.4_
 
-- [ ] 8.2 Write property test for SPA routing
+- [x] 8.2 Write property test for SPA routing
   - **Property 24: SPA routing for direct access**
   - **Validates: Requirements 8.4**
 
-- [ ] 8.3 Write property test for static file caching
+- [x] 8.3 Write property test for static file caching
   - **Property 26: Static file caching headers**
   - **Validates: Requirements 8.3**
 
-- [ ] 8.4 Ensure production deployment without Node.js dependencies
+- [x] 8.4 Ensure production deployment without Node.js dependencies
   - Verify built assets are properly included in Python package
   - Test production deployment without Node.js runtime
   - Validate API authentication continues to work correctly
   - _Requirements: 8.2, 8.5_
 
-- [ ] 8.5 Write property test for API authentication
+- [x] 8.5 Write property test for API authentication
   - **Property 25: API authentication consistency**
   - **Validates: Requirements 8.5**
 
-- [ ] 9. Implement data migration and backward compatibility
-- [ ] 9.1 Create data migration system
+- [x] 9. Implement data migration and backward compatibility
+- [x] 9.1 Create data migration system
   - Implement migration for existing SSH configurations
   - Add user preference migration from legacy format
   - Create one-time migration process with user confirmation
   - Ensure no data loss during migration process
   - _Requirements: 10.1, 10.2, 10.4, 10.5_
 
-- [ ] 9.2 Write property test for data migration
+- [x] 9.2 Write property test for data migration
   - **Property 28: Data migration preservation**
   - **Validates: Requirements 10.1, 10.2, 10.3, 10.4**
 
-- [ ] 9.3 Preserve user customizations and preferences
+- [x] 9.3 Preserve user customizations and preferences
   - Maintain existing theme and layout preferences
   - Preserve favorites and bookmarks
   - Keep SSH key configurations and aliases
   - _Requirements: 10.3_
 
-- [ ] 10. Set up comprehensive testing infrastructure
-- [ ] 10.1 Configure frontend testing with Vitest
+- [x] 10. Set up comprehensive testing infrastructure
+- [x] 10.1 Configure frontend testing with Vitest
   - Set up Vitest with Vue Testing Library
   - Configure coverage reporting and thresholds
   - Add property-based testing with fast-check
   - Create test utilities and mock factories
   - _Requirements: 9.1_
 
-- [ ] 10.2 Configure backend testing enhancements
+- [x] 10.2 Configure backend testing enhancements
   - Enhance existing pytest setup for new API endpoints
   - Add property-based testing with Hypothesis
   - Create WebSocket testing utilities
   - Add performance and load testing
   - _Requirements: 9.2_
 
-- [ ] 10.3 Set up end-to-end testing with Playwright
+- [x] 10.3 Set up end-to-end testing with Playwright
   - Configure Playwright for cross-browser testing
   - Create E2E tests for complete user workflows
   - Add mobile device simulation tests
   - Implement visual regression testing
   - _Requirements: 9.3_
 
-- [ ] 10.4 Write property test for test execution
+- [x] 10.4 Write property test for test execution
   - **Property 27: Test execution and reporting**
   - **Validates: Requirements 9.4, 9.5**
 
-- [ ] 11. Final integration and polish
-- [ ] 11.1 Integrate all components and test complete workflows
+- [x] 11. Final integration and polish
+- [x] 11.1 Integrate all components and test complete workflows
   - Test complete user journeys from boxes to files to terminal
   - Verify all keyboard shortcuts and accessibility features
   - Test mobile experience across different devices
   - Validate performance and loading times
   - _Requirements: All_
 
-- [ ] 11.2 Write property test for frontend hot reload
+- [x] 11.2 Write property test for frontend hot reload
   - **Property 1: Frontend hot reload consistency**
   - **Validates: Requirements 1.2**
 
-- [ ] 11.3 Final cleanup and documentation updates
+- [x] 11.3 Final cleanup and documentation updates
   - Update README with new development workflow
   - Clean up legacy HTMX templates and routes
   - Add migration guide for existing users
   - Update CLI help text and documentation
   - _Requirements: All_
 
-- [ ] 12. Checkpoint - Ensure all tests pass
+- [x] 12. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
