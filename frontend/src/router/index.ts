@@ -40,6 +40,15 @@ const router = createRouter({
       },
     },
     {
+      path: "/multi-terminal",
+      name: "multi-terminal",
+      component: () => import("@/views/MultiTerminalView.vue"),
+      meta: {
+        title: "Multi-Terminal",
+        description: "Multiple terminal sessions in a grid",
+      },
+    },
+    {
       path: "/settings",
       name: "settings",
       component: () => import("@/views/SettingsView.vue"),
@@ -58,7 +67,7 @@ const router = createRouter({
       },
     },
   ],
-  scrollBehavior(to, from, savedPosition) {
+  scrollBehavior(to, _from, savedPosition) {
     // Restore scroll position when using browser back/forward
     if (savedPosition) {
       return savedPosition;
@@ -78,7 +87,7 @@ const router = createRouter({
 });
 
 // Navigation guards
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
   // Update document title
   const title = to.meta?.title as string;
   if (title) {

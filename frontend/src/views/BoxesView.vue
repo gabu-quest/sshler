@@ -2,7 +2,7 @@
 import { computed, onMounted } from "vue";
 
 import { NAlert, NButton, NCard, NGrid, NGridItem, NIcon, NSpace, useMessage } from "naive-ui";
-import { PhFolderSimple, PhPushPinSimple, PhStar } from "@phosphor-icons/vue";
+import { PhFolderSimple, PhPushPinSimple, PhStar, PhTerminalWindow } from "@phosphor-icons/vue";
 
 import { boxStatus } from "@/api/http";
 import type { ApiBox } from "@/api/types";
@@ -94,6 +94,19 @@ onMounted(async () => {
             <span>{{ box.name }}</span>
           </div>
           <p class="text-muted small">{{ box.host }} • {{ box.transport }}</p>
+          <NSpace size="small" style="margin-bottom: 8px;">
+            <NButton size="tiny" type="primary" @click="() => $router.push(`/files?box=${box.name}`)">
+              <NIcon size="14"><PhFolderSimple /></NIcon>
+              Files
+            </NButton>
+            <NButton size="tiny" type="primary" @click="() => $router.push(`/terminal?box=${box.name}`)">
+              <NIcon size="14"><PhTerminalWindow /></NIcon>
+              Terminal
+            </NButton>
+            <NButton size="tiny" @click="() => $router.push(`/multi-terminal?box=${box.name}`)">
+              Multi
+            </NButton>
+          </NSpace>
           <NSpace size="small">
             <NButton size="tiny" secondary @click="() => togglePin(box.name)">
               <NIcon size="14"><PhPushPinSimple /></NIcon>

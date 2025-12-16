@@ -52,6 +52,8 @@ export interface SessionInfo {
 
 export interface TerminalHandshake {
   ws_url: string;
+  token_header?: string;
+  token?: string | null;
 }
 
 export interface PinToggle {

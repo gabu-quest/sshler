@@ -7,6 +7,7 @@ import {
   PhCode,
   PhRocketLaunch,
   PhShieldCheck,
+  PhRocketLaunch as RocketLaunch,
 } from "@phosphor-icons/vue";
 
 import { useBootstrapStore } from "@/stores/bootstrap";

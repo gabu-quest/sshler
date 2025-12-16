@@ -1,5 +1,19 @@
-# Vue 3 + TypeScript + Vite
+# sshler SPA (Vue 3 + Vite)
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+This is the Vue 3 SPA that replaces the legacy HTMX UI. It is built once and shipped with the Python package (no Node at runtime).
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## Dev
+
+```bash
+pnpm install
+pnpm dev -- --host --base /app/   # proxies /api and /ws to 127.0.0.1:8822
+```
+
+## Build (bundled into Python wheel)
+
+```bash
+pnpm run build        # emits to ../sshler/static/dist
+pnpm run test         # vitest
+```
+
+`make frontend-build` in repo root runs install+build and checks the dist exists.

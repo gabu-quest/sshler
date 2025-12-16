@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 
-import { NButton, NIcon, NInput, NList, NListItem, NModal, NText, NSpace } from "naive-ui";
+import { NButton, NIcon, NInput, NList, NListItem, NModal, NText } from "naive-ui";
 import {
   PhCommand,
   PhFolderSimple,
@@ -12,7 +12,6 @@ import {
   PhTerminal,
   PhGearSix,
   PhHouseLine,
-  PhServer,
   PhArrowClockwise,
   PhMagnifyingGlass,
 } from "@phosphor-icons/vue";
@@ -52,7 +51,7 @@ const actions = computed((): CommandAction[] => [
     id: "nav-boxes",
     label: "Boxes",
     description: "Manage SSH server connections",
-    icon: PhServer,
+    icon: PhFolderSimple,
     shortcut: "Alt+B",
     category: "Navigation",
     action: () => router.push("/boxes"),
@@ -95,7 +94,7 @@ const actions = computed((): CommandAction[] => [
     icon: PhStar,
     category: "Navigation",
     action: () => router.push({ path: "/files", hash: "#favorites" }),
-    keywords: ["bookmarks", "starred", "saved"],
+    keywords: ["bookmarks", "starred", "saved", "file"],
   },
   {
     id: "theme-toggle",
@@ -207,7 +206,7 @@ const groupedActions = computed(() => {
     if (!groups[action.category]) {
       groups[action.category] = [];
     }
-    groups[action.category].push(action);
+    groups[action.category]!.push(action);
   });
   
   return groups;
@@ -224,11 +223,12 @@ function handleKeydown(e: KeyboardEvent) {
   if (!show.value) return;
   
   const items = filtered.value;
-  
+  if (!items.length) return;
+
   switch (e.key) {
     case "ArrowDown":
       e.preventDefault();
-      selectedIndex.value = Math.min(selectedIndex.value + 1, items.length - 1);
+      selectedIndex.value = Math.min(selectedIndex.value + 1, Math.max(items.length - 1, 0));
       break;
     case "ArrowUp":
       e.preventDefault();
@@ -236,9 +236,8 @@ function handleKeydown(e: KeyboardEvent) {
       break;
     case "Enter":
       e.preventDefault();
-      if (items[selectedIndex.value]) {
-        activate(items[selectedIndex.value]);
-      }
+      const target = items[selectedIndex.value] ?? items[0];
+      if (target) activate(target);
       break;
     case "Escape":
       e.preventDefault();
@@ -250,11 +249,9 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function onGlobalKey(e: KeyboardEvent) {
-  const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-  const cmd = isMac ? e.metaKey : e.ctrlKey;
-  
-  // Command palette shortcut
-  if (cmd && e.key.toLowerCase() === "k") {
+  const cmdKey = e.metaKey || e.ctrlKey;
+
+  if (cmdKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
     show.value = !show.value;
     if (show.value) {
@@ -264,7 +261,7 @@ function onGlobalKey(e: KeyboardEvent) {
   }
   
   // Global search shortcut
-  if (cmd && e.shiftKey && e.key.toLowerCase() === "f") {
+  if (cmdKey && e.shiftKey && e.key.toLowerCase() === "f") {
     e.preventDefault();
     show.value = true;
     query.value = "";
@@ -274,7 +271,7 @@ function onGlobalKey(e: KeyboardEvent) {
       const searchAction = filtered.value.find(a => a.id === "search-global");
       if (searchAction) {
         const index = filtered.value.indexOf(searchAction);
-        selectedIndex.value = index;
+        selectedIndex.value = index >= 0 ? index : 0;
       }
     });
   }
@@ -369,7 +366,7 @@ watch(
           <div class="palette-group-title">{{ category }}</div>
           <NList>
             <NListItem 
-              v-for="(item, index) in group" 
+              v-for="item in group" 
               :key="item.id"
               @click="activate(item)" 
               class="palette-item"

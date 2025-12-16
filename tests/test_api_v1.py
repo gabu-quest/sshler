@@ -96,6 +96,25 @@ def test_local_directory_touch_delete(tmp_path):
         client.close()
 
 
+def test_write_file(tmp_path):
+    config_dir = setup_config(tmp_path)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    target = workdir / "edit.txt"
+    target.write_text("old", encoding="utf-8")
+    client = build_client(config_dir)
+    try:
+        write_resp = client.post(
+          "/api/v1/boxes/local/write",
+          json={"path": str(target), "content": "new-content"},
+          headers=auth_headers(),
+        )
+        assert write_resp.status_code == 200
+        assert target.read_text(encoding="utf-8") == "new-content"
+    finally:
+        client.close()
+
+
 def test_favorites_and_pin(tmp_path):
     config_dir = setup_config(tmp_path)
     client = build_client(config_dir)

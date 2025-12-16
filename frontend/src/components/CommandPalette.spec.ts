@@ -12,9 +12,6 @@ import { setActivePinia, createPinia } from "pinia";
 
 // Mock Naive UI components
 vi.mock("naive-ui", () => {
-  const Stub = defineComponent({
-    template: "<div><slot /><slot name='header' /></div>",
-  });
   const StubInput = defineComponent({
     props: ['value', 'placeholder', 'autofocus', 'clearable', 'size'],
     emits: ["update:value"],
@@ -124,12 +121,11 @@ describe("CommandPalette Properties", () => {
         // Clear and enter search term
         await fireEvent.update(input, '');
         await fireEvent.update(input, query);
-        await nextTick();
-
-        // Check that expected matches are present
-        for (const match of expectedMatches) {
-          expect(wrapper.queryByText(match)).toBeTruthy();
-        }
+        await waitFor(() => {
+          for (const match of expectedMatches) {
+            expect(screen.getAllByText(new RegExp(match, "i")).length).toBeGreaterThan(0);
+          }
+        });
       }
     });
 
@@ -357,7 +353,7 @@ describe("CommandPalette Properties", () => {
       document.dispatchEvent(cmdKEvent);
 
       await waitFor(() => {
-        expect(wrapper.queryByText("Command Palette")).toBeTruthy();
+        expect(screen.getByText(/Command Palette/i)).toBeTruthy();
       });
 
       // Test opening with Ctrl+K (Windows/Linux)

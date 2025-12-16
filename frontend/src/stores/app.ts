@@ -1,4 +1,4 @@
-import { computed, ref, watch, onMounted, onUnmounted } from "vue";
+import { computed, ref, watch } from "vue";
 
 import { defineStore } from "pinia";
 
@@ -57,29 +57,43 @@ export const useAppStore = defineStore("app", () => {
     return colorMode.value === "dark";
   });
 
+  const applyThemeAttributes = () => {
+    if (typeof document === "undefined") return;
+    document.documentElement.setAttribute("data-theme", isDark.value ? "dark" : "light");
+    document.documentElement.classList.toggle("reduced-motion", reducedMotion.value);
+  };
+
   // Theme management
   const setColorMode = (mode: ColorMode) => {
     colorMode.value = mode;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(COLOR_KEY, mode);
+    }
+    applyThemeAttributes();
   };
 
   const toggleTheme = () => {
-    colorMode.value = isDark.value ? "light" : "dark";
+    setColorMode(isDark.value ? "light" : "dark");
   };
 
   const cycleTheme = () => {
     const modes: ColorMode[] = ["light", "dark", "system"];
     const currentIndex = modes.indexOf(colorMode.value);
-    const nextIndex = (currentIndex + 1) % modes.length;
-    colorMode.value = modes[nextIndex];
+    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % modes.length;
+    setColorMode(modes[nextIndex] as ColorMode);
   };
 
   // Accessibility preferences
   const setReducedMotion = (enabled: boolean) => {
     reducedMotion.value = enabled;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(REDUCED_MOTION_KEY, enabled.toString());
+    }
+    applyThemeAttributes();
   };
 
   const toggleReducedMotion = () => {
-    reducedMotion.value = !reducedMotion.value;
+    setReducedMotion(!reducedMotion.value);
   };
 
   // System preference listeners
@@ -93,6 +107,7 @@ export const useAppStore = defineStore("app", () => {
     darkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleDarkModeChange = (e: MediaQueryListEvent) => {
       systemDark.value = e.matches;
+      applyThemeAttributes();
     };
     darkModeMediaQuery.addEventListener("change", handleDarkModeChange);
 
@@ -120,40 +135,23 @@ export const useAppStore = defineStore("app", () => {
   };
 
   // Persistence watchers
-  watch(
-    colorMode,
-    (value) => {
-      if (typeof localStorage === "undefined") return;
-      localStorage.setItem(COLOR_KEY, value);
+  watch(colorMode, () => {
+    applyThemeAttributes();
+  });
 
-      // Apply theme class to document for CSS custom properties
-      document.documentElement.setAttribute("data-theme", isDark.value ? "dark" : "light");
-    },
-    { immediate: true },
-  );
+  watch(isDark, () => {
+    applyThemeAttributes();
+  });
 
-  watch(
-    isDark,
-    (value) => {
-      if (typeof document === "undefined") return;
-      document.documentElement.setAttribute("data-theme", value ? "dark" : "light");
-    },
-    { immediate: true },
-  );
+  watch(systemDark, () => {
+    if (colorMode.value === "system") {
+      applyThemeAttributes();
+    }
+  });
 
-  watch(
-    reducedMotion,
-    (value) => {
-      if (typeof localStorage === "undefined") return;
-      localStorage.setItem(REDUCED_MOTION_KEY, value.toString());
-
-      // Apply reduced motion class to document
-      if (typeof document !== "undefined") {
-        document.documentElement.classList.toggle("reduced-motion", value);
-      }
-    },
-    { immediate: true },
-  );
+  watch(reducedMotion, () => {
+    applyThemeAttributes();
+  });
 
   // Initialize system listeners
   let cleanup: (() => void) | undefined;
@@ -164,11 +162,7 @@ export const useAppStore = defineStore("app", () => {
     // Set initial system values
     systemDark.value = prefersDark();
 
-    // Apply initial classes
-    if (typeof document !== "undefined") {
-      document.documentElement.setAttribute("data-theme", isDark.value ? "dark" : "light");
-      document.documentElement.classList.toggle("reduced-motion", reducedMotion.value);
-    }
+    applyThemeAttributes();
   };
 
   const destroy = () => {

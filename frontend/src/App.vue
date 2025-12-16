@@ -29,9 +29,34 @@ const theme = computed(() => (appStore.isDark ? darkTheme : lightTheme));
           <AppHeader />
         </NLayoutHeader>
         <NLayoutContent class="app-main">
-          <RouterView />
+          <div class="app-content">
+            <RouterView />
+          </div>
         </NLayoutContent>
       </NLayout>
     </NMessageProvider>
   </NConfigProvider>
 </template>
+
+<style scoped>
+.app-layout {
+  height: 100vh;
+}
+
+.app-main {
+  height: calc(100vh - 64px);
+  overflow: auto;
+}
+
+.app-content {
+  padding: 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .app-content {
+    padding: 8px;
+  }
+}
+</style>

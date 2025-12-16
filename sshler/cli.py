@@ -266,6 +266,64 @@ def serve(
         )
 
 
+def fix_frontend():
+    """Fix frontend issues by rebuilding and clearing cache."""
+    print("Fixing frontend issues...")
+    
+    # Build frontend
+    if not build_frontend():
+        return False
+    
+    # Clear any cached files
+    frontend_dir = Path(__file__).parent.parent / "frontend"
+    dist_dir = Path(__file__).parent / "static" / "dist"
+    
+    if dist_dir.exists():
+        print("Clearing dist cache...")
+        import shutil
+        try:
+            shutil.rmtree(dist_dir)
+        except Exception as e:
+            print(f"Warning: Could not clear dist cache: {e}")
+    
+    # Rebuild
+    if build_frontend():
+        print("Frontend fixed! Hard refresh your browser (Ctrl+F5)")
+        return True
+    
+    return False
+
+
+def build_frontend():
+    """Build the Vue frontend."""
+    frontend_dir = Path(__file__).parent.parent / "frontend"
+    if not frontend_dir.exists():
+        print("Frontend directory not found")
+        return False
+    
+    print("Building Vue frontend...")
+    try:
+        result = subprocess.run(
+            ["pnpm", "build"],
+            cwd=frontend_dir,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        print("Frontend build completed successfully!")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Frontend build failed: {e}")
+        if e.stdout:
+            print("STDOUT:", e.stdout)
+        if e.stderr:
+            print("STDERR:", e.stderr)
+        return False
+    except FileNotFoundError:
+        print("pnpm not found. Please install pnpm first.")
+        return False
+
+
 def main() -> None:
     """Parse CLI arguments and invoke the requested subcommand.
 
@@ -280,6 +338,14 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(prog="sshler", description="Local SSH tmux-in-browser")
     subcommands = parser.add_subparsers(dest="command")
+
+    # Build command
+    build_parser = subcommands.add_parser("build", help="Build the Vue frontend")
+    build_parser.set_defaults(func=lambda: build_frontend())
+
+    # Fix command
+    fix_parser = subcommands.add_parser("fix", help="Fix frontend issues (rebuild + clear cache)")
+    fix_parser.set_defaults(func=lambda: fix_frontend())
 
     serve_parser = subcommands.add_parser("serve", help="Start the sshler web app")
     serve_parser.add_argument(
@@ -339,7 +405,11 @@ def main() -> None:
     serve_parser.set_defaults(open_browser=True)
 
     parsed_args = parser.parse_args()
-    if parsed_args.command in (None, "serve"):
+    if parsed_args.command == "build":
+        build_frontend()
+    elif parsed_args.command == "fix":
+        fix_frontend()
+    elif parsed_args.command in (None, "serve"):
         bind_host = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
         basic_auth: tuple[str, str] | None = None
         auth_value = getattr(parsed_args, "auth", None)

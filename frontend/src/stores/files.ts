@@ -20,6 +20,7 @@ export const useFilesStore = defineStore("files", () => {
   const uploadProgress = ref(0);
   const uploadFileName = ref<string | null>(null);
   const uploadError = ref<string | null>(null);
+  const selectedFiles = ref<string[]>([]);
 
   async function load(box: string, directory: string, token: string | null) {
     loading.value = true;
@@ -31,6 +32,10 @@ export const useFilesStore = defineStore("files", () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  function setSelectedFiles(paths: string[]) {
+    selectedFiles.value = [...paths];
   }
 
   async function doTouch(box: string, directory: string, filename: string, token: string | null) {
@@ -63,15 +68,17 @@ export const useFilesStore = defineStore("files", () => {
     uploadProgress.value = 0;
     uploadFileName.value = file.name;
     uploadError.value = null;
-    await uploadFile(box, directory, file, token, (percent) => {
-      uploadProgress.value = percent;
-    }).catch((err) => {
+    try {
+      await uploadFile(box, directory, file, token, (percent) => {
+        uploadProgress.value = percent;
+      });
+      // Ensure final state reflects completion even if callback did not hit 100
+      uploadProgress.value = Math.max(uploadProgress.value, 100);
+    } catch (err) {
       uploadError.value = err instanceof Error ? err.message : String(err);
-      throw err;
-    }).finally(() => {
       uploadProgress.value = 0;
       uploadFileName.value = null;
-    });
+    }
   }
 
   return {
@@ -81,7 +88,9 @@ export const useFilesStore = defineStore("files", () => {
     uploadProgress,
     uploadFileName,
     uploadError,
+    selectedFiles,
     load,
+    setSelectedFiles,
     doTouch,
     doDelete,
     doRename,

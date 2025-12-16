@@ -41,7 +41,7 @@ class MockWebSocket {
     }, 10);
   }
 
-  send(data: string) {
+  send(_data: string) {
     // Mock send functionality
   }
 
@@ -51,7 +51,8 @@ class MockWebSocket {
   }
 }
 
-global.WebSocket = MockWebSocket as any;
+const globalAny = globalThis as any;
+globalAny.WebSocket = MockWebSocket;
 
 vi.mock("naive-ui", () => {
   const Stub = defineComponent({ template: "<div><slot /></div>" });
@@ -121,7 +122,7 @@ describe("TerminalView Properties", () => {
           cols: fc.integer({ min: 40, max: 200 }),
           rows: fc.integer({ min: 10, max: 60 }),
         }),
-        async ({ boxName, sessionName, directory, cols, rows }) => {
+        async ({ boxName: _box, sessionName: _sessionName, directory: _dir, cols: _cols, rows: _rows }) => {
           const wrapper = render(TerminalView, {
             global: {
               stubs: {

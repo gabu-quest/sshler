@@ -13,8 +13,36 @@ import type {
 
 const API_BASE = "/api/v1";
 
-async function handle<T>(response: Response): Promise<T> {
+async function handle<T>(response: Response, originalRequest?: { url: string, options: RequestInit }): Promise<T> {
   if (!response.ok) {
+    // Auto-retry token issues once
+    if (response.status === 403 && !response.url.includes('/bootstrap') && originalRequest) {
+      console.warn('Token invalid, fetching fresh token...');
+      try {
+        const { useBootstrapStore } = await import('@/stores/bootstrap');
+        const bootstrapStore = useBootstrapStore();
+        
+        // Clear old token and fetch fresh one
+        bootstrapStore.setToken(null);
+        await bootstrapStore.bootstrap();
+        
+        // Retry the original request with new token
+        const token = bootstrapStore.token;
+        if (token) {
+          const newHeaders = { ...originalRequest.options.headers, ...buildHeaders(token) };
+          const retryResponse = await fetch(originalRequest.url, {
+            ...originalRequest.options,
+            headers: newHeaders
+          });
+          if (retryResponse.ok) {
+            return retryResponse.json() as Promise<T>;
+          }
+        }
+      } catch (retryError) {
+        console.error('Token refresh failed:', retryError);
+      }
+    }
+    
     const detail = await safeParseError(response);
     throw new Error(detail || `request failed with ${response.status}`);
   }
@@ -47,17 +75,18 @@ export function buildHeaders(token?: string | null): HeadersInit {
 }
 
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
-  const res = await fetch(`${API_BASE}/bootstrap`, {
+  const res = await fetch(`${API_BASE}/bootstrap?_t=${Date.now()}`, {
     headers: buildHeaders(),
+    cache: 'no-cache'
   });
   return handle<BootstrapPayload>(res);
 }
 
 export async function fetchBoxes(token: string | null): Promise<ApiBox[]> {
-  const res = await fetch(`${API_BASE}/boxes`, {
-    headers: buildHeaders(token),
-  });
-  return handle<ApiBox[]>(res);
+  const url = `${API_BASE}/boxes`;
+  const options = { headers: buildHeaders(token) };
+  const res = await fetch(url, options);
+  return handle<ApiBox[]>(res, { url, options });
 }
 
 export async function fetchBox(name: string, token: string | null): Promise<ApiBox> {
@@ -191,6 +220,20 @@ export async function copyFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ source, destination, new_name }),
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function writeFile(
+  name: string,
+  path: string,
+  content: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/write`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
   });
   return handle<SimpleMessage>(res);
 }

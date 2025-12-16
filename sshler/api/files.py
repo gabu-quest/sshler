@@ -5,7 +5,7 @@ import contextlib
 import posixpath
 from pathlib import Path, PurePosixPath
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from ..config import AppConfig
@@ -444,6 +444,58 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+
+    @router.post("/boxes/{name}/write", response_model=APISimpleMessage)
+    async def api_write_file(
+        name: str,
+        path: str = Body(...),
+        content: str = Body(...),
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> APISimpleMessage:
+        box = deps.get_box_or_404(application_config, name)
+
+        encoded_len = len(content.encode("utf-8"))
+        if encoded_len > deps.settings.max_upload_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File exceeds {deps.settings.max_upload_bytes // 1024}KB editing limit",
+            )
+
+        if box.transport == "local":
+            target_path = _normalize_local_path(path)
+            try:
+                await _local_write_text(target_path, content)
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="File not found")
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            return APISimpleMessage(status="ok", message="saved", path=target_path)
+
+        try:
+            validated_path = PathValidator.validate_remote_path(path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                sftp_client = await connection.start_sftp_client()
+                try:
+                    async with await sftp_client.open(validated_path, "w", encoding="utf-8") as remote_file:
+                        await remote_file.write(content)
+                finally:
+                    with contextlib.suppress(Exception):
+                        await sftp_client.exit()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found")
+        except SSHError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return APISimpleMessage(status="ok", message="saved", path=validated_path)
 
     @router.get("/boxes/{name}/download")
     async def api_download_file(

@@ -12,16 +12,20 @@ import fc from "fast-check";
 import { useFilesStore } from "./files";
 import { useDirectoryStore } from "./directory";
 
-// Mock API functions
-const mockFetchDirectory = vi.fn();
-const mockTouchFile = vi.fn();
-const mockDeleteFile = vi.fn();
-const mockRenameFile = vi.fn();
-const mockMoveFile = vi.fn();
-const mockCopyFile = vi.fn();
-const mockUploadFile = vi.fn();
+// Mock API functions (hoisted to satisfy vitest hoisting rules)
+const apiMocks = vi.hoisted(() => ({
+  fetchDirectory: vi.fn(),
+  touchFile: vi.fn(),
+  deleteFile: vi.fn(),
+  renameFile: vi.fn(),
+  moveFile: vi.fn(),
+  copyFile: vi.fn(),
+  uploadFile: vi.fn(),
+}));
 
-vi.mock("@/api/http", () => ({
+vi.mock("@/api/http", () => apiMocks);
+
+const {
   fetchDirectory: mockFetchDirectory,
   touchFile: mockTouchFile,
   deleteFile: mockDeleteFile,
@@ -29,7 +33,7 @@ vi.mock("@/api/http", () => ({
   moveFile: mockMoveFile,
   copyFile: mockCopyFile,
   uploadFile: mockUploadFile,
-}));
+} = apiMocks;
 
 describe("Files Store Properties", () => {
   beforeEach(() => {
@@ -271,6 +275,7 @@ describe("Files Store Properties", () => {
           fileSize: fc.nat({ max: 1024 * 1024 }), // Up to 1MB
         }),
         async ({ boxName, directory, fileName, fileSize }) => {
+          mockUploadFile.mockClear();
           const store = useFilesStore();
 
           // Create mock file
@@ -295,7 +300,7 @@ describe("Files Store Properties", () => {
           await store.doUpload(boxName, directory, mockFile, "test-token");
 
           // Verify API was called
-          expect(mockUploadFile).toHaveBeenCalledWith(boxName, directory, mockFile, "test-token");
+          expect(mockUploadFile).toHaveBeenCalledWith(boxName, directory, mockFile, "test-token", expect.any(Function));
 
           // Verify upload progress was tracked
           expect(store.uploadProgress).toBe(100);
@@ -316,6 +321,7 @@ describe("Files Store Properties", () => {
           errorMessage: fc.string({ minLength: 1, maxLength: 200 }),
         }),
         async ({ boxName, directory, fileName, errorMessage }) => {
+          mockUploadFile.mockClear();
           const store = useFilesStore();
 
           // Create mock file
@@ -366,11 +372,11 @@ describe("Files Store Properties", () => {
           };
 
           // Select files by indices (filter valid indices)
-          const validIndices = selectedIndices.filter(i => i < files.length);
-          const selectedFiles = validIndices.map(i => files[i]);
+          const validIndices = selectedIndices.filter(i => i >= 0 && i < files.length);
+          const selectedFiles = validIndices.map(i => files[i]!);
 
           // Simulate selection
-          store.selectedFiles = selectedFiles.map(f => f.path);
+          store.setSelectedFiles(selectedFiles.map(f => f.path));
 
           // Verify selection count
           expect(store.selectedFiles.length).toBe(validIndices.length);
@@ -419,22 +425,10 @@ describe("Files Store Properties", () => {
           directoryStore.setFilter(searchQuery);
 
           // Get filtered results
-          const filteredFiles = files.filter(file =>
-            file.name.toLowerCase().includes(searchQuery.toLowerCase())
+          // Verify filter is applied (normalizing stray whitespace)
+          expect(directoryStore.filter).toBe(
+            (searchQuery as any).strip?.() ?? searchQuery.trim(),
           );
-
-          // Verify filter is applied
-          expect(directoryStore.filter).toBe(searchQuery);
-
-          // In a real implementation, we'd verify the filtered results
-          // For this test, we verify the filter mechanism works
-          if (searchQuery.trim()) {
-            // Search should filter results
-            expect(directoryStore.filter).toBe(searchQuery);
-          } else {
-            // Empty search should show all results
-            expect(directoryStore.filter).toBe("");
-          }
         }
       ), { numRuns: 100 });
     });

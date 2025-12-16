@@ -26,7 +26,7 @@ export const useDirectoryStore = defineStore("directory", () => {
   }
 
   function setFilter(value: string) {
-    filter.value = value;
+    filter.value = value.trim();
   }
 
   function remember(box: string, path: string) {

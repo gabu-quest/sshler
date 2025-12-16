@@ -105,7 +105,7 @@ describe('App Store Theme Properties', () => {
             const modes = ['light', 'dark', 'system'] as const;
 
             // Test cycling through all modes
-            modes.forEach((expectedMode, index) => {
+            modes.forEach((expectedMode) => {
                 store.cycleTheme();
                 expect(store.colorMode).toBe(expectedMode);
                 expect(mockLocalStorage.setItem).toHaveBeenCalledWith('sshler:ui:color-mode', expectedMode);

@@ -67,7 +67,14 @@ from .config import (
     save_config,
 )
 from .spa import mount_spa
-from .ssh import SSHError, connect, open_tmux, sftp_is_directory, sftp_list_directory
+from .ssh import (
+    SSHError,
+    connect,
+    open_tmux,
+    sftp_is_directory,
+    sftp_list_directory,
+    sftp_read_file,
+)
 from .ssh_pool import get_pool, initialize_pool, shutdown_pool
 from .validation import PathValidator, ValidationError
 from .rate_limit import get_rate_limiter
@@ -1732,9 +1739,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 text_content: str | None = None
                 if not image_mime or image_too_large:
                     try:
-                        text_content = await _read_remote_text(
-                            connection, validated_path, settings.max_upload_bytes
+                        text_content = await sftp_read_file(
+                            connection, validated_path, max_bytes=settings.max_upload_bytes
                         )
+                    except TypeError as exc:
+                        if "max_bytes" not in str(exc):
+                            raise HTTPException(status_code=500, detail=str(exc)) from exc
+                        text_content = await sftp_read_file(connection, validated_path)
                     except Exception as exc:
                         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

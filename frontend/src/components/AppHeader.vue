@@ -13,7 +13,6 @@ import {
   PhTerminal,
   PhList,
   PhX,
-  PhServer,
 } from "@phosphor-icons/vue";
 
 import { useAppStore } from "@/stores/app";
@@ -29,9 +28,10 @@ const isMobile = ref(false);
 
 const links = [
   { to: "/", label: "Overview", icon: PhHouseLine, shortcut: "Alt+H" },
-  { to: "/boxes", label: "Boxes", icon: PhServer, shortcut: "Alt+B" },
+  { to: "/boxes", label: "Boxes", icon: PhFolderSimple, shortcut: "Alt+B" },
   { to: "/files", label: "Files", icon: PhFolderSimple, shortcut: "Alt+F" },
   { to: "/terminal", label: "Terminal", icon: PhTerminal, shortcut: "Alt+T" },
+  { to: "/multi-terminal", label: "Multi-Terminal", icon: PhTerminal, shortcut: "Alt+M" },
   { to: "/settings", label: "Settings", icon: PhGearSix, shortcut: "Alt+S" },
 ];
 
@@ -79,6 +79,7 @@ const handleKeydown = (event: KeyboardEvent) => {
       'b': '/boxes',
       'f': '/files',
       't': '/terminal',
+      'm': '/multi-terminal',
       's': '/settings',
     };
     
