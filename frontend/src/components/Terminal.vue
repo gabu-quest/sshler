@@ -368,34 +368,34 @@ const connect = async () => {
       connected.value = true
       emit('connected')
       
-      // Send initial connection data
-      websocket?.send(JSON.stringify({
-        type: 'connect',
-        box: props.boxName,
-        session: props.sessionName,
-        directory: props.directory,
-        cols: terminal?.cols || 80,
-        rows: terminal?.rows || 24
-      }))
+      // Connection parameters are already in URL query params
+      // No need to send additional connect message
     }
     
     websocket.onmessage = (event) => {
+      // Handle binary data (terminal output)
+      if (event.data instanceof ArrayBuffer) {
+        terminal?.write(new Uint8Array(event.data))
+        return
+      }
+      
+      // Handle text data (JSON messages or raw text)
       try {
         const message = JSON.parse(event.data)
         
-        switch (message.type) {
-          case 'output':
-            terminal?.write(message.data)
+        switch (message.op) {
+          case 'windows':
+            // Handle tmux window list updates
+            console.log('Windows updated:', message.windows)
             break
-          case 'osc777':
-            handleOSC777(message.data)
+          case 'ping':
+            // Handle ping messages
             break
-          case 'error':
-            console.error('Terminal error:', message.error)
-            break
+          default:
+            console.log('Unknown message:', message)
         }
       } catch {
-        // Assume raw data
+        // Assume raw text data
         terminal?.write(event.data)
       }
     }
