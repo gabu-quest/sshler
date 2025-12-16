@@ -50,17 +50,12 @@ const gridCols = computed(() => {
 
 const terminalFontSize = computed(() => {
   const count = terminals.value.length
-  if (count <= 4) return 14
-  if (count <= 8) return 13
-  return 12
+  if (count <= 4) return 12
+  if (count <= 8) return 11
+  return 10
 })
 
-const terminalMinHeight = computed(() => {
-  const count = terminals.value.length
-  if (count <= 2) return '400px'
-  if (count <= 6) return '300px'
-  return '250px'
-})
+const terminalHeight = '350px' // Fixed height for all terminals
 
 const terminalColors = ['#6aa6ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2', '#eb2f96', '#f5222d']
 
@@ -155,7 +150,7 @@ onMounted(async () => {
       class="terminal-grid" 
       :style="{ 
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
-        '--terminal-min-height': terminalMinHeight
+        '--terminal-height': terminalHeight
       }"
     >
       <div
@@ -280,7 +275,7 @@ onMounted(async () => {
   padding: 4px;
   min-height: 0;
   overflow-y: auto; /* Allow vertical scrolling */
-  grid-auto-rows: var(--terminal-min-height, 300px); /* Consistent row height */
+  grid-auto-rows: var(--terminal-height, 350px); /* Fixed row height */
 }
 
 .terminal-container {
@@ -290,7 +285,7 @@ onMounted(async () => {
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
-  height: var(--terminal-min-height, 300px); /* Fixed height for consistency */
+  height: var(--terminal-height, 350px); /* Fixed height for consistency */
 }
 
 .terminal-header {
