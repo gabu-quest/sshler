@@ -2437,11 +2437,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             if settings.basic_auth_header:
                 auth_header = websocket.headers.get("authorization")
                 if auth_header != settings.basic_auth_header:
+                    logger.warning("[Connection] WebSocket auth failed: invalid basic auth")
                     await websocket.close(code=4401, reason="Unauthorized")
                     return
 
             token_param = websocket.query_params.get("token")
             if settings.csrf_token and token_param != settings.csrf_token:
+                logger.warning("[Connection] WebSocket auth failed: invalid CSRF token")
                 await websocket.close(code=4403, reason="Invalid token")
                 return
 
@@ -2459,25 +2461,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 else _normalize_directory_path(directory)
             )
 
+            client_host = websocket.client.host if websocket.client else "unknown"  # type: ignore[attr-defined]
             logger.info(
-                "Terminal websocket connected",
-                extra={
-                    "box": box.name,
-                    "transport": transport,
-                    "dir": normalized_directory,
-                    "session": session,
-                    "client": websocket.client.host if websocket.client else None,  # type: ignore[attr-defined]
-                },
+                f"[Connection] WebSocket connected: box={box.name}, transport={transport}, "
+                f"dir={normalized_directory}, session={session}, client={client_host}"
             )
-
-            # Configure file logging if not already configured
-            if not logger.handlers:
-                logger.setLevel(logging.DEBUG)
-                file_handler = logging.FileHandler("debug.log")
-                file_handler.setLevel(logging.DEBUG)
-                formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-                file_handler.setFormatter(formatter)
-                logger.addHandler(file_handler)
 
             connection: asyncssh.SSHClientConnection | None = None
             process = None
@@ -2490,17 +2478,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 if not is_directory:
                     normalized_directory = _normalize_local_path(box.default_dir)
 
-                # Debug: Log the command we're about to run
                 logger.info(
-                    f"Starting local tmux: transport={transport}, "
-                    f"dir={normalized_directory}, session={session}"
+                    f"[Connection] Starting local tmux: dir={normalized_directory}, session={session}"
                 )
 
                 try:
                     process = await _open_local_tmux(normalized_directory, session)
-                    logger.info(f"Local tmux process started: {process}")
+                    logger.info(f"[Connection] Local tmux process started successfully")
                 except Exception as exc:
-                    logger.error(f"Failed to start local tmux: {exc}", exc_info=True)
+                    logger.error(f"[Connection] Failed to start local tmux: {exc}", exc_info=True)
                     error_msg = f"Connection failed: {exc}\r\n"
                     try:
                         await websocket.send_text(error_msg)
@@ -2509,6 +2495,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     await websocket.close()
                     return
             else:
+                logger.info(
+                    f"[Connection] Connecting to SSH: host={box.connect_host}, "
+                    f"user={box.user}, port={box.port}"
+                )
                 try:
                     connection = await connect(
                         box.connect_host,
@@ -2519,8 +2509,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         application_config.ssh_config_path,
                         box.ssh_alias,
                     )
+                    logger.info(f"[Connection] SSH connection established successfully")
                 except Exception as exc:  # pragma: no cover
                     # network errors are environment specific
+                    logger.error(f"[Connection] SSH connection failed: {exc}", exc_info=True)
                     await websocket.send_text(f"Connection failed: {exc}")
                     await websocket.close()
                     return
@@ -2711,6 +2703,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     connection.close()
             except Exception:
                 pass
+
+            logger.info(
+                f"[Connection] WebSocket closed: box={box.name}, transport={transport}, "
+                f"session={session}, client={client_host}"
+            )
 
     application.include_router(create_api_router(deps))
     return application

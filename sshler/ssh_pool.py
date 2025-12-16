@@ -37,15 +37,15 @@ class SSHConnectionPool:
     def __init__(
         self,
         max_connections_per_box: int = 3,
-        idle_timeout: int = 300,  # 5 minutes
-        max_lifetime: int = 3600,  # 1 hour
+        idle_timeout: int | None = 1800,  # 30 minutes (None = forever)
+        max_lifetime: int | None = 3600,  # 1 hour (None = forever)
     ):
         """Initialize the connection pool.
 
         Args:
             max_connections_per_box: Maximum number of connections to maintain per box
-            idle_timeout: Seconds before an idle connection is closed
-            max_lifetime: Maximum lifetime of a connection in seconds
+            idle_timeout: Seconds before an idle connection is closed (None = never timeout)
+            max_lifetime: Maximum lifetime of a connection in seconds (None = never expire)
         """
         self._pools: dict[str, list[PooledConnection]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -84,8 +84,14 @@ class SSHConnectionPool:
                 healthy_connections = []
                 for conn in pool:
                     # Check if connection is stale
-                    is_idle_too_long = (now - conn.last_used_at) > self._idle_timeout
-                    is_too_old = (now - conn.created_at) > self._max_lifetime
+                    is_idle_too_long = (
+                        self._idle_timeout is not None
+                        and (now - conn.last_used_at) > self._idle_timeout
+                    )
+                    is_too_old = (
+                        self._max_lifetime is not None
+                        and (now - conn.created_at) > self._max_lifetime
+                    )
 
                     if is_idle_too_long or is_too_old or not conn.is_healthy:
                         # Close stale connection
@@ -310,10 +316,26 @@ def get_pool() -> SSHConnectionPool:
     """Get the global SSH connection pool instance."""
     global _global_pool
     if _global_pool is None:
+        import os
+
+        # Read configuration from environment variables
+        idle_timeout_str = os.getenv("SSHLER_POOL_IDLE_TIMEOUT", "1800")
+        max_lifetime_str = os.getenv("SSHLER_POOL_MAX_LIFETIME", "3600")
+        max_connections = int(os.getenv("SSHLER_POOL_MAX_CONNECTIONS", "3"))
+
+        # Parse timeout values: "forever" or "none" -> None, otherwise int
+        idle_timeout: int | None = None
+        if idle_timeout_str.lower() not in ("forever", "none"):
+            idle_timeout = int(idle_timeout_str)
+
+        max_lifetime: int | None = None
+        if max_lifetime_str.lower() not in ("forever", "none"):
+            max_lifetime = int(max_lifetime_str)
+
         _global_pool = SSHConnectionPool(
-            max_connections_per_box=3,
-            idle_timeout=300,
-            max_lifetime=3600,
+            max_connections_per_box=max_connections,
+            idle_timeout=idle_timeout,
+            max_lifetime=max_lifetime,
         )
     return _global_pool
 
