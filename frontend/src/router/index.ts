@@ -58,6 +58,16 @@ const router = createRouter({
       },
     },
     {
+      path: "/login",
+      name: "login",
+      component: () => import("@/views/LoginView.vue"),
+      meta: {
+        title: "Login",
+        description: "Sign in to sshler",
+        public: true, // No auth required for login page
+      },
+    },
+    {
       path: "/:pathMatch(.*)*",
       name: "not-found",
       component: () => import("@/views/NotFoundView.vue"),
@@ -87,7 +97,7 @@ const router = createRouter({
 });
 
 // Navigation guards
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   // Update document title
   const title = to.meta?.title as string;
   if (title) {
@@ -106,6 +116,41 @@ router.beforeEach((to, _from, next) => {
       document.head.appendChild(metaDescription);
     }
     metaDescription.setAttribute('content', description);
+  }
+
+  // Authentication guard
+  const isPublicRoute = to.meta?.public === true;
+
+  if (!isPublicRoute) {
+    try {
+      // Check if server requires authentication
+      const { useBootstrapStore } = await import('@/stores/bootstrap');
+      const bootstrapStore = useBootstrapStore();
+
+      // Ensure bootstrap is loaded
+      if (!bootstrapStore.token && !bootstrapStore.loading) {
+        await bootstrapStore.bootstrap();
+      }
+
+      // Check if basic auth is required
+      if (bootstrapStore.basicAuthRequired) {
+        const { useAuthStore } = await import('@/stores/auth');
+        const authStore = useAuthStore();
+
+        // If not authenticated, redirect to login
+        if (!authStore.isAuthenticated) {
+          next({
+            name: 'login',
+            query: { redirect: to.fullPath }
+          });
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('Auth guard error:', error);
+      // On error, allow navigation (fail open for better UX)
+      // The API will reject the request if auth is actually required
+    }
   }
 
   next();

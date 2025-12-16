@@ -19,6 +19,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
   const version = computed(() => payload.value?.version ?? "");
   const spaBase = computed(() => payload.value?.spa_base ?? "/app/");
   const spaEnabled = computed(() => payload.value?.spa_enabled ?? true);
+  const basicAuthRequired = computed(() => payload.value?.basic_auth_required ?? false);
 
   function readStoredToken(): string | null {
     if (typeof localStorage === "undefined") {
@@ -105,6 +106,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
     version,
     spaBase,
     spaEnabled,
+    basicAuthRequired,
     bootstrap,
     refreshToken,
     setToken,

@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
-import { NButton, NIcon, NSpace, NDrawer, NDrawerContent } from "naive-ui";
+import { NButton, NIcon, NSpace, NDrawer, NDrawerContent, NTooltip } from "naive-ui";
 import {
   PhFolderSimple,
   PhGearSix,
@@ -13,14 +13,28 @@ import {
   PhTerminal,
   PhList,
   PhX,
+  PhLockKey,
 } from "@phosphor-icons/vue";
 
 import { useAppStore } from "@/stores/app";
+import { useAuthStore } from "@/stores/auth";
+import { useBootstrapStore } from "@/stores/bootstrap";
 import CommandPalette from "@/components/CommandPalette.vue";
 import ShortcutsOverlay from "@/components/ShortcutsOverlay.vue";
 
 const appStore = useAppStore();
+const authStore = useAuthStore();
+const bootstrapStore = useBootstrapStore();
 const route = useRoute();
+
+// Auth status computed
+const showAuthIndicator = computed(() => bootstrapStore.basicAuthRequired && authStore.isAuthenticated);
+const authTooltip = computed(() => {
+  if (!bootstrapStore.basicAuthRequired) return '';
+  return authStore.isAuthenticated
+    ? `Authenticated as ${authStore.displayUsername}`
+    : 'Authentication required';
+});
 
 // Mobile navigation state
 const isMobileMenuOpen = ref(false);
@@ -146,11 +160,24 @@ onUnmounted(() => {
     <!-- Header Actions -->
     <div class="header-actions">
       <NSpace align="center" size="small">
+        <!-- Auth Indicator -->
+        <NTooltip v-if="showAuthIndicator" :delay="300">
+          <template #trigger>
+            <div class="auth-indicator" :aria-label="authTooltip">
+              <NIcon size="16" color="var(--success-color)">
+                <PhLockKey />
+              </NIcon>
+              <span class="auth-username">{{ authStore.displayUsername }}</span>
+            </div>
+          </template>
+          {{ authTooltip }}
+        </NTooltip>
+
         <span class="text-muted mode-label" aria-live="polite">{{ themeLabel }}</span>
-        <NButton 
-          quaternary 
-          circle 
-          size="small" 
+        <NButton
+          quaternary
+          circle
+          size="small"
           @click="toggleTheme"
           :aria-label="`Switch to ${appStore.isDark ? 'light' : 'dark'} theme`"
           title="Toggle theme"
@@ -313,6 +340,26 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.auth-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(var(--success-color-rgb, 24, 160, 88), 0.1);
+  border: 1px solid rgba(var(--success-color-rgb, 24, 160, 88), 0.2);
+}
+
+.auth-username {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-color);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mode-label {
   text-transform: uppercase;
   font-size: 11px;
@@ -394,6 +441,14 @@ onUnmounted(() => {
 
   .mode-label {
     display: none;
+  }
+
+  .auth-username {
+    display: none;
+  }
+
+  .auth-indicator {
+    padding: 6px 8px;
   }
 }
 

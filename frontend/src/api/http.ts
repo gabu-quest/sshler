@@ -64,19 +64,158 @@ async function safeParseError(response: Response): Promise<string | null> {
   return null;
 }
 
-export function buildHeaders(token?: string | null): HeadersInit {
+export function buildHeaders(token?: string | null, authHeader?: string | null): HeadersInit {
   const headers: HeadersInit = {
     Accept: "application/json",
   };
   if (token) {
     headers["X-SSHLER-TOKEN"] = token;
   }
+  if (authHeader) {
+    headers["Authorization"] = authHeader;
+  }
   return headers;
 }
 
+/**
+ * Get auth header from auth store if available
+ */
+async function getAuthHeaders(): Promise<HeadersInit> {
+  try {
+    const { useAuthStore } = await import('@/stores/auth');
+    const authStore = useAuthStore();
+    const authHeader = authStore.getAuthHeader();
+    return buildHeaders(undefined, authHeader);
+  } catch {
+    return buildHeaders();
+  }
+}
+
+/**
+ * Combine auth headers with CSRF token
+ */
+async function buildHeadersWithAuth(token?: string | null): Promise<HeadersInit> {
+  const authHeaders = await getAuthHeaders();
+  const tokenHeaders = buildHeaders(token);
+  return { ...authHeaders, ...tokenHeaders };
+}
+
+/**
+ * Axios-style HTTP client with automatic auth header injection
+ */
+export const http = {
+  async get<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    const authHeaders = await getAuthHeaders();
+    const headers = { ...authHeaders, ...config?.headers };
+    const response = await fetch(url, { method: 'GET', headers });
+
+    if (!response.ok) {
+      await handleAuthErrors(response);
+      const detail = await safeParseError(response);
+      throw createHttpError(response.status, detail || `GET ${url} failed with ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { data };
+  },
+
+  async post<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    const authHeaders = await getAuthHeaders();
+    const headers = {
+      ...authHeaders,
+      'Content-Type': 'application/json',
+      ...config?.headers
+    };
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    if (!response.ok) {
+      await handleAuthErrors(response);
+      const detail = await safeParseError(response);
+      throw createHttpError(response.status, detail || `POST ${url} failed with ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { data };
+  },
+
+  async put<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    const authHeaders = await getAuthHeaders();
+    const headers = {
+      ...authHeaders,
+      'Content-Type': 'application/json',
+      ...config?.headers
+    };
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    if (!response.ok) {
+      await handleAuthErrors(response);
+      const detail = await safeParseError(response);
+      throw createHttpError(response.status, detail || `PUT ${url} failed with ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { data };
+  },
+
+  async delete<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    const authHeaders = await getAuthHeaders();
+    const headers = { ...authHeaders, ...config?.headers };
+    const response = await fetch(url, { method: 'DELETE', headers });
+
+    if (!response.ok) {
+      await handleAuthErrors(response);
+      const detail = await safeParseError(response);
+      throw createHttpError(response.status, detail || `DELETE ${url} failed with ${response.status}`);
+    }
+
+    const data = await response.json();
+    return { data };
+  },
+};
+
+/**
+ * Handle authentication-specific errors
+ */
+async function handleAuthErrors(response: Response): Promise<void> {
+  if (response.status === 401) {
+    // Unauthorized - redirect to login
+    try {
+      const { useAuthStore } = await import('@/stores/auth');
+      const authStore = useAuthStore();
+      authStore.clearCredentials();
+
+      // Redirect to login page with return URL
+      const currentPath = window.location.pathname;
+      if (!currentPath.startsWith('/login')) {
+        window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`;
+      }
+    } catch (err) {
+      console.error('Failed to handle 401 error:', err);
+    }
+  }
+}
+
+/**
+ * Create HTTP error with response details
+ */
+function createHttpError(status: number, message: string): Error {
+  const error = new Error(message) as any;
+  error.response = { status };
+  return error;
+}
+
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
+  const authHeaders = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/bootstrap?_t=${Date.now()}`, {
-    headers: buildHeaders(),
+    headers: { ...authHeaders, ...buildHeaders() },
     cache: 'no-cache'
   });
   return handle<BootstrapPayload>(res);
@@ -84,7 +223,7 @@ export async function fetchBootstrap(): Promise<BootstrapPayload> {
 
 export async function fetchBoxes(token: string | null): Promise<ApiBox[]> {
   const url = `${API_BASE}/boxes`;
-  const options = { headers: buildHeaders(token) };
+  const options = { headers: await buildHeadersWithAuth(token) };
   const res = await fetch(url, options);
   return handle<ApiBox[]>(res, { url, options });
 }
@@ -128,7 +267,9 @@ export async function fetchSessions(token: string | null): Promise<SessionInfo> 
 }
 
 export async function fetchTerminalHandshake(token: string | null): Promise<TerminalHandshake> {
-  const res = await fetch(`${API_BASE}/terminal/handshake`, { headers: buildHeaders(token) });
+  const res = await fetch(`${API_BASE}/terminal/handshake`, {
+    headers: await buildHeadersWithAuth(token)
+  });
   return handle<TerminalHandshake>(res);
 }
 
@@ -249,13 +390,17 @@ export async function uploadFile(
   form.append("directory", directory);
   form.append("file", file);
 
+  // Get auth headers
+  const headers = await buildHeadersWithAuth(token);
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/boxes/${encodeURIComponent(name)}/upload`, true);
-    xhr.setRequestHeader("Accept", "application/json");
-    if (token) {
-      xhr.setRequestHeader("X-SSHLER-TOKEN", token);
-    }
+
+    // Set all headers including auth
+    Object.entries(headers).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, String(value));
+    });
 
     if (xhr.upload && onProgress) {
       xhr.upload.onprogress = (event) => {
