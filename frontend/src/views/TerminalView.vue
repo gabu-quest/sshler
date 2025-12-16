@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NCard, NSelect, NButton, NIcon, NAlert, useMessage } from 'naive-ui'
+import { NCard, NSelect, NButton, NIcon, useMessage } from 'naive-ui'
 import { PhTerminalWindow, PhArrowLeft } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
@@ -16,6 +16,7 @@ const boxesStore = useBoxesStore()
 
 const selectedBox = ref<string | null>(null)
 const initialDirectory = ref<string>('~')
+const sessionName = ref<string>('main')
 
 const boxOptions = computed(() =>
   boxesStore.items.map((box) => ({ 
@@ -31,6 +32,13 @@ const tokenValue = computed(() =>
 const selectedBoxData = computed(() => 
   boxesStore.items.find(box => box.name === selectedBox.value)
 )
+
+// Generate directory-based session name
+const generateSessionName = (directory: string) => {
+  return directory 
+    ? directory.replace(/[^a-zA-Z0-9]/g, '_').replace(/^_+|_+$/g, '') || 'root'
+    : 'home'
+}
 
 const ensureData = async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
@@ -54,6 +62,9 @@ const initializeFromRoute = () => {
   if (dirFromRoute) {
     initialDirectory.value = dirFromRoute
   }
+  
+  // Set session name based on directory
+  sessionName.value = generateSessionName(initialDirectory.value)
 }
 
 const handleBoxChange = (boxName: string) => {
@@ -112,27 +123,12 @@ watch(() => boxesStore.items, () => {
       </div>
     </header>
 
-    <!-- Connection Status -->
-    <NAlert 
-      v-if="selectedBoxData" 
-      type="info" 
-      :title="`Connected to ${selectedBoxData.name}`"
-      closable
-    >
-      <template #icon>
-        <NIcon size="16"><PhTerminalWindow /></NIcon>
-      </template>
-      Host: {{ selectedBoxData.host }}
-      <span v-if="selectedBoxData.user"> • User: {{ selectedBoxData.user }}</span>
-      <span v-if="selectedBoxData.port && selectedBoxData.port !== 22"> • Port: {{ selectedBoxData.port }}</span>
-    </NAlert>
-
     <!-- Terminal Container -->
     <div class="terminal-container">
       <Terminal
         v-if="selectedBox"
         :box-name="selectedBox"
-        :session-name="'main'"
+        :session-name="sessionName"
         :directory="initialDirectory"
       />
       
