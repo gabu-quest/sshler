@@ -167,6 +167,11 @@ const TERMINAL_THEMES = {
   }
 }
 
+const handleTerminalClick = () => {
+  console.log('Terminal clicked, focusing...') // Debug
+  terminal?.focus()
+}
+
 const createTerminal = () => {
   if (!terminalRef.value) return
 
@@ -203,11 +208,14 @@ const createTerminal = () => {
 
   // Handle data input
   terminal.onData((data) => {
+    console.log('Terminal onData triggered:', data) // Debug
     if (websocket && websocket.readyState === WebSocket.OPEN) {
       websocket.send(JSON.stringify({
         type: 'input',
         data: data
       }))
+    } else {
+      console.log('WebSocket not open, cannot send data. State:', websocket?.readyState)
     }
   })
 
@@ -229,6 +237,7 @@ const createTerminal = () => {
   // Initial fit
   nextTick(() => {
     fitAddon?.fit()
+    terminal?.focus()
   })
 }
 
@@ -362,41 +371,46 @@ const connect = async () => {
     wsUrl += '?' + params.toString()
     
     websocket = new WebSocket(wsUrl)
+    websocket.binaryType = 'arraybuffer' // Critical for binary terminal data!
     
     websocket.onopen = () => {
       connecting.value = false
       connected.value = true
       emit('connected')
       
-      // Connection parameters are already in URL query params
-      // No need to send additional connect message
+      // Focus terminal to enable input
+      nextTick(() => {
+        terminal?.focus()
+      })
     }
     
-    websocket.onmessage = (event) => {
-      // Handle binary data (terminal output)
+    websocket.onmessage = async (event) => {
+      // Handle binary data (actual terminal output)
       if (event.data instanceof ArrayBuffer) {
         terminal?.write(new Uint8Array(event.data))
         return
       }
       
-      // Handle text data (JSON messages or raw text)
-      try {
-        const message = JSON.parse(event.data)
-        
-        switch (message.op) {
-          case 'windows':
-            // Handle tmux window list updates
-            console.log('Windows updated:', message.windows)
-            break
-          case 'ping':
-            // Handle ping messages
-            break
-          default:
-            console.log('Unknown message:', message)
+      if (event.data instanceof Blob) {
+        const buffer = await event.data.arrayBuffer()
+        terminal?.write(new Uint8Array(buffer))
+        return
+      }
+      
+      // Handle text data
+      if (typeof event.data === 'string') {
+        try {
+          const message = JSON.parse(event.data)
+          // Filter out control messages - don't display them in terminal
+          if (message.op === 'ping' || message.op === 'windows') {
+            return // Ignore these control messages
+          }
+          // Any other JSON messages we don't recognize - ignore for now
+          console.log('Unknown control message:', message)
+        } catch {
+          // Not JSON - this is raw terminal text data
+          terminal?.write(event.data)
         }
-      } catch {
-        // Assume raw text data
-        terminal?.write(event.data)
       }
     }
     
@@ -412,6 +426,14 @@ const connect = async () => {
         message.error('Authentication failed - please refresh the page')
       } else if (event.code === 4401) {
         message.error('Authorization failed')
+      } else if (event.code === 1005) {
+        // Connection dropped - try to reconnect automatically
+        console.log('Connection dropped, attempting reconnect in 2s...')
+        setTimeout(() => {
+          if (!connected.value && !connecting.value) {
+            connect()
+          }
+        }, 2000)
       }
     }
     
@@ -542,7 +564,7 @@ defineExpose({
 
 <template>
   <div class="terminal-container">
-    <div ref="terminalRef" class="terminal" />
+    <div ref="terminalRef" class="terminal" @click="handleTerminalClick" />
     <div v-if="connecting" class="terminal-overlay">
       <div class="connecting-indicator">
         <div class="spinner" />
