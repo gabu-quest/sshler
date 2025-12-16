@@ -535,6 +535,11 @@ def main() -> None:
         help="Enable HTTP basic auth with 'username:password'",
     )
     serve_parser.add_argument(
+        "--no-password",
+        action="store_true",
+        help="Disable authentication (UNSAFE - only for testing on localhost)",
+    )
+    serve_parser.add_argument(
         "--max-upload-mb",
         type=int,
         default=50,
@@ -578,13 +583,75 @@ def main() -> None:
         )
     elif parsed_args.command in (None, "serve"):
         bind_host = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
+        no_password = getattr(parsed_args, "no_password", False)
         basic_auth: tuple[str, str] | None = None
         auth_value = getattr(parsed_args, "auth", None)
+
         if auth_value:
             if ":" not in auth_value:
                 parser.error("--auth must be in the form username:password")
             basic_auth = tuple(auth_value.split(":", 1))  # type: ignore[assignment]
-        
+
+        # Check if authentication is configured (from env vars or CLI)
+        env_username = os.getenv("SSHLER_USERNAME")
+        env_has_password = bool(os.getenv("SSHLER_PASSWORD_HASH") or os.getenv("SSHLER_PASSWORD"))
+        has_auth = bool(basic_auth or (env_username and env_has_password))
+
+        # Security validation
+        if not has_auth and not no_password:
+            # No auth configured - check if we're binding to a non-localhost interface
+            if bind_host not in ("127.0.0.1", "localhost"):
+                print("=" * 70, file=sys.stderr)
+                print("SECURITY ERROR: Authentication required for non-localhost binding", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                print(f"\nYou are trying to bind to: {bind_host}", file=sys.stderr)
+                print("This would expose sshler to your network without authentication!", file=sys.stderr)
+                print("\nTo fix this, choose one of these options:", file=sys.stderr)
+                print("\n1. Set up authentication with environment variables:", file=sys.stderr)
+                print("   sshler hash-password  # This will guide you through setup", file=sys.stderr)
+                print("\n2. Use --auth flag (not recommended - password visible in process list):", file=sys.stderr)
+                print("   sshler serve --host 0.0.0.0 --auth username:password", file=sys.stderr)
+                print("\n3. Use --no-password flag (UNSAFE - only for testing):", file=sys.stderr)
+                print("   sshler serve --host 0.0.0.0 --no-password", file=sys.stderr)
+                print("\n4. Bind to localhost only (no auth required):", file=sys.stderr)
+                print("   sshler serve --host 127.0.0.1", file=sys.stderr)
+                print("\n" + "=" * 70, file=sys.stderr)
+                sys.exit(1)
+            else:
+                # Localhost without auth - show warning
+                print("=" * 70, file=sys.stderr)
+                print("⚠️  WARNING: Running without authentication", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                print(f"Binding to: {bind_host}:{getattr(parsed_args, 'port', 8822)}", file=sys.stderr)
+                print("This is ONLY safe because you're bound to localhost.", file=sys.stderr)
+                print("\nFor production deployments, set up authentication:", file=sys.stderr)
+                print("  sshler hash-password", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                print()
+        elif no_password and bind_host not in ("127.0.0.1", "localhost"):
+            # --no-password with non-localhost - show big warning
+            print("=" * 70, file=sys.stderr)
+            print("⚠️  SECURITY WARNING: Running without authentication on network interface!", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            print(f"Binding to: {bind_host}:{getattr(parsed_args, 'port', 8822)}", file=sys.stderr)
+            print("Anyone on your network can access this sshler instance!", file=sys.stderr)
+            print("\nThis is EXTREMELY UNSAFE and should ONLY be used for testing.", file=sys.stderr)
+            print("Press Ctrl+C now to cancel, or wait 5 seconds to continue...", file=sys.stderr)
+            print("=" * 70, file=sys.stderr)
+            try:
+                time.sleep(5)
+            except KeyboardInterrupt:
+                print("\nCancelled.", file=sys.stderr)
+                sys.exit(0)
+
+        # Override auth if --no-password is set
+        if no_password:
+            basic_auth = None
+            # Also need to temporarily clear env vars for this run
+            os.environ.pop("SSHLER_USERNAME", None)
+            os.environ.pop("SSHLER_PASSWORD", None)
+            os.environ.pop("SSHLER_PASSWORD_HASH", None)
+
         # Check if dev mode is requested
         if getattr(parsed_args, "dev", False):
             serve_dev(
