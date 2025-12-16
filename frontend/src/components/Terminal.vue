@@ -39,6 +39,9 @@ const bootstrapStore = useBootstrapStore()
 const terminalRef = ref<HTMLDivElement>()
 const connected = ref(false)
 const connecting = ref(false)
+const reconnecting = ref(false)
+const reconnectAttempts = ref(0)
+const maxReconnectAttempts = ref(10)
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 const textEncoder = new TextEncoder()
@@ -49,6 +52,8 @@ let searchAddon: SearchAddon | null = null
 let websocket: WebSocket | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeTimeout: number | null = null
+let reconnectTimeout: number | null = null
+let intentionalDisconnect = false
 
 const TERMINAL_THEMES = {
   default: {
@@ -371,7 +376,7 @@ const handleOSC777 = (data: string) => {
     }
 
     emit('notification', { title, message: messageText })
-    
+
     // Show browser notification
     if (Notification.permission === 'granted') {
       new Notification(title, {
@@ -380,7 +385,7 @@ const handleOSC777 = (data: string) => {
         tag: 'terminal-osc777'
       })
     }
-    
+
     // Show toast
     message.info(`${title}: ${messageText}`)
   } catch (error) {
@@ -388,11 +393,56 @@ const handleOSC777 = (data: string) => {
   }
 }
 
+const calculateReconnectDelay = (attempt: number): number => {
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+  const baseDelay = 1000
+  const maxDelay = 30000
+  const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay)
+  return delay
+}
+
+const scheduleReconnect = () => {
+  // Clear any existing reconnect timeout
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout)
+    reconnectTimeout = null
+  }
+
+  // Don't reconnect if it was an intentional disconnect
+  if (intentionalDisconnect) {
+    console.log('[Connection] Skipping reconnect - intentional disconnect')
+    return
+  }
+
+  // Check if we've exceeded max attempts
+  if (reconnectAttempts.value >= maxReconnectAttempts.value) {
+    console.log('[Connection] Max reconnect attempts reached')
+    message.error('Connection lost - max reconnect attempts reached', {
+      duration: 5000
+    })
+    reconnecting.value = false
+    return
+  }
+
+  const delay = calculateReconnectDelay(reconnectAttempts.value)
+  reconnecting.value = true
+
+  console.log(`[Connection] Scheduling reconnect attempt ${reconnectAttempts.value + 1}/${maxReconnectAttempts.value} in ${delay}ms`)
+
+  reconnectTimeout = window.setTimeout(() => {
+    reconnectAttempts.value++
+    connect()
+  }, delay)
+}
+
 const connect = async () => {
   if (connecting.value || connected.value) return
 
   connecting.value = true
-  
+  intentionalDisconnect = false
+
+  console.log(`[Connection] Connecting to ${props.boxName} (attempt ${reconnectAttempts.value + 1})`)
+
   try {
     // Get WebSocket URL from backend handshake to ensure proper host resolution
     const handshakeResponse = await fetch('/api/v1/terminal/handshake', {
@@ -431,14 +481,27 @@ const connect = async () => {
     websocket.onopen = () => {
       connecting.value = false
       connected.value = true
+      reconnecting.value = false
       emit('connected')
-      
-      // Show auto-dismissing success message
-      message.success(`Connected to ${props.boxName}`, {
-        duration: 2000,
-        closable: false
-      })
-      
+
+      console.log(`[Connection] Connected to ${props.boxName}`)
+
+      // Show success message - more prominent if recovering from reconnect
+      if (reconnectAttempts.value > 0) {
+        message.success(`Reconnected to ${props.boxName}`, {
+          duration: 3000,
+          closable: false
+        })
+      } else {
+        message.success(`Connected to ${props.boxName}`, {
+          duration: 2000,
+          closable: false
+        })
+      }
+
+      // Reset reconnect attempts on successful connection
+      reconnectAttempts.value = 0
+
       // Focus terminal to enable input
       nextTick(() => {
         terminal?.focus()
@@ -479,42 +542,70 @@ const connect = async () => {
       connected.value = false
       connecting.value = false
       emit('disconnected')
-      
+
       // Log close reason for debugging
-      console.log('WebSocket closed:', event.code, event.reason)
-      
+      console.log(`[Connection] WebSocket closed: code=${event.code} reason="${event.reason}"`)
+
       if (event.code === 4403) {
-        message.error('Authentication failed - please refresh the page')
+        message.error('Authentication failed - please refresh the page', {
+          duration: 5000
+        })
+        reconnecting.value = false
       } else if (event.code === 4401) {
-        message.error('Authorization failed')
-      } else if (event.code === 1005) {
-        // Connection dropped - try to reconnect automatically
-        console.log('Connection dropped, attempting reconnect in 2s...')
-        setTimeout(() => {
-          if (!connected.value && !connecting.value) {
-            connect()
-          }
-        }, 2000)
+        message.error('Authorization failed', {
+          duration: 5000
+        })
+        reconnecting.value = false
+      } else if (event.code === 1000) {
+        // Normal closure - don't reconnect
+        console.log('[Connection] Normal close - not reconnecting')
+        reconnecting.value = false
+      } else {
+        // Unexpected disconnect - attempt reconnect with backoff
+        console.log('[Connection] Unexpected disconnect - scheduling reconnect')
+        scheduleReconnect()
       }
     }
     
     websocket.onerror = (error) => {
-      console.error('WebSocket error:', error)
+      console.error('[Connection] WebSocket error:', error)
       connected.value = false
       connecting.value = false
-      message.error('Terminal connection failed')
+
+      // Only show error message if not already reconnecting
+      if (!reconnecting.value && reconnectAttempts.value === 0) {
+        message.error('Terminal connection failed')
+      }
     }
-    
+
   } catch (error) {
-    console.error('Failed to connect:', error)
+    console.error('[Connection] Failed to connect:', error)
     connecting.value = false
-    message.error(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+
+    // Only show error message if not already reconnecting
+    if (!reconnecting.value && reconnectAttempts.value === 0) {
+      message.error(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+
+    // Schedule reconnect on connection failure
+    scheduleReconnect()
   }
 }
 
 const disconnect = () => {
+  console.log('[Connection] Intentional disconnect')
+  intentionalDisconnect = true
+  reconnecting.value = false
+  reconnectAttempts.value = 0
+
+  // Clear any pending reconnect timeout
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout)
+    reconnectTimeout = null
+  }
+
   if (websocket) {
-    websocket.close()
+    websocket.close(1000) // Normal closure
     websocket = null
   }
   connected.value = false
@@ -582,15 +673,19 @@ onMounted(async () => {
 
 onUnmounted(() => {
   disconnect()
-  
+
   if (resizeTimeout) {
     clearTimeout(resizeTimeout)
   }
-  
+
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout)
+  }
+
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
-  
+
   if (terminal) {
     terminal.dispose()
   }
@@ -631,10 +726,14 @@ defineExpose({
       @click="handleTerminalClick"
       @contextmenu="handleContextMenu"
     />
-    <div v-if="connecting" class="terminal-overlay">
+    <div v-if="connecting || reconnecting" class="terminal-overlay">
       <div class="connecting-indicator">
         <div class="spinner" />
-        <span>Connecting to {{ boxName }}...</span>
+        <span v-if="reconnecting">
+          Reconnecting to {{ boxName }}...
+          <small v-if="reconnectAttempts > 0">(attempt {{ reconnectAttempts }}/{{ maxReconnectAttempts }})</small>
+        </span>
+        <span v-else>Connecting to {{ boxName }}...</span>
       </div>
     </div>
     <div v-else-if="!connected" class="terminal-overlay">
@@ -681,6 +780,13 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   gap: 12px;
+}
+
+.connecting-indicator small {
+  display: block;
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 4px;
 }
 
 .spinner {
