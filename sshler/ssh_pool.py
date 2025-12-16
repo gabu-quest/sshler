@@ -307,6 +307,38 @@ class SSHConnectionPool:
             }
         return stats
 
+    def get_config(self) -> dict[str, int | None]:
+        """Get current pool configuration.
+
+        Returns:
+            Dictionary with idle_timeout, max_lifetime, and max_connections_per_box
+        """
+        return {
+            "idle_timeout": self._idle_timeout,
+            "max_lifetime": self._max_lifetime,
+            "max_connections_per_box": self._max_connections_per_box,
+        }
+
+    def update_config(
+        self,
+        idle_timeout: int | None = None,
+        max_lifetime: int | None = None,
+        max_connections_per_box: int | None = None,
+    ) -> None:
+        """Update pool configuration dynamically.
+
+        Args:
+            idle_timeout: New idle timeout (None = keep current)
+            max_lifetime: New max lifetime (None = keep current)
+            max_connections_per_box: New max connections (None = keep current)
+        """
+        if idle_timeout is not None:
+            self._idle_timeout = idle_timeout
+        if max_lifetime is not None:
+            self._max_lifetime = max_lifetime
+        if max_connections_per_box is not None:
+            self._max_connections_per_box = max_connections_per_box
+
 
 # Global connection pool instance
 _global_pool: SSHConnectionPool | None = None

@@ -134,3 +134,19 @@ class APIBootstrap(BaseModel):
     allow_origins: list[str]
     spa_base: str = "/app/"
     spa_enabled: bool = True
+
+
+class APIPoolConfig(BaseModel):
+    """SSH connection pool configuration."""
+
+    idle_timeout: int | None
+    max_lifetime: int | None
+    max_connections_per_box: int
+
+
+class APIPoolConfigUpdate(BaseModel):
+    """Update SSH connection pool configuration."""
+
+    idle_timeout: int | None = None
+    max_lifetime: int | None = None
+    max_connections_per_box: int | None = None
