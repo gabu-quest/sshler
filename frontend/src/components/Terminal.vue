@@ -41,6 +41,7 @@ const connected = ref(false)
 const connecting = ref(false)
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
+const textEncoder = new TextEncoder()
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -208,12 +209,9 @@ const createTerminal = () => {
 
   // Handle data input
   terminal.onData((data) => {
-    console.log('Terminal onData triggered:', data) // Debug
     if (websocket && websocket.readyState === WebSocket.OPEN) {
-      websocket.send(JSON.stringify({
-        type: 'input',
-        data: data
-      }))
+      // Backend expects binary frames for stdin
+      websocket.send(textEncoder.encode(data))
     } else {
       console.log('WebSocket not open, cannot send data. State:', websocket?.readyState)
     }
@@ -224,7 +222,7 @@ const createTerminal = () => {
     emit('resize', { cols, rows })
     if (websocket && websocket.readyState === WebSocket.OPEN) {
       websocket.send(JSON.stringify({
-        type: 'resize',
+        op: 'resize',
         cols,
         rows
       }))
