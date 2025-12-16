@@ -62,6 +62,12 @@ const terminalMinHeight = computed(() => {
   return '250px'
 })
 
+const terminalColors = ['#6aa6ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2', '#eb2f96', '#f5222d']
+
+const getTerminalColor = (index: number) => {
+  return terminalColors[index % terminalColors.length]
+}
+
 const ensureData = async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
     await bootstrapStore.bootstrap()
@@ -77,18 +83,23 @@ const addTerminal = () => {
     return
   }
   
+  // Generate session name based on directory for tmux window sharing
+  const dirBasedSession = newTerminal.value.directory 
+    ? newTerminal.value.directory.replace(/[^a-zA-Z0-9]/g, '_').replace(/^_+|_+$/g, '') || 'root'
+    : 'home'
+  
   const id = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   terminals.value.push({
     id,
     boxName: newTerminal.value.boxName,
-    sessionName: newTerminal.value.sessionName || 'main',
+    sessionName: newTerminal.value.sessionName || dirBasedSession,
     directory: newTerminal.value.directory || '~'
   })
   
   showAddModal.value = false
   newTerminal.value = {
     boxName: newTerminal.value.boxName, // Keep same box selected
-    sessionName: `session-${terminals.value.length + 1}`,
+    sessionName: '', // Reset to auto-generate
     directory: '~'
   }
 }
@@ -148,15 +159,23 @@ onMounted(async () => {
       }"
     >
       <div
-        v-for="terminal in terminals"
+        v-for="(terminal, index) in terminals"
         :key="terminal.id"
         class="terminal-container"
+        :style="{ 
+          borderColor: getTerminalColor(index),
+          borderWidth: '2px'
+        }"
       >
-        <div class="terminal-header">
+        <div 
+          class="terminal-header"
+          :style="{ backgroundColor: getTerminalColor(index) + '20' }"
+        >
           <div class="terminal-info">
             <NIcon size="14"><PhTerminalWindow /></NIcon>
             <span>{{ terminal.boxName }}</span>
             <span class="session-name">{{ terminal.sessionName }}</span>
+            <span class="directory-name">{{ terminal.directory }}</span>
           </div>
           <NButton size="tiny" quaternary @click="removeTerminal(terminal.id)" title="Close">
             ×
@@ -196,8 +215,9 @@ onMounted(async () => {
           <label class="form-label">Session Name</label>
           <NInput
             v-model:value="newTerminal.sessionName"
-            placeholder="main"
+            placeholder="Auto-generated from directory"
           />
+          <p class="form-help">Leave empty to auto-generate from directory (same dir = same tmux window)</p>
         </div>
         
         <div>
@@ -256,29 +276,28 @@ onMounted(async () => {
 .terminal-grid {
   flex: 1;
   display: grid;
-  gap: 2px; /* Minimal gap */
-  padding: 2px; /* Very minimal padding */
+  gap: 4px; /* Slightly larger gap for colored borders */
+  padding: 4px;
   min-height: 0;
   overflow-y: auto; /* Allow vertical scrolling */
-  grid-auto-rows: minmax(var(--terminal-min-height, 300px), auto);
+  grid-auto-rows: var(--terminal-min-height, 300px); /* Consistent row height */
 }
 
 .terminal-container {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--stroke);
-  border-radius: 6px;
+  border: 2px solid var(--stroke);
+  border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
-  min-height: var(--terminal-min-height, 300px);
-  height: fit-content;
+  height: var(--terminal-min-height, 300px); /* Fixed height for consistency */
 }
 
 .terminal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
+  padding: 6px 10px;
   background: var(--surface-variant);
   border-bottom: 1px solid var(--stroke);
   font-size: 12px;
@@ -288,12 +307,25 @@ onMounted(async () => {
 .terminal-info {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  overflow: hidden;
 }
 
 .session-name {
   color: var(--muted);
   font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.directory-name {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.7;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-wrapper {
@@ -332,6 +364,13 @@ onMounted(async () => {
   font-weight: 600;
   margin-bottom: 4px;
   color: var(--text);
+}
+
+.form-help {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.3;
 }
 
 .text-muted {

@@ -199,11 +199,9 @@ const copySelection = () => {
 const pasteFromClipboard = async () => {
   try {
     const text = await navigator.clipboard.readText()
-    if (text && websocket && websocket.readyState === WebSocket.OPEN) {
-      websocket.send(JSON.stringify({
-        type: 'input',
-        data: text
-      }))
+    if (text && terminal) {
+      // Use xterm's built-in paste method
+      terminal.paste(text)
     }
   } catch (err) {
     message.error('Failed to paste from clipboard')
