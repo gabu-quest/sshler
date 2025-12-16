@@ -173,6 +173,61 @@ const handleTerminalClick = () => {
   terminal?.focus()
 }
 
+const handleContextMenu = (event: MouseEvent) => {
+  event.preventDefault()
+  
+  const hasSelection = terminal?.hasSelection() || false
+  
+  if (hasSelection) {
+    copySelection()
+  } else {
+    pasteFromClipboard()
+  }
+}
+
+const copySelection = () => {
+  const selection = terminal?.getSelection()
+  if (selection) {
+    navigator.clipboard.writeText(selection).then(() => {
+      message.success('Copied to clipboard', { duration: 1000 })
+    }).catch(() => {
+      message.error('Failed to copy')
+    })
+  }
+}
+
+const pasteFromClipboard = async () => {
+  try {
+    const text = await navigator.clipboard.readText()
+    if (text && websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify({
+        type: 'input',
+        data: text
+      }))
+    }
+  } catch (err) {
+    message.error('Failed to paste from clipboard')
+  }
+}
+
+const handleKeyDown = (event: KeyboardEvent) => {
+  // Smart Ctrl+C handling
+  if (event.ctrlKey && event.key === 'c') {
+    if (terminal?.hasSelection()) {
+      event.preventDefault()
+      copySelection()
+      return
+    }
+    // Otherwise let Ctrl+C send interrupt signal as normal
+  }
+  
+  // Ctrl+V for paste
+  if (event.ctrlKey && event.key === 'v') {
+    event.preventDefault()
+    pasteFromClipboard()
+  }
+}
+
 const createTerminal = () => {
   if (!terminalRef.value) return
 
@@ -200,6 +255,10 @@ const createTerminal = () => {
   terminal.loadAddon(searchAddon)
 
   terminal.open(terminalRef.value)
+  
+  // Add event listeners
+  terminalRef.value.addEventListener('contextmenu', handleContextMenu)
+  terminalRef.value.addEventListener('keydown', handleKeyDown)
   
   // Handle bell
   terminal.onBell(() => {
@@ -375,6 +434,12 @@ const connect = async () => {
       connecting.value = false
       connected.value = true
       emit('connected')
+      
+      // Show auto-dismissing success message
+      message.success(`Connected to ${props.boxName}`, {
+        duration: 2000,
+        closable: false
+      })
       
       // Focus terminal to enable input
       nextTick(() => {
@@ -562,7 +627,12 @@ defineExpose({
 
 <template>
   <div class="terminal-container">
-    <div ref="terminalRef" class="terminal" @click="handleTerminalClick" />
+    <div 
+      ref="terminalRef" 
+      class="terminal" 
+      @click="handleTerminalClick"
+      @contextmenu="handleContextMenu"
+    />
     <div v-if="connecting" class="terminal-overlay">
       <div class="connecting-indicator">
         <div class="spinner" />

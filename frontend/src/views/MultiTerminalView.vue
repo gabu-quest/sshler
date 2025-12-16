@@ -48,6 +48,20 @@ const gridCols = computed(() => {
   return 4
 })
 
+const terminalFontSize = computed(() => {
+  const count = terminals.value.length
+  if (count <= 4) return 14
+  if (count <= 8) return 13
+  return 12
+})
+
+const terminalMinHeight = computed(() => {
+  const count = terminals.value.length
+  if (count <= 2) return '400px'
+  if (count <= 6) return '300px'
+  return '250px'
+})
+
 const ensureData = async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
     await bootstrapStore.bootstrap()
@@ -130,7 +144,7 @@ onMounted(async () => {
       class="terminal-grid" 
       :style="{ 
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
-        gridTemplateRows: terminals.length === 0 ? '1fr' : `repeat(${Math.ceil(terminals.length / gridCols)}, 1fr)`
+        '--terminal-min-height': terminalMinHeight
       }"
     >
       <div
@@ -153,7 +167,7 @@ onMounted(async () => {
             :box-name="terminal.boxName"
             :session-name="terminal.sessionName"
             :directory="terminal.directory"
-            :font-size="12"
+            :font-size="terminalFontSize"
           />
         </div>
       </div>
@@ -211,6 +225,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0; /* Remove default padding */
 }
 
 .header {
@@ -241,9 +256,11 @@ onMounted(async () => {
 .terminal-grid {
   flex: 1;
   display: grid;
-  gap: 4px;
-  padding: 4px;
+  gap: 2px; /* Minimal gap */
+  padding: 2px; /* Very minimal padding */
   min-height: 0;
+  overflow-y: auto; /* Allow vertical scrolling */
+  grid-auto-rows: minmax(var(--terminal-min-height, 300px), auto);
 }
 
 .terminal-container {
@@ -253,7 +270,8 @@ onMounted(async () => {
   border-radius: 6px;
   overflow: hidden;
   background: var(--surface);
-  min-height: 200px;
+  min-height: var(--terminal-min-height, 300px);
+  height: fit-content;
 }
 
 .terminal-header {
@@ -264,6 +282,7 @@ onMounted(async () => {
   background: var(--surface-variant);
   border-bottom: 1px solid var(--stroke);
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .terminal-info {
@@ -280,6 +299,8 @@ onMounted(async () => {
 .terminal-wrapper {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .empty-state {
