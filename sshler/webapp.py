@@ -5,9 +5,11 @@ import base64
 import contextlib
 import json
 import logging
+import os
 import secrets
 import shlex
 import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -34,6 +36,7 @@ from markdown_it import MarkdownIt
 
 from . import __version__, state
 from .api import APIDependencies, create_api_router
+from .auth import AuthManager, PasswordHasher, PasswordValidator, PasswordPolicy
 from .api.helpers import (
     DEFAULT_MAX_UPLOAD_BYTES,
     IMAGE_CONTENT_TYPES,
@@ -83,6 +86,156 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 SPA_DIST_DIR = STATIC_DIR / "dist"
 
+class AuthFailureTracker:
+    """Track failed authentication attempts and enforce lockouts."""
+
+    def __init__(
+        self,
+        lockout_threshold: int = 5,
+        lockout_duration: int = 300,  # 5 minutes
+        failure_window: int = 600,  # 10 minutes
+    ):
+        """Initialize auth failure tracker.
+
+        Args:
+            lockout_threshold: Number of failures before lockout
+            lockout_duration: Seconds to lock out after threshold
+            failure_window: Seconds to keep failure history
+        """
+        self._failures: dict[str, list[float]] = {}
+        self._lockouts: dict[str, float] = {}
+        self._lockout_threshold = lockout_threshold
+        self._lockout_duration = lockout_duration
+        self._failure_window = failure_window
+
+    def record_failure(self, client_ip: str) -> None:
+        """Record a failed authentication attempt.
+
+        Args:
+            client_ip: IP address of the client
+        """
+        now = time.time()
+
+        if client_ip not in self._failures:
+            self._failures[client_ip] = []
+
+        # Keep only failures from the failure window
+        self._failures[client_ip] = [
+            t for t in self._failures[client_ip] if now - t < self._failure_window
+        ]
+        self._failures[client_ip].append(now)
+
+        # Check for lockout
+        if len(self._failures[client_ip]) >= self._lockout_threshold:
+            self._lockouts[client_ip] = now + self._lockout_duration
+            logging.warning(
+                f"[Security] IP {client_ip} locked out after {len(self._failures[client_ip])} failed auth attempts"
+            )
+
+    def is_locked_out(self, client_ip: str) -> bool:
+        """Check if an IP is currently locked out.
+
+        Args:
+            client_ip: IP address to check
+
+        Returns:
+            True if locked out, False otherwise
+        """
+        if client_ip in self._lockouts:
+            if time.time() < self._lockouts[client_ip]:
+                return True
+            else:
+                # Lockout expired, remove it
+                del self._lockouts[client_ip]
+                # Also clear failures for this IP
+                self._failures.pop(client_ip, None)
+        return False
+
+    def get_lockout_remaining(self, client_ip: str) -> int:
+        """Get remaining lockout time in seconds.
+
+        Args:
+            client_ip: IP address to check
+
+        Returns:
+            Seconds remaining in lockout, or 0 if not locked out
+        """
+        if client_ip in self._lockouts:
+            remaining = int(self._lockouts[client_ip] - time.time())
+            return max(0, remaining)
+        return 0
+
+    def reset_failures(self, client_ip: str) -> None:
+        """Reset failure count for an IP (after successful auth).
+
+        Args:
+            client_ip: IP address to reset
+        """
+        self._failures.pop(client_ip, None)
+        self._lockouts.pop(client_ip, None)
+
+    def get_failure_count(self, client_ip: str) -> int:
+        """Get current failure count for an IP.
+
+        Args:
+            client_ip: IP address to check
+
+        Returns:
+            Number of failures in the current window
+        """
+        if client_ip not in self._failures:
+            return 0
+
+        # Clean up old failures first
+        now = time.time()
+        self._failures[client_ip] = [
+            t for t in self._failures[client_ip] if now - t < self._failure_window
+        ]
+
+        return len(self._failures[client_ip])
+
+
+def _load_auth_from_env() -> tuple[str, str] | None:
+    """Load authentication credentials from environment variables.
+
+    Returns:
+        Tuple of (username, password_hash) if credentials are set, None otherwise
+    """
+    username = os.getenv("SSHLER_USERNAME")
+    password_hash = os.getenv("SSHLER_PASSWORD_HASH")
+    password = os.getenv("SSHLER_PASSWORD")
+
+    if not username:
+        return None
+
+    # Prefer hash over plaintext password
+    if password_hash:
+        return (username, password_hash)
+    elif password:
+        # Hash the plaintext password on startup
+        print(
+            "⚠️  WARNING: Using plaintext SSHLER_PASSWORD is not recommended.",
+            file=sys.stderr,
+        )
+        print(
+            "   Use 'sshler hash-password' to generate SSHLER_PASSWORD_HASH instead.",
+            file=sys.stderr,
+        )
+        hasher = PasswordHasher()
+        password_hash = hasher.hash(password)
+        return (username, password_hash)
+    else:
+        print(
+            "ERROR: SSHLER_USERNAME is set but no password provided.",
+            file=sys.stderr,
+        )
+        print(
+            "   Set either SSHLER_PASSWORD_HASH or SSHLER_PASSWORD.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 @dataclass
 class ServerSettings:
     allow_origins: list[str] = field(default_factory=list)
@@ -91,6 +244,7 @@ class ServerSettings:
     allow_ssh_alias: bool = True
     basic_auth: tuple[str, str] | None = None
     basic_auth_header: str | None = field(init=False, default=None)
+    auth_manager: AuthManager | None = field(init=False, default=None)
     serve_spa: bool = True
 
     def __post_init__(self) -> None:
@@ -104,8 +258,40 @@ class ServerSettings:
                 normalised.append(cleaned)
         self.allow_origins = normalised
 
-        if self.basic_auth:
+        # Load auth from environment if not provided via basic_auth
+        if not self.basic_auth:
+            env_auth = _load_auth_from_env()
+            if env_auth:
+                username, password_hash = env_auth
+                self.auth_manager = AuthManager(username, password_hash)
+                # Generate basic_auth_header for backwards compatibility
+                # (middleware needs it for header comparison)
+                self.basic_auth_header = f"Basic {username}:{password_hash}"  # Placeholder
+        elif self.basic_auth:
+            # CLI --auth flag provided: validate and hash password
             user, password = self.basic_auth
+
+            # Validate password strength
+            policy = PasswordPolicy()
+            is_valid, errors = PasswordValidator.validate(password, user, policy)
+            if not is_valid:
+                print("\n" + "=" * 70, file=sys.stderr)
+                print("ERROR: Password does not meet security requirements:", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                for error in errors:
+                    print(f"  - {error}", file=sys.stderr)
+                print(
+                    "\nUse 'sshler hash-password' to generate a strong password.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            # Hash password and create AuthManager
+            hasher = PasswordHasher()
+            password_hash = hasher.hash(password)
+            self.auth_manager = AuthManager(user, password_hash)
+
+            # Also generate basic_auth_header for backwards compatibility
             raw = f"{user}:{password}".encode()
             self.basic_auth_header = "Basic " + base64.b64encode(raw).decode("ascii")
 
@@ -307,6 +493,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     app_version = _compute_app_version()
 
     application.state.settings = settings
+    application.state.auth_tracker = AuthFailureTracker()
     templates.env.globals["csrf_token"] = settings.csrf_token
     templates.env.globals["format_file_size"] = _format_file_size
     templates.env.globals["format_timestamp"] = _format_timestamp
@@ -322,13 +509,53 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     @application.middleware("http")
     async def _security_middleware(request: Request, call_next):
-        if settings.basic_auth_header and request.method != "OPTIONS":
+        auth_tracker: AuthFailureTracker = request.app.state.auth_tracker
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Check authentication if required
+        if settings.auth_manager and request.method != "OPTIONS":
+            # Check if IP is locked out
+            if auth_tracker.is_locked_out(client_ip):
+                retry_after = auth_tracker.get_lockout_remaining(client_ip)
+                logging.warning(
+                    f"[Security] Blocked locked-out IP {client_ip} "
+                    f"({retry_after}s remaining)"
+                )
+                return Response(
+                    status_code=429,
+                    content="Too many failed authentication attempts. Try again later.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            # Verify authentication
             auth_header = request.headers.get("authorization")
-            if auth_header != settings.basic_auth_header:
+            if not auth_header or not auth_header.startswith("Basic "):
                 return Response(
                     status_code=401,
                     headers={"WWW-Authenticate": 'Basic realm="sshler"'},
                 )
+
+            # Use AuthManager to verify credentials
+            if not settings.auth_manager.verify_basic_auth_header(auth_header):
+                # Record failed attempt
+                auth_tracker.record_failure(client_ip)
+                failure_count = auth_tracker.get_failure_count(client_ip)
+
+                logging.warning(
+                    f"[Security] Failed auth attempt from {client_ip} "
+                    f"({failure_count}/5 failures)"
+                )
+
+                # Slow down brute force attempts
+                await asyncio.sleep(2)
+
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="sshler"'},
+                )
+
+            # Successful auth - reset failure counter
+            auth_tracker.reset_failures(client_ip)
 
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -2434,13 +2661,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         logger = logging.getLogger("sshler.webapp")
 
         try:
-            if settings.basic_auth_header:
+            # Check HTTP Basic Auth if required
+            if settings.auth_manager:
                 auth_header = websocket.headers.get("authorization")
-                if auth_header != settings.basic_auth_header:
+                if not auth_header or not settings.auth_manager.verify_basic_auth_header(
+                    auth_header
+                ):
                     logger.warning("[Connection] WebSocket auth failed: invalid basic auth")
                     await websocket.close(code=4401, reason="Unauthorized")
                     return
 
+            # Check CSRF token
             token_param = websocket.query_params.get("token")
             if settings.csrf_token and token_param != settings.csrf_token:
                 logger.warning("[Connection] WebSocket auth failed: invalid CSRF token")
