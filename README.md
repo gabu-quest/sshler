@@ -190,6 +190,288 @@ The server prints the token (and, if enabled, the basic auth username) on startu
 - JSON payloads are also supported: `printf '\033]777;notify={"title":"Codex","message":"All tasks finished"}\a'`.
 - The first notification prompts the browser for permission. Denying it still leaves the in-app toast and title badge when you return to the tab.
 
+## TLS/HTTPS Deployment
+
+### Why HTTPS Matters
+
+sshler uses secure **httpOnly session cookies** for authentication. While these cookies provide strong security, browsers require the `Secure` flag to be set on cookies when serving over HTTPS. This ensures cookies are only transmitted over encrypted connections.
+
+**For production deployments, HTTPS is strongly recommended.**
+
+### Deployment Options
+
+#### 1. Localhost Development (HTTP)
+
+For local development on `localhost` or `127.0.0.1`, you can disable the Secure cookie flag:
+
+```bash
+# .env
+SSHLER_HOST=127.0.0.1
+SSHLER_PORT=8822
+SSHLER_PUBLIC_URL=http://localhost:8822
+SSHLER_COOKIE_SECURE=false  # Only for localhost dev!
+```
+
+**⚠️ Never use `COOKIE_SECURE=false` in production or on network-accessible interfaces.**
+
+#### 2. Production with Caddy Reverse Proxy (Recommended)
+
+[Caddy](https://caddyserver.com/) is the easiest way to add HTTPS to sshler. It automatically obtains and renews Let's Encrypt certificates.
+
+**Basic Setup:**
+
+1. Install Caddy:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install caddy
+
+   # macOS
+   brew install caddy
+   ```
+
+2. Create a Caddyfile:
+   ```caddyfile
+   # /etc/caddy/Caddyfile or ~/Caddyfile
+
+   sshler.company.internal {
+       reverse_proxy localhost:8822
+   }
+   ```
+
+3. Configure sshler for HTTPS:
+   ```bash
+   # .env
+   SSHLER_HOST=127.0.0.1
+   SSHLER_PORT=8822
+   SSHLER_PUBLIC_URL=https://sshler.company.internal
+   SSHLER_COOKIE_SECURE=true  # Required for HTTPS
+   ```
+
+4. Start Caddy:
+   ```bash
+   # System service
+   sudo systemctl start caddy
+
+   # Or run directly
+   caddy run --config /etc/caddy/Caddyfile
+   ```
+
+5. Access sshler at `https://sshler.company.internal`
+
+**For LAN Deployments (Self-Signed Certs):**
+
+If you're deploying on a local network without a public domain, use Caddy with a self-signed certificate:
+
+```caddyfile
+sshler.local {
+    tls internal  # Use Caddy's internal CA
+    reverse_proxy localhost:8822
+}
+```
+
+Then configure your browser to trust Caddy's local CA certificate (usually at `~/.local/share/caddy/pki/authorities/local/root.crt`).
+
+**Advanced Caddy Configuration:**
+
+```caddyfile
+sshler.company.internal {
+    # Automatic HTTPS with Let's Encrypt
+
+    # Optional: Rate limiting for API endpoints
+    @api {
+        path /api/v1/*
+    }
+    rate_limit @api 100r/m
+
+    # Stricter rate limiting for login endpoint (recommended)
+    @login {
+        path /api/v1/auth/login
+    }
+    rate_limit @login 5r/m
+
+    # Proxy to sshler
+    reverse_proxy localhost:8822 {
+        # Preserve client IP
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Optional: Add security headers
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
+}
+```
+
+#### 3. Tailscale Deployment
+
+If you're using [Tailscale](https://tailscale.com/), you can access sshler over your Tailscale network. Tailscale automatically provides HTTPS with MagicDNS.
+
+1. Configure sshler to listen on your Tailscale IP:
+   ```bash
+   # .env
+   SSHLER_HOST=100.64.0.1  # Your Tailscale IP
+   SSHLER_PORT=8822
+   SSHLER_PUBLIC_URL=https://yourhost.tail-scale.ts.net
+   SSHLER_COOKIE_SECURE=true
+   ```
+
+2. Enable Tailscale Serve (optional, for HTTPS):
+   ```bash
+   tailscale serve https / http://localhost:8822
+   ```
+
+3. Access sshler at `https://yourhost.tail-scale.ts.net`
+
+**Note:** Tailscale provides network-level encryption, but using HTTPS ensures secure cookies work properly.
+
+#### 4. Other Reverse Proxies
+
+**Nginx:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name sshler.company.internal;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:8822;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+**Traefik:**
+
+```yaml
+http:
+  routers:
+    sshler:
+      rule: "Host(`sshler.company.internal`)"
+      service: sshler
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    sshler:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:8822"
+```
+
+### Multi-Instance Deployments
+
+⚠️ **IMPORTANT**: The current session store is **in-memory** and **not suitable for multi-instance deployments** (e.g., behind a load balancer with multiple sshler processes).
+
+**Why this matters:**
+- Sessions are stored in process memory
+- Each instance has its own independent session store
+- Users will lose their session if requests are routed to a different instance
+- Session cookies will appear invalid when load-balanced across instances
+
+**For single-instance deployments** (most common):
+- ✅ One sshler process behind a reverse proxy (Caddy, Nginx)
+- ✅ Systemd service running one instance
+- ✅ Docker container (single instance)
+
+**For multi-instance/load-balanced deployments**, you must implement a shared session backend:
+
+**Option 1: Redis (Recommended for Production)**
+```python
+# Replace SessionStore with Redis-backed implementation
+# See sshler/session.py for the interface to implement
+```
+
+**Option 2: Database (PostgreSQL, MySQL)**
+```python
+# Implement SessionStore backed by a database table
+# Ensure all instances connect to the same database
+```
+
+**Option 3: Sticky Sessions (Not Recommended)**
+- Configure load balancer for session affinity based on cookie
+- Still requires graceful handling of instance failures
+- Not as robust as shared session storage
+
+If you need multi-instance support, please open an issue or submit a PR implementing a shared session backend.
+
+### Security Checklist
+
+When deploying sshler in production:
+
+- ✅ **Use HTTPS** with a valid certificate (Let's Encrypt recommended)
+- ✅ **Set `SSHLER_COOKIE_SECURE=true`** in your `.env` file
+- ✅ **Set `SSHLER_PUBLIC_URL`** to your actual HTTPS URL
+- ✅ **Use strong passwords** (generate with `sshler hash-password`)
+- ✅ **Keep `SSHLER_REQUIRE_AUTH=true`** (never disable auth in production)
+- ✅ **Bind to localhost** (`SSHLER_HOST=127.0.0.1`) when behind a reverse proxy
+- ✅ **Enable firewall rules** to restrict access to trusted networks
+- ✅ **Keep sshler updated** to receive security patches
+
+### Network Security Layers
+
+sshler security works in layers:
+
+1. **Transport Security (HTTPS)** - Encrypts all traffic, protects session cookies
+2. **Application Auth (Session Cookies)** - Verifies user identity with httpOnly cookies
+3. **CSRF Protection** - Origin header validation on state-changing requests
+4. **Network Isolation** (Optional) - Tailscale, VPN, or firewall rules
+
+**Recommendation:** Use HTTPS + session auth for most deployments. Add network isolation (Tailscale/VPN) for extra security when accessing over the internet.
+
+### Why Cookie Sessions Instead of JWTs?
+
+**TL;DR**: JWTs solve distributed stateless auth. We don't have that problem. Cookie sessions are simpler, more secure, and revocable.
+
+**Decision rationale:**
+
+1. **Immediate Revocation**
+   - Sessions can be invalidated server-side instantly (logout, security breach, admin action)
+   - JWTs cannot be revoked without complex deny-lists (which defeats "stateless")
+   - Critical for admin tools where you need emergency access control
+
+2. **Simpler Security Model**
+   - No key rotation complexity
+   - No JWT claims validation edge cases
+   - No "where do we store the JWT" bikeshedding (localStorage = XSS vulnerable, cookies = use sessions instead)
+
+3. **Correct Use Case**
+   - **JWTs are for**: Service-to-service auth, distributed microservices, mobile apps without cookie support
+   - **Sessions are for**: Browser-based apps talking to a single backend (sshler's architecture)
+
+4. **Security Benefits**
+   - httpOnly cookies prevent XSS token theft (JavaScript can't access them)
+   - SameSite=Lax prevents CSRF attacks
+   - Shorter attack window (8-hour default TTL vs typical JWT refresh token patterns)
+
+**When to use JWTs:**
+- Microservices passing tokens between services
+- Mobile apps that can't use cookies reliably
+- Truly stateless APIs serving thousands of independent clients
+- Cross-domain authentication (e.g., SSO provider)
+
+**When to use sessions (our case):**
+- Browser-based admin tools
+- Single backend (or shared session store)
+- Need immediate revocation
+- Same-origin or tightly controlled CORS deployment
+
+**Bottom line**: We chose the boring, correct solution for browser authentication. If you need JWTs, you need a different architecture first (distributed services, mobile clients, etc.). For a browser-based SSH manager, cookie sessions are the right tool.
+
 ## Autostart
 
 ### Windows (Task Scheduler)

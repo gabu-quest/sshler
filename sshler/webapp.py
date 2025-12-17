@@ -36,7 +36,10 @@ from markdown_it import MarkdownIt
 
 from . import __version__, state
 from .api import APIDependencies, create_api_router
+from .api.auth import create_auth_router
 from .auth import AuthManager, PasswordHasher, PasswordValidator, PasswordPolicy
+from .session import get_session_store
+from .settings import get_settings as get_app_settings
 from .api.helpers import (
     DEFAULT_MAX_UPLOAD_BYTES,
     IMAGE_CONTENT_TYPES,
@@ -602,6 +605,49 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 content="Rate limit exceeded. Please try again later.",
                 headers={"Retry-After": "60"},
             )
+
+        return await call_next(request)
+
+    @application.middleware("http")
+    async def _origin_check_middleware(request: Request, call_next):
+        """Origin header validation for CSRF protection on state-changing requests."""
+        # Get settings
+        app_settings = get_app_settings()
+
+        # Only check state-changing methods if origin check is enabled
+        if (
+            app_settings.origin_check_enabled
+            and request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and not request.url.path.startswith("/static/")
+        ):
+            origin = request.headers.get("origin") or request.headers.get("referer")
+
+            # Only validate Origin if present — missing Origin is allowed
+            # Non-browser clients (curl, health checks, API clients) may not send Origin
+            # Browser requests will always include Origin/Referer on state-changing requests
+            if origin:
+                # Normalize origin (remove trailing slash, extract scheme://host:port)
+                from urllib.parse import urlparse
+
+                parsed_origin = urlparse(origin)
+                origin_base = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+
+                # Parse expected origin from public_url
+                parsed_public = urlparse(app_settings.public_url)
+                expected_origin = f"{parsed_public.scheme}://{parsed_public.netloc}"
+
+                # Check if origin matches public_url or is in allowed_origins
+                allowed_origins = [expected_origin] + app_settings.allowed_origins_list
+
+                if origin_base not in allowed_origins:
+                    logging.warning(
+                        f"[Security] Blocked request with invalid Origin: {origin_base} "
+                        f"(expected one of: {allowed_origins})"
+                    )
+                    return Response(
+                        status_code=403,
+                        content="Invalid Origin header",
+                    )
 
         return await call_next(request)
 
@@ -2940,6 +2986,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 f"session={session}, client={client_host}"
             )
 
+    # Include auth router (for session-based authentication)
+    auth_router = create_auth_router(settings.auth_manager, application.state.auth_tracker)
+    application.include_router(auth_router, prefix="/api/v1")
+
+    # Include main API router
     application.include_router(create_api_router(deps))
     return application
 

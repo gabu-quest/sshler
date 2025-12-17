@@ -27,12 +27,14 @@ Requires-Dist: fastapi>=0.115.6
 Requires-Dist: uvicorn[standard]>=0.30.0
 Requires-Dist: jinja2>=3.1
 Requires-Dist: pyyaml>=6.0
+Requires-Dist: argon2-cffi>=23.1.0
 Requires-Dist: asyncssh>=2.14.0
 Requires-Dist: platformdirs>=4.2
 Requires-Dist: pydantic>=2.7
 Requires-Dist: python-multipart>=0.0.9
 Requires-Dist: markdown-it-py>=3.0.0
 Requires-Dist: sqler>=1.2025.9.24
+Requires-Dist: pydantic-settings>=2.12.0
 Provides-Extra: dev
 Requires-Dist: anyio>=4.4; extra == "dev"
 Requires-Dist: httpx>=0.27.0; extra == "dev"
@@ -234,6 +236,207 @@ The server prints the token (and, if enabled, the basic auth username) on startu
 - For richer messages use OSC 777: `printf '\033]777;notify=Codex%20done|Check%20the%20output\a'`. The text before the `|` becomes the title; the second part is the body.
 - JSON payloads are also supported: `printf '\033]777;notify={"title":"Codex","message":"All tasks finished"}\a'`.
 - The first notification prompts the browser for permission. Denying it still leaves the in-app toast and title badge when you return to the tab.
+
+## TLS/HTTPS Deployment
+
+### Why HTTPS Matters
+
+sshler uses secure **httpOnly session cookies** for authentication. While these cookies provide strong security, browsers require the `Secure` flag to be set on cookies when serving over HTTPS. This ensures cookies are only transmitted over encrypted connections.
+
+**For production deployments, HTTPS is strongly recommended.**
+
+### Deployment Options
+
+#### 1. Localhost Development (HTTP)
+
+For local development on `localhost` or `127.0.0.1`, you can disable the Secure cookie flag:
+
+```bash
+# .env
+SSHLER_HOST=127.0.0.1
+SSHLER_PORT=8822
+SSHLER_PUBLIC_URL=http://localhost:8822
+SSHLER_COOKIE_SECURE=false  # Only for localhost dev!
+```
+
+**⚠️ Never use `COOKIE_SECURE=false` in production or on network-accessible interfaces.**
+
+#### 2. Production with Caddy Reverse Proxy (Recommended)
+
+[Caddy](https://caddyserver.com/) is the easiest way to add HTTPS to sshler. It automatically obtains and renews Let's Encrypt certificates.
+
+**Basic Setup:**
+
+1. Install Caddy:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install caddy
+
+   # macOS
+   brew install caddy
+   ```
+
+2. Create a Caddyfile:
+   ```caddyfile
+   # /etc/caddy/Caddyfile or ~/Caddyfile
+
+   sshler.company.internal {
+       reverse_proxy localhost:8822
+   }
+   ```
+
+3. Configure sshler for HTTPS:
+   ```bash
+   # .env
+   SSHLER_HOST=127.0.0.1
+   SSHLER_PORT=8822
+   SSHLER_PUBLIC_URL=https://sshler.company.internal
+   SSHLER_COOKIE_SECURE=true  # Required for HTTPS
+   ```
+
+4. Start Caddy:
+   ```bash
+   # System service
+   sudo systemctl start caddy
+
+   # Or run directly
+   caddy run --config /etc/caddy/Caddyfile
+   ```
+
+5. Access sshler at `https://sshler.company.internal`
+
+**For LAN Deployments (Self-Signed Certs):**
+
+If you're deploying on a local network without a public domain, use Caddy with a self-signed certificate:
+
+```caddyfile
+sshler.local {
+    tls internal  # Use Caddy's internal CA
+    reverse_proxy localhost:8822
+}
+```
+
+Then configure your browser to trust Caddy's local CA certificate (usually at `~/.local/share/caddy/pki/authorities/local/root.crt`).
+
+**Advanced Caddy Configuration:**
+
+```caddyfile
+sshler.company.internal {
+    # Automatic HTTPS with Let's Encrypt
+
+    # Optional: Basic rate limiting
+    @api {
+        path /api/v1/*
+    }
+    rate_limit @api 100r/m
+
+    # Proxy to sshler
+    reverse_proxy localhost:8822 {
+        # Preserve client IP
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Optional: Add security headers
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
+}
+```
+
+#### 3. Tailscale Deployment
+
+If you're using [Tailscale](https://tailscale.com/), you can access sshler over your Tailscale network. Tailscale automatically provides HTTPS with MagicDNS.
+
+1. Configure sshler to listen on your Tailscale IP:
+   ```bash
+   # .env
+   SSHLER_HOST=100.64.0.1  # Your Tailscale IP
+   SSHLER_PORT=8822
+   SSHLER_PUBLIC_URL=https://yourhost.tail-scale.ts.net
+   SSHLER_COOKIE_SECURE=true
+   ```
+
+2. Enable Tailscale Serve (optional, for HTTPS):
+   ```bash
+   tailscale serve https / http://localhost:8822
+   ```
+
+3. Access sshler at `https://yourhost.tail-scale.ts.net`
+
+**Note:** Tailscale provides network-level encryption, but using HTTPS ensures secure cookies work properly.
+
+#### 4. Other Reverse Proxies
+
+**Nginx:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name sshler.company.internal;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:8822;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+**Traefik:**
+
+```yaml
+http:
+  routers:
+    sshler:
+      rule: "Host(`sshler.company.internal`)"
+      service: sshler
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    sshler:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:8822"
+```
+
+### Security Checklist
+
+When deploying sshler in production:
+
+- ✅ **Use HTTPS** with a valid certificate (Let's Encrypt recommended)
+- ✅ **Set `SSHLER_COOKIE_SECURE=true`** in your `.env` file
+- ✅ **Set `SSHLER_PUBLIC_URL`** to your actual HTTPS URL
+- ✅ **Use strong passwords** (generate with `sshler hash-password`)
+- ✅ **Keep `SSHLER_REQUIRE_AUTH=true`** (never disable auth in production)
+- ✅ **Bind to localhost** (`SSHLER_HOST=127.0.0.1`) when behind a reverse proxy
+- ✅ **Enable firewall rules** to restrict access to trusted networks
+- ✅ **Keep sshler updated** to receive security patches
+
+### Network Security Layers
+
+sshler security works in layers:
+
+1. **Transport Security (HTTPS)** - Encrypts all traffic, protects session cookies
+2. **Application Auth (Session Cookies)** - Verifies user identity with httpOnly cookies
+3. **CSRF Protection** - Origin header validation on state-changing requests
+4. **Network Isolation** (Optional) - Tailscale, VPN, or firewall rules
+
+**Recommendation:** Use HTTPS + session auth for most deployments. Add network isolation (Tailscale/VPN) for extra security when accessing over the internet.
 
 ## Autostart
 

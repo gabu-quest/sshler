@@ -2,12 +2,14 @@ fastapi>=0.115.6
 uvicorn[standard]>=0.30.0
 jinja2>=3.1
 pyyaml>=6.0
+argon2-cffi>=23.1.0
 asyncssh>=2.14.0
 platformdirs>=4.2
 pydantic>=2.7
 python-multipart>=0.0.9
 markdown-it-py>=3.0.0
 sqler>=1.2025.9.24
+pydantic-settings>=2.12.0
 
 [dev]
 anyio>=4.4
