@@ -73,6 +73,12 @@ def create_auth_router(
         """Authenticate user and create session.
 
         Sets httpOnly session cookie on successful authentication.
+
+        TODO: Consider adding stricter rate limiting specifically for login attempts
+        beyond the IP-based lockout. Options:
+        - Add rate limiting at reverse proxy (Caddy, Nginx) - recommended
+        - Implement per-endpoint rate limiting middleware
+        - Consider CAPTCHA after N failed attempts
         """
         # Check if auth is required
         if not settings.require_auth or auth_manager is None:

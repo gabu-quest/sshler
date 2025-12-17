@@ -51,8 +51,26 @@ class Session:
 class SessionStore:
     """In-memory session store.
 
-    This is a simple implementation suitable for single-instance deployments.
-    For multi-instance deployments, replace with Redis or database-backed storage.
+    ⚠️  WARNING: NOT SUITABLE FOR MULTI-INSTANCE DEPLOYMENTS
+
+    This implementation stores sessions in process memory and does not share
+    session state between multiple instances. If you run multiple sshler processes
+    behind a load balancer, users will experience:
+    - Session loss when requests are routed to different instances
+    - Random logouts as load balancer switches between instances
+    - "Session expired or invalid" errors
+
+    **Suitable for:**
+    - Single-instance deployments (systemd service, Docker container)
+    - Development and testing
+    - Small internal tools with one backend process
+
+    **For multi-instance deployments, implement a shared session backend:**
+    - Redis (recommended) - use redis-py with session_id as key
+    - PostgreSQL/MySQL - create a sessions table
+    - Memcached - similar to Redis approach
+
+    See the SessionStore interface below for methods to implement.
     """
 
     def __init__(self):

@@ -622,6 +622,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         ):
             origin = request.headers.get("origin") or request.headers.get("referer")
 
+            # Only validate Origin if present — missing Origin is allowed
+            # Non-browser clients (curl, health checks, API clients) may not send Origin
+            # Browser requests will always include Origin/Referer on state-changing requests
             if origin:
                 # Normalize origin (remove trailing slash, extract scheme://host:port)
                 from urllib.parse import urlparse

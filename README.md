@@ -277,11 +277,17 @@ Then configure your browser to trust Caddy's local CA certificate (usually at `~
 sshler.company.internal {
     # Automatic HTTPS with Let's Encrypt
 
-    # Optional: Basic rate limiting
+    # Optional: Rate limiting for API endpoints
     @api {
         path /api/v1/*
     }
     rate_limit @api 100r/m
+
+    # Stricter rate limiting for login endpoint (recommended)
+    @login {
+        path /api/v1/auth/login
+    }
+    rate_limit @login 5r/m
 
     # Proxy to sshler
     reverse_proxy localhost:8822 {
@@ -367,6 +373,42 @@ http:
           - url: "http://localhost:8822"
 ```
 
+### Multi-Instance Deployments
+
+⚠️ **IMPORTANT**: The current session store is **in-memory** and **not suitable for multi-instance deployments** (e.g., behind a load balancer with multiple sshler processes).
+
+**Why this matters:**
+- Sessions are stored in process memory
+- Each instance has its own independent session store
+- Users will lose their session if requests are routed to a different instance
+- Session cookies will appear invalid when load-balanced across instances
+
+**For single-instance deployments** (most common):
+- ✅ One sshler process behind a reverse proxy (Caddy, Nginx)
+- ✅ Systemd service running one instance
+- ✅ Docker container (single instance)
+
+**For multi-instance/load-balanced deployments**, you must implement a shared session backend:
+
+**Option 1: Redis (Recommended for Production)**
+```python
+# Replace SessionStore with Redis-backed implementation
+# See sshler/session.py for the interface to implement
+```
+
+**Option 2: Database (PostgreSQL, MySQL)**
+```python
+# Implement SessionStore backed by a database table
+# Ensure all instances connect to the same database
+```
+
+**Option 3: Sticky Sessions (Not Recommended)**
+- Configure load balancer for session affinity based on cookie
+- Still requires graceful handling of instance failures
+- Not as robust as shared session storage
+
+If you need multi-instance support, please open an issue or submit a PR implementing a shared session backend.
+
 ### Security Checklist
 
 When deploying sshler in production:
@@ -390,6 +432,45 @@ sshler security works in layers:
 4. **Network Isolation** (Optional) - Tailscale, VPN, or firewall rules
 
 **Recommendation:** Use HTTPS + session auth for most deployments. Add network isolation (Tailscale/VPN) for extra security when accessing over the internet.
+
+### Why Cookie Sessions Instead of JWTs?
+
+**TL;DR**: JWTs solve distributed stateless auth. We don't have that problem. Cookie sessions are simpler, more secure, and revocable.
+
+**Decision rationale:**
+
+1. **Immediate Revocation**
+   - Sessions can be invalidated server-side instantly (logout, security breach, admin action)
+   - JWTs cannot be revoked without complex deny-lists (which defeats "stateless")
+   - Critical for admin tools where you need emergency access control
+
+2. **Simpler Security Model**
+   - No key rotation complexity
+   - No JWT claims validation edge cases
+   - No "where do we store the JWT" bikeshedding (localStorage = XSS vulnerable, cookies = use sessions instead)
+
+3. **Correct Use Case**
+   - **JWTs are for**: Service-to-service auth, distributed microservices, mobile apps without cookie support
+   - **Sessions are for**: Browser-based apps talking to a single backend (sshler's architecture)
+
+4. **Security Benefits**
+   - httpOnly cookies prevent XSS token theft (JavaScript can't access them)
+   - SameSite=Lax prevents CSRF attacks
+   - Shorter attack window (8-hour default TTL vs typical JWT refresh token patterns)
+
+**When to use JWTs:**
+- Microservices passing tokens between services
+- Mobile apps that can't use cookies reliably
+- Truly stateless APIs serving thousands of independent clients
+- Cross-domain authentication (e.g., SSO provider)
+
+**When to use sessions (our case):**
+- Browser-based admin tools
+- Single backend (or shared session store)
+- Need immediate revocation
+- Same-origin or tightly controlled CORS deployment
+
+**Bottom line**: We chose the boring, correct solution for browser authentication. If you need JWTs, you need a different architecture first (distributed services, mobile clients, etc.). For a browser-based SSH manager, cookie sessions are the right tool.
 
 ## Autostart
 
