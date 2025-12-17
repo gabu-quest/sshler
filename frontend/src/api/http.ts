@@ -21,18 +21,19 @@ async function handle<T>(response: Response, originalRequest?: { url: string, op
       try {
         const { useBootstrapStore } = await import('@/stores/bootstrap');
         const bootstrapStore = useBootstrapStore();
-        
+
         // Clear old token and fetch fresh one
         bootstrapStore.setToken(null);
         await bootstrapStore.bootstrap();
-        
+
         // Retry the original request with new token
         const token = bootstrapStore.token;
         if (token) {
           const newHeaders = { ...originalRequest.options.headers, ...buildHeaders(token) };
           const retryResponse = await fetch(originalRequest.url, {
             ...originalRequest.options,
-            headers: newHeaders
+            headers: newHeaders,
+            credentials: 'include', // Always include cookies
           });
           if (retryResponse.ok) {
             return retryResponse.json() as Promise<T>;
@@ -42,7 +43,12 @@ async function handle<T>(response: Response, originalRequest?: { url: string, op
         console.error('Token refresh failed:', retryError);
       }
     }
-    
+
+    // Handle 401 Unauthorized
+    if (response.status === 401) {
+      await handleAuthErrors(response);
+    }
+
     const detail = await safeParseError(response);
     throw new Error(detail || `request failed with ${response.status}`);
   }
@@ -64,50 +70,29 @@ async function safeParseError(response: Response): Promise<string | null> {
   return null;
 }
 
-export function buildHeaders(token?: string | null, authHeader?: string | null): HeadersInit {
+export function buildHeaders(token?: string | null): HeadersInit {
   const headers: HeadersInit = {
     Accept: "application/json",
   };
   if (token) {
     headers["X-SSHLER-TOKEN"] = token;
   }
-  if (authHeader) {
-    headers["Authorization"] = authHeader;
-  }
+  // NOTE: Do NOT include Authorization header - we use httpOnly cookies
   return headers;
 }
 
 /**
- * Get auth header from auth store if available
- */
-async function getAuthHeaders(): Promise<HeadersInit> {
-  try {
-    const { useAuthStore } = await import('@/stores/auth');
-    const authStore = useAuthStore();
-    const authHeader = authStore.getAuthHeader();
-    return buildHeaders(undefined, authHeader);
-  } catch {
-    return buildHeaders();
-  }
-}
-
-/**
- * Combine auth headers with CSRF token
- */
-async function buildHeadersWithAuth(token?: string | null): Promise<HeadersInit> {
-  const authHeaders = await getAuthHeaders();
-  const tokenHeaders = buildHeaders(token);
-  return { ...authHeaders, ...tokenHeaders };
-}
-
-/**
- * Axios-style HTTP client with automatic auth header injection
+ * Axios-style HTTP client with automatic cookie-based auth
+ * All requests include credentials: 'include' for httpOnly session cookies
  */
 export const http = {
   async get<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const authHeaders = await getAuthHeaders();
-    const headers = { ...authHeaders, ...config?.headers };
-    const response = await fetch(url, { method: 'GET', headers });
+    const headers = { ...config?.headers };
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include' // Include httpOnly cookies
+    });
 
     if (!response.ok) {
       await handleAuthErrors(response);
@@ -120,16 +105,15 @@ export const http = {
   },
 
   async post<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const authHeaders = await getAuthHeaders();
     const headers = {
-      ...authHeaders,
       'Content-Type': 'application/json',
       ...config?.headers
     };
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: body ? JSON.stringify(body) : undefined
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'include' // Include httpOnly cookies
     });
 
     if (!response.ok) {
@@ -143,16 +127,15 @@ export const http = {
   },
 
   async put<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const authHeaders = await getAuthHeaders();
     const headers = {
-      ...authHeaders,
       'Content-Type': 'application/json',
       ...config?.headers
     };
     const response = await fetch(url, {
       method: 'PUT',
       headers,
-      body: body ? JSON.stringify(body) : undefined
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'include' // Include httpOnly cookies
     });
 
     if (!response.ok) {
@@ -166,9 +149,12 @@ export const http = {
   },
 
   async delete<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const authHeaders = await getAuthHeaders();
-    const headers = { ...authHeaders, ...config?.headers };
-    const response = await fetch(url, { method: 'DELETE', headers });
+    const headers = { ...config?.headers };
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers,
+      credentials: 'include' // Include httpOnly cookies
+    });
 
     if (!response.ok) {
       await handleAuthErrors(response);
@@ -186,11 +172,11 @@ export const http = {
  */
 async function handleAuthErrors(response: Response): Promise<void> {
   if (response.status === 401) {
-    // Unauthorized - redirect to login
+    // Unauthorized - clear auth state and redirect to login
     try {
       const { useAuthStore } = await import('@/stores/auth');
       const authStore = useAuthStore();
-      authStore.clearCredentials();
+      authStore.clearUser();
 
       // Redirect to login page with return URL
       const currentPath = window.location.pathname;
@@ -213,17 +199,20 @@ function createHttpError(status: number, message: string): Error {
 }
 
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
-  const authHeaders = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/bootstrap?_t=${Date.now()}`, {
-    headers: { ...authHeaders, ...buildHeaders() },
-    cache: 'no-cache'
+    headers: buildHeaders(),
+    cache: 'no-cache',
+    credentials: 'include' // Include httpOnly cookies
   });
   return handle<BootstrapPayload>(res);
 }
 
 export async function fetchBoxes(token: string | null): Promise<ApiBox[]> {
   const url = `${API_BASE}/boxes`;
-  const options = { headers: await buildHeadersWithAuth(token) };
+  const options = {
+    headers: buildHeaders(token),
+    credentials: 'include' as RequestCredentials
+  };
   const res = await fetch(url, options);
   return handle<ApiBox[]>(res, { url, options });
 }
@@ -231,6 +220,7 @@ export async function fetchBoxes(token: string | null): Promise<ApiBox[]> {
 export async function fetchBox(name: string, token: string | null): Promise<ApiBox> {
   const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}`, {
     headers: buildHeaders(token),
+    credentials: 'include'
   });
   return handle<ApiBox>(res);
 }
@@ -244,6 +234,7 @@ export async function fetchDirectory(
   url.searchParams.set("directory", directory || "/");
   const res = await fetch(url.toString().replace(window.location.origin, ""), {
     headers: buildHeaders(token),
+    credentials: 'include'
   });
   return handle<DirectoryListing>(res);
 }
@@ -257,18 +248,23 @@ export async function fetchFilePreview(
   url.searchParams.set("path", path);
   const res = await fetch(url.toString().replace(window.location.origin, ""), {
     headers: buildHeaders(token),
+    credentials: 'include'
   });
   return handle<FilePreview>(res);
 }
 
 export async function fetchSessions(token: string | null): Promise<SessionInfo> {
-  const res = await fetch(`${API_BASE}/sessions`, { headers: buildHeaders(token) });
+  const res = await fetch(`${API_BASE}/sessions`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
   return handle<SessionInfo>(res);
 }
 
 export async function fetchTerminalHandshake(token: string | null): Promise<TerminalHandshake> {
   const res = await fetch(`${API_BASE}/terminal/handshake`, {
-    headers: await buildHeadersWithAuth(token)
+    headers: buildHeaders(token),
+    credentials: 'include'
   });
   return handle<TerminalHandshake>(res);
 }
@@ -277,6 +273,7 @@ export async function togglePin(name: string, token: string | null): Promise<Pin
   const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/pin`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    credentials: 'include'
   });
   return handle<PinToggle>(res);
 }
@@ -291,6 +288,7 @@ export async function toggleFavorite(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ path, favorite }),
+    credentials: 'include'
   });
   return handle<FavoriteToggle>(res);
 }
@@ -305,6 +303,7 @@ export async function touchFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ directory, filename }),
+    credentials: 'include'
   });
   return handle<SimpleMessage>(res);
 }
@@ -318,6 +317,7 @@ export async function deleteFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
+    credentials: 'include'
   });
   return handle<SimpleMessage>(res);
 }
@@ -332,6 +332,7 @@ export async function renameFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ path, new_name }),
+    credentials: 'include'
   });
   return handle<SimpleMessage>(res);
 }
@@ -346,6 +347,7 @@ export async function moveFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ source, destination }),
+    credentials: 'include'
   });
   return handle<SimpleMessage>(res);
 }
@@ -361,6 +363,7 @@ export async function copyFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ source, destination, new_name }),
+    credentials: 'include'
   });
   return handle<SimpleMessage>(res);
 }
@@ -375,6 +378,7 @@ export async function writeFile(
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ path, content }),
+    credentials: 'include'
   });
   return handle<SimpleMessage>(res);
 }
@@ -390,17 +394,20 @@ export async function uploadFile(
   form.append("directory", directory);
   form.append("file", file);
 
-  // Get auth headers
-  const headers = await buildHeadersWithAuth(token);
+  // Build headers (excluding Content-Type for FormData)
+  const headers = buildHeaders(token);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/boxes/${encodeURIComponent(name)}/upload`, true);
 
-    // Set all headers including auth
+    // Set headers
     Object.entries(headers).forEach(([key, value]) => {
       xhr.setRequestHeader(key, String(value));
     });
+
+    // IMPORTANT: Include credentials for cookie-based auth
+    xhr.withCredentials = true;
 
     if (xhr.upload && onProgress) {
       xhr.upload.onprogress = (event) => {
@@ -441,6 +448,7 @@ export async function uploadFile(
 export async function boxStatus(name: string, token: string | null) {
   const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/status`, {
     headers: buildHeaders(token),
+    credentials: 'include'
   });
   return handle<BoxStatus>(res);
 }
@@ -454,6 +462,7 @@ export async function downloadFile(
   url.searchParams.set("path", path);
   const res = await fetch(url.toString().replace(window.location.origin, ""), {
     headers: buildHeaders(token),
+    credentials: 'include'
   });
   if (!res.ok) {
     throw new Error(`download failed ${res.status}`);

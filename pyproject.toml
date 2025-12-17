@@ -23,6 +23,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "markdown-it-py>=3.0.0",
     "sqler>=1.2025.9.24",
+    "pydantic-settings>=2.12.0",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

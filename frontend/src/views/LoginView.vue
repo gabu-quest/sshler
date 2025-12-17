@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NCard, NForm, NFormItem, NInput, NButton, NAlert, NSpace } from 'naive-ui'
+import { NCard, NForm, NFormItem, NInput, NButton, NAlert } from 'naive-ui'
 import { LockClosedOutline } from '@vicons/ionicons5'
 import { NIcon } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
-import { useBootstrapStore } from '@/stores/bootstrap'
+import { http } from '@/api/http'
 
 const router = useRouter()
 const authStore = useAuthStore()
-const bootstrapStore = useBootstrapStore()
 
 const username = ref('')
 const password = ref('')
@@ -28,33 +27,33 @@ const handleLogin = async () => {
   loading.value = true
 
   try {
-    // Set credentials in auth store
-    authStore.setCredentials(username.value, password.value)
+    // Call /auth/login endpoint
+    await http.post('/api/v1/auth/login', {
+      username: username.value,
+      password: password.value
+    })
 
-    // Test the credentials by refreshing bootstrap
-    // This will fail with 401 if credentials are invalid
-    await bootstrapStore.refreshToken()
+    // On success, fetch user info
+    const { data: userInfo } = await http.get('/api/v1/auth/me')
 
-    // If we got here, auth was successful
+    // Update auth store
+    authStore.setUser(userInfo.username)
+    authStore.setBootstrapped(true)
+
     // Redirect to the page they were trying to access or home
     const redirect = router.currentRoute.value.query.redirect as string || '/'
     router.push(redirect)
-  } catch (err) {
-    // Clear invalid credentials
-    authStore.clearCredentials()
-
-    if (err && typeof err === 'object' && 'response' in err) {
-      const response = (err as any).response
-      if (response?.status === 401) {
-        error.value = 'Invalid username or password'
-      } else if (response?.status === 429) {
-        const retryAfter = response.headers?.['retry-after'] || 'a few minutes'
-        error.value = `Too many failed attempts. Please try again in ${retryAfter} seconds`
-      } else {
-        error.value = 'Authentication failed. Please try again.'
-      }
+  } catch (err: any) {
+    // Handle errors
+    if (err?.response?.status === 401) {
+      error.value = 'Invalid username or password'
+    } else if (err?.response?.status === 429) {
+      const retryAfter = err.response?.headers?.['retry-after'] || 'a few minutes'
+      error.value = `Too many failed attempts. Please try again in ${retryAfter} seconds`
+    } else if (err?.message) {
+      error.value = err.message
     } else {
-      error.value = 'Unable to connect to server. Please check your connection.'
+      error.value = 'Authentication failed. Please try again.'
     }
   } finally {
     loading.value = false
@@ -121,11 +120,11 @@ const handleKeypress = (event: KeyboardEvent) => {
 
         <div class="security-notice">
           <p>
-            <strong>Security Notice:</strong> sshler uses Argon2id password hashing
-            and enforces strict authentication. Your credentials are never stored in plaintext.
+            <strong>Security Notice:</strong> sshler uses secure session cookies with
+            Argon2id password hashing. Your credentials are never stored in the browser.
           </p>
           <p class="muted-text">
-            Session expires when browser tab closes for your security.
+            Sessions expire after 8 hours of inactivity for your security.
           </p>
         </div>
       </NCard>
