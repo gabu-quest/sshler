@@ -2712,7 +2712,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             None: The coroutine completes when the websocket terminates.
         """
 
-        settings: ServerSettings = websocket.app.state.settings  # type: ignore[attr-defined]
+        settings: ServerSettings = websocket.app.state.settings
         logger = logging.getLogger("sshler.webapp")
 
         try:
@@ -2756,7 +2756,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 else _normalize_directory_path(directory)
             )
 
-            client_host = websocket.client.host if websocket.client else "unknown"  # type: ignore[attr-defined]
+            client_host = websocket.client.host if websocket.client else "unknown"
             logger.info(
                 f"[Connection] WebSocket connected: box={box.name}, transport={transport}, "
                 f"dir={normalized_directory}, session={session}, client={client_host}"

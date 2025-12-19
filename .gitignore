@@ -5,3 +5,8 @@ __pycache__/
 frontend/node_modules
 sshler/static/dist
 .pnpm-store
+
+# Environment variables (sensitive)
+.env
+.env.local
+.env.*.local

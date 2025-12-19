@@ -154,6 +154,7 @@ Hit "Add Box" in the UI to define a host that isn't in your SSH config (for exam
 ### Security model (important)
 
 - sshler is designed for **single-user localhost** use. By default `sshler serve` binds to `127.0.0.1` and prints a random `X-SSHLER-TOKEN` that every state-changing request must send.
+- **Environment variables**: Never commit your `.env` file to version control. Use `.env.example` as a template. The `.env` file may contain sensitive credentials like password hashes.
 - File uploads are capped at 50 MB (tunable via `--max-upload-mb`). Uploaded content is never executed server-side.
 - SSH connections still honour your system `known_hosts`. Only set `known_hosts: ignore` if you fully understand the risk.
 - If you expose sshler beyond localhost, opt-in via `--allow-origin` and add `--auth user:pass` (basic auth). Use it only on networks you trust and put TLS in front (nginx, Caddy, etc.).

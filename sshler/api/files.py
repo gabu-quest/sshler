@@ -98,8 +98,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     name=str(entry["name"]),
                     path=entry_path,
                     is_directory=bool(entry.get("is_directory")),
-                    size=int(entry["size"]) if entry.get("size") is not None else None,
-                    modified=float(entry["modified"]) if entry.get("modified") is not None else None,
+                    size=int(str(entry["size"])) if entry.get("size") is not None else None,
+                    modified=float(str(entry["modified"])) if entry.get("modified") is not None else None,
                 )
             )
 

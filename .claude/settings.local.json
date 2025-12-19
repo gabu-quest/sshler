@@ -21,7 +21,12 @@
       "Bash(curl:*)",
       "Bash(uv add:*)",
       "Bash(uv run:*)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(tee:*)"
     ],
     "deny": [],
     "ask": []

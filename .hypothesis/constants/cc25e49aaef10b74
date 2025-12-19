@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/auth.py
+# hypothesis_version: 6.148.7
+
+[0.0, 50.0, 102400, '111111', '123123', '12345', '123456', '1234567', '12345678', '123456789', '1234567890', ':', 'Basic ', '[0-9]', '[A-Z]', '[^a-zA-Z0-9]', '[a-z]', 'abc123', 'admin', 'admin123', 'ascii', 'changeme', 'default', 'demo', 'dragon', 'football', 'guest', 'letmein', 'master', 'monkey', 'passw0rd', 'password', 'password1', 'password123', 'princess', 'qazwsx', 'qwerty', 'root', 'sample', 'shadow', 'sunshine', 'superman', 'test', 'trustno1', 'user', 'utf-8', 'welcome']

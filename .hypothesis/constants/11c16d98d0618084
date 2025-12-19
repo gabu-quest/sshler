@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/files.py
+# hypothesis_version: 6.148.7
+
+[400, 404, 413, 500, 502, 1024, '/', '/boxes/{name}/copy', '/boxes/{name}/delete', '/boxes/{name}/file', '/boxes/{name}/ls', '/boxes/{name}/move', '/boxes/{name}/rename', '/boxes/{name}/touch', '/boxes/{name}/upload', '/boxes/{name}/write', 'Content-Disposition', 'Directory not found', 'File already exists', 'File not found', 'Missing filename', 'Source not found', 'ascii', 'copied', 'created', 'deleted', 'is_directory', 'local', 'modified', 'moved', 'name', 'ok', 'rb', 'renamed', 'saved', 'size', 'uploaded', 'utf-8', 'w', 'wb']

@@ -1,0 +1,4 @@
+# file: /home/gabu/projects/pypi/sshler/sshler/api/config.py
+# hypothesis_version: 6.148.7
+
+[400, '/app/', '/bootstrap', '/pool/config', 'X-SSHLER-TOKEN', 'idle_timeout', 'max_lifetime']
