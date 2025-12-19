@@ -537,10 +537,6 @@ async def update_session_metadata_async(
     return await asyncio.to_thread(update_session_metadata, session_id, metadata, window_count)
 
 
-async def delete_session_async(session_id: str) -> bool:
-    return await asyncio.to_thread(delete_session, session_id)
-
-
 def cleanup_old_sessions(max_age_days: int = 30) -> int:
     """Delete sessions older than max_age_days that are inactive."""
     _require_db()

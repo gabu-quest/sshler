@@ -128,16 +128,28 @@
 - Background tasks: Added error logging for monitoring and ping failures
 - Remaining 13 handlers in other files (spa.py, api/, ssh.py, cli.py, config.py) can be addressed separately
 
-### 7. [ ] Improve Type Hints Coverage
+### 7. [~] Improve Type Hints Coverage
 **Priority**: HIGH
-**Current**: ~54% coverage
-**Target**: 90%+
+**Current**: ~54% coverage → Infrastructure added, 103 type errors identified
+**Target**: 90%+ (requires fixing all 103 mypy errors)
+**Status**: ⏳ IN PROGRESS (Infrastructure complete, type checking enabled)
 **Actions**:
-- [ ] Add return type hints to `webapp.py:392-436`
-- [ ] Add return type hints to `cli.py` functions
-- [ ] Add type hints to all public API functions
-- [ ] Run mypy --strict and fix issues
+- [x] Install mypy and types-PyYAML stub packages
+- [x] Add mypy configuration to pyproject.toml
+- [x] Fix duplicate function definition in state.py (delete_session_async)
+- [x] Enable type checking across codebase (103 errors identified)
+- [ ] Fix remaining 103 mypy type errors (large task - needs dedicated session)
+- [ ] Add return type hints where missing
 - [ ] Add mypy to CI/CD pipeline
+**Notes**:
+- Mypy now integrated with configuration in pyproject.toml
+- Type checking reveals 103 errors across 11 files:
+  * SFTP exit() return value issues (multiple files)
+  * Path/str type mismatches (config.py, webapp.py, api/files.py)
+  * Variable redefinitions (webapp.py, api/files.py)
+  * Optional type handling (cli.py, webapp.py)
+- Infrastructure is in place for systematic type hint improvements
+- Recommend dedicated session to fix all 103 errors for 90%+ coverage
 
 ### 8. [ ] Add Missing Unit Tests
 **Priority**: HIGH

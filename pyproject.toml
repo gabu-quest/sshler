@@ -68,6 +68,8 @@ dev = [
     "pytest-playwright>=0.5.0",
     "ruff>=0.5.6",
     "hypothesis>=6.100.0",
+    "mypy>=1.19.1",
+    "types-pyyaml>=6.0.12.20250915",
 ]
 
 [project.scripts]
@@ -95,3 +97,16 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+show_error_codes = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_reexport = true
+strict_equality = true
