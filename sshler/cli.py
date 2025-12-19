@@ -586,7 +586,8 @@ def main() -> None:
             append_to_env=not getattr(parsed_args, "no_env", False)
         )
     elif parsed_args.command in (None, "serve"):
-        bind_host: str = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
+        bind_host_value = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
+        bind_host: str = bind_host_value if bind_host_value is not None else "127.0.0.1"
         no_password = getattr(parsed_args, "no_password", False)
         basic_auth: tuple[str, str] | None = None
         auth_value = getattr(parsed_args, "auth", None)
