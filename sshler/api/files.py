@@ -338,9 +338,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
             ) as connection:
                 sftp_client = await connection.start_sftp_client()
                 try:
-                    with contextlib.ExitStack() as stack:
-                        src_file = stack.enter_async_context(await sftp_client.open(src, "rb"))
-                        dest_file = stack.enter_async_context(await sftp_client.open(target, "wb"))
+                    async with contextlib.AsyncExitStack() as stack:
+                        src_file = await stack.enter_async_context(await sftp_client.open(src, "rb"))
+                        dest_file = await stack.enter_async_context(await sftp_client.open(target, "wb"))
                         data = await src_file.read()
                         await dest_file.write(data)
                 finally:
