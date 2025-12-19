@@ -6,7 +6,7 @@ Provides /auth/login, /auth/me, and /auth/logout endpoints.
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
@@ -15,6 +15,9 @@ from ..auth import AuthManager
 from ..session import Session, get_session_store
 from ..settings import get_settings
 from .rate_limiting import rate_limit_login
+
+if TYPE_CHECKING:
+    from ..webapp import AuthFailureTracker
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +53,7 @@ class LogoutResponse(BaseModel):
 
 def create_auth_router(
     auth_manager: AuthManager | None,
-    failure_tracker: object,
+    failure_tracker: AuthFailureTracker,
 ) -> APIRouter:
     """Create authentication router.
 
