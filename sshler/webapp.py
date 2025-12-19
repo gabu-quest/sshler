@@ -1105,7 +1105,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         error_message = f"Failed to create file: {exc}"
                     finally:
                         try:
-                            await sftp_client.exit()
+                            await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                         except Exception as exc:
                             logger.debug(f"Error closing SFTP client: {exc}")
                 except Exception as exc:  # pragma: no cover - depends on remote server
@@ -1297,7 +1297,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         finally:
                             if sftp_client is not None:
                                 try:
-                                    await sftp_client.exit()
+                                    await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                                 except Exception as exc:
                                     logger.debug(f"Error closing SFTP client: {exc}")
             except SSHError as exc:
@@ -1440,7 +1440,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     finally:
                         if sftp_client is not None:
                             try:
-                                await sftp_client.exit()
+                                await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                             except Exception as exc:
                                 logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
@@ -1566,7 +1566,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 finally:
                     if sftp_client:
                         try:
-                            await sftp_client.exit()
+                            await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                         except Exception as exc:
                             logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
@@ -1733,7 +1733,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 finally:
                     if sftp_client:
                         try:
-                            await sftp_client.exit()
+                            await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                         except Exception as exc:
                             logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
@@ -1883,7 +1883,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 finally:
                     if sftp_client:
                         try:
-                            await sftp_client.exit()
+                            await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                         except Exception as exc:
                             logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
@@ -2161,7 +2161,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         await remote_file.write(content)
                 finally:
                     try:
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
                     except Exception as exc:
                         logger.debug(f"Error closing SFTP client: {exc}")
                 return templates.TemplateResponse(
