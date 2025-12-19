@@ -271,12 +271,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
             return APISimpleMessage(status="ok", message="moved", path=str(target))
 
         try:
-            src = PathValidator.validate_remote_path(payload.source)
-            dest_dir = PathValidator.validate_remote_path(payload.destination)
+            remote_src = PathValidator.validate_remote_path(payload.source)
+            remote_dest_dir = PathValidator.validate_remote_path(payload.destination)
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-        target = str(PurePosixPath(dest_dir) / PurePosixPath(src).name)
+        remote_target = str(PurePosixPath(remote_dest_dir) / PurePosixPath(remote_src).name)
         ssh_pool = get_pool()
         try:
             async with ssh_pool.connection(
@@ -284,7 +284,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             ) as connection:
                 sftp_client = await connection.start_sftp_client()
                 try:
-                    await sftp_client.rename(src, target)
+                    await sftp_client.rename(remote_src, remote_target)
                 finally:
                     with contextlib.suppress(Exception):
                         await sftp_client.exit()  # type: ignore[func-returns-value]
@@ -294,7 +294,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
-        return APISimpleMessage(status="ok", message="moved", path=target)
+        return APISimpleMessage(status="ok", message="moved", path=remote_target)
 
     @router.post("/boxes/{name}/copy", response_model=APISimpleMessage)
     async def api_copy(
@@ -323,14 +323,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             return APISimpleMessage(status="ok", message="copied", path=str(target))
 
         try:
-            src = PathValidator.validate_remote_path(payload.source)
-            dest_dir = PathValidator.validate_remote_path(payload.destination)
-            new_name = payload.new_name or PurePosixPath(src).name
+            remote_src = PathValidator.validate_remote_path(payload.source)
+            remote_dest_dir = PathValidator.validate_remote_path(payload.destination)
+            new_name = payload.new_name or PurePosixPath(remote_src).name
             new_name = PathValidator.validate_filename(new_name)
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-        target = str(PurePosixPath(dest_dir) / new_name)
+        remote_target = str(PurePosixPath(remote_dest_dir) / new_name)
         ssh_pool = get_pool()
         try:
             async with ssh_pool.connection(
@@ -339,8 +339,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 sftp_client = await connection.start_sftp_client()
                 try:
                     async with contextlib.AsyncExitStack() as stack:
-                        src_file = await stack.enter_async_context(await sftp_client.open(src, "rb"))
-                        dest_file = await stack.enter_async_context(await sftp_client.open(target, "wb"))
+                        src_file = await stack.enter_async_context(await sftp_client.open(remote_src, "rb"))
+                        dest_file = await stack.enter_async_context(await sftp_client.open(remote_target, "wb"))
                         data = await src_file.read()
                         await dest_file.write(data)
                 finally:
@@ -354,7 +354,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
-        return APISimpleMessage(status="ok", message="copied", path=target)
+        return APISimpleMessage(status="ok", message="copied", path=remote_target)
 
     @router.get("/boxes/{name}/file", response_model=APIFilePreview)
     async def api_file_preview(
