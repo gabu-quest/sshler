@@ -1,9 +1,12 @@
-# Handoff notes for next session (aggressive execution)
+# Handoff notes for FUTURE modularization work (NOT CURRENT)
 
-## Current branch
+**NOTE**: This is for FUTURE work on the `vue-migrate` branch to modularize webapp.py.
+**Current active work**: See HANDOFF.md for security improvements.
+
+## Target branch
 - `vue-migrate`
 
-## Recent work
+## Recent work (COMPLETED)
 - SPA/legacy toggle added: `sshler serve --ui=legacy|vue|both`; bootstrap returns `spa_enabled`/`spa_base`; root redirects to `/app/` only when SPA is on.
 - Favorites/pins persist per box (backend state DB) and survive reload; Playwright e2e covers file ops, terminal connect/resize, boxes pin/favorite, download endpoint content, and persistence after reload.
 - SPA i18n init fixed; favorites/pins hydrated from backend; local box override deduped.
