@@ -1068,8 +1068,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 error_override=f"Invalid filename: {exc}",
             )
 
-        error_message = None
-        success_message: str | None = None
+        remote_error_message = None
+        remote_success_message: str | None = None
         ssh_pool = get_pool()
 
         async def connect_func():
@@ -1091,7 +1091,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     try:
                         try:
                             await sftp_client.stat(remote_path)
-                            error_message = (
+                            remote_error_message = (
                                 f"File already exists: {PurePosixPath(remote_path).name}"
                             )
                         except (FileNotFoundError, OSError):
@@ -1100,18 +1100,18 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 remote_path, "w", encoding="utf-8"
                             ) as remote_file:
                                 await remote_file.write("")
-                            success_message = f"Created {PurePosixPath(remote_path).name}"
+                            remote_success_message = f"Created {PurePosixPath(remote_path).name}"
                     except Exception as exc:  # pragma: no cover - remote host behavior varies
-                        error_message = f"Failed to create file: {exc}"
+                        remote_error_message = f"Failed to create file: {exc}"
                     finally:
                         try:
                             await sftp_client.exit()  # type: ignore[func-returns-value]  # type: ignore[func-returns-value]
                         except Exception as exc:
                             logger.debug(f"Error closing SFTP client: {exc}")
                 except Exception as exc:  # pragma: no cover - depends on remote server
-                    error_message = f"SFTP session failed: {exc}"
+                    remote_error_message = f"SFTP session failed: {exc}"
         except SSHError as exc:
-            error_message = f"SSH connection failed: {exc}"
+            remote_error_message = f"SSH connection failed: {exc}"
 
         response = await _render_directory_listing(
             request,
@@ -1119,14 +1119,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             directory_path,
             target,
             application_config,
-            error_override=error_message,
+            error_override=remote_error_message,
         )
-        message = error_message or success_message
+        message = remote_error_message or remote_success_message
         if message:
             trigger_payload = json.dumps(
                 {
                     "dir-action": {
-                        "status": "error" if error_message else "success",
+                        "status": "error" if remote_error_message else "success",
                         "message": message,
                     }
                 }
@@ -1241,18 +1241,18 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 error_override=f"Invalid filename: {exc}",
             )
 
-        error_message = None
-        success_message: str | None = None
+        remote_error_message = None
+        remote_success_message: str | None = None
         try:
             contents = await file.read()
         finally:
             await file.close()
 
         if not candidate_name:
-            error_message = "Select a file to upload"
+            remote_error_message = "Select a file to upload"
         elif len(contents) > settings.max_upload_bytes:
             limit_kb = settings.max_upload_bytes // 1024
-            error_message = f"Upload exceeds {limit_kb} KB limit"
+            remote_error_message = f"Upload exceeds {limit_kb} KB limit"
 
         # Use connection pool
         ssh_pool = get_pool()
@@ -1269,14 +1269,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 allow_alias=settings.allow_ssh_alias,
             )
 
-        if error_message is None:
+        if remote_error_message is None:
             try:
                 async with ssh_pool.connection(box, connect_func) as connection:
                     sftp_client = None
                     try:
                         sftp_client = await connection.start_sftp_client()
                     except Exception as exc:  # pragma: no cover - depends on remote server
-                        error_message = f"SFTP session failed: {exc}"
+                        remote_error_message = f"SFTP session failed: {exc}"
                     else:
                         try:
                             try:
@@ -1285,15 +1285,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 # File doesn't exist - this is expected for new uploads
                                 pass
                             else:
-                                error_message = (
+                                remote_error_message = (
                                     f"File already exists: {PurePosixPath(remote_path).name}"
                                 )
-                            if error_message is None:
+                            if remote_error_message is None:
                                 async with await sftp_client.open(remote_path, "wb") as remote_file:
                                     await remote_file.write(contents)
-                                success_message = f"Uploaded {PurePosixPath(remote_path).name}"
+                                remote_success_message = f"Uploaded {PurePosixPath(remote_path).name}"
                         except Exception as exc:  # pragma: no cover - remote SFTP failures vary
-                            error_message = f"Failed to upload file: {exc}"
+                            remote_error_message = f"Failed to upload file: {exc}"
                         finally:
                             if sftp_client is not None:
                                 try:
@@ -1301,7 +1301,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 except Exception as exc:
                                     logger.debug(f"Error closing SFTP client: {exc}")
             except SSHError as exc:
-                error_message = f"SSH connection failed: {exc}"
+                remote_error_message = f"SSH connection failed: {exc}"
 
         response = await _render_directory_listing(
             request,
@@ -1309,14 +1309,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             directory_path,
             target,
             application_config,
-            error_override=error_message,
+            error_override=remote_error_message,
         )
-        message = error_message or success_message
+        message = remote_error_message or remote_success_message
         if message:
             trigger_payload = json.dumps(
                 {
                     "dir-action": {
-                        "status": "error" if error_message else "success",
+                        "status": "error" if remote_error_message else "success",
                         "message": message,
                     }
                 }
@@ -1404,8 +1404,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             return response
 
         # Remote file deletion
-        error_message = None
-        success_message: str | None = None
+        remote_error_message = None
+        remote_success_message: str | None = None
 
         # Use connection pool
         ssh_pool = get_pool()
@@ -1428,15 +1428,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 try:
                     sftp_client = await connection.start_sftp_client()
                 except Exception as exc:
-                    error_message = f"SFTP session failed: {exc}"
+                    remote_error_message = f"SFTP session failed: {exc}"
                 else:
                     try:
                         await sftp_client.remove(validated_path)
-                        success_message = f"Deleted {PurePosixPath(validated_path).name}"
+                        remote_success_message = f"Deleted {PurePosixPath(validated_path).name}"
                     except FileNotFoundError:
-                        error_message = f"File not found: {PurePosixPath(validated_path).name}"
+                        remote_error_message = f"File not found: {PurePosixPath(validated_path).name}"
                     except Exception as exc:
-                        error_message = f"Failed to delete file: {exc}"
+                        remote_error_message = f"Failed to delete file: {exc}"
                     finally:
                         if sftp_client is not None:
                             try:
@@ -1444,7 +1444,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             except Exception as exc:
                                 logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
-            error_message = f"SSH connection failed: {exc}"
+            remote_error_message = f"SSH connection failed: {exc}"
 
         response = await _render_directory_listing(
             request,
@@ -1452,14 +1452,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             directory_path,
             target,
             application_config,
-            error_override=error_message,
+            error_override=remote_error_message,
         )
-        message = error_message or success_message
+        message = remote_error_message or remote_success_message
         if message:
             trigger_payload = json.dumps(
                 {
                     "dir-action": {
-                        "status": "error" if error_message else "success",
+                        "status": "error" if remote_error_message else "success",
                         "message": message,
                     }
                 }
@@ -2001,7 +2001,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             async with ssh_pool.connection(box, connect_func) as connection:
                 suffix = Path(validated_path).suffix.lower()
                 image_mime = IMAGE_CONTENT_TYPES.get(suffix)
-                image_data: str | None = None
+                remote_image_data: str | None = None
                 image_too_large = False
                 if image_mime:
                     try:
@@ -2013,18 +2013,18 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     if too_large:
                         image_too_large = True
                     else:
-                        image_data = base64.b64encode(image_bytes).decode("ascii")
+                        remote_image_data = base64.b64encode(image_bytes).decode("ascii")
 
-                text_content: str | None = None
+                remote_text_content: str | None = None
                 if not image_mime or image_too_large:
                     try:
-                        text_content = await sftp_read_file(
+                        remote_text_content = await sftp_read_file(
                             connection, validated_path, max_bytes=settings.max_upload_bytes
                         )
                     except TypeError as exc:
                         if "max_bytes" not in str(exc):
                             raise HTTPException(status_code=500, detail=str(exc)) from exc
-                        text_content = await sftp_read_file(connection, validated_path)
+                        remote_text_content = await sftp_read_file(connection, validated_path)
                     except Exception as exc:
                         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -2034,17 +2034,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 # Check if this is a markdown file and render it
                 is_markdown = _is_markdown_file(validated_path)
                 markdown_html = None
-                if is_markdown and text_content:
-                    markdown_html = _render_markdown(text_content)
+                if is_markdown and remote_text_content:
+                    markdown_html = _render_markdown(remote_text_content)
 
                 context = {
                     "box": box,
                     "path": validated_path,
                     "parent_directory": parent_dir,
-                    "content": text_content or "",
+                    "content": remote_text_content or "",
                     "syntax_class": _syntax_from_filename(validated_path),
                     "app_version": app_version,
-                    "image_data": image_data,
+                    "image_data": remote_image_data,
                     "image_mime": image_mime,
                     "image_too_large": image_too_large,
                     "image_limit_kb": MAX_IMAGE_PREVIEW_BYTES // 1024,

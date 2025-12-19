@@ -411,7 +411,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             ) as connection:
                 suffix = Path(validated_path).suffix.lower()
                 image_mime = IMAGE_CONTENT_TYPES.get(suffix)
-                image_data: str | None = None
+                remote_image_data: str | None = None
                 image_too_large = False
                 if image_mime:
                     image_bytes, too_large = await _read_file_bytes(
@@ -420,11 +420,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     if too_large:
                         image_too_large = True
                     else:
-                        image_data = base64.b64encode(image_bytes).decode("ascii")
+                        remote_image_data = base64.b64encode(image_bytes).decode("ascii")
 
-                text_content: str | None = None
+                remote_text_content: str | None = None
                 if not image_mime or image_too_large:
-                    text_content = await _read_remote_text(
+                    remote_text_content = await _read_remote_text(
                         connection, validated_path, deps.settings.max_upload_bytes
                     )
 
@@ -436,9 +436,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     box=box.name,
                     path=validated_path,
                     parent=parent_dir,
-                    content=text_content or None,
+                    content=remote_text_content or None,
                     syntax_class=syntax_class,
-                    image_data=image_data,
+                    image_data=remote_image_data,
                     image_mime=image_mime,
                     image_too_large=image_too_large,
                     is_markdown=is_markdown,
