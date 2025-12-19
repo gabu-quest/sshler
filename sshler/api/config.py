@@ -33,7 +33,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         return APIPoolConfig(
             idle_timeout=config["idle_timeout"],
             max_lifetime=config["max_lifetime"],
-            max_connections_per_box=config["max_connections_per_box"],
+            max_connections_per_box=config["max_connections_per_box"] or 5,
         )
 
     @router.put("/pool/config", response_model=APIPoolConfig)
@@ -63,7 +63,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         return APIPoolConfig(
             idle_timeout=config["idle_timeout"],
             max_lifetime=config["max_lifetime"],
-            max_connections_per_box=config["max_connections_per_box"],
+            max_connections_per_box=config["max_connections_per_box"] or 5,
         )
 
     return router
