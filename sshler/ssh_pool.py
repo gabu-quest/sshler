@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -114,7 +114,7 @@ class SSHConnectionPool:
     async def acquire(
         self,
         box: Box,
-        connect_func,
+        connect_func: Callable[[], Awaitable[asyncssh.SSHClientConnection]],
     ) -> asyncssh.SSHClientConnection:
         """Acquire a connection from the pool or create a new one.
 

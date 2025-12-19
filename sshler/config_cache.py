@@ -55,6 +55,9 @@ class ConfigCache:
             self._cached_at = now
             self._load_func = load_func
             self._signature = signature
+
+            # Type narrowing: we just loaded, so cache must not be None
+            assert self._cache is not None, "load_func must return AppConfig"
             return self._cache
 
     def invalidate(self):

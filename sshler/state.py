@@ -108,7 +108,8 @@ class Session(SQLerModel):
     def metadata(self) -> dict:
         """Parse metadata JSON."""
         try:
-            return json.loads(self.metadata_json)
+            result = json.loads(self.metadata_json)
+            return result if isinstance(result, dict) else {}
         except (json.JSONDecodeError, TypeError):
             return {}
 
