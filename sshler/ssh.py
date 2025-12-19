@@ -76,14 +76,16 @@ async def connect(
         resolved_host = alias_data.get("hostname")
         if resolved_host:
             connect_host = resolved_host
-            if alias_data.get("user") and not connect_user:
-                connect_user = alias_data["user"]
+            alias_user = alias_data.get("user")
+            if alias_user and not connect_user:
+                connect_user = alias_user
             try:
                 connect_port = int(alias_data.get("port") or connect_port)
             except (TypeError, ValueError):
                 pass
-            if not connect_keyfile and alias_data.get("identityfile"):
-                connect_keyfile = alias_data["identityfile"]
+            alias_keyfile = alias_data.get("identityfile")
+            if not connect_keyfile and alias_keyfile:
+                connect_keyfile = alias_keyfile
             LOGGER.info(
                 "Resolved SSH alias %s -> host=%s port=%s user=%s",
                 ssh_alias,
@@ -182,9 +184,10 @@ async def sftp_list_directory(
         for filename in await sftp_client.listdir(path):
             try:
                 stats = await sftp_client.stat(f"{path.rstrip('/')}/{filename}")
+                permissions = stats.permissions or 0
                 entry = {
                     "name": filename,
-                    "is_directory": (stats.permissions & 0o40000) == 0o40000,
+                    "is_directory": (permissions & 0o40000) == 0o40000,
                     "size": stats.size,
                 }
                 modified = getattr(stats, "mtime", None)
@@ -195,10 +198,10 @@ async def sftp_list_directory(
                 pass
     finally:
         try:
-            await sftp_client.exit()
+            await sftp_client.exit()  # type: ignore[func-returns-value]
         except Exception:
             pass
-    entries.sort(key=lambda entry: (not entry["is_directory"], entry["name"].lower()))
+    entries.sort(key=lambda entry: (not entry["is_directory"], str(entry["name"]).lower()))
     return entries
 
 
@@ -222,10 +225,11 @@ async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str)
     sftp_client = await connection.start_sftp_client()
     try:
         stats = await sftp_client.stat(path)
-        return (stats.permissions & 0o40000) == 0o40000
+        permissions = stats.permissions or 0
+        return (permissions & 0o40000) == 0o40000
     finally:
         try:
-            await sftp_client.exit()
+            await sftp_client.exit()  # type: ignore[func-returns-value]
         except Exception:
             pass
 
@@ -255,12 +259,12 @@ async def sftp_read_file(
         return data
     finally:
         try:
-            await sftp_client.exit()
+            await sftp_client.exit()  # type: ignore[func-returns-value]
         except Exception:
             pass
 
 
-async def _expand_alias(alias: str) -> dict[str, str]:
+async def _expand_alias(alias: str) -> dict[str, str | None]:
     process: Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(

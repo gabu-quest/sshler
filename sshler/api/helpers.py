@@ -141,7 +141,7 @@ async def _local_list_directory(path: str) -> list[dict[str, object]]:
                     "modified": stats.st_mtime,
                 }
             )
-        entries.sort(key=lambda entry: (not entry["is_directory"], entry["name"].lower()))
+        entries.sort(key=lambda entry: (not entry["is_directory"], str(entry["name"]).lower()))
         return entries
 
     return await asyncio.to_thread(_worker)
@@ -209,10 +209,12 @@ async def _read_file_bytes(
     sftp_client = await connection.start_sftp_client()
     try:
         async with await sftp_client.open(path, "rb") as remote_file:
-            data = await remote_file.read(limit + 1)
+            data_read = await remote_file.read(limit + 1)
+            # Opened with 'rb' so data should be bytes
+            data = data_read if isinstance(data_read, bytes) else data_read.encode()
     finally:
         with contextlib.suppress(Exception):
-            await sftp_client.exit()
+            await sftp_client.exit()  # type: ignore[func-returns-value]
     too_large = len(data) > limit
     if too_large:
         return b"", True
