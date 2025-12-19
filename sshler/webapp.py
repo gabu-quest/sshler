@@ -387,7 +387,8 @@ async def _open_local_tmux(
     # This is necessary on both Windows and Linux for proper terminal I/O.
     if LOCAL_IS_WINDOWS:
         # Use 'script' command in WSL to create a PTY
-        cmd_str = " ".join(f"'{arg}'" if " " in arg else arg for arg in command[2:])
+        # SECURITY: Use shlex.quote() to prevent command injection
+        cmd_str = " ".join(shlex.quote(arg) for arg in command[2:])
         script_command = ["wsl", "--", "script", "-qefc", cmd_str, "/dev/null"]
         return await asyncio.create_subprocess_exec(
             *script_command,
@@ -2683,6 +2684,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     ) -> None:
         """Bridge between the browser websocket and tmux over SSH or locally.
 
+        SECURITY: Session names are sanitized to prevent command injection attacks.
+
         English:
             Streams bytes between the browser and tmux, handling command
             messages (resize, rename, etc.) and window polling.
@@ -2707,6 +2710,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         logger = logging.getLogger("sshler.webapp")
 
         try:
+            # Sanitize session name to prevent command injection
+            # Session names are passed to tmux/subprocess commands, so only allow safe characters
+            try:
+                session = PathValidator.sanitize_session_name(session)
+            except ValidationError as exc:
+                logger.warning(f"[Security] Invalid session name rejected: {exc}")
+                await websocket.close(code=4400, reason="Invalid session name")
+                return
+
             # Check HTTP Basic Auth if required
             if settings.auth_manager:
                 auth_header = websocket.headers.get("authorization")

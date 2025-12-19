@@ -61,15 +61,26 @@
 - Token bucket algorithm with burst capacity
 - All tests pass (15 rate limiting tests + all existing tests)
 
-### 4. [ ] Validate Command Injection Points
+### 4. [x] Validate Command Injection Points
 **Priority**: CRITICAL
-**File**: `sshler/webapp.py:392-436`
-**Issue**: Session names passed to tmux subprocess without validation
+**Files**: `sshler/webapp.py:2717`, `sshler/webapp.py:391`
+**Issue**: Session names passed to tmux subprocess without validation, unsafe quoting on Windows
+**Status**: ✅ COMPLETED
 **Actions**:
-- [ ] Add session name sanitization (alphanumeric + dashes only)
-- [ ] Create `PathValidator.sanitize_session_name()` method
-- [ ] Add unit tests for injection attempts
-- [ ] Audit all subprocess calls for similar issues
+- [x] Add session name sanitization at WebSocket endpoint entry point
+- [x] Use existing `PathValidator.sanitize_session_name()` method
+- [x] Fix unsafe Windows quoting - replaced manual quoting with `shlex.quote()`
+- [x] Add 13 comprehensive unit tests for injection attempts
+- [x] Audit all subprocess calls - verified all use safe patterns
+**Notes**:
+- Session parameter sanitized before use in subprocess calls
+- Windows quoting now uses `shlex.quote()` consistently with Linux
+- All tmux session names limited to alphanumeric, dash, underscore, dot
+- 13 tests cover injection attempts, real-world attacks, Unicode edge cases
+- Verified all subprocess calls use either:
+  * `create_subprocess_exec()` with separate args (safe)
+  * `shlex.quote()` for shell commands (safe)
+  * No unsafe `shell=True` usage found
 
 ---
 
