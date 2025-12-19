@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 
 from .auth import PasswordHasher, PasswordValidator, PasswordPolicy
 from .webapp import ServerSettings, make_app
@@ -478,6 +479,9 @@ def main() -> None:
         ``sshler`` のコマンドライン引数を解析し、サブコマンドが指定されて
         いない場合は ``serve`` を実行します。
     """
+
+    # Load .env file from current directory or parent directories
+    load_dotenv()
 
     parser = argparse.ArgumentParser(prog="sshler", description="Local SSH tmux-in-browser")
     subcommands = parser.add_subparsers(dest="command")
