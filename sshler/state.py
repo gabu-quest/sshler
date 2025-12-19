@@ -22,6 +22,58 @@ _DB_PATH: Path | None = None
 _INITIALISED = False
 
 
+def _ensure_composite_indexes(db: SQLerDB) -> None:
+    """Create composite indexes for performance optimization.
+
+    Composite indexes improve query performance for multi-column WHERE clauses.
+    SQLite can use a composite index for queries filtering on the leftmost columns.
+
+    Performance improvements:
+    - Session lookups by (box, session_name): O(log n) instead of O(n)
+    - Session cleanup by (active, last_accessed_at): O(log n) instead of O(n)
+    - Favorite lookups by (box, path): O(log n) instead of O(n)
+
+    Index strategy:
+    - Put most selective column first for best performance
+    - box is typically selective (10-100 boxes)
+    - session_name is unique per box
+    - active is binary (low selectivity) but combined with time is useful
+    """
+
+    adapter = db.adapter
+
+    # Composite index for session lookups by box and name
+    # Used by: get_session_by_name(), create_or_update_session()
+    # Query: WHERE box = ? AND session_name = ?
+    # Note: sqler uses JSON storage, so we must use json_extract()
+    adapter.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sessions_box_name
+        ON sessions(json_extract(data, '$.box'), json_extract(data, '$.session_name'))
+        """
+    )
+
+    # Composite index for session cleanup queries
+    # Used by: cleanup_old_sessions()
+    # Query: WHERE active = 0 AND last_accessed_at < ?
+    adapter.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sessions_active_accessed
+        ON sessions(json_extract(data, '$.active'), json_extract(data, '$.last_accessed_at'))
+        """
+    )
+
+    # Composite index for favorite lookups
+    # Used by: toggle_favorite()
+    # Query: WHERE box = ? AND path = ?
+    adapter.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_favorites_box_path
+        ON favorites(json_extract(data, '$.box'), json_extract(data, '$.path'))
+        """
+    )
+
+
 class Favorite(SQLerModel):
     """Persisted favourite directories per box."""
 
@@ -101,6 +153,11 @@ def initialize(config_dir: Path) -> None:
         Session.ensure_index("last_accessed_at")
         Session.ensure_index("active")
         Session.ensure_index("session_name")
+
+        # Create composite indexes for performance optimization
+        # Note: sqler only supports single-column indexes via ensure_index(),
+        # so we create composite indexes using raw SQL for optimal query performance.
+        _ensure_composite_indexes(db)
 
         _DB = db
         _DB_PATH = target_path
