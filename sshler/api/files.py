@@ -5,7 +5,7 @@ import contextlib
 import posixpath
 from pathlib import Path, PurePosixPath
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from ..config import AppConfig
@@ -13,6 +13,7 @@ from ..ssh import SSHError, sftp_list_directory
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
+from .rate_limiting import rate_limit_delete, rate_limit_upload, rate_limit_write
 from .helpers import (
     IMAGE_CONTENT_TYPES,
     MAX_IMAGE_PREVIEW_BYTES,
@@ -205,9 +206,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
     @router.post("/boxes/{name}/delete", response_model=APISimpleMessage)
     async def api_delete_file(
+        request: Request,
         name: str,
         payload: APIDeleteRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
+        _rate_limit: None = Depends(rate_limit_delete),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
 
@@ -447,10 +450,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
     @router.post("/boxes/{name}/write", response_model=APISimpleMessage)
     async def api_write_file(
+        request: Request,
         name: str,
         path: str = Body(...),
         content: str = Body(...),
         application_config: AppConfig = Depends(deps.get_application_config),
+        _rate_limit: None = Depends(rate_limit_write),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
 
@@ -541,10 +546,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
     @router.post("/boxes/{name}/upload", response_model=APISimpleMessage)
     async def api_upload(
+        request: Request,
         name: str,
         directory: str = Form(...),
         file: UploadFile = File(...),
         application_config: AppConfig = Depends(deps.get_application_config),
+        _rate_limit: None = Depends(rate_limit_upload),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
         candidate_name = (file.filename or "").strip()

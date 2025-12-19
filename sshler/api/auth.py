@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from ..auth import AuthManager
 from ..session import Session, get_session_store
 from ..settings import get_settings
+from .rate_limiting import rate_limit_login
 
 logger = logging.getLogger(__name__)
 
@@ -69,16 +70,16 @@ def create_auth_router(
         request: Request,
         response: Response,
         credentials: LoginRequest,
+        _rate_limit: None = Depends(rate_limit_login),
     ) -> LoginResponse:
         """Authenticate user and create session.
 
         Sets httpOnly session cookie on successful authentication.
 
-        TODO: Consider adding stricter rate limiting specifically for login attempts
-        beyond the IP-based lockout. Options:
-        - Add rate limiting at reverse proxy (Caddy, Nginx) - recommended
-        - Implement per-endpoint rate limiting middleware
-        - Consider CAPTCHA after N failed attempts
+        Rate limiting:
+        - IP-based rate limiting: 5 requests per minute (prevents brute force)
+        - IP-based lockout: 5 failed attempts = 5 minute lockout (failure tracker)
+        - Additional reverse proxy rate limiting recommended for production
         """
         # Check if auth is required
         if not settings.require_auth or auth_manager is None:
