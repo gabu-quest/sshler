@@ -7,6 +7,7 @@ for every request. Dramatically improves performance for file operations.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,6 +15,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import asyncssh
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .config import Box
@@ -67,9 +70,9 @@ class SSHConnectionPool:
                 await self._cleanup_stale_connections()
             except asyncio.CancelledError:
                 break
-            except Exception:
-                # Log error but continue cleanup loop
-                pass
+            except Exception as exc:
+                # Log error but continue cleanup loop to ensure pool maintenance continues
+                logger.error(f"Error during connection pool cleanup: {exc}", exc_info=True)
 
     async def _cleanup_stale_connections(self):
         """Remove connections that are idle or past their lifetime."""
@@ -97,8 +100,8 @@ class SSHConnectionPool:
                         # Close stale connection
                         try:
                             conn.connection.close()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error closing stale connection for {box_name}: {exc}")
                     else:
                         healthy_connections.append(conn)
 
@@ -151,8 +154,8 @@ class SSHConnectionPool:
                     # Connection is dead, close it
                     try:
                         pooled_conn.connection.close()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Error closing dead connection for {box_name}: {exc}")
 
             # No healthy connection in pool, create a new one
             connection = await connect_func()
@@ -186,8 +189,8 @@ class SSHConnectionPool:
                 # Pool is full, close this connection
                 try:
                     connection.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Error closing connection (pool full) for {box_name}: {exc}")
                 return
 
             # Check if connection is healthy before returning to pool
@@ -206,8 +209,8 @@ class SSHConnectionPool:
                 # Connection is not healthy, close it
                 try:
                     connection.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Error closing unhealthy connection for {box_name}: {exc}")
 
     async def _is_connection_healthy(
         self,
@@ -246,8 +249,8 @@ class SSHConnectionPool:
                 for conn in pool:
                     try:
                         conn.connection.close()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Error closing connection during invalidate for {box_name}: {exc}")
                 del self._pools[box_name]
 
     async def close_all(self):

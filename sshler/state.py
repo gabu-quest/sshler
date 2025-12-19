@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 import threading
 import time
@@ -13,6 +14,8 @@ from pydantic import Field
 from sqler import SQLerDB, SQLerModel
 from sqler.adapter import SQLiteAdapter
 from sqler.query import SQLerField as F
+
+logger = logging.getLogger(__name__)
 
 STATE_FILENAME = "state.sqlite"
 
@@ -172,8 +175,9 @@ def reset_state() -> None:
         if _DB is not None:
             try:
                 _DB.close()
-            except Exception:  # pragma: no cover - best effort cleanup
-                pass
+            except Exception as exc:  # pragma: no cover - best effort cleanup
+                # Log but don't fail - this is cleanup during reset
+                logger.debug(f"Error closing database during reset: {exc}")
         _DB = None
         _DB_PATH = None
         _INITIALISED = False

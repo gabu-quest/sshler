@@ -85,6 +85,8 @@ from .ssh_pool import get_pool, initialize_pool, shutdown_pool
 from .validation import PathValidator, ValidationError
 from .rate_limit import get_rate_limiter
 
+logger = logging.getLogger(__name__)
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 SPA_DIST_DIR = STATIC_DIR / "dist"
@@ -421,8 +423,8 @@ async def _run_local_tmux_command(args: list[str]) -> None:
             stderr=asyncio.subprocess.PIPE,
         )
         await process.communicate()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"Local tmux command failed: {' '.join(args)}: {exc}")
 
 
 async def _list_local_tmux_windows(session: str) -> list[dict[str, str]] | None:
@@ -440,7 +442,8 @@ async def _list_local_tmux_windows(session: str) -> list[dict[str, str]] | None:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await process.communicate()
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Failed to list local tmux windows for session {session}: {exc}")
         return None
 
     if process.returncode != 0:
@@ -663,7 +666,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         def _resolve(endpoint: str, **params: str) -> str:
             try:
                 return request.url_for(endpoint, **params)
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"URL resolution failed for endpoint {endpoint}, using fallback: {exc}")
                 if endpoint == "list_directory":
                     return f"/box/{box_name}/ls"
                 if endpoint == "create_empty_file":
@@ -828,9 +832,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 # Fallback: use entire content for both
                 english_html = md.render(readme_text)
                 japanese_html = english_html
-        except Exception:
-            # If README can't be read, use empty strings
-            pass
+        except Exception as exc:
+            # If README can't be read, use empty strings (non-critical)
+            logger.debug(f"Failed to render README: {exc}")
 
         return templates.TemplateResponse(
             "docs.html",
@@ -1090,7 +1094,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             error_message = (
                                 f"File already exists: {PurePosixPath(remote_path).name}"
                             )
-                        except Exception:
+                        except (FileNotFoundError, OSError):
                             # File doesn't exist, we can create it
                             async with await sftp_client.open(
                                 remote_path, "w", encoding="utf-8"
@@ -1102,8 +1106,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     finally:
                         try:
                             await sftp_client.exit()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error closing SFTP client: {exc}")
                 except Exception as exc:  # pragma: no cover - depends on remote server
                     error_message = f"SFTP session failed: {exc}"
         except SSHError as exc:
@@ -1277,7 +1281,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         try:
                             try:
                                 await sftp_client.stat(remote_path)
-                            except Exception:
+                            except (FileNotFoundError, OSError):
+                                # File doesn't exist - this is expected for new uploads
                                 pass
                             else:
                                 error_message = (
@@ -1293,8 +1298,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             if sftp_client is not None:
                                 try:
                                     await sftp_client.exit()
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.debug(f"Error closing SFTP client: {exc}")
             except SSHError as exc:
                 error_message = f"SSH connection failed: {exc}"
 
@@ -1436,8 +1441,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         if sftp_client is not None:
                             try:
                                 await sftp_client.exit()
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
 
@@ -1562,8 +1567,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     if sftp_client:
                         try:
                             await sftp_client.exit()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
 
@@ -1729,8 +1734,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     if sftp_client:
                         try:
                             await sftp_client.exit()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
 
@@ -1879,8 +1884,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     if sftp_client:
                         try:
                             await sftp_client.exit()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
             error_message = f"SSH connection failed: {exc}"
 
@@ -2157,8 +2162,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 finally:
                     try:
                         await sftp_client.exit()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Error closing SFTP client: {exc}")
                 return templates.TemplateResponse(
                     request,
                     "file_edit.html",
@@ -2397,7 +2402,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             connection.close()
             elapsed = (time_module.time() - start_time) * 1000  # Convert to ms
             return {"status": "online", "latency_ms": round(elapsed)}
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Box {name} connection check failed: {exc}")
             return {"status": "offline", "latency_ms": None}
 
     # Session Management API
@@ -2608,9 +2614,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     )
                 finally:
                     connection.close()
-        except Exception:
+        except Exception as exc:
             # Continue even if tmux kill fails (session might already be dead)
-            pass
+            logger.debug(f"Failed to kill tmux session (may already be dead): {exc}")
 
         # Remove from database
         await state.delete_session_async(session_id)
@@ -2762,7 +2768,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             if transport == "local":
                 try:
                     is_directory = await _local_is_directory(normalized_directory)
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Failed to check if directory exists (using fallback): {exc}")
                     is_directory = False
                 if not is_directory:
                     normalized_directory = _normalize_local_path(box.default_dir)
@@ -2779,8 +2786,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     error_msg = f"Connection failed: {exc}\r\n"
                     try:
                         await websocket.send_text(error_msg)
-                    except Exception:
-                        pass
+                    except Exception as ws_exc:
+                        logger.debug(f"Failed to send error message via websocket: {ws_exc}")
                     await websocket.close()
                     return
             else:
@@ -2810,8 +2817,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     is_directory = await sftp_is_directory(connection, normalized_directory)
                     if not is_directory:
                         normalized_directory = box.default_dir or f"/home/{box.user}"
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Failed to check if remote directory exists (using default): {exc}")
 
                 process = await open_tmux(
                     connection,
@@ -2850,8 +2857,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             messages_buffer = getattr(process.stdin, "messages")
                             if isinstance(messages_buffer, list) and data_bytes not in messages_buffer:
                                 messages_buffer.append(data_bytes)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Failed to record message in test buffer: {exc}")
                 return True
 
             # Handle any immediate message now that the process exists.
@@ -2928,11 +2935,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                         active=True,
                                         window_count=len(window_payload),
                                     )
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.debug(f"Failed to update session activity: {exc}")
                         await asyncio.sleep(2)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Error in tmux window polling loop: {exc}")
 
             async def websocket_pinger() -> None:
                 """Send WebSocket pings to keep connection alive through proxies/NAT."""
@@ -2945,8 +2952,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         except Exception as exc:
                             logger.warning(f"Failed to send WebSocket ping: {exc}")
                             break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"WebSocket pinger task ended: {exc}")
 
             poller = asyncio.create_task(poll_tmux_windows())
             pinger = asyncio.create_task(websocket_pinger())
@@ -2975,23 +2982,23 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         # The tmux session will continue running in WSL
                         try:
                             process.stdin.close()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error closing process stdin: {exc}")
                         try:
                             # Give it a moment to flush
                             await asyncio.sleep(0.1)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Error during flush sleep: {exc}")
                     else:
                         process.stdin.write_eof()
                         process.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Error during process cleanup: {exc}")
             try:
                 if connection is not None:
                     connection.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Error closing SSH connection: {exc}")
 
             logger.info(
                 f"[Connection] WebSocket closed: box={box.name}, transport={transport}, "
@@ -3019,8 +3026,9 @@ def _compute_app_version() -> str:
         git_hash = result.stdout.strip()
         if git_hash:
             parts.append(f"({git_hash})")
-    except Exception:
-        pass
+    except Exception as exc:
+        # Git hash retrieval is best-effort for version display
+        logger.debug(f"Failed to get git hash for version display: {exc}")
     return " ".join(part for part in parts if part)
 
 
@@ -3051,14 +3059,14 @@ async def _handle_control_message(
                 # Resize local tmux client
                 try:
                     await _run_local_tmux_command(["refresh-client", "-C", f"{cols}x{rows}"])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Failed to resize local tmux: {exc}")
             else:
                 # Resize SSH PTY
                 try:
                     process.set_pty_size(cols, rows)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Failed to resize SSH PTY: {exc}")
     elif operation == "select-window":
         target = message.get("target")
         if target is not None:
@@ -3070,15 +3078,15 @@ async def _handle_control_message(
                         f"tmux select-window -t {shlex.quote(session)}:{shlex.quote(str(target))}",
                         check=False,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Failed to select window: {exc}")
     elif operation == "send":
         data = message.get("data")
         if data:
             try:
                 process.stdin.write(data.encode())
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Failed to send data to process: {exc}")
     elif operation == "rename-window":
         new_name = message.get("target")
         if new_name:
@@ -3090,8 +3098,8 @@ async def _handle_control_message(
                         f"tmux rename-window -t {shlex.quote(session)} {shlex.quote(str(new_name))}"
                     )
                     await connection.run(rename_command, check=False)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Failed to rename window: {exc}")
 
 
 async def _list_tmux_windows(
@@ -3103,7 +3111,8 @@ async def _list_tmux_windows(
             f"{shlex.quote(session)}",
             check=False,
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Failed to list tmux windows for session {session}: {exc}")
         return None
 
     if result.returncode != 0:
