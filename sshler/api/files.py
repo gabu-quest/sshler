@@ -141,7 +141,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.rename(validated_path, target_path)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="File not found")
         except SSHError as exc:
@@ -194,7 +194,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         await remote_file.write("")
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except SSHError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         except HTTPException:
@@ -239,7 +239,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.remove(validated_path)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="File not found")
         except SSHError as exc:
@@ -287,7 +287,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.rename(src, target)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Source not found")
         except SSHError as exc:
@@ -345,7 +345,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         await dest_file.write(data)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Source not found")
         except HTTPException:
@@ -492,7 +492,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         await remote_file.write(content)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="File not found")
         except SSHError as exc:
@@ -606,7 +606,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         await remote_file.write(contents)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
         except HTTPException:
             raise
         except SSHError as exc:
