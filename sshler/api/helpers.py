@@ -50,15 +50,62 @@ def _compose_remote_child_path(directory: str, filename: str) -> str:
     return (parent / cleaned).as_posix()
 
 
-def _normalize_local_path(directory: str | None) -> str:
+def _normalize_local_path(directory: str | None, allowed_base: str | Path | None = None) -> str:
+    """Normalize and validate local path, resolving symlinks to prevent directory escape.
+
+    Args:
+        directory: Path to normalize (defaults to user home)
+        allowed_base: Base directory to restrict access to. If provided, validates that
+                     the resolved path (after following symlinks) stays within this base.
+                     If None, no restriction is applied (full filesystem access).
+
+    Returns:
+        Normalized absolute path string
+
+    Raises:
+        ValueError: If resolved path escapes the allowed base directory (when allowed_base is set)
+
+    Security Notes:
+        - This function resolves symlinks using Path.resolve(), preventing attacks where
+          a symlink inside an allowed directory points to files outside it.
+        - For maximum security, always pass an allowed_base parameter.
+        - For "local" boxes, consider restricting to Path.home() or box.default_dir.
+    """
     if directory:
         base = Path(directory).expanduser()
     else:
         base = Path.home()
+
+    # Resolve symlinks to prevent directory traversal via symlinks
     try:
-        resolved = base.resolve()
+        resolved = base.resolve(strict=False)  # strict=False allows non-existent paths
     except Exception:
         resolved = base
+
+    # Validate that resolved path is within allowed base (if specified)
+    if allowed_base is not None:
+        # Convert allowed_base to Path and resolve it
+        if isinstance(allowed_base, str):
+            allowed_base = Path(allowed_base)
+        allowed_base_resolved = allowed_base.expanduser().resolve(strict=False)
+
+        # Check if resolved path is within allowed base
+        # Use try/except for Python 3.8 compatibility (is_relative_to added in 3.9)
+        try:
+            # Python 3.9+
+            if not resolved.is_relative_to(allowed_base_resolved):
+                raise ValueError(
+                    f"Path escape detected: {resolved} is outside allowed directory {allowed_base_resolved}"
+                )
+        except AttributeError:
+            # Python 3.8 fallback
+            try:
+                resolved.relative_to(allowed_base_resolved)
+            except ValueError:
+                raise ValueError(
+                    f"Path escape detected: {resolved} is outside allowed directory {allowed_base_resolved}"
+                )
+
     if LOCAL_IS_WINDOWS:
         return resolved.as_posix()
     return str(resolved)
