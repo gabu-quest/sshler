@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -427,7 +428,7 @@ async def _run_local_tmux_command(args: list[str]) -> None:
         logger.debug(f"Local tmux command failed: {' '.join(args)}: {exc}")
 
 
-async def _list_local_tmux_windows(session: str) -> list[dict[str, str]] | None:
+async def _list_local_tmux_windows(session: str) -> list[dict[str, str | bool]] | None:
     command = list(_local_tmux_base_command()) + [
         "list-windows",
         "-F",
@@ -449,7 +450,7 @@ async def _list_local_tmux_windows(session: str) -> list[dict[str, str]] | None:
     if process.returncode != 0:
         return None
 
-    windows: list[dict[str, str]] = []
+    windows: list[dict[str, str | bool]] = []
     for line in stdout.decode("utf-8", errors="ignore").splitlines():
         parts = line.split(" ", 2)
         if len(parts) < 3:
@@ -665,7 +666,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     def _build_directory_urls(request: Request, box_name: str) -> dict[str, str]:
         def _resolve(endpoint: str, **params: str) -> str:
             try:
-                return request.url_for(endpoint, **params)
+                return str(request.url_for(endpoint, **params))
             except Exception as exc:
                 logger.debug(f"URL resolution failed for endpoint {endpoint}, using fallback: {exc}")
                 if endpoint == "list_directory":
@@ -1723,7 +1724,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             await dst.write(content)
 
                         # Copy permissions
-                        await sftp_client.chmod(dest_path, attrs.permissions)
+                        if attrs.permissions is not None:
+                            await sftp_client.chmod(dest_path, attrs.permissions)
                         success_message = f"Copied file to {PurePosixPath(dest_path).name}"
 
                 except FileNotFoundError:
