@@ -586,7 +586,7 @@ def main() -> None:
             append_to_env=not getattr(parsed_args, "no_env", False)
         )
     elif parsed_args.command in (None, "serve"):
-        bind_host = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
+        bind_host: str = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
         no_password = getattr(parsed_args, "no_password", False)
         basic_auth: tuple[str, str] | None = None
         auth_value = getattr(parsed_args, "auth", None)
@@ -594,7 +594,7 @@ def main() -> None:
         if auth_value:
             if ":" not in auth_value:
                 parser.error("--auth must be in the form username:password")
-            basic_auth = tuple(auth_value.split(":", 1))  # type: ignore[assignment]
+            basic_auth = tuple(auth_value.split(":", 1))
 
         # Check if authentication is configured (from env vars or CLI)
         env_username = os.getenv("SSHLER_USERNAME")

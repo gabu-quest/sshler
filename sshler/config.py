@@ -193,7 +193,7 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
     stored_without_local = dict(stored)
     stored_without_local.pop("local", None)
 
-    boxes = _build_boxes(stored_without_local, load_ssh_config(resolved_path))
+    boxes = _build_boxes(stored_without_local, load_ssh_config(str(resolved_path) if resolved_path else None))
     local_box = _build_local_box()
     if local_override:
         if local_override.host:
@@ -283,7 +283,7 @@ def rebuild_boxes(application_config: AppConfig, ssh_config_path: str | None = N
     resolved_path = _resolve_ssh_config_path(ssh_config_path or application_config.ssh_config_path)
     application_config.ssh_config_path = str(resolved_path) if resolved_path else None
     application_config.boxes = _build_boxes(
-        application_config.stored, load_ssh_config(resolved_path)
+        application_config.stored, load_ssh_config(str(resolved_path) if resolved_path else None)
     )
     _apply_favorites(application_config.boxes)
 
