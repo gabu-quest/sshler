@@ -92,14 +92,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc))
 
         for entry in raw_entries:
-            entry_path = posixpath.join(normalized_remote, entry["name"])
+            entry_path = posixpath.join(normalized_remote, str(entry["name"]))
             entries.append(
                 APIDirectoryEntry(
                     name=str(entry["name"]),
                     path=entry_path,
                     is_directory=bool(entry.get("is_directory")),
                     size=int(entry["size"]) if entry.get("size") is not None else None,
-                    modified=entry.get("modified"),
+                    modified=float(entry["modified"]) if entry.get("modified") is not None else None,
                 )
             )
 
