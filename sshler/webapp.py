@@ -1666,15 +1666,16 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             validated_source_path = PathValidator.validate_remote_path(file_path)
 
             # Generate destination path if not provided
+            dest_path_remote: str
             if not destination:
-                source_path_obj = PurePosixPath(validated_source_path)
-                base_name = source_path_obj.stem
-                suffix = source_path_obj.suffix
-                parent_dir = str(source_path_obj.parent)
-                dest_path = f"{parent_dir}/{base_name}_copy{suffix}" if parent_dir != "." else f"{base_name}_copy{suffix}"
+                source_path_obj_temp = PurePosixPath(validated_source_path)
+                base_name = source_path_obj_temp.stem
+                suffix = source_path_obj_temp.suffix
+                parent_dir = str(source_path_obj_temp.parent)
+                dest_path_remote = f"{parent_dir}/{base_name}_copy{suffix}" if parent_dir != "." else f"{base_name}_copy{suffix}"
             else:
-                dest_path = destination
-                PathValidator.validate_remote_path(dest_path)
+                dest_path_remote = destination
+                PathValidator.validate_remote_path(dest_path_remote)
         except ValidationError as exc:
             return await _render_directory_listing(
                 request, box, directory_path, target, application_config,
@@ -1701,18 +1702,19 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
                     # Check if source is a directory
                     attrs = await sftp_client.stat(validated_source_path)
-                    is_dir = stat.S_ISDIR(attrs.permissions)
+                    is_dir = stat.S_ISDIR(attrs.permissions) if attrs.permissions is not None else False
 
                     if is_dir:
                         # For directories, use shell commands for recursive copy
                         result = await connection.run(
-                            f"cp -r {shlex.quote(validated_source_path)} {shlex.quote(dest_path)}",
+                            f"cp -r {shlex.quote(validated_source_path)} {shlex.quote(dest_path_remote)}",
                             check=False
                         )
                         if result.exit_status != 0:
-                            error_message = f"Failed to copy directory: {result.stderr}"
+                            stderr_msg = result.stderr.decode('utf-8', errors='replace') if isinstance(result.stderr, bytes) else (result.stderr or 'Unknown error')
+                            error_message = f"Failed to copy directory: {stderr_msg}"
                         else:
-                            success_message = f"Copied directory to {PurePosixPath(dest_path).name}"
+                            success_message = f"Copied directory to {PurePosixPath(dest_path_remote).name}"
                     else:
                         # For files, use SFTP
                         # Read the source file
@@ -1720,13 +1722,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             content = await src.read()
 
                         # Write to destination
-                        async with sftp_client.open(dest_path, 'wb') as dst:
+                        async with sftp_client.open(dest_path_remote, 'wb') as dst:
                             await dst.write(content)
 
                         # Copy permissions
                         if attrs.permissions is not None:
-                            await sftp_client.chmod(dest_path, attrs.permissions)
-                        success_message = f"Copied file to {PurePosixPath(dest_path).name}"
+                            await sftp_client.chmod(dest_path_remote, attrs.permissions)
+                        success_message = f"Copied file to {PurePosixPath(dest_path_remote).name}"
 
                 except FileNotFoundError:
                     error_message = f"File not found: {PurePosixPath(validated_source_path).name}"
@@ -1805,9 +1807,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 response.headers["HX-Trigger"] = trigger_payload
                 return response
 
-            error_message = None
-            success_message = None
-
             try:
                 shutil.move(source_path, dest_path)
                 success_message = f"Moved {source_path_obj.name} to {Path(dest_dir).name}"
@@ -1836,17 +1835,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             validated_source_path = PathValidator.validate_remote_path(file_path)
             validated_dest_dir = PathValidator.validate_remote_path(destination_dir)
 
-            source_path_obj = PurePosixPath(validated_source_path)
-            dest_path = f"{validated_dest_dir}/{source_path_obj.name}"
-            PathValidator.validate_remote_path(dest_path)
+            source_path_obj_temp2 = PurePosixPath(validated_source_path)
+            dest_path_remote_move: str = f"{validated_dest_dir}/{source_path_obj_temp2.name}"
+            PathValidator.validate_remote_path(dest_path_remote_move)
         except ValidationError as exc:
             return await _render_directory_listing(
                 request, box, directory_path, target, application_config,
                 error_override=f"Invalid path: {exc}"
             )
 
-        error_message = None
-        success_message = None
+        error_message_remote: str | None = None
+        success_message_remote: str | None = None
 
         ssh_pool = get_pool()
 
@@ -1865,23 +1864,24 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
                     # Check if destination already exists
                     try:
-                        await sftp_client.stat(dest_path)
-                        error_message = f"File already exists in destination: {source_path_obj.name}"
+                        await sftp_client.stat(dest_path_remote_move)
+                        error_message_remote = f"File already exists in destination: {source_path_obj_temp2.name}"
                     except FileNotFoundError:
                         # Destination doesn't exist, proceed with move
                         # Use shell command for move (works for both files and directories)
                         result = await connection.run(
-                            f"mv {shlex.quote(validated_source_path)} {shlex.quote(dest_path)}",
+                            f"mv {shlex.quote(validated_source_path)} {shlex.quote(dest_path_remote_move)}",
                             check=False
                         )
                         if result.exit_status != 0:
-                            error_message = f"Failed to move: {result.stderr}"
+                            stderr_msg = result.stderr.decode('utf-8', errors='replace') if isinstance(result.stderr, bytes) else (result.stderr or 'Unknown error')
+                            error_message_remote = f"Failed to move: {stderr_msg}"
                         else:
-                            success_message = f"Moved {source_path_obj.name} to {PurePosixPath(validated_dest_dir).name}"
+                            success_message_remote = f"Moved {source_path_obj_temp2.name} to {PurePosixPath(validated_dest_dir).name}"
 
                 except Exception as exc:
-                    if not error_message:
-                        error_message = f"Failed to move: {exc}"
+                    if not error_message_remote:
+                        error_message_remote = f"Failed to move: {exc}"
                 finally:
                     if sftp_client:
                         try:
@@ -1889,18 +1889,18 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         except Exception as exc:
                             logger.debug(f"Error closing SFTP client: {exc}")
         except SSHError as exc:
-            error_message = f"SSH connection failed: {exc}"
+            error_message_remote = f"SSH connection failed: {exc}"
 
         response = await _render_directory_listing(
             request, box, directory_path, target, application_config,
-            error_override=error_message
+            error_override=error_message_remote
         )
-        message = error_message or success_message
-        if message:
+        message_remote: str | None = error_message_remote or success_message_remote
+        if message_remote:
             trigger_payload = json.dumps({
                 "dir-action": {
-                    "status": "error" if error_message else "success",
-                    "message": message,
+                    "status": "error" if error_message_remote else "success",
+                    "message": message_remote,
                 }
             })
             response.headers["HX-Trigger"] = trigger_payload
@@ -2765,7 +2765,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             )
 
             connection: asyncssh.SSHClientConnection | None = None
-            process = None
+            process: asyncssh.SSHClientProcess[str] | asyncio.subprocess.Process | None = None
 
             if transport == "local":
                 try:
@@ -2837,36 +2837,45 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     return False
 
                 if "text" in message and message["text"] is not None:
-                    logger.debug(f"Writer: got text message: {message['text'][:50]}")
-                    await _handle_control_message(
-                        message["text"],
-                        process,
-                        connection,
-                        session,
-                        transport,
-                    )
+                    text_value = message["text"]
+                    if isinstance(text_value, str):
+                        logger.debug(f"Writer: got text message: {text_value[:50]}")
+                        await _handle_control_message(
+                            text_value,
+                            process,
+                            connection,
+                            session,
+                            transport,
+                        )
                     return True
 
                 if "bytes" in message and message["bytes"] is not None:
-                    num_bytes = len(message["bytes"])
-                    logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
-                    data_bytes = message["bytes"]
-                    process.stdin.write(data_bytes)
-                    # In tests or with stub stdin objects, also record bytes when a
-                    # simple messages buffer is available.
-                    if hasattr(process.stdin, "messages"):
-                        try:
-                            messages_buffer = getattr(process.stdin, "messages")
-                            if isinstance(messages_buffer, list) and data_bytes not in messages_buffer:
-                                messages_buffer.append(data_bytes)
-                        except Exception as exc:
-                            logger.debug(f"Failed to record message in test buffer: {exc}")
+                    bytes_value = message["bytes"]
+                    if isinstance(bytes_value, bytes):
+                        num_bytes = len(bytes_value)
+                        logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
+                        if process is not None and process.stdin is not None:
+                            # SSH process expects str, local process expects bytes
+                            if isinstance(process, asyncio.subprocess.Process):
+                                process.stdin.write(bytes_value)
+                            else:
+                                # SSHClientProcess expects str
+                                process.stdin.write(bytes_value.decode('utf-8', errors='replace'))
+                            # In tests or with stub stdin objects, also record bytes when a
+                            # simple messages buffer is available.
+                            if hasattr(process.stdin, "messages"):
+                                try:
+                                    messages_buffer = getattr(process.stdin, "messages")
+                                    if isinstance(messages_buffer, list) and bytes_value not in messages_buffer:
+                                        messages_buffer.append(bytes_value)
+                                except Exception as exc:
+                                    logger.debug(f"Failed to record message in test buffer: {exc}")
                 return True
 
             # Handle any immediate message now that the process exists.
             try:
                 initial_message = await asyncio.wait_for(websocket.receive(), timeout=0.05)
-                if not await _process_message(initial_message):
+                if not await _process_message(dict(initial_message)):
                     return
             except asyncio.TimeoutError:
                 pass
@@ -2894,6 +2903,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             async def reader() -> None:
                 logger.info("Reader task started")
                 try:
+                    if process is None or process.stdout is None:
+                        logger.error("Reader: process or stdout is None")
+                        return
                     while True:
                         logger.debug("Reader: waiting for stdout data...")
                         data = await process.stdout.read(32768)
@@ -2901,7 +2913,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             logger.info("Reader: got empty data, ending")
                             break
                         logger.debug(f"Reader: got {len(data)} bytes, sending to websocket")
-                        await websocket.send_bytes(data)
+                        # Convert str to bytes if needed (SSH returns str, local returns bytes)
+                        bytes_data = data.encode('utf-8') if isinstance(data, str) else data
+                        await websocket.send_bytes(bytes_data)
                 except Exception as exc:
                     logger.error(f"Reader exception: {exc}", exc_info=True)
 
@@ -2911,7 +2925,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     while True:
                         logger.debug("Writer: waiting for websocket message...")
                         message = await websocket.receive()
-                        if not await _process_message(message):
+                        if not await _process_message(dict(message)):
                             break
                 except WebSocketDisconnect:
                     logger.info("Writer: websocket disconnected")
@@ -2921,10 +2935,14 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             async def poll_tmux_windows() -> None:
                 try:
                     while True:
+                        window_payload: list[dict[str, str | bool]] | None
                         if transport == "local":
                             window_payload = await _list_local_tmux_windows(session)
                         else:
-                            window_payload = await _list_tmux_windows(connection, session)
+                            if connection is not None:
+                                window_payload = await _list_tmux_windows(connection, session)
+                            else:
+                                window_payload = None
                         if window_payload is not None:
                             await websocket.send_text(
                                 json.dumps({"op": "windows", "windows": window_payload})
@@ -2983,7 +3001,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         # Don't terminate! Just close stdin/stdout to detach gracefully
                         # The tmux session will continue running in WSL
                         try:
-                            process.stdin.close()
+                            if process.stdin is not None:
+                                process.stdin.close()
                         except Exception as exc:
                             logger.debug(f"Error closing process stdin: {exc}")
                         try:
@@ -2992,8 +3011,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         except Exception as exc:
                             logger.debug(f"Error during flush sleep: {exc}")
                     else:
-                        process.stdin.write_eof()
-                        process.close()
+                        # SSH process cleanup
+                        if process.stdin is not None:
+                            process.stdin.write_eof()
+                        if isinstance(process, asyncssh.SSHClientProcess):
+                            process.close()
             except Exception as exc:
                 logger.debug(f"Error during process cleanup: {exc}")
             try:
@@ -3002,8 +3024,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             except Exception as exc:
                 logger.debug(f"Error closing SSH connection: {exc}")
 
+            box_name = box.name if box is not None else "unknown"
             logger.info(
-                f"[Connection] WebSocket closed: box={box.name}, transport={transport}, "
+                f"[Connection] WebSocket closed: box={box_name}, transport={transport}, "
                 f"session={session}, client={client_host}"
             )
 
@@ -3017,7 +3040,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
 
 def _compute_app_version() -> str:
-    parts = [__version__]
+    parts: list[str] = [__version__]
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -3037,7 +3060,8 @@ def _compute_app_version() -> str:
 def _render_markdown(content: str) -> str:
     """Convert markdown content to HTML."""
     md = MarkdownIt()
-    return md.render(content)
+    result: str = md.render(content)
+    return result
 
 
 async def _handle_control_message(
@@ -3106,7 +3130,7 @@ async def _handle_control_message(
 
 async def _list_tmux_windows(
     connection: asyncssh.SSHClientConnection, session: str
-) -> list[dict[str, str]] | None:
+) -> list[dict[str, str | bool]] | None:
     try:
         result = await connection.run(
             "tmux list-windows -F '#{window_index} #{window_name} #{window_active}' -t "
@@ -3117,11 +3141,12 @@ async def _list_tmux_windows(
         logger.debug(f"Failed to list tmux windows for session {session}: {exc}")
         return None
 
-    if result.returncode != 0:
+    if result.returncode != 0 or result.stdout is None:
         return None
 
-    windows: list[dict[str, str]] = []
-    for line in result.stdout.splitlines():
+    stdout_str = result.stdout if isinstance(result.stdout, str) else result.stdout.decode('utf-8', errors='replace')
+    windows: list[dict[str, str | bool]] = []
+    for line in stdout_str.splitlines():
         parts = line.split(" ", 2)
         if len(parts) < 3:
             continue
