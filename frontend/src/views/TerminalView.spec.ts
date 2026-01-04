@@ -8,8 +8,24 @@
 import { render, screen } from "@testing-library/vue";
 import { createPinia, setActivePinia } from "pinia";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
-import { defineComponent } from "vue";
+import { defineComponent, ref } from "vue";
 import fc from "fast-check";
+
+// Mock vue-router
+const mockRoute = {
+  query: ref({ box: 'local', dir: '/tmp' }),
+  path: '/terminal',
+  params: {},
+  name: 'terminal',
+};
+
+vi.mock("vue-router", () => ({
+  useRoute: () => mockRoute,
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+  }),
+}));
 
 // Mock xterm
 vi.mock("@xterm/xterm", () => ({

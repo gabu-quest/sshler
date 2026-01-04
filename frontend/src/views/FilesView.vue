@@ -27,7 +27,7 @@ const message = useMessage();
 
 // State
 const selectedBox = ref<string | null>(null);
-const currentDir = ref("/tmp");
+const currentDir = ref("/");
 const newFileName = ref("");
 const actionBusy = ref(false);
 const uploadTarget = ref<File | null>(null);
@@ -192,7 +192,13 @@ async function ensureData() {
   if (boxesStore.items.length) favoritesStore.hydrateFromBoxes(boxesStore.items);
   if (!selectedBox.value && boxesStore.items.length) {
     const firstBox = boxesStore.items[0];
-    if (firstBox) { selectedBox.value = firstBox.name; await refreshFavorites(firstBox.name); }
+    if (firstBox) {
+      selectedBox.value = firstBox.name;
+      if (firstBox.default_dir) {
+        currentDir.value = firstBox.default_dir;
+      }
+      await refreshFavorites(firstBox.name);
+    }
   }
   if (selectedBox.value) {
     await refreshFavorites(selectedBox.value);
@@ -235,6 +241,10 @@ async function toggleFavoriteCurrentDir() {
 
 async function onBoxChange(val: string) {
   selectedBox.value = val;
+  const box = boxesStore.items.find((b) => b.name === val);
+  if (box?.default_dir) {
+    currentDir.value = box.default_dir;
+  }
   favoritesStore.hydrateFromBoxes(boxesStore.items);
   await refreshFavorites(val);
   await directoryStore.load(val, currentDir.value, tokenValue.value || null);

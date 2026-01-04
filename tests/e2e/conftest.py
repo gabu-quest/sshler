@@ -47,6 +47,8 @@ def app_server(tmp_path_factory):
 
     env = os.environ.copy()
     env["SSHLER_CONFIG_DIR"] = str(config_dir)
+    # Set PUBLIC_URL to match the test server URL for origin validation
+    env["PUBLIC_URL"] = f"http://127.0.0.1:{port}"
 
     cmd = [
         sys.executable,

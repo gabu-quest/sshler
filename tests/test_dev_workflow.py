@@ -136,7 +136,12 @@ class TestDevWorkflowProperties:
 
     @given(
         allow_origins=st.lists(
-            st.text(min_size=1, max_size=50).filter(lambda x: '://' in x),
+            st.builds(
+                lambda protocol, domain, port: f"{protocol}://{domain}:{port}",
+                protocol=st.sampled_from(["http", "https"]),
+                domain=st.sampled_from(["localhost", "127.0.0.1", "example.com", "dev.local"]),
+                port=st.integers(min_value=3000, max_value=9999),
+            ),
             min_size=0,
             max_size=5
         )

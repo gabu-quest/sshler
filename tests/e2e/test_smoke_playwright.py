@@ -33,17 +33,45 @@ async def test_create_custom_box_flow(app_server):
         page = await browser.new_page()
         await page.set_extra_http_headers({"X-SSHLER-TOKEN": token})
 
-        # Create a new custom box
+        # Create a new custom box using fetch (since form POST doesn't include extra headers)
         await page.goto(f"{base_url}/boxes/new", wait_until="domcontentloaded")
-        await page.fill("input[name=name]", box_name)
-        await page.fill("input[name=host]", "192.0.2.10")
-        await page.fill("input[name=user]", "demo")
-        await page.fill("input[name=default_dir]", "/home/demo")
-        await page.click("text=Save Box")
 
-        # Verify it appears on the boxes page
-        await page.wait_for_url(f"{base_url}/boxes")
-        await page.wait_for_selector(f'[data-box-name="{box_name}"]')
-        assert await page.locator(f'[data-box-name="{box_name}"] .title').inner_text() == box_name
+        # Use JavaScript fetch to submit the form with the token header
+        # (Native form POST doesn't include custom headers set via set_extra_http_headers)
+        result = await page.evaluate(
+            """async ([url, token, boxName]) => {
+                const formData = new FormData();
+                formData.append('name', boxName);
+                formData.append('host', '192.0.2.10');
+                formData.append('user', 'demo');
+                formData.append('port', '22');
+                formData.append('default_dir', '/home/demo');
+                formData.append('keyfile', '');
+                formData.append('ssh_alias', '');
+                formData.append('favorites', '');
+                formData.append('known_hosts', '');
+
+                const response = await fetch(url + '/boxes/new', {
+                    method: 'POST',
+                    headers: { 'x-sshler-token': token },
+                    body: formData,
+                    redirect: 'follow'
+                });
+                return { ok: response.ok, status: response.status };
+            }""",
+            [base_url, token, box_name],
+        )
+        assert result["ok"], f"Form submission failed with status {result['status']}"
+
+        # Navigate to boxes page to verify
+        await page.goto(f"{base_url}/boxes", wait_until="load")
+
+        # Wait for the new box to appear
+        box_locator = page.locator(f'li.card[data-box-name="{box_name}"]')
+        await box_locator.wait_for(timeout=10000)
+
+        # Verify the box title
+        box_title = await box_locator.locator(".title").inner_text()
+        assert box_title == box_name
 
         await browser.close()

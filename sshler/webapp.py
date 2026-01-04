@@ -29,6 +29,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -407,11 +408,15 @@ async def _open_local_tmux(
     # -c: run command directly
     cmd_str = " ".join(shlex.quote(arg) for arg in command)
     script_command = ["script", "-qefc", cmd_str, "/dev/null"]
+    # Set TERM for proper 256-color support in tmux
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
     return await asyncio.create_subprocess_exec(
         *script_command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
 
 
@@ -2669,7 +2674,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             else directory
         )
         if not session:
-            base = Path(display_directory).name or "sshler"
+            # Use directory name as session name
+            base = Path(display_directory).name or box.name
             session = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in base)
         context = {
             "box": box,
@@ -2912,12 +2918,16 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         if not data:
                             logger.info("Reader: got empty data, ending")
                             break
+                        # Check if websocket is still connected before sending
+                        if websocket.client_state != WebSocketState.CONNECTED:
+                            logger.info("Reader: websocket no longer connected, ending")
+                            break
                         logger.debug(f"Reader: got {len(data)} bytes, sending to websocket")
                         # Convert str to bytes if needed (SSH returns str, local returns bytes)
                         bytes_data = data.encode('utf-8') if isinstance(data, str) else data
                         await websocket.send_bytes(bytes_data)
                 except Exception as exc:
-                    logger.error(f"Reader exception: {exc}", exc_info=True)
+                    logger.debug(f"Reader ended: {exc}")
 
             async def writer() -> None:
                 logger.info("Writer task started")
@@ -2935,6 +2945,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             async def poll_tmux_windows() -> None:
                 try:
                     while True:
+                        if websocket.client_state != WebSocketState.CONNECTED:
+                            break
                         window_payload: list[dict[str, str | bool]] | None
                         if transport == "local":
                             window_payload = await _list_local_tmux_windows(session)
@@ -2944,6 +2956,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             else:
                                 window_payload = None
                         if window_payload is not None:
+                            if websocket.client_state != WebSocketState.CONNECTED:
+                                break
                             await websocket.send_text(
                                 json.dumps({"op": "windows", "windows": window_payload})
                             )
@@ -2959,18 +2973,20 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                     logger.debug(f"Failed to update session activity: {exc}")
                         await asyncio.sleep(2)
                 except Exception as exc:
-                    logger.debug(f"Error in tmux window polling loop: {exc}")
+                    logger.debug(f"Tmux window polling ended: {exc}")
 
             async def websocket_pinger() -> None:
                 """Send WebSocket pings to keep connection alive through proxies/NAT."""
                 try:
                     while True:
                         await asyncio.sleep(30)  # Ping every 30 seconds
+                        if websocket.client_state != WebSocketState.CONNECTED:
+                            break
                         try:
                             await websocket.send_text(json.dumps({"op": "ping"}))
                             logger.debug("Sent WebSocket ping")
                         except Exception as exc:
-                            logger.warning(f"Failed to send WebSocket ping: {exc}")
+                            logger.debug(f"WebSocket ping ended: {exc}")
                             break
                 except Exception as exc:
                     logger.debug(f"WebSocket pinger task ended: {exc}")
