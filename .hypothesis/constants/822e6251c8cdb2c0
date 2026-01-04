@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/api/dependencies.py
-# hypothesis_version: 6.148.7
-
-[403, 404, '/api/v1/bootstrap', 'Box not found', 'SSHLER_CONFIG_DIR', 'SSHLER_SSH_CONFIG', 'x-sshler-token']

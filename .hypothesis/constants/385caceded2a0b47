@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/settings.py
-# hypothesis_version: 6.148.7
-
-[300, 1800, 3600, 8822, 28800, ',', '.env', '127.0.0.1', 'Host to bind to', 'Port to bind to', 'Session cookie name', 'ignore', 'lax', 'none', 'sshler_config_dir', 'sshler_password', 'sshler_password_hash', 'sshler_session', 'sshler_ssh_config', 'sshler_username', 'strict', 'utf-8']

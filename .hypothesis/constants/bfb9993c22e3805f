@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/state.py
-# hypothesis_version: 6.148.7
-
-['active', 'box', 'favorites', 'id', 'last_accessed_at', 'path', 'position', 'session_name', 'sessions', 'state.sqlite', '{}']

@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/ssh_pool.py
-# hypothesis_version: 6.148.7
-
-[2.0, 300, 3600, 'active_connections', 'echo test', 'total_uses']

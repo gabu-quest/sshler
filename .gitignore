@@ -10,3 +10,9 @@ sshler/static/dist
 .env
 .env.local
 .env.*.local
+
+# Test cache
+.hypothesis/
+
+# Claude Code local settings
+.claude/settings.local.json

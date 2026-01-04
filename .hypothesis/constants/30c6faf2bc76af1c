@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/config.py
-# hypothesis_version: 6.148.7
-
-['.ssh', 'SSHLER_CONFIG_DIR', 'SSHLER_SSH_CONFIG', 'agent', 'boxes', 'boxes.yaml', 'config', 'custom', 'default_dir', 'favorites', 'gabu', 'gabu-server', 'host', 'keyfile', 'known_hosts', 'last_accessed', 'local', 'localhost', 'name', 'pinned', 'port', 'r', 'ssh', 'ssh_alias', 'ssh_config', 'sshler', 'user', 'utf-8', 'w']

@@ -1,4 +1,0 @@
-# file: /home/user/sshler/sshler/api/auth.py
-# hypothesis_version: 6.148.7
-
-[200, 86400, '/', '/auth', '/login', '/logout', '/me', 'Login successful', 'Not authenticated', 'Retry-After', 'anonymous', 'authentication', 'unknown']

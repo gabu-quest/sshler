@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/api/rate_limiting.py
-# hypothesis_version: 6.148.7
-
-[1.5, 'Retry-After', 'api_delete', 'api_file_ops', 'api_login', 'api_terminal', 'api_upload', 'api_write', 'unknown']

@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/validation.py
-# hypothesis_version: 6.148.7
-
-[100, 1000, 1024, 65535, '\x00', '-_.', '.', '..', '/', '/..', '/../', ':', 'Path cannot be empty', '\\', '^[a-zA-Z0-9_.-]+$', '_']

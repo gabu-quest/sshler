@@ -1,4 +1,0 @@
-# file: /home/gabu/projects/pypi/sshler/sshler/api/helpers.py
-# hypothesis_version: 6.148.7
-
-[1024, '\x00', '.', '..', '.bash', '.css', '.gif', '.html', '.ini', '.jpeg', '.jpg', '.js', '.json', '.markdown', '.md', '.png', '.py', '.sh', '.svg', '.toml', '.ts', '.webp', '.yaml', '.yml', '/', 'Filename is required', '\\', 'bash', 'css', 'image/gif', 'image/jpeg', 'image/png', 'image/svg+xml', 'image/webp', 'ini', 'is_directory', 'javascript', 'json', 'markdown', 'markup', 'max_bytes', 'modified', 'name', 'python', 'rb', 'replace', 'size', 'toml', 'typescript', 'utf-8', 'w', 'wb', 'windows', 'yaml']
