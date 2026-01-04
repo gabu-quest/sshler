@@ -113,7 +113,8 @@ Host demo-box
             websocket.send_bytes(b"hello")
 
         assert captured["working_directory"] == fallback_directory
-        assert fake_process.stdin.messages == [b"hello"]
+        # SSH processes receive decoded strings, not bytes
+        assert fake_process.stdin.messages == ["hello"]
         assert fake_process.stdin.eof_called is True
         assert fake_process.closed is True
     finally:

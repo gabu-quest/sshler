@@ -2867,15 +2867,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             else:
                                 # SSHClientProcess expects str
                                 process.stdin.write(bytes_value.decode('utf-8', errors='replace'))
-                            # In tests or with stub stdin objects, also record bytes when a
-                            # simple messages buffer is available.
-                            if hasattr(process.stdin, "messages"):
-                                try:
-                                    messages_buffer = getattr(process.stdin, "messages")
-                                    if isinstance(messages_buffer, list) and bytes_value not in messages_buffer:
-                                        messages_buffer.append(bytes_value)
-                                except Exception as exc:
-                                    logger.debug(f"Failed to record message in test buffer: {exc}")
                 return True
 
             # Handle any immediate message now that the process exists.
@@ -3030,7 +3021,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         # SSH process cleanup
                         if process.stdin is not None:
                             process.stdin.write_eof()
-                        if isinstance(process, asyncssh.SSHClientProcess):
+                        if hasattr(process, "close"):
                             process.close()
             except Exception as exc:
                 logger.debug(f"Error during process cleanup: {exc}")
