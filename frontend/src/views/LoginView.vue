@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NCard, NForm, NFormItem, NInput, NButton, NAlert } from 'naive-ui'
-import { LockClosedOutline } from '@vicons/ionicons5'
-import { NIcon } from 'naive-ui'
+import { NCard, NForm, NFormItem, NInput, NButton, NAlert, NIcon } from 'naive-ui'
+import { PhLock } from '@phosphor-icons/vue'
 import { useAuthStore } from '@/stores/auth'
 import { http } from '@/api/http'
 
@@ -72,7 +71,7 @@ const handleKeypress = (event: KeyboardEvent) => {
     <div class="login-box">
       <div class="login-header">
         <NIcon size="48" color="var(--primary-color)">
-          <LockClosedOutline />
+          <PhLock weight="regular" />
         </NIcon>
         <h1>Authentication Required</h1>
         <p class="subtitle">Please sign in to access sshler</p>

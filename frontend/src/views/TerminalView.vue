@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NCard, NSelect, NButton, NIcon, useMessage } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft } from '@phosphor-icons/vue'
+import { NSelect, NButton, NIcon, NInput, NSpace, useMessage } from 'naive-ui'
+import { PhTerminalWindow, PhArrowLeft, PhStar } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
+import { useFavoritesStore } from '@/stores/favorites'
 import Terminal from '@/components/Terminal.vue'
 
 const route = useRoute()
@@ -13,10 +14,12 @@ const message = useMessage()
 
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
+const favoritesStore = useFavoritesStore()
 
 const selectedBox = ref<string | null>(null)
 const initialDirectory = ref<string>('~')
 const sessionName = ref<string>('main')
+const showManualDir = ref(false)
 
 const boxOptions = computed(() =>
   boxesStore.items.map((box) => ({ 
@@ -29,15 +32,52 @@ const tokenValue = computed(() =>
   bootstrapStore.token || bootstrapStore.payload?.token || null
 )
 
-const selectedBoxData = computed(() => 
+const selectedBoxData = computed(() =>
   boxesStore.items.find(box => box.name === selectedBox.value)
 )
 
-// Generate directory-based session name
+const directoryOptions = computed(() => {
+  const options = [
+    { label: '~ (Home)', value: '~' }
+  ]
+
+  if (selectedBox.value) {
+    const favorites = Array.from(favoritesStore.favoritesForBox(selectedBox.value).values())
+    favorites.forEach(fav => {
+      const label = fav.split('/').pop() || fav
+      options.push({ label: `★ ${label}`, value: fav })
+    })
+  }
+
+  options.push({ label: '+ Custom path...', value: '__custom__' })
+  return options
+})
+
+const handleDirectoryChange = (value: string) => {
+  if (value === '__custom__') {
+    showManualDir.value = true
+    return
+  }
+  showManualDir.value = false
+  initialDirectory.value = value
+  sessionName.value = generateSessionName(value)
+}
+
+// Generate directory-based session name from the directory path
 const generateSessionName = (directory: string) => {
-  return directory 
-    ? directory.replace(/[^a-zA-Z0-9]/g, '_').replace(/^_+|_+$/g, '') || 'root'
-    : 'home'
+  if (!directory || directory === '~') {
+    return 'home'
+  }
+
+  // Extract last path component (directory name)
+  const pathParts = directory.split('/').filter(Boolean)
+  const dirName = pathParts[pathParts.length - 1] || 'root'
+
+  // Sanitize: replace non-alphanumeric with underscore
+  const sanitized = dirName.replace(/[^a-zA-Z0-9]/g, '_')
+
+  // Remove leading/trailing underscores
+  return sanitized.replace(/^_+|_+$/g, '') || 'root'
 }
 
 const ensureData = async () => {
@@ -67,13 +107,16 @@ const initializeFromRoute = () => {
   sessionName.value = generateSessionName(initialDirectory.value)
 }
 
-const handleBoxChange = (boxName: string) => {
+const handleBoxChange = async (boxName: string) => {
   selectedBox.value = boxName
-  
+
+  // Load favorites for this box
+  await favoritesStore.loadBox(boxName, tokenValue.value || null)
+
   const newQuery = { ...route.query, box: boxName }
   window.history.replaceState(
-    null, 
-    '', 
+    null,
+    '',
     `${route.path}?${new URLSearchParams(newQuery).toString()}`
   )
 }
@@ -111,14 +154,35 @@ watch(() => boxesStore.items, () => {
         </div>
         
         <div class="header-actions">
-          <NSelect
-            v-model:value="selectedBox"
-            :options="boxOptions"
-            placeholder="Choose box"
-            :disabled="boxesStore.loading"
-            @update:value="handleBoxChange"
-            style="min-width: 200px"
-          />
+          <NSpace>
+            <NSelect
+              v-model:value="selectedBox"
+              :options="boxOptions"
+              placeholder="Choose box"
+              :disabled="boxesStore.loading"
+              @update:value="handleBoxChange"
+              style="min-width: 180px"
+            />
+            <NSelect
+              v-if="selectedBox && !showManualDir"
+              :value="initialDirectory"
+              :options="directoryOptions"
+              placeholder="Directory"
+              @update:value="handleDirectoryChange"
+              style="min-width: 180px"
+            />
+            <NInput
+              v-if="showManualDir"
+              v-model:value="initialDirectory"
+              placeholder="/path/to/dir"
+              @blur="sessionName = generateSessionName(initialDirectory)"
+              @keyup.enter="sessionName = generateSessionName(initialDirectory)"
+              style="min-width: 200px"
+            />
+            <NButton v-if="showManualDir" size="small" @click="showManualDir = false">
+              Cancel
+            </NButton>
+          </NSpace>
         </div>
       </div>
     </header>

@@ -240,14 +240,20 @@ const createTerminal = () => {
     theme,
     fontSize: props.fontSize,
     fontFamily: props.fontFamily,
+    lineHeight: 1.2,
+    letterSpacing: 0,
     cursorBlink: true,
+    cursorStyle: 'block',
     allowTransparency: false,
     scrollback: 10000,
+    smoothScrollDuration: 100,
     rightClickSelectsWord: true,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: false,
     convertEol: true,
-    allowProposedApi: true
+    allowProposedApi: true,
+    // Use canvas renderer for more stable rendering (avoid WebGL glitches)
+    rendererType: 'canvas'
   })
 
   fitAddon = new FitAddon()
@@ -310,7 +316,7 @@ const setupResizeObserver = () => {
     }
     resizeTimeout = window.setTimeout(() => {
       fitAddon?.fit()
-    }, 100)
+    }, 150)
   })
 
   resizeObserver.observe(terminalRef.value)

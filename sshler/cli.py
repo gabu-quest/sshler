@@ -21,6 +21,143 @@ from .auth import PasswordHasher, PasswordValidator, PasswordPolicy
 from .webapp import ServerSettings, make_app
 
 _RELOAD_ENV_KEY = "SSHLER_RELOAD_SETTINGS"
+_PID_FILE = Path("/tmp/sshler.pid")
+
+
+def _write_pid() -> None:
+    """Write current PID to file."""
+    _PID_FILE.write_text(str(os.getpid()))
+
+
+def _read_pid() -> int | None:
+    """Read PID from file, return None if not found or invalid."""
+    if not _PID_FILE.exists():
+        return None
+    try:
+        pid = int(_PID_FILE.read_text().strip())
+        # Check if process exists
+        os.kill(pid, 0)
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        return None
+
+
+def _remove_pid() -> None:
+    """Remove PID file."""
+    try:
+        _PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _get_sshler_pids() -> list[int]:
+    """Find sshler processes by checking for uvicorn serving sshler."""
+    pids = []
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "uvicorn.*sshler"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                if line.strip():
+                    pids.append(int(line.strip()))
+    except Exception:
+        pass
+    return pids
+
+
+def status() -> int:
+    """Check if sshler is running.
+
+    Returns:
+        0 if running, 1 if not running
+    """
+    # First check PID file
+    pid = _read_pid()
+    if pid:
+        print(f"sshler is running (PID: {pid})")
+        return 0
+
+    # Also check for any uvicorn processes serving sshler
+    pids = _get_sshler_pids()
+    if pids:
+        print(f"sshler is running (PIDs: {', '.join(map(str, pids))})")
+        return 0
+
+    print("sshler is not running")
+    return 1
+
+
+def stop() -> int:
+    """Stop sshler if running.
+
+    Returns:
+        0 if stopped successfully, 1 if not running, 2 if error
+    """
+    # First try PID file
+    pid = _read_pid()
+    if pid:
+        try:
+            print(f"Stopping sshler (PID: {pid})...")
+            os.kill(pid, signal.SIGTERM)
+            # Wait for process to terminate
+            for _ in range(50):  # 5 seconds max
+                time.sleep(0.1)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+            _remove_pid()
+            print("sshler stopped")
+            return 0
+        except ProcessLookupError:
+            _remove_pid()
+            print("sshler was not running (stale PID file removed)")
+            return 1
+        except PermissionError:
+            print(f"Permission denied stopping PID {pid}")
+            return 2
+
+    # Try finding and stopping uvicorn processes
+    pids = _get_sshler_pids()
+    if not pids:
+        print("sshler is not running")
+        return 1
+
+    print(f"Stopping sshler (PIDs: {', '.join(map(str, pids))})...")
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    # Wait for processes to terminate
+    time.sleep(1)
+    remaining = _get_sshler_pids()
+    if remaining:
+        print(f"Force killing remaining processes: {remaining}")
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    _remove_pid()
+    print("sshler stopped")
+    return 0
+
+
+def restart() -> None:
+    """Restart sshler - stop if running, then start."""
+    print("Restarting sshler...")
+    stop()
+    time.sleep(1)
+
+    # Re-exec with serve command
+    # This replaces the current process
+    os.execvp("sshler", ["sshler", "serve", "--no-browser"])
 
 
 def _reload_app():
@@ -235,6 +372,9 @@ def serve(
     if open_browser and host in {"127.0.0.1", "localhost"}:
         _open_browser_later(application_url)
 
+    # Write PID file for status/stop commands
+    _write_pid()
+
     print(f"[sshler] listening on {application_url}")
     print(f"[sshler] X-SSHLER-TOKEN={settings.csrf_token}")
     if basic_auth:
@@ -242,31 +382,34 @@ def serve(
     if settings.allow_origins:
         print(f"[sshler] Additional allowed origins: {', '.join(settings.allow_origins)}")
 
-    if reload:
-        payload = {
-            "allow_origins": settings.allow_origins,
-            "csrf_token": settings.csrf_token,
-            "max_upload_bytes": settings.max_upload_bytes,
-            "allow_ssh_alias": settings.allow_ssh_alias,
-            "basic_auth": list(settings.basic_auth) if settings.basic_auth else None,
-        }
-        os.environ[_RELOAD_ENV_KEY] = json.dumps(payload)
-        uvicorn.run(
-            "sshler.cli:_reload_app",
-            host=host,
-            port=port,
-            reload=True,
-            log_level=log_level,
-            factory=True,
-        )
-    else:
-        uvicorn.run(
-            fastapi_application,
-            host=host,
-            port=port,
-            reload=False,
-            log_level=log_level,
-        )
+    try:
+        if reload:
+            payload = {
+                "allow_origins": settings.allow_origins,
+                "csrf_token": settings.csrf_token,
+                "max_upload_bytes": settings.max_upload_bytes,
+                "allow_ssh_alias": settings.allow_ssh_alias,
+                "basic_auth": list(settings.basic_auth) if settings.basic_auth else None,
+            }
+            os.environ[_RELOAD_ENV_KEY] = json.dumps(payload)
+            uvicorn.run(
+                "sshler.cli:_reload_app",
+                host=host,
+                port=port,
+                reload=True,
+                log_level=log_level,
+                factory=True,
+            )
+        else:
+            uvicorn.run(
+                fastapi_application,
+                host=host,
+                port=port,
+                reload=False,
+                log_level=log_level,
+            )
+    finally:
+        _remove_pid()
 
 
 def fix_frontend():
@@ -513,6 +656,18 @@ def main() -> None:
         append_to_env=not getattr(args, "no_env", False)
     ))
 
+    # Status command
+    status_parser = subcommands.add_parser("status", help="Check if sshler is running")
+    status_parser.set_defaults(func=lambda args: sys.exit(status()))
+
+    # Stop command
+    stop_parser = subcommands.add_parser("stop", help="Stop sshler if running")
+    stop_parser.set_defaults(func=lambda args: sys.exit(stop()))
+
+    # Restart command
+    restart_parser = subcommands.add_parser("restart", help="Restart sshler")
+    restart_parser.set_defaults(func=lambda args: restart())
+
     serve_parser = subcommands.add_parser("serve", help="Start the sshler web app")
     serve_parser.add_argument(
         "--host",
@@ -585,6 +740,12 @@ def main() -> None:
             username=getattr(parsed_args, "username", None),
             append_to_env=not getattr(parsed_args, "no_env", False)
         )
+    elif parsed_args.command == "status":
+        sys.exit(status())
+    elif parsed_args.command == "stop":
+        sys.exit(stop())
+    elif parsed_args.command == "restart":
+        restart()
     elif parsed_args.command in (None, "serve"):
         bind_host_value = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
         bind_host: str = bind_host_value if bind_host_value is not None else "127.0.0.1"

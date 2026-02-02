@@ -520,13 +520,29 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             allow_headers=["*"]
         )
 
+    def _get_client_ip(request: Request) -> str:
+        """Get client IP, respecting X-Real-IP header from trusted proxies.
+
+        When behind a reverse proxy (Caddy), the actual client IP is forwarded
+        via the X-Real-IP header. We only trust this header when the request
+        comes from localhost (where Caddy runs).
+        """
+        # Trust Caddy's X-Real-IP header if present and request is from localhost
+        if request.client and request.client.host == "127.0.0.1":
+            forwarded_ip = request.headers.get("x-real-ip")
+            if forwarded_ip:
+                return forwarded_ip
+        # Otherwise use direct client IP
+        return request.client.host if request.client else "unknown"
+
     @application.middleware("http")
     async def _security_middleware(request: Request, call_next):
         auth_tracker: AuthFailureTracker = request.app.state.auth_tracker
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _get_client_ip(request)
 
         # Check authentication if required
-        if settings.auth_manager and request.method != "OPTIONS":
+        # Skip auth for health check endpoint (needed for load balancers)
+        if settings.auth_manager and request.method != "OPTIONS" and request.url.path != "/health":
             # Check if IP is locked out
             if auth_tracker.is_locked_out(client_ip):
                 retry_after = auth_tracker.get_lockout_remaining(client_ip)
@@ -592,8 +608,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         if path.startswith("/static/") or path.startswith("/app") or path in ["/", "/docs"]:
             return await call_next(request)
 
-        # Get client identifier (IP address)
-        client_ip = request.client.host if request.client else "unknown"
+        # Get client identifier (IP address, respecting X-Real-IP from trusted proxies)
+        client_ip = _get_client_ip(request)
 
         # Different rate limits for different endpoint types
         if request.url.path.startswith("/box/") and "/upload" in request.url.path:
@@ -3036,6 +3052,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 f"[Connection] WebSocket closed: box={box_name}, transport={transport}, "
                 f"session={session}, client={client_host}"
             )
+
+    # Health check endpoint for monitoring
+    @application.get("/health")
+    async def health_check():
+        """Health check endpoint for load balancers and monitoring tools."""
+        return {"status": "ok", "timestamp": time.time()}
 
     # Include auth router (for session-based authentication)
     auth_router = create_auth_router(settings.auth_manager, application.state.auth_tracker)

@@ -177,6 +177,32 @@ const handleDragLeave = (e: DragEvent) => { e.preventDefault(); dragCounter.valu
 const handleDragOver = (e: DragEvent) => { e.preventDefault(); };
 const handleDrop = async (e: DragEvent) => { e.preventDefault(); dragCounter.value = 0; isDragOver.value = false; const files = e.dataTransfer?.files; if (files && files.length > 0) await handleUpload(files); };
 
+// Row click handler for file selection (extracted to prevent recreating closures on every render)
+const handleRowClick = (row: any, e: MouseEvent) => {
+  if (e.ctrlKey || e.metaKey) {
+    const isSelected = selectedPaths.value.includes(row.path);
+    if (isSelected) {
+      filesStore.setSelectedFiles(selectedPaths.value.filter((p: string) => p !== row.path));
+    } else {
+      filesStore.setSelectedFiles([...selectedPaths.value, row.path]);
+    }
+  } else if (e.shiftKey && selectedPaths.value.length > 0) {
+    const lastSelected = selectedPaths.value[selectedPaths.value.length - 1];
+    const lastIndex = filteredRows.value.findIndex((r: any) => r.path === lastSelected);
+    const currentIndex = filteredRows.value.findIndex((r: any) => r.path === row.path);
+    const start = Math.min(lastIndex, currentIndex);
+    const end = Math.max(lastIndex, currentIndex);
+    const rangeSelection = filteredRows.value.slice(start, end + 1).map((r: any) => r.path);
+    filesStore.setSelectedFiles([...new Set([...selectedPaths.value, ...rangeSelection])]);
+  }
+};
+
+// Row props factory for NDataTable (stable reference to avoid recreating on every render)
+const getRowProps = (row: any) => ({
+  style: 'cursor: pointer;',
+  onClick: (e: MouseEvent) => handleRowClick(row, e)
+});
+
 function applyBoxPatch(boxName: string, patch: Partial<ApiBox>) {
   boxesStore.setBoxes(boxesStore.items.map((box) => (box.name === boxName ? { ...box, ...patch } : box)));
 }
@@ -197,7 +223,6 @@ async function ensureData() {
       if (firstBox.default_dir) {
         currentDir.value = firstBox.default_dir;
       }
-      await refreshFavorites(firstBox.name);
     }
   }
   if (selectedBox.value) {
@@ -519,7 +544,7 @@ const columns = [
         <NButton size="small" @click="reloadDir" :disabled="!selectedBox" title="Refresh">
           <NIcon size="16"><PhUploadSimple /></NIcon>
         </NButton>
-        <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}`)" :disabled="!selectedBox" title="Open Terminal">
+        <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)" :disabled="!selectedBox" title="Open Terminal">
           <NIcon size="16"><PhTerminalWindow /></NIcon>
         </NButton>
       </NSpace>
@@ -613,27 +638,7 @@ const columns = [
             </div>
           </div>
           
-          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="(row: any) => ({ 
-            style: 'cursor: pointer;',
-            onClick: (e: MouseEvent) => {
-              if (e.ctrlKey || e.metaKey) {
-                const isSelected = selectedPaths.value.includes(row.path);
-                if (isSelected) {
-                  filesStore.setSelectedFiles(selectedPaths.value.filter((p: string) => p !== row.path));
-                } else {
-                  filesStore.setSelectedFiles([...selectedPaths.value, row.path]);
-                }
-              } else if (e.shiftKey && selectedPaths.value.length > 0) {
-                const lastSelected = selectedPaths.value[selectedPaths.value.length - 1];
-                const lastIndex = filteredRows.value.findIndex((r: any) => r.path === lastSelected);
-                const currentIndex = filteredRows.value.findIndex((r: any) => r.path === row.path);
-                const start = Math.min(lastIndex, currentIndex);
-                const end = Math.max(lastIndex, currentIndex);
-                const rangeSelection = filteredRows.value.slice(start, end + 1).map((r: any) => r.path);
-                filesStore.setSelectedFiles([...new Set([...selectedPaths.value, ...rangeSelection])]);
-              }
-            }
-          })" :scroll-x="800" />
+          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="getRowProps" :scroll-x="800" />
         </div>
 
         <!-- Error Display -->
