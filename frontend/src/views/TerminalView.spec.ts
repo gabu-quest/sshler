@@ -79,6 +79,12 @@ vi.mock("naive-ui", () => {
     NIcon: Stub,
     NList: Stub,
     NListItem: Stub,
+    NSpace: Stub,
+    NInput: defineComponent({
+      props: ['value', 'placeholder'],
+      emits: ['update:value', 'blur', 'keyup'],
+      template: '<input :value="value" :placeholder="placeholder" @input="$emit(\'update:value\', $event.target.value)" />'
+    }),
     NSelect: defineComponent({
       props: ['value', 'options'],
       emits: ['update:value'],
