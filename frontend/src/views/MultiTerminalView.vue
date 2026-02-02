@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NIcon, NSpace, NModal, NSelect, NInput, NAutoComplete, useMessage } from 'naive-ui'
+import { NButton, NIcon, NSpace, NModal, NSelect, NInput, useMessage } from 'naive-ui'
 import { PhPlus, PhTerminalWindow, PhArrowLeft } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import Terminal from '@/components/Terminal.vue'
+import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 
 interface TerminalInstance {
   id: string
@@ -24,9 +25,10 @@ const favoritesStore = useFavoritesStore()
 
 const terminals = ref<TerminalInstance[]>([])
 const showAddModal = ref(false)
+const showDirPicker = ref(false)
 const newTerminal = ref({
   boxName: '',
-  sessionName: 'main',
+  sessionName: '',
   directory: '~'
 })
 
@@ -57,12 +59,11 @@ const terminalFontSize = computed(() => {
   return 11
 })
 
-// Dynamic height: single terminal fills space, multiple share equally
+// Fixed terminal height for consistent grid layout
 const terminalMinHeight = computed(() => {
   const count = terminals.value.length
-  if (count <= 1) return 'calc(100vh - 120px)'
-  if (count <= 2) return 'calc(50vh - 60px)'
-  if (count <= 4) return 'calc(50vh - 60px)'
+  if (count <= 1) return '400px'
+  if (count <= 4) return '350px'
   return '300px' // Many terminals: allow scrolling
 })
 
@@ -99,8 +100,23 @@ const directoryOptions = computed(() => {
     })
   }
   
+  // Add Browse option
+  options.push({ label: '📁 Browse...', value: '__browse__' })
+  
   return options
 })
+
+const handleDirectoryChange = (value: string) => {
+  if (value === '__browse__') {
+    showDirPicker.value = true
+    return
+  }
+  newTerminal.value.directory = value
+}
+
+const handleDirPickerSelect = (path: string) => {
+  newTerminal.value.directory = path
+}
 
 const ensureData = async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
@@ -267,13 +283,13 @@ onMounted(async () => {
         
         <div>
           <label class="form-label">Directory</label>
-          <NAutoComplete
-            v-model:value="newTerminal.directory"
+          <NSelect
+            :value="newTerminal.directory"
             :options="directoryOptions"
             placeholder="~ or select from favorites"
-            clearable
+            @update:value="handleDirectoryChange"
           />
-          <p class="form-help">Select a favorite or type a custom path</p>
+          <p class="form-help">Select a favorite or browse for a directory</p>
         </div>
       </NSpace>
       
@@ -284,6 +300,16 @@ onMounted(async () => {
         </NSpace>
       </template>
     </NModal>
+    
+    <!-- Directory Picker Modal -->
+    <DirectoryPickerModal
+      v-if="newTerminal.boxName"
+      v-model:show="showDirPicker"
+      :box-name="newTerminal.boxName"
+      :initial-path="newTerminal.directory"
+      :token="tokenValue"
+      @select="handleDirPickerSelect"
+    />
   </div>
 </template>
 

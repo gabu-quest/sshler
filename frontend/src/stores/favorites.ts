@@ -110,6 +110,12 @@ export const useFavoritesStore = defineStore("favorites", () => {
     }
   }
 
+  // Toggle a favorite - add if not favorited, remove if already favorited
+  async function toggle(box: string, path: string, token: string | null) {
+    const currentlyFavorite = isFavorite(box, path);
+    return setFavorite(box, path, !currentlyFavorite, token);
+  }
+
   return {
     favoritesByBox,
     pinnedBoxes,
@@ -123,5 +129,6 @@ export const useFavoritesStore = defineStore("favorites", () => {
     setFavorite,
     setFavoritesFromList,
     setPinned,
+    toggle,
   };
 });

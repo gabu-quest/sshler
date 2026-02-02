@@ -714,6 +714,13 @@ watch(() => props.theme, () => {
   }
 })
 
+// Send data directly to terminal (for tmux commands etc)
+const send = (data: string) => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(data))
+  }
+}
+
 defineExpose({
   connect,
   disconnect,
@@ -721,6 +728,7 @@ defineExpose({
   focus,
   clear,
   search,
+  send,
   terminal: () => terminal,
   connected: () => connected.value,
   connecting: () => connecting.value

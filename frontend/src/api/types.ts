@@ -50,6 +50,18 @@ export interface SessionInfo {
   sessions: string[];
 }
 
+export interface ApiSession {
+  id: string;
+  box: string;
+  session_name: string;
+  working_directory: string;
+  created_at: number;
+  last_accessed_at: number;
+  active: boolean;
+  window_count: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface TerminalHandshake {
   ws_url: string;
   token_header?: string;

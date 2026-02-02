@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { NSelect, NButton, NIcon, NInput, NSpace, useMessage } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar } from '@phosphor-icons/vue'
+import { useRoute, useRouter } from 'vue-router'
+import { NSelect, NButton, NIcon, NInput, NSpace, NButtonGroup, NDivider } from 'naive-ui'
+import { PhTerminalWindow, PhArrowLeft, PhStar, PhCaretLeft, PhCaretRight, PhPlusCircle, PhFolderOpen } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import Terminal from '@/components/Terminal.vue'
+import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 
 const route = useRoute()
-const message = useMessage()
+const router = useRouter()
 
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
@@ -20,6 +21,25 @@ const selectedBox = ref<string | null>(null)
 const initialDirectory = ref<string>('~')
 const sessionName = ref<string>('main')
 const showManualDir = ref(false)
+const showDirPicker = ref(false)
+const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
+
+// Tmux control sequences (Ctrl+B prefix)
+const TMUX_PREFIX = '\x02' // Ctrl+B
+const sendTmuxCommand = (key: string) => {
+  terminalRef.value?.send(TMUX_PREFIX + key)
+  terminalRef.value?.focus()
+}
+
+const tmuxPrevWindow = () => sendTmuxCommand('p')
+const tmuxNextWindow = () => sendTmuxCommand('n')
+const tmuxNewWindow = () => sendTmuxCommand('c')
+
+const goToFiles = () => {
+  if (selectedBox.value) {
+    router.push({ path: '/files', query: { box: selectedBox.value } })
+  }
+}
 
 const boxOptions = computed(() =>
   boxesStore.items.map((box) => ({ 
@@ -32,9 +52,15 @@ const tokenValue = computed(() =>
   bootstrapStore.token || bootstrapStore.payload?.token || null
 )
 
-const selectedBoxData = computed(() =>
-  boxesStore.items.find(box => box.name === selectedBox.value)
+const isCurrentDirFavorite = computed(() => 
+  selectedBox.value ? favoritesStore.isFavorite(selectedBox.value, initialDirectory.value) : false
 )
+
+const toggleCurrentDirFavorite = async () => {
+  if (selectedBox.value) {
+    await favoritesStore.toggle(selectedBox.value, initialDirectory.value, tokenValue.value)
+  }
+}
 
 const directoryOptions = computed(() => {
   const options = [
@@ -49,11 +75,16 @@ const directoryOptions = computed(() => {
     })
   }
 
+  options.push({ label: '📁 Browse...', value: '__browse__' })
   options.push({ label: '+ Custom path...', value: '__custom__' })
   return options
 })
 
 const handleDirectoryChange = (value: string) => {
+  if (value === '__browse__') {
+    showDirPicker.value = true
+    return
+  }
   if (value === '__custom__') {
     showManualDir.value = true
     return
@@ -61,6 +92,11 @@ const handleDirectoryChange = (value: string) => {
   showManualDir.value = false
   initialDirectory.value = value
   sessionName.value = generateSessionName(value)
+}
+
+const handleDirPickerSelect = (path: string) => {
+  initialDirectory.value = path
+  sessionName.value = generateSessionName(path)
 }
 
 // Generate directory-based session name from the directory path
@@ -154,7 +190,7 @@ watch(() => boxesStore.items, () => {
         </div>
         
         <div class="header-actions">
-          <NSpace>
+          <NSpace align="center">
             <NSelect
               v-model:value="selectedBox"
               :options="boxOptions"
@@ -182,6 +218,66 @@ watch(() => boxesStore.items, () => {
             <NButton v-if="showManualDir" size="small" @click="showManualDir = false">
               Cancel
             </NButton>
+            
+            <!-- Tmux Window Controls -->
+            <template v-if="selectedBox">
+              <NDivider vertical />
+              <NButtonGroup size="small">
+                <NButton 
+                  class="tmux-nav-btn tmux-prev"
+                  @click="tmuxPrevWindow" 
+                  title="Previous Window (Ctrl+B p)"
+                >
+                  <NIcon size="14"><PhCaretLeft weight="bold" /></NIcon>
+                </NButton>
+                <NButton 
+                  class="tmux-nav-btn tmux-next"
+                  @click="tmuxNextWindow" 
+                  title="Next Window (Ctrl+B n)"
+                >
+                  <NIcon size="14"><PhCaretRight weight="bold" /></NIcon>
+                </NButton>
+              </NButtonGroup>
+              
+              <NButton 
+                size="small"
+                class="tmux-new-btn"
+                @click="tmuxNewWindow" 
+                title="New Window (Ctrl+B c)"
+              >
+                <template #icon>
+                  <NIcon size="14"><PhPlusCircle weight="fill" /></NIcon>
+                </template>
+                New
+              </NButton>
+              
+              <NDivider vertical />
+              
+              <NButton 
+                size="small"
+                @click="goToFiles"
+                title="Browse Files"
+              >
+                <template #icon>
+                  <NIcon size="14"><PhFolderOpen /></NIcon>
+                </template>
+                Files
+              </NButton>
+              
+              <NButton 
+                size="small"
+                :type="isCurrentDirFavorite ? 'warning' : 'default'"
+                @click="toggleCurrentDirFavorite"
+                :title="isCurrentDirFavorite ? 'Remove from favorites' : 'Add to favorites'"
+                class="favorite-btn"
+              >
+                <template #icon>
+                  <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
+                    <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'regular'" />
+                  </NIcon>
+                </template>
+              </NButton>
+            </template>
           </NSpace>
         </div>
       </div>
@@ -191,6 +287,7 @@ watch(() => boxesStore.items, () => {
     <div class="terminal-container">
       <Terminal
         v-if="selectedBox"
+        ref="terminalRef"
         :box-name="selectedBox"
         :session-name="sessionName"
         :directory="initialDirectory"
@@ -211,6 +308,16 @@ watch(() => boxesStore.items, () => {
         </div>
       </div>
     </div>
+    
+    <!-- Directory Picker Modal -->
+    <DirectoryPickerModal
+      v-if="selectedBox"
+      v-model:show="showDirPicker"
+      :box-name="selectedBox"
+      :initial-path="initialDirectory"
+      :token="tokenValue"
+      @select="handleDirPickerSelect"
+    />
   </div>
 </template>
 
@@ -320,6 +427,53 @@ h1 {
 
 .terminal-container :deep(.terminal-container) {
   height: 100%;
+}
+
+/* Tmux control buttons - colorful and cute */
+.tmux-nav-btn {
+  transition: all 0.15s ease;
+}
+
+.tmux-prev {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  border-color: #667eea !important;
+  color: white !important;
+}
+
+.tmux-prev:hover {
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
+  transform: translateX(-1px);
+}
+
+.tmux-next {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%) !important;
+  border-color: #764ba2 !important;
+  color: white !important;
+}
+
+.tmux-next:hover {
+  background: linear-gradient(135deg, #6b46c1 0%, #5a67d8 100%) !important;
+  transform: translateX(1px);
+}
+
+.tmux-new-btn {
+  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%) !important;
+  border-color: #48bb78 !important;
+  color: white !important;
+  margin-left: 8px;
+}
+
+.tmux-new-btn:hover {
+  background: linear-gradient(135deg, #38a169 0%, #2f855a 100%) !important;
+  transform: scale(1.02);
+}
+
+.favorite-btn {
+  transition: transform 0.15s ease;
+}
+
+.favorite-btn:hover {
+  transform: scale(1.1);
 }
 
 @media (prefers-contrast: high) {

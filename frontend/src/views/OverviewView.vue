@@ -11,6 +11,7 @@ import {
   NSpin, 
   NTag,
   NEmpty,
+  NTooltip,
   useMessage
 } from "naive-ui";
 import {
@@ -26,11 +27,13 @@ import {
 
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
+import { useSessionsStore } from "@/stores/sessions";
 
 const router = useRouter();
 const message = useMessage();
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
+const sessionsStore = useSessionsStore();
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token);
 const hasServers = computed(() => boxesStore.items.length > 0);
@@ -55,7 +58,33 @@ onMounted(async () => {
   if (!boxesStore.items.length && !boxesStore.loading) {
     await boxesStore.load(tokenValue.value || null);
   }
+  // Load sessions for all boxes
+  if (boxesStore.items.length > 0) {
+    await sessionsStore.loadAllBoxSessions(
+      boxesStore.items.map(b => b.name),
+      tokenValue.value || null
+    );
+  }
 });
+
+// Get session info for a box
+const getBoxSessionCount = (boxName: string): number => {
+  return sessionsStore.getActiveSessionCount(boxName);
+};
+
+const getBoxLastUsed = (boxName: string): string => {
+  const session = sessionsStore.getMostRecentSession(boxName);
+  if (!session) return 'never';
+  return sessionsStore.formatRelativeTime(session.last_accessed_at);
+};
+
+const getBoxSessions = (boxName: string) => {
+  return sessionsStore.getBoxSessions(boxName);
+};
+
+const handleJumpToSession = (boxName: string, sessionName: string) => {
+  router.push(`/terminal?box=${boxName}&session=${sessionName}`);
+};
 
 const getServerStatus = (box: any) => {
   if (box.name.includes('offline')) return 'offline';
@@ -206,12 +235,28 @@ const handleBrowseServerFiles = (serverName: string) => {
             <div class="server-info">
               <p class="server-host">{{ box.host }}</p>
               <p class="server-meta">
-                {{ getServerStatus(box) === 'online' ? '2 active sessions' : 
-                   getServerStatus(box) === 'busy' ? '1 active session' : 'offline' }}
+                <NTooltip v-if="getBoxSessions(box.name).length > 0" trigger="hover">
+                  <template #trigger>
+                    <span class="session-link">
+                      {{ getBoxSessionCount(box.name) }} active session{{ getBoxSessionCount(box.name) === 1 ? '' : 's' }}
+                    </span>
+                  </template>
+                  <div class="session-tooltip">
+                    <div 
+                      v-for="session in getBoxSessions(box.name)" 
+                      :key="session.id"
+                      class="session-item"
+                      @click="handleJumpToSession(box.name, session.session_name)"
+                    >
+                      <span class="session-name">{{ session.session_name || 'unnamed' }}</span>
+                      <span class="session-dir">{{ session.working_directory }}</span>
+                    </div>
+                  </div>
+                </NTooltip>
+                <span v-else class="no-sessions">No active sessions</span>
               </p>
               <p class="server-last-used">
-                Last used: {{ getServerStatus(box) === 'online' ? '5min ago' : 
-                            getServerStatus(box) === 'busy' ? '2hr ago' : '2d ago' }}
+                Last used: {{ getBoxLastUsed(box.name) }}
               </p>
             </div>
             
@@ -589,5 +634,53 @@ const handleBrowseServerFiles = (serverName: string) => {
   .server-card:hover {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   }
+}
+
+/* Session tooltip styles */
+.session-link {
+  cursor: pointer;
+  color: var(--accent);
+  text-decoration: underline dotted;
+}
+
+.session-link:hover {
+  text-decoration: underline solid;
+}
+
+.no-sessions {
+  color: var(--muted);
+}
+
+.session-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.session-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.session-dir {
+  font-size: 11px;
+  opacity: 0.7;
+  font-family: var(--font-mono);
 }
 </style>
