@@ -226,6 +226,13 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 }
 
+// Handle window resize
+const handleResize = () => {
+  setTimeout(() => {
+    fitAll()
+  }, 100)
+}
+
 onMounted(() => {
   // Create initial pane
   createPane('main', props.initialDirectory)
@@ -239,21 +246,12 @@ onMounted(() => {
   document.addEventListener('keydown', handleKeyDown)
   
   // Handle window resize
-  const handleResize = () => {
-    setTimeout(() => {
-      fitAll()
-    }, 100)
-  }
-  
   window.addEventListener('resize', handleResize)
-  
-  onUnmounted(() => {
-    document.removeEventListener('keydown', handleKeyDown)
-    window.removeEventListener('resize', handleResize)
-  })
 })
 
 onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('resize', handleResize)
   disconnectAll()
 })
 

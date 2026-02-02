@@ -16,3 +16,7 @@ sshler/static/dist
 
 # Claude Code local settings
 .claude/settings.local.json
+
+
+# Sandbox
+.sandbox/

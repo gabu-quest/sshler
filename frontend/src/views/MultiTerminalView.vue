@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NIcon, NSpace, NModal, NSelect, NInput, useMessage } from 'naive-ui'
+import { NButton, NIcon, NSpace, NModal, NSelect, NInput, NAutoComplete, useMessage } from 'naive-ui'
 import { PhPlus, PhTerminalWindow, PhArrowLeft } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
+import { useFavoritesStore } from '@/stores/favorites'
 import Terminal from '@/components/Terminal.vue'
 
 interface TerminalInstance {
@@ -19,6 +20,7 @@ const route = useRoute()
 const message = useMessage()
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
+const favoritesStore = useFavoritesStore()
 
 const terminals = ref<TerminalInstance[]>([])
 const showAddModal = ref(false)
@@ -50,18 +52,55 @@ const gridCols = computed(() => {
 
 const terminalFontSize = computed(() => {
   const count = terminals.value.length
-  if (count <= 4) return 12
-  if (count <= 8) return 11
-  return 10
+  if (count <= 4) return 14
+  if (count <= 8) return 12
+  return 11
 })
 
-const terminalHeight = '350px' // Fixed height for all terminals
+// Dynamic height: single terminal fills space, multiple share equally
+const terminalMinHeight = computed(() => {
+  const count = terminals.value.length
+  if (count <= 1) return 'calc(100vh - 120px)'
+  if (count <= 2) return 'calc(50vh - 60px)'
+  if (count <= 4) return 'calc(50vh - 60px)'
+  return '300px' // Many terminals: allow scrolling
+})
 
 const terminalColors = ['#6aa6ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2', '#eb2f96', '#f5222d']
 
 const getTerminalColor = (index: number) => {
   return terminalColors[index % terminalColors.length]
 }
+
+// T7: Directory options for dropdown - favorites from selected box + common paths
+const directoryOptions = computed(() => {
+  const options: Array<{ label: string; value: string }> = [
+    { label: '~ (Home)', value: '~' },
+    { label: '/tmp', value: '/tmp' },
+    { label: '/var/log', value: '/var/log' },
+  ]
+  
+  // Add favorites from selected box
+  if (newTerminal.value.boxName) {
+    const boxData = boxesStore.items.find(b => b.name === newTerminal.value.boxName)
+    if (boxData?.favorites) {
+      boxData.favorites.forEach(fav => {
+        const label = fav.split('/').pop() || fav
+        options.unshift({ label: `★ ${label}`, value: fav })
+      })
+    }
+    // Also check favoritesStore
+    const storeFavs = Array.from(favoritesStore.favoritesForBox(newTerminal.value.boxName).values())
+    storeFavs.forEach(fav => {
+      if (!options.some(o => o.value === fav)) {
+        const label = fav.split('/').pop() || fav
+        options.unshift({ label: `★ ${label}`, value: fav })
+      }
+    })
+  }
+  
+  return options
+})
 
 const ensureData = async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
@@ -107,8 +146,19 @@ const openAddModal = () => {
   if (boxOptions.value.length > 0 && !newTerminal.value.boxName) {
     newTerminal.value.boxName = boxOptions.value[0].value
   }
+  // Load favorites for selected box
+  if (newTerminal.value.boxName) {
+    favoritesStore.loadBox(newTerminal.value.boxName, tokenValue.value || null)
+  }
   showAddModal.value = true
 }
+
+// Watch for box selection changes to load favorites
+watch(() => newTerminal.value.boxName, async (boxName) => {
+  if (boxName) {
+    await favoritesStore.loadBox(boxName, tokenValue.value || null)
+  }
+})
 
 const goBack = () => {
   window.history.back()
@@ -150,7 +200,7 @@ onMounted(async () => {
       class="terminal-grid" 
       :style="{ 
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
-        '--terminal-height': terminalHeight
+        '--terminal-min-height': terminalMinHeight
       }"
     >
       <div
@@ -217,10 +267,13 @@ onMounted(async () => {
         
         <div>
           <label class="form-label">Directory</label>
-          <NInput
+          <NAutoComplete
             v-model:value="newTerminal.directory"
-            placeholder="~"
+            :options="directoryOptions"
+            placeholder="~ or select from favorites"
+            clearable
           />
+          <p class="form-help">Select a favorite or type a custom path</p>
         </div>
       </NSpace>
       
@@ -271,11 +324,11 @@ onMounted(async () => {
 .terminal-grid {
   flex: 1;
   display: grid;
-  gap: 4px; /* Slightly larger gap for colored borders */
+  gap: 4px;
   padding: 4px;
   min-height: 0;
-  overflow-y: auto; /* Allow vertical scrolling */
-  grid-auto-rows: var(--terminal-height, 350px); /* Fixed row height */
+  overflow-y: auto;
+  grid-auto-rows: minmax(var(--terminal-min-height, 300px), 1fr);
 }
 
 .terminal-container {
@@ -285,7 +338,7 @@ onMounted(async () => {
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
-  height: var(--terminal-height, 350px); /* Fixed height for consistency */
+  min-height: var(--terminal-min-height, 300px);
 }
 
 .terminal-header {

@@ -8,7 +8,12 @@ import { http } from '@/api/http'
 const bootstrapStore = useBootstrapStore()
 const appStore = useAppStore()
 const message = useMessage()
+
+// Browser globals (safe access for SSR/edge cases)
 const location = window.location
+const userAgent = window.navigator?.userAgent ?? 'N/A'
+const localStorageCount = computed(() => Object.keys(window.localStorage || {}).length)
+const sessionStorageCount = computed(() => Object.keys(window.sessionStorage || {}).length)
 
 // Pool configuration state
 const poolConfig = ref({
@@ -271,9 +276,9 @@ onMounted(() => {
     <NCard title="Debug Information" size="medium">
       <NSpace vertical size="small">
         <p><strong>Current URL:</strong> {{ location.href }}</p>
-        <p><strong>User Agent:</strong> {{ navigator.userAgent }}</p>
-        <p><strong>Local Storage:</strong> {{ Object.keys(localStorage).length }} items</p>
-        <p><strong>Session Storage:</strong> {{ Object.keys(sessionStorage).length }} items</p>
+        <p><strong>User Agent:</strong> {{ userAgent }}</p>
+        <p><strong>Local Storage:</strong> {{ localStorageCount }} items</p>
+        <p><strong>Session Storage:</strong> {{ sessionStorageCount }} items</p>
       </NSpace>
     </NCard>
 

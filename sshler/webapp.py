@@ -810,19 +810,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     @application.get("/")
     async def root() -> RedirectResponse:
-        """Redirect the index page to the boxes list.
+        """Redirect the index page to the Vue SPA.
 
         English:
-            Visiting ``/`` immediately sends the browser to the SPA or legacy boxes view.
+            Visiting ``/`` immediately sends the browser to the Vue SPA at ``/app/``.
+            The legacy HTMX UI is deprecated.
 
         日本語:
-            ルート ``/`` にアクセスした際に SPA または従来のボックス一覧へリダイレクトします。
+            ルート ``/`` にアクセスした際に Vue SPA (``/app/``) へリダイレクトします。
+            従来の HTMX UI は非推奨です。
 
         Returns:
-            RedirectResponse: HTTP redirect to ``/boxes``.
+            RedirectResponse: HTTP redirect to ``/app/``.
         """
-
-        return RedirectResponse(url="/app/" if settings.serve_spa else "/boxes")
+        # Always redirect to Vue SPA - legacy HTMX UI is deprecated
+        return RedirectResponse(url="/app/")
 
     @application.get("/docs", response_class=HTMLResponse)
     async def docs(request: Request, lang: str = Query("en")) -> HTMLResponse:

@@ -29,7 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
   directory: '~',
   theme: 'default',
   fontSize: 14,
-  fontFamily: 'SF Mono, Monaco, Cascadia Code, Roboto Mono, Consolas, Courier New, monospace'
+  fontFamily: '"CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "Cascadia Code", "Cascadia Mono", "SF Mono", Monaco, Consolas, "Courier New", monospace'
 })
 
 const emit = defineEmits<Emits>()
@@ -653,7 +653,11 @@ const handleViewportChange = () => {
       viewport.removeEventListener('resize', handleResize)
     }
   }
+  return undefined
 }
+
+// Store cleanup function for viewport
+let cleanupViewport: (() => void) | undefined
 
 onMounted(async () => {
   await nextTick()
@@ -665,19 +669,18 @@ onMounted(async () => {
   }
   
   // Setup mobile viewport handling
-  const cleanupViewport = handleViewportChange()
+  cleanupViewport = handleViewportChange()
   
   // Auto-connect after terminal is created
   setTimeout(() => {
     connect()
   }, 100)
-  
-  onUnmounted(() => {
-    cleanupViewport?.()
-  })
 })
 
 onUnmounted(() => {
+  // Cleanup viewport handler
+  cleanupViewport?.()
+  
   disconnect()
 
   if (resizeTimeout) {

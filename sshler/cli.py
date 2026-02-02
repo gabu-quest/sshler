@@ -720,7 +720,7 @@ def main() -> None:
         "--ui",
         choices=["both", "vue", "legacy"],
         default="vue",
-        help="Serve the Vue SPA, legacy templates, or both (default: vue)",
+        help="UI mode: 'vue' (default, recommended), 'legacy' (deprecated), 'both' (deprecated)",
     )
     serve_parser.add_argument(
         "--no-browser",
@@ -832,6 +832,21 @@ def main() -> None:
                 token=getattr(parsed_args, "token", None),
             )
         else:
+            ui_mode = getattr(parsed_args, "ui", "vue")
+            
+            # Show deprecation warning for legacy/both modes
+            if ui_mode in ("legacy", "both"):
+                print("=" * 70, file=sys.stderr)
+                print("⚠️  DEPRECATION WARNING: HTMX UI is deprecated", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                print(f"You are using --ui={ui_mode}", file=sys.stderr)
+                print("\nThe legacy HTMX UI is deprecated and will be removed in a future version.", file=sys.stderr)
+                print("The Vue SPA at /app is now the recommended and default UI.", file=sys.stderr)
+                print("\nTo use the new Vue UI (recommended):", file=sys.stderr)
+                print("  sshler serve  # defaults to --ui=vue", file=sys.stderr)
+                print("=" * 70, file=sys.stderr)
+                print()
+            
             serve(
                 host=bind_host,
                 port=getattr(parsed_args, "port", 8822),
@@ -843,7 +858,7 @@ def main() -> None:
                 log_level=getattr(parsed_args, "log_level", "info"),
                 open_browser=getattr(parsed_args, "open_browser", True),
                 token=getattr(parsed_args, "token", None),
-                ui=getattr(parsed_args, "ui", "both"),
+                ui=ui_mode,
             )
     else:
         parser.print_help()

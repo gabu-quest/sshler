@@ -11,7 +11,6 @@ import {
   NSpin, 
   NTag,
   NEmpty,
-  NTime,
   useMessage
 } from "naive-ui";
 import {
@@ -20,10 +19,8 @@ import {
   PhFolderOpen,
   PhRocketLaunch,
   PhCircle,
-  PhClockCounterClockwise,
   PhChartBar,
   PhDesktop,
-  PhFiles,
   PhLightning
 } from "@phosphor-icons/vue";
 
@@ -39,18 +36,16 @@ const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload
 const hasServers = computed(() => boxesStore.items.length > 0);
 const onlineServers = computed(() => boxesStore.items.filter(box => !box.name.includes('offline')));
 const recentServer = computed(() => boxesStore.items.find(box => box.pinned) || boxesStore.items[0]);
+const pinnedBoxes = computed(() => boxesStore.items.filter(box => box.pinned));
+const totalFavorites = computed(() => 
+  boxesStore.items.reduce((acc, box) => acc + (box.favorites?.length || 0), 0)
+);
 
-// Mock activity data - in real app this would come from API
-const recentActivity = computed(() => [
-  { type: 'terminal', server: 'dev-server', action: 'Opened terminal session', time: new Date(Date.now() - 5 * 60 * 1000) },
-  { type: 'file', server: 'prod-web', action: 'Uploaded config.json', time: new Date(Date.now() - 2 * 60 * 60 * 1000) },
-  { type: 'session', server: 'dev-server', action: 'Started session "deploy"', time: new Date(Date.now() - 4 * 60 * 60 * 1000) },
-]);
-
+// Real stats only - no fake data
 const quickStats = computed(() => ({
   servers: boxesStore.items.length,
-  filesUploaded: 12, // Mock data
-  activeSessions: 5   // Mock data
+  pinnedBoxes: pinnedBoxes.value.length,
+  favorites: totalFavorites.value
 }));
 
 onMounted(async () => {
@@ -74,15 +69,6 @@ const getStatusColor = (status: string) => {
     case 'busy': return '#faad14';
     case 'offline': return '#8c8c8c';
     default: return '#8c8c8c';
-  }
-};
-
-const getActivityIcon = (type: string) => {
-  switch (type) {
-    case 'terminal': return PhTerminal;
-    case 'file': return PhFiles;
-    case 'session': return PhLightning;
-    default: return PhCircle;
   }
 };
 
@@ -253,30 +239,42 @@ const handleBrowseServerFiles = (serverName: string) => {
 
     <!-- Activity & Stats -->
     <NGrid :x-gap="24" :y-gap="16" :cols="2" responsive="screen">
-      <!-- Recent Activity -->
+      <!-- Quick Actions -->
       <NGridItem>
         <NCard class="activity-card">
           <div class="section-header">
             <NIcon size="18">
-              <PhClockCounterClockwise />
+              <PhRocketLaunch />
             </NIcon>
-            <h3>Recent Activity</h3>
+            <h3>Quick Actions</h3>
           </div>
           
           <div class="activity-list">
-            <div 
-              v-for="(activity, index) in recentActivity" 
-              :key="index"
-              class="activity-item"
-            >
+            <div class="activity-item" @click="router.push('/terminal')" style="cursor: pointer;">
               <NIcon size="16" class="activity-icon">
-                <component :is="getActivityIcon(activity.type)" />
+                <PhTerminal />
               </NIcon>
               <div class="activity-content">
-                <p class="activity-action">{{ activity.action }}</p>
-                <p class="activity-meta">
-                  {{ activity.server }} • <NTime :time="activity.time" type="relative" />
-                </p>
+                <p class="activity-action">Open Multi-Terminal</p>
+                <p class="activity-meta">Manage multiple sessions in a grid</p>
+              </div>
+            </div>
+            <div class="activity-item" @click="router.push('/boxes')" style="cursor: pointer;">
+              <NIcon size="16" class="activity-icon">
+                <PhDesktop />
+              </NIcon>
+              <div class="activity-content">
+                <p class="activity-action">Manage Boxes</p>
+                <p class="activity-meta">View and configure your servers</p>
+              </div>
+            </div>
+            <div class="activity-item" @click="router.push('/settings')" style="cursor: pointer;">
+              <NIcon size="16" class="activity-icon">
+                <PhLightning />
+              </NIcon>
+              <div class="activity-content">
+                <p class="activity-action">Settings</p>
+                <p class="activity-meta">Configure connection pool and preferences</p>
               </div>
             </div>
           </div>
@@ -306,21 +304,21 @@ const handleBrowseServerFiles = (serverName: string) => {
             
             <div class="stat-item">
               <NIcon size="20" class="stat-icon">
-                <PhFiles />
+                <PhCircle />
               </NIcon>
               <div>
-                <p class="stat-number">{{ quickStats.filesUploaded }}</p>
-                <p class="stat-label">Files Today</p>
+                <p class="stat-number">{{ quickStats.pinnedBoxes }}</p>
+                <p class="stat-label">Pinned</p>
               </div>
             </div>
             
             <div class="stat-item">
               <NIcon size="20" class="stat-icon">
-                <PhLightning />
+                <PhFolderOpen />
               </NIcon>
               <div>
-                <p class="stat-number">{{ quickStats.activeSessions }}</p>
-                <p class="stat-label">Sessions</p>
+                <p class="stat-number">{{ quickStats.favorites }}</p>
+                <p class="stat-label">Favorites</p>
               </div>
             </div>
           </div>
