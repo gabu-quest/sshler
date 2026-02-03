@@ -11,7 +11,7 @@ interface Props {
   boxName: string
   sessionName?: string
   directory?: string
-  theme?: 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai'
+  theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai'
   fontSize?: number
   fontFamily?: string
 }
@@ -27,9 +27,9 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   sessionName: 'main',
   directory: '~',
-  theme: 'default',
+  theme: 'cyberpunk',
   fontSize: 14,
-  fontFamily: '"CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "Cascadia Code", "Cascadia Mono", "SF Mono", Monaco, Consolas, "Courier New", monospace'
+  fontFamily: '"JetBrains Mono Nerd Font", "Iosevka Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "SF Mono", Monaco, Consolas, monospace'
 })
 
 const emit = defineEmits<Emits>()
@@ -56,6 +56,31 @@ let reconnectTimeout: number | null = null
 let intentionalDisconnect = false
 
 const TERMINAL_THEMES = {
+  cyberpunk: {
+    background: '#0a0e14',      // Deep near-black
+    foreground: '#b3b1ad',      // Muted warm gray
+    cursor: '#e6b450',          // Amber cursor
+    cursorAccent: '#0a0e14',
+    selectionBackground: '#273747',
+    selectionForeground: '#e6e6e6',
+    // ANSI colors tuned for Starship + readability
+    black: '#01060e',
+    red: '#ea6c73',             // Errors: visible but not screaming
+    green: '#91b362',           // Success: calm green
+    yellow: '#f9af4f',          // Warnings: readable amber
+    blue: '#53bdfa',            // Info: cool blue
+    magenta: '#fae994',         // Accent
+    cyan: '#90e1c6',            // Secondary
+    white: '#c7c7c7',
+    brightBlack: '#686868',
+    brightRed: '#f07178',
+    brightGreen: '#c2d94c',
+    brightYellow: '#ffb454',
+    brightBlue: '#59c2ff',
+    brightMagenta: '#ffee99',
+    brightCyan: '#95e6cb',
+    brightWhite: '#ffffff',
+  },
   default: {
     background: '#0f1115',
     foreground: '#e6e6e6',
@@ -235,18 +260,20 @@ const createTerminal = () => {
   if (!terminalRef.value) return
 
   const theme = TERMINAL_THEMES[props.theme]
+  const isCyberpunk = props.theme === 'cyberpunk'
   
   terminal = new Terminal({
     theme,
     fontSize: props.fontSize,
     fontFamily: props.fontFamily,
-    lineHeight: 1.2,
+    lineHeight: isCyberpunk ? 1.25 : 1.2,
     letterSpacing: 0,
     cursorBlink: true,
-    cursorStyle: 'block',
+    cursorStyle: isCyberpunk ? 'bar' : 'block',
+    cursorInactiveStyle: 'outline',
     allowTransparency: false,
     scrollback: 10000,
-    smoothScrollDuration: 100,
+    smoothScrollDuration: isCyberpunk ? 150 : 100,
     rightClickSelectsWord: true,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: false,
@@ -285,6 +312,25 @@ const createTerminal = () => {
     }
   })
 
+  // Copy on selection (like tmux mouse mode)
+  // Note: Uses mouseup event for better clipboard API compatibility
+  terminalRef.value?.addEventListener('mouseup', () => {
+    const selection = terminal?.getSelection()
+    if (selection && selection.length > 0) {
+      // Use clipboard API with fallback
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(selection).then(() => {
+          console.log('[Terminal] Selection copied:', selection.length, 'chars')
+        }).catch((err) => {
+          console.warn('[Terminal] Clipboard API failed, trying fallback:', err)
+          copyWithFallback(selection)
+        })
+      } else {
+        copyWithFallback(selection)
+      }
+    }
+  })
+
   // Handle resize
   terminal.onResize(({ cols, rows }) => {
     emit('resize', { cols, rows })
@@ -300,26 +346,45 @@ const createTerminal = () => {
   // Setup resize observer with throttling
   setupResizeObserver()
   
-  // Initial fit
-  nextTick(() => {
+  // Expose terminal globally for debugging
+  ;(window as any).term = terminal
+  ;(window as any).fitAddon = fitAddon
+  
+  // Initial fit - MUST wait for fonts to load for correct cell measurements
+  nextTick(async () => {
+    // Wait for fonts (critical for Nerd Fonts)
+    await (document as any).fonts?.ready
     fitAddon?.fit()
     terminal?.focus()
+    
+    // Debug: log actual dimensions
+    console.log('[Terminal] Initial fit complete - cols:', terminal?.cols, 'rows:', terminal?.rows)
   })
 }
 
 const setupResizeObserver = () => {
   if (!terminalRef.value || !fitAddon) return
 
-  resizeObserver = new ResizeObserver(() => {
+  resizeObserver = new ResizeObserver((entries) => {
     if (resizeTimeout) {
       clearTimeout(resizeTimeout)
     }
     resizeTimeout = window.setTimeout(() => {
+      const entry = entries[0]
+      if (entry) {
+        console.log('[Terminal] Container size:', entry.contentRect.width, 'x', entry.contentRect.height)
+      }
       fitAddon?.fit()
+      const dims = fitAddon?.proposeDimensions()
+      console.log('[Terminal] After fit - cols:', dims?.cols, 'rows:', dims?.rows)
     }, 150)
   })
 
+  // Observe both the terminal element and its parent container
   resizeObserver.observe(terminalRef.value)
+  if (terminalRef.value.parentElement) {
+    resizeObserver.observe(terminalRef.value.parentElement)
+  }
 }
 
 const handleBell = () => {
@@ -491,6 +556,19 @@ const connect = async () => {
       emit('connected')
 
       console.log(`[Connection] Connected to ${props.boxName}`)
+      
+      // Re-fit after connection and ALWAYS send resize to backend
+      // This is critical - the PTY defaults to 80x24 and needs the real dimensions
+      nextTick(() => {
+        fitAddon?.fit()
+        // Always send resize after connect, even if dimensions didn't change
+        if (terminal && websocket?.readyState === WebSocket.OPEN) {
+          const cols = terminal.cols
+          const rows = terminal.rows
+          console.log(`[Connection] Sending initial resize: ${cols}x${rows}`)
+          websocket.send(JSON.stringify({ op: 'resize', cols, rows }))
+        }
+      })
 
       // Show success message - more prominent if recovering from reconnect
       if (reconnectAttempts.value > 0) {
@@ -767,14 +845,72 @@ defineExpose({
   position: relative;
   width: 100%;
   height: 100%;
-  background: var(--terminal-bg, #0f1115);
-  border-radius: 8px;
+  min-width: 0;  /* Critical for flex layouts */
+  min-height: 0;
+  background: var(--terminal-bg, #0a0e14);
+  border-radius: 14px;
   overflow: hidden;
+  /* Cyberpunk depth */
+  box-shadow: 
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  /* Inner padding for breathing room */
+  padding: 10px 12px;
+}
+
+/* Focus glow */
+.terminal-container:focus-within {
+  box-shadow: 
+    0 0 0 1px rgba(83, 189, 250, 0.3),
+    0 0 20px rgba(83, 189, 250, 0.08),
+    0 4px 24px rgba(0, 0, 0, 0.4);
 }
 
 .terminal {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Force xterm internal elements to fill the container */
+.terminal :deep(.xterm) {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.terminal :deep(.xterm-viewport) {
+  width: 100% !important;
+}
+
+.terminal :deep(.xterm-screen) {
+  width: 100% !important;
+}
+
+/* Ultra-minimal scrollbars */
+.terminal :deep(.xterm-viewport)::-webkit-scrollbar {
+  width: 6px;
+  background: transparent;
+}
+
+.terminal :deep(.xterm-viewport)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Firefox scrollbars */
+.terminal :deep(.xterm-viewport) {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 .terminal-overlay {
@@ -783,12 +919,13 @@ defineExpose({
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(10, 14, 20, 0.9);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: #b3b1ad;
   font-family: var(--font-mono);
+  border-radius: 14px;
 }
 
 .connecting-indicator,
@@ -809,24 +946,26 @@ defineExpose({
 .spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top: 2px solid white;
+  border: 2px solid rgba(230, 180, 80, 0.2);
+  border-top: 2px solid #e6b450;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
 .reconnect-btn {
   padding: 8px 16px;
-  background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 4px;
+  background: rgba(83, 189, 250, 0.2);
+  color: #53bdfa;
+  border: 1px solid rgba(83, 189, 250, 0.3);
+  border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+  transition: all 0.2s ease;
 }
 
 .reconnect-btn:hover {
-  background: var(--accent-hover);
+  background: rgba(83, 189, 250, 0.3);
+  border-color: rgba(83, 189, 250, 0.5);
 }
 
 @keyframes spin {
@@ -838,6 +977,7 @@ defineExpose({
 @media (max-width: 768px) {
   .terminal-container {
     border-radius: 0;
+    padding: 6px 8px;
   }
   
   .terminal :deep(.xterm-viewport) {
