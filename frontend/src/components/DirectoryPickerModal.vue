@@ -344,6 +344,23 @@ watch(() => props.show, (show) => {
   opacity: 1;
 }
 
+/* Touch devices: always show star button since there is no hover */
+@media (hover: none) and (pointer: coarse) {
+  .star-btn {
+    opacity: 1;
+  }
+
+  .directory-item {
+    padding: 14px 12px;
+    min-height: 48px;
+  }
+
+  .favorite-item {
+    padding: 10px 8px;
+    min-height: 48px;
+  }
+}
+
 .footer-actions {
   display: flex;
   justify-content: flex-end;

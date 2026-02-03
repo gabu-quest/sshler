@@ -199,4 +199,19 @@ const handleKeypress = (event: KeyboardEvent) => {
 .n-form-item {
   margin-bottom: 20px;
 }
+
+@media (max-width: 480px) {
+  .login-container {
+    padding: 16px;
+  }
+
+  .login-logo {
+    width: 80px;
+    height: 80px;
+  }
+
+  .login-header {
+    margin-bottom: 16px;
+  }
+}
 </style>

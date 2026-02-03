@@ -330,7 +330,7 @@ watch(() => boxesStore.items, () => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: calc(100vh - 96px);
+  height: calc(var(--vh-full, 100vh) - 96px);
   overflow: hidden;
   width: 100%;
   max-width: none;
@@ -451,6 +451,8 @@ watch(() => boxesStore.items, () => {
 @media (max-width: 768px) {
   .page {
     gap: 8px;
+    height: calc(var(--vh-full, 100vh) - 80px);
+    padding: 0 8px;
   }
 
   .header-content {
@@ -469,6 +471,34 @@ watch(() => boxesStore.items, () => {
 
   .header-controls {
     flex-wrap: wrap;
+  }
+
+  .header-controls :deep(.n-select),
+  .header-controls :deep(.n-input) {
+    min-width: 0 !important;
+    flex: 1 1 120px;
+  }
+}
+
+@media (max-width: 480px) {
+  .page {
+    padding: 0 4px;
+  }
+
+  .header-left {
+    gap: 8px;
+  }
+
+  .dir-title {
+    font-size: 16px;
+  }
+
+  .box-badge {
+    display: none;
+  }
+
+  .git-badge {
+    display: none;
   }
 }
 

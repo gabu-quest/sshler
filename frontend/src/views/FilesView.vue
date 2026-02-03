@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { useResponsive } from "@/composables/useResponsive";
 import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
@@ -27,6 +28,7 @@ const directoryStore = useDirectoryStore();
 const favoritesStore = useFavoritesStore();
 const filesStore = useFilesStore();
 const message = useMessage();
+const { isMobile } = useResponsive();
 
 // State
 const selectedBox = ref<string | null>(null);
@@ -515,75 +517,102 @@ async function bulkDownload() {
   }
 }
 
-// Table columns
-const columns = [
-  { type: "selection" as const },
-  {
+// Mobile-friendly actions button that opens context menu
+const mobileActionsButton = (row: any) => {
+  return h(NButton, {
+    size: "tiny",
+    quaternary: true,
+    onClick: (e: MouseEvent) => showContextMenu(e, row)
+  }, { default: () => '...' });
+};
+
+// Table columns — responsive: on mobile show only name + actions
+const columns = computed(() => {
+  const nameCol = {
     title: "name", key: "name",
     render(row: any) {
       const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
-      return h("div", { 
-        style: "display:flex;align-items:center;gap:8px;cursor:pointer;",
+      const children = [
+        h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile)),
+        h("div", { style: "min-width:0;flex:1;" }, [
+          h("span", row.name),
+          isMobile.value && !row.is_directory && row.size
+            ? h("div", { style: "font-size:11px;color:var(--muted);" }, formatFileSize(row.size))
+            : null,
+        ]),
+        isFav && h(NIcon, { size: 14, color: "#faad14", style: "margin-left: 4px;flex-shrink:0;" }, () => h(PhStar, { weight: "fill" }))
+      ];
+      return h("div", {
+        style: "display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;",
         onDblclick: () => row.is_directory ? navigateToDirectory(row.path) : handlePreview(row),
         onContextmenu: (e: MouseEvent) => showContextMenu(e, row)
-      }, [
-        h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile)),
-        h("span", row.name),
-        isFav && h(NIcon, { size: 14, color: "#faad14", style: "margin-left: 4px;" }, () => h(PhStar, { weight: "fill" }))
-      ]);
+      }, children);
     },
-  },
-  { title: "type", key: "is_directory", render(row: any) { return row.is_directory ? "directory" : getFileType(row.name); } },
-  { title: "size", key: "size", render(row: any) { return row.size ? formatFileSize(row.size) : "-"; } },
-  { title: "modified", key: "modified", render(row: any) { return row.modified ? new Date(row.modified).toLocaleDateString() : "-"; } },
-  {
-    title: "actions", key: "actions",
-    render(row: any) {
-      const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
-      return h("div", { style: "display:flex;gap:4px;align-items:center;" }, [
-        // Directory actions: favorite toggle & open terminal
-        row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { 
-            size: "tiny", 
-            quaternary: true, 
-            onClick: () => toggleFavoriteDir(row.path)
-          }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "regular" })) }),
-          default: () => isFav ? "Remove from Favorites" : "Add to Favorites"
-        }),
-        row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { 
-            size: "tiny", 
-            quaternary: true, 
-            onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
-          }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow)) }),
-          default: () => "Open Terminal Here"
-        }),
-        // File actions: preview, edit, download
-        !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye)) }),
-          default: () => "Preview"
-        }),
-        !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleEdit(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhPencil)) }),
-          default: () => "Edit"
-        }),
-        !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple)) }),
-          default: () => "Download"
-        }),
-        // Common actions: rename, delete
-        h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa)) }),
-          default: () => "Rename"
-        }),
-        h(NTooltip, { trigger: "hover", placement: "left" }, {
-          trigger: () => h(NButton, { size: "tiny", quaternary: true, type: "error", onClick: () => removePath(row.path) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTrash)) }),
-          default: () => "Delete"
-        }),
-      ]);
+  };
+
+  if (isMobile.value) {
+    return [
+      { type: "selection" as const },
+      nameCol,
+      {
+        title: "", key: "actions", width: 48,
+        render(row: any) { return mobileActionsButton(row); }
+      }
+    ];
+  }
+
+  return [
+    { type: "selection" as const },
+    nameCol,
+    { title: "type", key: "is_directory", render(row: any) { return row.is_directory ? "directory" : getFileType(row.name); } },
+    { title: "size", key: "size", render(row: any) { return row.size ? formatFileSize(row.size) : "-"; } },
+    { title: "modified", key: "modified", render(row: any) { return row.modified ? new Date(row.modified).toLocaleDateString() : "-"; } },
+    {
+      title: "actions", key: "actions",
+      render(row: any) {
+        const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
+        return h("div", { style: "display:flex;gap:4px;align-items:center;" }, [
+          row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, {
+              size: "tiny",
+              quaternary: true,
+              onClick: () => toggleFavoriteDir(row.path)
+            }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "regular" })) }),
+            default: () => isFav ? "Remove from Favorites" : "Add to Favorites"
+          }),
+          row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, {
+              size: "tiny",
+              quaternary: true,
+              onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
+            }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow)) }),
+            default: () => "Open Terminal Here"
+          }),
+          !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye)) }),
+            default: () => "Preview"
+          }),
+          !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleEdit(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhPencil)) }),
+            default: () => "Edit"
+          }),
+          !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple)) }),
+            default: () => "Download"
+          }),
+          h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa)) }),
+            default: () => "Rename"
+          }),
+          h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, type: "error", onClick: () => removePath(row.path) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTrash)) }),
+            default: () => "Delete"
+          }),
+        ]);
+      },
     },
-  },
-];
+  ];
+});
 </script>
 <template>
   <div class="page">
@@ -696,7 +725,7 @@ const columns = [
             </div>
           </div>
           
-          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="getRowProps" :scroll-x="800" />
+          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" />
         </div>
 
         <!-- Error Display -->
@@ -1049,29 +1078,56 @@ h1 {
   .page {
     gap: 12px;
   }
-  
+
   .page-header {
     flex-direction: column;
     align-items: flex-start;
   }
-  
+
+  .page-header h1 {
+    font-size: 20px;
+  }
+
   .breadcrumb-nav {
     flex-direction: column;
     gap: 8px;
   }
-  
+
+  .breadcrumb-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 200px;
+  }
+
   .card-title {
     flex-direction: column;
     align-items: flex-start;
   }
-  
+
   .card-actions {
     width: 100%;
     justify-content: flex-start;
   }
-  
+
+  .card-actions :deep(.n-input) {
+    width: 100% !important;
+  }
+
   .bulk-actions :deep(.n-space) {
     flex-wrap: wrap;
+  }
+
+  /* Full-width upload input */
+  input[type="file"] {
+    max-width: 100% !important;
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .breadcrumb-path {
+    max-width: 140px;
   }
 }
 
