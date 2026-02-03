@@ -215,13 +215,30 @@ const handleContextMenu = (event: MouseEvent) => {
   }
 }
 
+// Fallback clipboard method for when navigator.clipboard fails
+const copyWithFallback = (text: string) => {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    document.execCommand('copy')
+    console.log('[Terminal] Fallback copy succeeded')
+  } catch (err) {
+    console.warn('[Terminal] Fallback copy failed:', err)
+  }
+  document.body.removeChild(textarea)
+}
+
 const copySelection = () => {
   const selection = terminal?.getSelection()
   if (selection) {
     navigator.clipboard.writeText(selection).then(() => {
       message.success('Copied to clipboard', { duration: 1000 })
     }).catch(() => {
-      message.error('Failed to copy')
+      copyWithFallback(selection)
     })
   }
 }
