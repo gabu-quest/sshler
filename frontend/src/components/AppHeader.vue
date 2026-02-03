@@ -128,11 +128,7 @@ onUnmounted(() => {
       aria-label="sshler home"
       @click="closeMobileMenu"
     >
-      <div class="brand-mark">
-        <img src="/logo.png" alt="sshler" class="brand-logo" />
-        <span>sshler</span>
-      </div>
-      <span class="brand-subtitle text-muted">SSH management interface</span>
+      <img src="/logo.png" alt="sshler" class="brand-logo" />
     </RouterLink>
 
     <!-- Desktop Navigation -->
@@ -266,24 +262,11 @@ onUnmounted(() => {
   border-radius: 4px;
 }
 
-.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-}
-
 .brand-logo {
-  width: 24px;
-  height: 24px;
+  height: 32px;
+  width: auto;
   object-fit: contain;
-  border-radius: 4px;
-}
-
-.brand-subtitle {
-  font-size: 12px;
-  line-height: 1.2;
+  border-radius: 6px;
 }
 
 /* Desktop Navigation */
@@ -436,10 +419,6 @@ onUnmounted(() => {
 
   .mobile-menu-button {
     display: flex;
-  }
-
-  .brand-subtitle {
-    display: none;
   }
 
   .mode-label {

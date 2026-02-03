@@ -3,11 +3,13 @@ import { computed, ref, onMounted } from 'vue'
 import { NCard, NButton, NSpace, NAlert, NCode, NInputNumber, NSwitch, useMessage } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
-import { http } from '@/api/http'
+import { http, buildHeaders } from '@/api/http'
 
 const bootstrapStore = useBootstrapStore()
 const appStore = useAppStore()
 const message = useMessage()
+
+const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 
 // Browser globals (safe access for SSR/edge cases)
 const location = window.location
@@ -59,7 +61,9 @@ const setTheme = (theme: string) => {
 const loadPoolConfig = async () => {
   poolLoading.value = true
   try {
-    const response = await http.get('/api/v1/pool/config')
+    const response = await http.get('/api/v1/pool/config', {
+      headers: buildHeaders(tokenValue.value)
+    })
     poolConfig.value = response.data
     useForeverIdle.value = response.data.idle_timeout === null
     useForeverLifetime.value = response.data.max_lifetime === null
@@ -87,7 +91,9 @@ const savePoolConfig = async () => {
       max_connections_per_box: poolConfig.value.max_connections_per_box
     }
 
-    await http.put('/api/v1/pool/config', payload)
+    await http.put('/api/v1/pool/config', payload, {
+      headers: buildHeaders(tokenValue.value)
+    })
     message.success('Pool configuration updated successfully')
   } catch (error) {
     message.error('Failed to save pool configuration: ' + (error instanceof Error ? error.message : String(error)))
@@ -104,7 +110,11 @@ const formatDuration = (minutes: number | null): string => {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // Ensure bootstrap is complete before loading pool config
+  if (!bootstrapStore.payload && !bootstrapStore.loading) {
+    await bootstrapStore.bootstrap()
+  }
   loadPoolConfig()
 })
 </script>
@@ -326,10 +336,10 @@ onMounted(() => {
 }
 
 .settings-logo {
-  width: 48px;
-  height: 48px;
+  width: 80px;
+  height: 80px;
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: 12px;
 }
 
 .eyebrow {

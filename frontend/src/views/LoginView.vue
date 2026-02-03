@@ -71,7 +71,6 @@ const handleKeypress = (event: KeyboardEvent) => {
     <div class="login-box">
       <div class="login-header">
         <img src="/logo.png" alt="sshler" class="login-logo" />
-        <h1>sshler</h1>
         <p class="subtitle">
           <NIcon size="16" color="var(--text-color-3)" style="vertical-align: middle; margin-right: 4px;">
             <PhLock weight="regular" />
@@ -155,11 +154,11 @@ const handleKeypress = (event: KeyboardEvent) => {
 }
 
 .login-logo {
-  width: 72px;
-  height: 72px;
+  width: 120px;
+  height: 120px;
   object-fit: contain;
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 }
 
 .login-header h1 {
