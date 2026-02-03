@@ -19,10 +19,8 @@ import {
   PhTerminal,
   PhFolderOpen,
   PhFolder,
-  PhRocketLaunch,
   PhCircle,
   PhChartBar,
-  PhLightning,
   PhStar
 } from "@phosphor-icons/vue";
 
@@ -167,64 +165,6 @@ const handleBrowseServerFiles = (serverName: string) => {
 
 <template>
   <div class="dashboard">
-    <!-- Hero Section -->
-    <section class="hero">
-      <div class="hero-content">
-        <h1 class="hero-title">
-          <NIcon size="24" class="hero-icon">
-            <PhRocketLaunch />
-          </NIcon>
-          Welcome back!
-        </h1>
-        <p class="hero-subtitle">
-          <template v-if="hasServers">
-            Ready to connect? You have {{ boxesStore.items.length }} server{{ boxesStore.items.length === 1 ? '' : 's' }} available
-          </template>
-          <template v-else>
-            Add your first server to get started
-          </template>
-        </p>
-      </div>
-      
-      <div class="hero-actions">
-        <NButton 
-          type="primary" 
-          size="large" 
-          @click="handleQuickConnect"
-          :disabled="!hasServers"
-          class="hero-btn"
-        >
-          <template #icon>
-            <NIcon><PhTerminal /></NIcon>
-          </template>
-          Quick Connect
-        </NButton>
-        
-        <NButton 
-          size="large" 
-          @click="handleBrowseFiles"
-          :disabled="!hasServers"
-          class="hero-btn"
-        >
-          <template #icon>
-            <NIcon><PhFolderOpen /></NIcon>
-          </template>
-          Browse Files
-        </NButton>
-        
-        <NButton 
-          size="large" 
-          @click="handleNewTerminal"
-          class="hero-btn"
-        >
-          <template #icon>
-            <NIcon><PhLightning /></NIcon>
-          </template>
-          New Terminal
-        </NButton>
-      </div>
-    </section>
-
     <!-- Compact Stats Pill -->
     <div class="stats-pill">
       <NIcon size="14"><PhChartBar /></NIcon>
@@ -401,53 +341,6 @@ const handleBrowseServerFiles = (serverName: string) => {
   gap: 32px;
   max-width: 1200px;
   margin: 0 auto;
-}
-
-/* Hero Section */
-.hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 24px;
-  background: linear-gradient(135deg, rgba(124, 93, 255, 0.1) 0%, rgba(124, 93, 255, 0.05) 100%);
-  border-radius: 16px;
-  border: 1px solid rgba(124, 93, 255, 0.2);
-}
-
-.hero-content {
-  flex: 1;
-}
-
-.hero-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0 0 8px 0;
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.hero-icon {
-  color: var(--accent);
-}
-
-.hero-subtitle {
-  margin: 0;
-  font-size: 16px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.hero-actions {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.hero-btn {
-  min-width: 140px;
 }
 
 /* Compact Stats Pill */

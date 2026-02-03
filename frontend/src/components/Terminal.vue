@@ -14,6 +14,7 @@ interface Props {
   theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai'
   fontSize?: number
   fontFamily?: string
+  showTitleBar?: boolean
 }
 
 interface Emits {
@@ -29,7 +30,8 @@ const props = withDefaults(defineProps<Props>(), {
   directory: '~',
   theme: 'cyberpunk',
   fontSize: 14,
-  fontFamily: '"JetBrains Mono Nerd Font", "Iosevka Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "SF Mono", Monaco, Consolas, monospace'
+  fontFamily: '"Monaspace Neon", "JetBrains Mono", "Fira Code", "SF Mono", Monaco, Consolas, monospace',
+  showTitleBar: true
 })
 
 const emit = defineEmits<Emits>()
@@ -42,6 +44,9 @@ const connecting = ref(false)
 const reconnecting = ref(false)
 const reconnectAttempts = ref(0)
 const maxReconnectAttempts = ref(10)
+const mouseMode = ref(true) // tmux mouse mode state
+const hasActivity = ref(false) // for glow effect
+let activityTimeout: number | null = null
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 const textEncoder = new TextEncoder()
@@ -265,12 +270,40 @@ const handleKeyDown = (event: KeyboardEvent) => {
     }
     // Otherwise let Ctrl+C send interrupt signal as normal
   }
-  
+
   // Ctrl+V for paste
   if (event.ctrlKey && event.key === 'v') {
     event.preventDefault()
     pasteFromClipboard()
   }
+}
+
+// Toggle tmux mouse mode for clipboard access
+const toggleMouseMode = () => {
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) return
+
+  mouseMode.value = !mouseMode.value
+  const cmd = mouseMode.value
+    ? 'tmux set -g mouse on\n'
+    : 'tmux set -g mouse off\n'
+
+  websocket.send(textEncoder.encode(cmd))
+
+  message.info(
+    mouseMode.value
+      ? 'Mouse mode ON - tmux handles selection'
+      : 'Mouse mode OFF - native selection enabled',
+    { duration: 2000 }
+  )
+}
+
+// Trigger activity indicator
+const triggerActivity = () => {
+  hasActivity.value = true
+  if (activityTimeout) clearTimeout(activityTimeout)
+  activityTimeout = window.setTimeout(() => {
+    hasActivity.value = false
+  }, 150)
 }
 
 const createTerminal = () => {
@@ -613,12 +646,14 @@ const connect = async () => {
       // Handle binary data (actual terminal output)
       if (event.data instanceof ArrayBuffer) {
         terminal?.write(new Uint8Array(event.data))
+        triggerActivity()
         return
       }
-      
+
       if (event.data instanceof Blob) {
         const buffer = await event.data.arrayBuffer()
         terminal?.write(new Uint8Array(buffer))
+        triggerActivity()
         return
       }
       
@@ -824,66 +859,325 @@ defineExpose({
   clear,
   search,
   send,
+  toggleMouseMode,
+  copySelection,
+  pasteFromClipboard,
   terminal: () => terminal,
   connected: () => connected.value,
-  connecting: () => connecting.value
+  connecting: () => connecting.value,
+  mouseMode: () => mouseMode.value
 })
 </script>
 
 <template>
-  <div class="terminal-container">
-    <div 
-      ref="terminalRef" 
-      class="terminal" 
-      @click="handleTerminalClick"
-      @contextmenu="handleContextMenu"
-    />
-    <div v-if="connecting || reconnecting" class="terminal-overlay">
-      <div class="connecting-indicator">
-        <div class="spinner" />
-        <span v-if="reconnecting">
-          Reconnecting to {{ boxName }}...
-          <small v-if="reconnectAttempts > 0">(attempt {{ reconnectAttempts }}/{{ maxReconnectAttempts }})</small>
-        </span>
-        <span v-else>Connecting to {{ boxName }}...</span>
+  <div class="terminal-wrapper" :class="{ 'has-activity': hasActivity }">
+    <!-- macOS-style Title Bar -->
+    <div v-if="showTitleBar" class="terminal-titlebar">
+      <div class="titlebar-left">
+        <div class="traffic-lights">
+          <span class="dot dot-close" title="Close" />
+          <span class="dot dot-minimize" title="Minimize" />
+          <span class="dot dot-maximize" title="Maximize" />
+        </div>
+      </div>
+      <div class="titlebar-center">
+        <span class="connection-dot" :class="{ connected, connecting }" />
+        <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
+      </div>
+      <div class="titlebar-right">
+        <button
+          class="titlebar-btn"
+          :class="{ active: !mouseMode }"
+          @click="toggleMouseMode"
+          :title="mouseMode ? 'Mouse mode ON (tmux) - Click to enable native selection' : 'Mouse mode OFF (native) - Click to restore tmux mouse'"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4l7.07 17 2.51-7.39L21 11.07z"/>
+          </svg>
+        </button>
+        <button class="titlebar-btn" @click="copySelection" title="Copy selection">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+        <button class="titlebar-btn" @click="pasteFromClipboard" title="Paste">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+          </svg>
+        </button>
+        <button class="titlebar-btn" @click="clear" title="Clear">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
       </div>
     </div>
-    <div v-else-if="!connected" class="terminal-overlay">
-      <div class="disconnected-indicator">
-        <span>Disconnected from {{ boxName }}</span>
-        <button @click="connect" class="reconnect-btn">Reconnect</button>
+
+    <!-- Terminal Container with Effects -->
+    <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar }">
+      <!-- CRT Scanlines Overlay -->
+      <div class="scanlines" />
+
+      <div
+        ref="terminalRef"
+        class="terminal"
+        @click="handleTerminalClick"
+        @contextmenu="handleContextMenu"
+      />
+
+      <!-- Connection Overlays -->
+      <div v-if="connecting || reconnecting" class="terminal-overlay">
+        <div class="connecting-indicator">
+          <div class="spinner" />
+          <span v-if="reconnecting">
+            Reconnecting to {{ boxName }}...
+            <small v-if="reconnectAttempts > 0">(attempt {{ reconnectAttempts }}/{{ maxReconnectAttempts }})</small>
+          </span>
+          <span v-else>Connecting to {{ boxName }}...</span>
+        </div>
       </div>
+      <div v-else-if="!connected" class="terminal-overlay">
+        <div class="disconnected-indicator">
+          <span>Disconnected from {{ boxName }}</span>
+          <button @click="connect" class="reconnect-btn">Reconnect</button>
+        </div>
+      </div>
+
+      <!-- Activity Accent Line -->
+      <div class="activity-line" :class="{ active: hasActivity }" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.terminal-container {
+/* =============================================================================
+   TERMINAL WRAPPER - The outermost container with activity glow
+   ============================================================================= */
+.terminal-wrapper {
   position: relative;
   width: 100%;
   height: 100%;
-  min-width: 0;  /* Critical for flex layouts */
+  min-width: 0;
   min-height: 0;
-  background: var(--terminal-bg, #0a0e14);
+  display: flex;
+  flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  /* Cyberpunk depth */
-  box-shadow: 
-    0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 4px 24px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.02);
-  /* Inner padding for breathing room */
-  padding: 10px 12px;
+  /* Glassmorphism base */
+  background: rgba(10, 14, 20, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  /* Layered borders for depth */
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* Deep shadow stack */
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }
 
-/* Focus glow */
-.terminal-container:focus-within {
-  box-shadow: 
-    0 0 0 1px rgba(83, 189, 250, 0.3),
-    0 0 20px rgba(83, 189, 250, 0.08),
-    0 4px 24px rgba(0, 0, 0, 0.4);
+/* Focus state - cyan glow */
+.terminal-wrapper:focus-within {
+  border-color: rgba(83, 189, 250, 0.25);
+  box-shadow:
+    0 0 0 1px rgba(83, 189, 250, 0.15),
+    0 0 40px rgba(83, 189, 250, 0.1),
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
+/* Activity pulse */
+.terminal-wrapper.has-activity {
+  border-color: rgba(230, 180, 80, 0.3);
+  box-shadow:
+    0 0 0 1px rgba(230, 180, 80, 0.2),
+    0 0 30px rgba(230, 180, 80, 0.08),
+    0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* =============================================================================
+   TITLE BAR - macOS-style window chrome
+   ============================================================================= */
+.terminal-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.titlebar-left,
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 80px;
+}
+
+.titlebar-right {
+  justify-content: flex-end;
+}
+
+.titlebar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+}
+
+.titlebar-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.02em;
+}
+
+/* Traffic light dots */
+.traffic-lights {
+  display: flex;
+  gap: 6px;
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  transition: all 0.15s ease;
+  cursor: default;
+}
+
+.terminal-titlebar:hover .dot-close {
+  background: #ff5f56;
+  box-shadow: 0 0 6px rgba(255, 95, 86, 0.4);
+}
+
+.terminal-titlebar:hover .dot-minimize {
+  background: #ffbd2e;
+  box-shadow: 0 0 6px rgba(255, 189, 46, 0.4);
+}
+
+.terminal-titlebar:hover .dot-maximize {
+  background: #27c93f;
+  box-shadow: 0 0 6px rgba(39, 201, 63, 0.4);
+}
+
+/* Connection status dot */
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff5f56;
+  transition: all 0.3s ease;
+}
+
+.connection-dot.connected {
+  background: #27c93f;
+  animation: breathe 2s ease-in-out infinite;
+}
+
+.connection-dot.connecting {
+  background: #ffbd2e;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(39, 201, 63, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(39, 201, 63, 0);
+    transform: scale(1.05);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Titlebar buttons */
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.titlebar-btn.active {
+  background: rgba(230, 180, 80, 0.2);
+  color: #e6b450;
+}
+
+.titlebar-btn.active:hover {
+  background: rgba(230, 180, 80, 0.3);
+}
+
+/* =============================================================================
+   TERMINAL CONTAINER - Main terminal area
+   ============================================================================= */
+.terminal-container {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 12px 12px;
+  overflow: hidden;
+}
+
+.terminal-container.no-titlebar {
+  border-radius: 14px 14px 0 0;
+}
+
+/* =============================================================================
+   CRT SCANLINES - Subtle retro effect
+   ============================================================================= */
+.scanlines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 10;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.02) 0px,
+    rgba(0, 0, 0, 0.02) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  /* Subtle vignette */
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 60%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 60%, transparent 100%);
+}
+
+/* =============================================================================
+   TERMINAL - xterm.js container
+   ============================================================================= */
 .terminal {
   width: 100%;
   height: 100%;
@@ -905,23 +1199,38 @@ defineExpose({
   width: 100% !important;
 }
 
-/* Ultra-minimal scrollbars */
+/* Phosphor text glow - subtle CRT effect */
+.terminal :deep(.xterm-rows) {
+  text-shadow: 0 0 1px currentColor;
+}
+
+/* Styled scrollbars */
 .terminal :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 6px;
-  background: transparent;
+  width: 8px;
 }
 
 .terminal :deep(.xterm-viewport)::-webkit-scrollbar-track {
   background: transparent;
+  border-radius: 4px;
 }
 
 .terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.12) 0%,
+    rgba(255, 255, 255, 0.08) 100%
+  );
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0.15) 100%
+  );
 }
 
 /* Firefox scrollbars */
@@ -930,19 +1239,51 @@ defineExpose({
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
+/* =============================================================================
+   ACTIVITY LINE - Accent underline that pulses on activity
+   ============================================================================= */
+.activity-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(230, 180, 80, 0.3), transparent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.activity-line.active {
+  opacity: 1;
+  animation: line-glow 0.3s ease;
+}
+
+@keyframes line-glow {
+  0% {
+    background: linear-gradient(90deg, transparent, rgba(230, 180, 80, 0.8), transparent);
+  }
+  100% {
+    background: linear-gradient(90deg, transparent, rgba(230, 180, 80, 0.3), transparent);
+  }
+}
+
+/* =============================================================================
+   OVERLAYS - Connection states
+   ============================================================================= */
 .terminal-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(10, 14, 20, 0.9);
+  background: rgba(10, 14, 20, 0.95);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
   color: #b3b1ad;
-  font-family: var(--font-mono);
-  border-radius: 14px;
+  font-family: 'Monaspace Neon', var(--font-mono);
+  z-index: 20;
 }
 
 .connecting-indicator,
@@ -971,18 +1312,20 @@ defineExpose({
 
 .reconnect-btn {
   padding: 8px 16px;
-  background: rgba(83, 189, 250, 0.2);
+  background: rgba(83, 189, 250, 0.15);
   color: #53bdfa;
   border: 1px solid rgba(83, 189, 250, 0.3);
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+  font-family: inherit;
   transition: all 0.2s ease;
 }
 
 .reconnect-btn:hover {
-  background: rgba(83, 189, 250, 0.3);
+  background: rgba(83, 189, 250, 0.25);
   border-color: rgba(83, 189, 250, 0.5);
+  box-shadow: 0 0 20px rgba(83, 189, 250, 0.15);
 }
 
 @keyframes spin {
@@ -990,35 +1333,71 @@ defineExpose({
   100% { transform: rotate(360deg); }
 }
 
-/* Mobile optimizations */
+/* =============================================================================
+   RESPONSIVE & ACCESSIBILITY
+   ============================================================================= */
 @media (max-width: 768px) {
-  .terminal-container {
+  .terminal-wrapper {
     border-radius: 0;
-    padding: 6px 8px;
   }
-  
+
+  .terminal-titlebar {
+    height: 32px;
+    padding: 0 8px;
+  }
+
+  .titlebar-text {
+    font-size: 11px;
+  }
+
+  .traffic-lights {
+    display: none;
+  }
+
+  .terminal-container {
+    padding: 4px 6px 8px;
+  }
+
   .terminal :deep(.xterm-viewport) {
-    /* Prevent zoom on iOS */
     touch-action: manipulation;
   }
-  
+
   .terminal :deep(.xterm-screen) {
-    /* Ensure proper touch handling */
     touch-action: none;
   }
 }
 
-/* High contrast mode */
 @media (prefers-contrast: high) {
-  .terminal-container {
+  .terminal-wrapper {
     border: 2px solid var(--stroke);
+  }
+
+  .scanlines {
+    display: none;
   }
 }
 
-/* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .spinner {
     animation: none;
+  }
+
+  .connection-dot.connected {
+    animation: none;
+  }
+
+  .connection-dot.connecting {
+    animation: none;
+  }
+
+  .activity-line.active {
+    animation: none;
+  }
+
+  .terminal-wrapper,
+  .terminal-wrapper:focus-within,
+  .terminal-wrapper.has-activity {
+    transition: none;
   }
 }
 </style>

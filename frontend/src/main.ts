@@ -3,6 +3,7 @@ import { createApp } from "vue";
 
 import App from "./App.vue";
 import router from "./router";
+import "./assets/fonts.css";
 import "./styles/main.css";
 import { createI18n } from "./i18n";
 import { useAppStore } from "./stores/app";
