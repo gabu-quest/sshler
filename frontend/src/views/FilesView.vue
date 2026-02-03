@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from "vue";
+import { computed, h, onMounted, ref, watch } from "vue";
 import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
@@ -17,6 +17,7 @@ import FavoritesPanel from "@/components/FavoritesPanel.vue";
 import CodeEditor from "@/components/CodeEditor.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile } from "@/api/http";
+import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
@@ -85,6 +86,26 @@ const selectedPaths = computed({
 const selectedCount = computed(() => selectedPaths.value.length);
 const recentPaths = computed(() => directoryStore.recentForBox(selectedBox.value));
 const uploading = computed(() => !!filesStore.uploadFileName);
+
+// Display name for current directory (last component)
+const displayDirName = computed(() => {
+  if (!currentDir.value || currentDir.value === '/' || currentDir.value === '~') {
+    return currentDir.value === '~' ? 'Home' : 'Root';
+  }
+  const parts = currentDir.value.split('/').filter(Boolean);
+  return parts[parts.length - 1] || 'Root';
+});
+
+// Update browser tab title and favicon
+watch([selectedBox, currentDir], () => {
+  if (selectedBox.value) {
+    document.title = `${displayDirName.value} — ${selectedBox.value} — sshler`;
+    setEmojiFavicon(`${selectedBox.value}:${currentDir.value}`);
+  } else {
+    document.title = 'Files — sshler';
+    resetFavicon();
+  }
+}, { immediate: true });
 
 // Utility functions
 const getFileType = (filename: string) => {

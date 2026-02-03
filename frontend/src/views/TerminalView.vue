@@ -9,6 +9,7 @@ import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
+import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
 
 const route = useRoute()
 const router = useRouter()
@@ -116,12 +117,15 @@ const displayDirName = computed(() => {
   return parts[parts.length - 1] || 'Root'
 })
 
-// Update browser tab title
+// Update browser tab title and favicon
 watch([selectedBox, initialDirectory], () => {
   if (selectedBox.value) {
     document.title = `${displayDirName.value} — ${selectedBox.value} — sshler`
+    // Set deterministic emoji favicon based on box + directory
+    setEmojiFavicon(`${selectedBox.value}:${initialDirectory.value}`)
   } else {
     document.title = 'Terminal — sshler'
+    resetFavicon()
   }
 }, { immediate: true })
 

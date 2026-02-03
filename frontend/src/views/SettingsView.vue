@@ -4,6 +4,7 @@ import { NCard, NButton, NSpace, NAlert, NCode, NInputNumber, NSwitch, useMessag
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { http, buildHeaders } from '@/api/http'
+import { resetFavicon } from '@/utils/emoji-favicon'
 
 const bootstrapStore = useBootstrapStore()
 const appStore = useAppStore()
@@ -111,6 +112,10 @@ const formatDuration = (minutes: number | null): string => {
 }
 
 onMounted(async () => {
+  // Reset to default favicon on settings page
+  document.title = 'Settings — sshler'
+  resetFavicon()
+
   // Ensure bootstrap is complete before loading pool config
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
     await bootstrapStore.bootstrap()

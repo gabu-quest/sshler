@@ -45,6 +45,18 @@ async function loadLocalStats() {
   }
 }
 
+// Color helpers for stats
+function getStatColor(percent: number | null | undefined, normalColor: string): string {
+  const p = percent ?? 0;
+  if (p >= 90) return '#ef4444'; // Red - critical
+  if (p >= 80) return '#f97316'; // Orange - warning
+  return normalColor;
+}
+
+function isStatCritical(percent: number | null | undefined): boolean {
+  return (percent ?? 0) >= 90;
+}
+
 // Refresh stats periodically
 let statsInterval: number | null = null;
 
@@ -184,8 +196,14 @@ onUnmounted(() => {
         <!-- System Stats (local box) -->
         <NTooltip v-if="localStats && !localStats.error" :delay="300">
           <template #trigger>
-            <div class="header-stats">
-              <div class="stat-mini">
+            <div
+              class="header-stats"
+              :class="{
+                'stats-warning': (localStats.cpu_percent ?? 0) >= 80 || (localStats.memory_percent ?? 0) >= 80,
+                'stats-critical': isStatCritical(localStats.cpu_percent) || isStatCritical(localStats.memory_percent)
+              }"
+            >
+              <div class="stat-mini" :class="{ critical: isStatCritical(localStats.cpu_percent) }">
                 <NIcon size="12"><PhCpu /></NIcon>
                 <NProgress
                   type="line"
@@ -193,12 +211,14 @@ onUnmounted(() => {
                   :show-indicator="false"
                   :height="4"
                   :border-radius="2"
-                  :color="(localStats.cpu_percent ?? 0) > 80 ? '#ef4444' : '#3b82f6'"
+                  :color="getStatColor(localStats.cpu_percent, '#3b82f6')"
                   style="width: 40px"
                 />
-                <span>{{ localStats.cpu_percent?.toFixed(0) }}%</span>
+                <span :style="{ color: getStatColor(localStats.cpu_percent, 'inherit') }">
+                  {{ localStats.cpu_percent?.toFixed(0) }}%
+                </span>
               </div>
-              <div class="stat-mini">
+              <div class="stat-mini" :class="{ critical: isStatCritical(localStats.memory_percent) }">
                 <NIcon size="12"><PhMemory /></NIcon>
                 <NProgress
                   type="line"
@@ -206,10 +226,12 @@ onUnmounted(() => {
                   :show-indicator="false"
                   :height="4"
                   :border-radius="2"
-                  :color="(localStats.memory_percent ?? 0) > 80 ? '#ef4444' : '#22c55e'"
+                  :color="getStatColor(localStats.memory_percent, '#22c55e')"
                   style="width: 40px"
                 />
-                <span>{{ localStats.memory_percent?.toFixed(0) }}%</span>
+                <span :style="{ color: getStatColor(localStats.memory_percent, 'inherit') }">
+                  {{ localStats.memory_percent?.toFixed(0) }}%
+                </span>
               </div>
             </div>
           </template>
@@ -402,6 +424,27 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.header-stats.stats-warning {
+  border-color: rgba(249, 115, 22, 0.3);
+  background: rgba(249, 115, 22, 0.05);
+}
+
+.header-stats.stats-critical {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+  animation: stats-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes stats-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.3);
+  }
 }
 
 .stat-mini {
@@ -412,9 +455,14 @@ onUnmounted(() => {
   color: var(--muted);
 }
 
+.stat-mini.critical {
+  color: #ef4444;
+}
+
 .stat-mini span {
   font-family: 'JetBrains Mono', monospace;
   min-width: 28px;
+  transition: color 0.3s ease;
 }
 
 .auth-indicator {

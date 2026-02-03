@@ -33,6 +33,7 @@ import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
 import { boxStats } from "@/api/http";
 import type { BoxStats } from "@/api/types";
+import { resetFavicon } from "@/utils/emoji-favicon";
 
 const router = useRouter();
 const message = useMessage();
@@ -108,15 +109,21 @@ const allFavorites = computed(() => {
   return favorites
 });
 
-// Open favorite in new tab
-const openFavoriteTerminal = (box: string, path: string) => {
-  const url = `/app/terminal?box=${encodeURIComponent(box)}&dir=${encodeURIComponent(path)}`
-  window.open(url, '_blank')
+// Build URLs for favorites (used as href for middle-click support)
+const getFavoriteTerminalUrl = (box: string, path: string) => {
+  return `/app/terminal?box=${encodeURIComponent(box)}&dir=${encodeURIComponent(path)}`
 };
 
-const openFavoriteFiles = (box: string, path: string) => {
-  const url = `/app/files?box=${encodeURIComponent(box)}&path=${encodeURIComponent(path)}`
-  window.open(url, '_blank')
+const getFavoriteFilesUrl = (box: string, path: string) => {
+  return `/app/files?box=${encodeURIComponent(box)}&path=${encodeURIComponent(path)}`
+};
+
+// Handle left-click: open in background tab (don't switch focus)
+const openInBackgroundTab = (event: MouseEvent, url: string) => {
+  event.preventDefault();
+  const newTab = window.open(url, '_blank');
+  // Try to keep focus on current tab (not always reliable)
+  window.focus();
 };
 
 // Real stats only - no fake data
@@ -127,6 +134,10 @@ const quickStats = computed(() => ({
 }));
 
 onMounted(async () => {
+  // Reset to default favicon on overview page
+  document.title = 'Overview — sshler';
+  resetFavicon();
+
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
     await bootstrapStore.bootstrap();
   }
@@ -219,22 +230,42 @@ const handleBrowseServerFiles = (serverName: string) => {
       <span>{{ quickStats.favorites }} favorite{{ quickStats.favorites === 1 ? '' : 's' }}</span>
     </div>
 
-    <!-- Favorites At a Glance Row -->
-    <section v-if="allFavorites.length > 0" class="favorites-row-section">
+    <!-- Favorites Bar -->
+    <section v-if="allFavorites.length > 0" class="favorites-section">
       <div class="section-header-inline">
         <NIcon size="18" color="#faad14"><PhStar weight="fill" /></NIcon>
         <h3>Favorites</h3>
       </div>
-      <div class="favorites-row">
-        <div 
-          v-for="fav in allFavorites" 
+      <div class="favorites-list">
+        <div
+          v-for="fav in allFavorites"
           :key="fav.box + '-' + fav.path"
-          class="favorite-chip"
-          @click="openFavoriteTerminal(fav.box, fav.path)"
-          title="Click to open terminal in new tab"
+          class="favorite-item"
         >
-          <span class="chip-box">{{ fav.box }}</span>
-          <span class="chip-path">{{ fav.label }}</span>
+          <div class="favorite-info">
+            <span class="favorite-box">{{ fav.box }}</span>
+            <span class="favorite-path">{{ fav.label }}</span>
+          </div>
+          <div class="favorite-actions">
+            <a
+              :href="getFavoriteTerminalUrl(fav.box, fav.path)"
+              class="favorite-btn favorite-btn-terminal"
+              title="Open terminal (middle-click for background tab)"
+              @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
+            >
+              <NIcon size="14"><PhTerminal /></NIcon>
+              <span>Terminal</span>
+            </a>
+            <a
+              :href="getFavoriteFilesUrl(fav.box, fav.path)"
+              class="favorite-btn favorite-btn-files"
+              title="Browse files (middle-click for background tab)"
+              @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
+            >
+              <NIcon size="14"><PhFolderOpen /></NIcon>
+              <span>Files</span>
+            </a>
+          </div>
         </div>
       </div>
     </section>
@@ -731,9 +762,9 @@ const handleBrowseServerFiles = (serverName: string) => {
   font-family: var(--font-mono);
 }
 
-/* Favorites Row Section (At a Glance) */
-.favorites-row-section {
-  margin-bottom: 8px;
+/* Favorites Section */
+.favorites-section {
+  margin-bottom: 16px;
 }
 
 .section-header-inline {
@@ -750,42 +781,89 @@ const handleBrowseServerFiles = (serverName: string) => {
   color: var(--text);
 }
 
-.favorites-row {
-  display: flex;
-  gap: 10px;
-  overflow-x: auto;
-  padding: 4px 0 8px 0;
-}
-
-.favorite-chip {
+.favorites-list {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+
+.favorite-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 10px 14px;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
-.favorite-chip:hover {
-  border-color: var(--accent);
-  background: rgba(52, 152, 219, 0.1);
-  transform: translateY(-2px);
+.favorite-item:hover {
+  border-color: var(--stroke);
 }
 
-.chip-box {
+.favorite-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.favorite-box {
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-.chip-path {
-  font-size: 13px;
+.favorite-path {
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favorite-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.favorite-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.favorite-btn-terminal {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.favorite-btn-terminal:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.favorite-btn-files {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.favorite-btn-files:hover {
+  background: rgba(34, 197, 94, 0.25);
+  border-color: rgba(34, 197, 94, 0.5);
 }
 
 /* Favorites List Card */
