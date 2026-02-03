@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { http } from '@/api/http'
+import { buildHeaders } from '@/api/http'
 import type { ApiSession } from '@/api/types'
 
 export const useSessionsStore = defineStore('sessions', () => {
@@ -12,14 +12,22 @@ export const useSessionsStore = defineStore('sessions', () => {
   /**
    * Load sessions for a specific box
    */
-  async function loadBoxSessions(boxName: string, _token: string | null, activeOnly = false): Promise<ApiSession[]> {
+  async function loadBoxSessions(boxName: string, token: string | null, activeOnly = false): Promise<ApiSession[]> {
     try {
       const params = new URLSearchParams()
       if (activeOnly) params.set('active_only', 'true')
       
       const url = `/api/v1/boxes/${encodeURIComponent(boxName)}/sessions${params.toString() ? '?' + params.toString() : ''}`
-      const response = await http.get<ApiSession[]>(url)
-      const sessions = response.data
+      const response = await fetch(url, {
+        headers: buildHeaders(token),
+        credentials: 'include'
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Failed to load sessions: ${response.status}`)
+      }
+      
+      const sessions = await response.json() as ApiSession[]
       sessionsByBox.value.set(boxName, sessions)
       return sessions
     } catch (e) {

@@ -17,30 +17,54 @@ async function handle<T>(response: Response, originalRequest?: { url: string, op
   if (!response.ok) {
     // Auto-retry token issues once
     if (response.status === 403 && !response.url.includes('/bootstrap') && originalRequest) {
-      console.warn('Token invalid, fetching fresh token...');
+      console.warn('[API] 403 received, refreshing token...');
       try {
         const { useBootstrapStore } = await import('@/stores/bootstrap');
         const bootstrapStore = useBootstrapStore();
 
         // Clear old token and fetch fresh one
+        const oldToken = bootstrapStore.token;
         bootstrapStore.setToken(null);
         await bootstrapStore.bootstrap();
 
         // Retry the original request with new token
-        const token = bootstrapStore.token;
-        if (token) {
-          const newHeaders = { ...originalRequest.options.headers, ...buildHeaders(token) };
+        const newToken = bootstrapStore.token;
+        console.log('[API] Token refresh complete, old:', oldToken?.slice(0, 8), 'new:', newToken?.slice(0, 8));
+        
+        if (newToken) {
+          // Convert existing headers to plain object if needed
+          const existingHeaders: Record<string, string> = {};
+          const origHeaders = originalRequest.options.headers;
+          if (origHeaders) {
+            if (origHeaders instanceof Headers) {
+              origHeaders.forEach((v, k) => { existingHeaders[k] = v; });
+            } else if (Array.isArray(origHeaders)) {
+              origHeaders.forEach(([k, v]) => { existingHeaders[k] = v; });
+            } else {
+              Object.assign(existingHeaders, origHeaders);
+            }
+          }
+          
+          // Build new headers with fresh token
+          const newHeaders = { ...existingHeaders, ...buildHeaders(newToken) };
+          console.log('[API] Retrying with headers:', Object.keys(newHeaders));
+          
           const retryResponse = await fetch(originalRequest.url, {
             ...originalRequest.options,
             headers: newHeaders,
-            credentials: 'include', // Always include cookies
+            credentials: 'include',
           });
+          
+          console.log('[API] Retry response status:', retryResponse.status);
           if (retryResponse.ok) {
             return retryResponse.json() as Promise<T>;
           }
+          // Log the retry failure details
+          const retryError = await safeParseError(retryResponse);
+          console.error('[API] Retry also failed:', retryResponse.status, retryError);
         }
       } catch (retryError) {
-        console.error('Token refresh failed:', retryError);
+        console.error('[API] Token refresh failed:', retryError);
       }
     }
 
@@ -284,13 +308,15 @@ export async function toggleFavorite(
   favorite: boolean,
   token: string | null,
 ): Promise<FavoriteToggle> {
-  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/fav`, {
+  const url = `${API_BASE}/boxes/${encodeURIComponent(name)}/fav`;
+  const options: RequestInit = {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ path, favorite }),
     credentials: 'include'
-  });
-  return handle<FavoriteToggle>(res);
+  };
+  const res = await fetch(url, options);
+  return handle<FavoriteToggle>(res, { url, options });
 }
 
 export async function touchFile(
