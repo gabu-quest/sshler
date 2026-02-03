@@ -100,6 +100,9 @@ export function buildHeaders(token?: string | null): HeadersInit {
   };
   if (token) {
     headers["X-SSHLER-TOKEN"] = token;
+    console.debug('[buildHeaders] Adding token:', token.substring(0, 8) + '...');
+  } else {
+    console.debug('[buildHeaders] No token provided');
   }
   // NOTE: Do NOT include Authorization header - we use httpOnly cookies
   return headers;

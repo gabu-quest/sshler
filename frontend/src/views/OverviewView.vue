@@ -88,11 +88,13 @@ onMounted(async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
     await bootstrapStore.bootstrap();
   }
+  console.debug('[OverviewView] After bootstrap, token:', bootstrapStore.token ? bootstrapStore.token.substring(0, 8) + '...' : 'null');
   if (!boxesStore.items.length && !boxesStore.loading) {
     await boxesStore.load(tokenValue.value || null);
   }
   // Sync sessions with actual tmux state (marks stale sessions inactive)
   if (boxesStore.items.length > 0) {
+    console.debug('[OverviewView] Syncing sessions with token:', tokenValue.value ? tokenValue.value.substring(0, 8) + '...' : 'null');
     await sessionsStore.syncAllBoxSessions(
       boxesStore.items.map(b => b.name),
       tokenValue.value || null

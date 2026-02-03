@@ -61,10 +61,13 @@ export const useSessionsStore = defineStore('sessions', () => {
    */
   async function syncBoxSessions(boxName: string, token: string | null): Promise<ApiSession[]> {
     try {
+      console.debug('[syncBoxSessions] Syncing for box:', boxName, 'token:', token ? token.substring(0, 8) + '...' : 'null')
       const url = `/api/v1/boxes/${encodeURIComponent(boxName)}/sessions/sync`
+      const headers = buildHeaders(token)
+      console.debug('[syncBoxSessions] Headers:', headers)
       const response = await fetch(url, {
         method: 'POST',
-        headers: buildHeaders(token),
+        headers,
         credentials: 'include'
       })
 
