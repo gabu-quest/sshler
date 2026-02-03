@@ -410,21 +410,27 @@ const createTerminal = () => {
 
   // Copy on selection (like tmux mouse mode)
   // Note: Uses mouseup event for better clipboard API compatibility
-  terminalRef.value?.addEventListener('mouseup', () => {
-    const selection = terminal?.getSelection()
-    if (selection && selection.length > 0) {
-      // Use clipboard API with fallback
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(selection).then(() => {
-          console.log('[Terminal] Selection copied:', selection.length, 'chars')
-        }).catch((err) => {
-          console.warn('[Terminal] Clipboard API failed, trying fallback:', err)
+  terminalRef.value?.addEventListener('mouseup', (event) => {
+    // Small delay to ensure selection is complete
+    setTimeout(() => {
+      const selection = terminal?.getSelection()
+      if (selection && selection.length > 0) {
+        // Use clipboard API with fallback
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(selection).then(() => {
+            // Show brief confirmation
+            message.success(`Copied ${selection.length} chars`, { duration: 1000 })
+          }).catch((err) => {
+            console.warn('[Terminal] Clipboard API failed, trying fallback:', err)
+            copyWithFallback(selection)
+            message.success(`Copied ${selection.length} chars`, { duration: 1000 })
+          })
+        } else {
           copyWithFallback(selection)
-        })
-      } else {
-        copyWithFallback(selection)
+          message.success(`Copied ${selection.length} chars`, { duration: 1000 })
+        }
       }
-    }
+    }, 50)
   })
 
   // Handle resize
@@ -1321,6 +1327,15 @@ defineExpose({
 /* Phosphor text glow - subtle CRT effect */
 .terminal :deep(.xterm-rows) {
   text-shadow: 0 0 1px currentColor;
+}
+
+/* Make selection more visible and persistent */
+.terminal :deep(.xterm-selection) {
+  background: rgba(83, 189, 250, 0.35) !important;
+}
+
+.terminal :deep(.xterm-selection div) {
+  background: rgba(83, 189, 250, 0.35) !important;
 }
 
 /* Styled scrollbars */

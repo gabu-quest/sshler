@@ -11,6 +11,7 @@ markdown-it-py>=3.0.0
 sqler>=1.2025.9.24
 pydantic-settings>=2.12.0
 python-dotenv>=1.0.0
+psutil>=5.9.0
 
 [dev]
 anyio>=4.4

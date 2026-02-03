@@ -8,12 +8,6 @@
   "description": "SSH box manager and terminal SPA",
   "icons": [
     {
-      "src": "favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
       "src": "favicon.png",
       "sizes": "512x512",
       "type": "image/png",

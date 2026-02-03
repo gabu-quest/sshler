@@ -336,8 +336,9 @@ onMounted(async () => {
 }
 
 .settings-logo {
-  width: 80px;
-  height: 80px;
+  width: 200px;
+  height: auto;
+  max-height: 120px;
   object-fit: contain;
   border-radius: 12px;
 }

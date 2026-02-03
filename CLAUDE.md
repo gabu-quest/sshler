@@ -183,16 +183,23 @@ pnpm test -- --run    # Run tests
 ### Full Stack Dev
 
 ```bash
-# Terminal 1: Backend (IMPORTANT: use --dev for Vite origin support!)
+# RECOMMENDED: Single command that starts both servers
 uv run sshler serve --dev
 
-# Terminal 2: Frontend dev server
-cd frontend && pnpm dev
+# This starts:
+# - FastAPI backend at http://localhost:8822
+# - Vite dev server at http://localhost:5173
+# - Opens browser to Vite URL automatically
 ```
 
-Access: `http://localhost:5173/app/` (Vite) or `http://localhost:8822/app/` (built)
+Access: `http://localhost:5173/app/` (Vite with HMR) or `http://localhost:8822/app/` (built)
 
-**IMPORTANT:** When running with the Vite dev server, you MUST use `sshler serve --dev`. The `--dev` flag adds `http://localhost:5173` and `http://127.0.0.1:5173` to the allowed origins list. Without this flag, all POST requests from the Vite dev server will fail with 403 Forbidden due to origin validation.
+**IMPORTANT:** The `--dev` flag is REQUIRED when using the Vite dev server. It:
+1. Starts both FastAPI and Vite dev servers together
+2. Adds `http://localhost:5173` to allowed origins
+3. Enables auto-reload for backend changes
+
+Without `--dev`, POST requests from Vite will fail with 403 Forbidden.
 
 ---
 

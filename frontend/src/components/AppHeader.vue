@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
-import { NButton, NIcon, NSpace, NDrawer, NDrawerContent, NTooltip } from "naive-ui";
+import { NButton, NIcon, NSpace, NDrawer, NDrawerContent, NTooltip, NProgress } from "naive-ui";
 import {
   PhFolderSimple,
   PhGearSix,
@@ -13,18 +13,40 @@ import {
   PhList,
   PhX,
   PhLockKey,
+  PhCpu,
+  PhMemory,
 } from "@phosphor-icons/vue";
 
 import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { useBootstrapStore } from "@/stores/bootstrap";
+import { useBoxesStore } from "@/stores/boxes";
+import { boxStats } from "@/api/http";
+import type { BoxStats } from "@/api/types";
 import CommandPalette from "@/components/CommandPalette.vue";
 import ShortcutsOverlay from "@/components/ShortcutsOverlay.vue";
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const bootstrapStore = useBootstrapStore();
+const boxesStore = useBoxesStore();
 const route = useRoute();
+
+// System stats for local box (shown in header)
+const localStats = ref<BoxStats | null>(null);
+const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token);
+
+async function loadLocalStats() {
+  try {
+    const stats = await boxStats('local', tokenValue.value || null);
+    localStats.value = stats;
+  } catch (e) {
+    // Stats are optional
+  }
+}
+
+// Refresh stats periodically
+let statsInterval: number | null = null;
 
 // Auth status computed
 const showAuthIndicator = computed(() => bootstrapStore.basicAuthRequired && authStore.isAuthenticated);
@@ -111,11 +133,18 @@ onMounted(() => {
   checkMobile();
   window.addEventListener('resize', checkMobile);
   window.addEventListener('keydown', handleKeydown);
+
+  // Load stats initially and refresh every 10 seconds
+  loadLocalStats();
+  statsInterval = window.setInterval(loadLocalStats, 10000);
 });
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile);
   window.removeEventListener('keydown', handleKeydown);
+  if (statsInterval) {
+    clearInterval(statsInterval);
+  }
 });
 </script>
 
@@ -152,6 +181,45 @@ onUnmounted(() => {
     <!-- Header Actions -->
     <div class="header-actions">
       <NSpace align="center" size="small">
+        <!-- System Stats (local box) -->
+        <NTooltip v-if="localStats && !localStats.error" :delay="300">
+          <template #trigger>
+            <div class="header-stats">
+              <div class="stat-mini">
+                <NIcon size="12"><PhCpu /></NIcon>
+                <NProgress
+                  type="line"
+                  :percentage="localStats.cpu_percent ?? 0"
+                  :show-indicator="false"
+                  :height="4"
+                  :border-radius="2"
+                  :color="(localStats.cpu_percent ?? 0) > 80 ? '#ef4444' : '#3b82f6'"
+                  style="width: 40px"
+                />
+                <span>{{ localStats.cpu_percent?.toFixed(0) }}%</span>
+              </div>
+              <div class="stat-mini">
+                <NIcon size="12"><PhMemory /></NIcon>
+                <NProgress
+                  type="line"
+                  :percentage="localStats.memory_percent ?? 0"
+                  :show-indicator="false"
+                  :height="4"
+                  :border-radius="2"
+                  :color="(localStats.memory_percent ?? 0) > 80 ? '#ef4444' : '#22c55e'"
+                  style="width: 40px"
+                />
+                <span>{{ localStats.memory_percent?.toFixed(0) }}%</span>
+              </div>
+            </div>
+          </template>
+          <div>
+            <strong>Local System</strong><br>
+            CPU: {{ localStats.cpu_percent?.toFixed(1) }}%<br>
+            RAM: {{ ((localStats.memory_used_mb ?? 0) / 1024).toFixed(1) }}GB / {{ ((localStats.memory_total_mb ?? 0) / 1024).toFixed(1) }}GB
+          </div>
+        </NTooltip>
+
         <!-- Auth Indicator -->
         <NTooltip v-if="showAuthIndicator" :delay="300">
           <template #trigger>
@@ -324,6 +392,29 @@ onUnmounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
+}
+
+/* Header Stats */
+.header-stats {
+  display: flex;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.stat-mini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.stat-mini span {
+  font-family: 'JetBrains Mono', monospace;
+  min-width: 28px;
 }
 
 .auth-indicator {

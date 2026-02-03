@@ -36,6 +36,7 @@ Requires-Dist: markdown-it-py>=3.0.0
 Requires-Dist: sqler>=1.2025.9.24
 Requires-Dist: pydantic-settings>=2.12.0
 Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: psutil>=5.9.0
 Provides-Extra: dev
 Requires-Dist: anyio>=4.4; extra == "dev"
 Requires-Dist: httpx>=0.27.0; extra == "dev"
@@ -50,6 +51,23 @@ Dynamic: license-file
 
 sshler is a lightweight, local-only web UI that lets you browse remote files over SFTP and jump into tmux sessions in your browser — without installing anything on the remote host.
 
+## Quick Start
+
+```bash
+# Install
+pip install sshler
+
+# Run (opens browser automatically)
+sshler serve
+
+# Or with development setup
+uv sync --group dev
+cd frontend && pnpm install && pnpm build && cd ..
+sshler serve
+```
+
+The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`.
+
 ## Features
 
 ### Core Features
@@ -57,11 +75,10 @@ sshler is a lightweight, local-only web UI that lets you browse remote files ove
 - **Local workspace**: Browse your own filesystem and launch native tmux sessions alongside remote hosts (uses WSL tmux on Windows, native tmux on Linux/macOS)
 - **SSH integration**: Uses your existing SSH keys and honors OpenSSH aliases
 - **Terminal in browser**: Opens `tmux new -As <session> -c <dir>` on the remote host and bridges it via WebSocket + xterm.js
-- **File management**: HTMX-based file browser with preview, edit, delete, and "Open Terminal Here"
+- **File management**: Vue-based file browser with preview, edit, delete, and "Open Terminal Here"
 - **Auto-configuration**: Creates starter config on first run
 - **Alias resolution**: Falls back to `ssh -G` when DNS fails; reset overrides with one click
 - **File operations**: Preview, edit (≤256 KB), and delete files with CodeMirror editor
-- **Bilingual UI**: Full English and Japanese language support
 
 ### Modern UI Features
 
@@ -148,19 +165,44 @@ uv run pytest tests/e2e
 sshler serve
 ```
 
-The app will open `http://127.0.0.1:8822` in your default browser.
-Use `--ui=legacy|vue|both` to control whether the SPA at `/app` is served.
+The app will open `http://127.0.0.1:8822` in your default browser and redirect to `/app/`.
 
-### Vue SPA (new)
+### Building the Frontend
 
-- SPA is served at `/app` when the frontend dist exists. Build once with `pnpm install && pnpm run build` in `frontend/` (dist emitted to `sshler/static/dist`).
-- Dev server: `cd frontend && pnpm dev -- --host --base /app/` (proxy hits backend at `http://127.0.0.1:8822`).
-- Build check for packaging: run `make frontend-build` (pnpm build + dist check).
-- Playwright E2E (SPA): `uv run playwright install chromium` once, then `uv run pytest tests/e2e/test_vue_app.py`.
-- Command palette: `Cmd/Ctrl+K` to jump to Files/Terminal/Settings, `Alt+F`/`Alt+T` for quick nav.
-- Favorites/pins/status: Boxes view lets you pin boxes and favorite defaults; Files view shows favorites panel with persisted favorites per box.
-- Legacy HTMX UI remains at `/` while the SPA reaches parity.
-- See `docs/dev-workflow.md` for a quickstart covering dev server, pnpm build, E2E, and the `--ui` toggle.
+The Vue SPA must be built before running (pre-built in PyPI releases):
+
+```bash
+cd frontend && pnpm install && pnpm build
+# or use the CLI:
+sshler build
+```
+
+### Development Mode
+
+For hot-reload development:
+
+```bash
+# Terminal 1: Backend
+sshler serve --no-browser
+
+# Terminal 2: Frontend dev server  
+cd frontend && pnpm dev -- --host --base /app/
+# Visit http://localhost:5173/app/
+```
+
+Or use the combined dev command:
+
+```bash
+sshler dev  # Runs both servers with hot-reload
+```
+
+### Key Shortcuts
+
+- **Cmd/Ctrl+K** - Command palette
+- **Alt+F** - Go to Files
+- **Alt+T** - Go to Terminal
+- **Alt+B** - Go to Boxes
+- **?** - Show all keyboard shortcuts
 
 ## Configuration
 
@@ -201,7 +243,23 @@ Hit "Add Box" in the UI to define a host that isn't in your SSH config (for exam
 
 ### Security model (important)
 
-- sshler is designed for **single-user localhost** use. By default `sshler serve` binds to `127.0.0.1` and prints a random `X-SSHLER-TOKEN` that every state-changing request must send.
+**Localhost (127.0.0.1):** No password required. sshler binds to localhost by default and uses a random `X-SSHLER-TOKEN` for CSRF protection.
+
+**Non-localhost:** Password REQUIRED. If you bind to `0.0.0.0` or any non-localhost address, you MUST configure authentication:
+
+```bash
+# Set up password (recommended - creates hash in .env)
+sshler hash-password
+
+# Or use environment variables directly
+export SSHLER_USERNAME=admin
+export SSHLER_PASSWORD_HASH='$argon2id$...'  # Use sshler hash-password to generate
+
+# Or use CLI flag (not recommended - visible in process list)
+sshler serve --host 0.0.0.0 --auth admin:password
+```
+
+**Additional security notes:**
 - **Environment variables**: Never commit your `.env` file to version control. Use `.env.example` as a template. The `.env` file may contain sensitive credentials like password hashes.
 - File uploads are capped at 50 MB (tunable via `--max-upload-mb`). Uploaded content is never executed server-side.
 - SSH connections still honour your system `known_hosts`. Only set `known_hosts: ignore` if you fully understand the risk.
