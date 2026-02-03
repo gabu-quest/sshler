@@ -64,7 +64,8 @@ const isTerminalRoute = computed(() => route.path === '/terminal' || route.path 
 
 @media (max-width: 768px) {
   .app-main {
-    height: calc(var(--vh-full, 100vh) - 40px);
+    height: calc(var(--vh-full, 100vh) - 16px);
+    overflow: hidden;
   }
 
   .app-content {
@@ -73,14 +74,12 @@ const isTerminalRoute = computed(() => route.path === '/terminal' || route.path 
 
   .app-content.terminal-mode {
     padding: 0;
+    height: 100%;
+    overflow: hidden;
   }
 }
 
 @media (max-width: 480px) {
-  .app-main {
-    height: calc(var(--vh-full, 100vh) - 34px);
-  }
-
   .app-content {
     padding: 4px;
   }

@@ -185,10 +185,10 @@ onUnmounted(() => {
       </RouterLink>
     </nav>
 
-    <!-- Header Actions -->
-    <div class="header-actions">
+    <!-- Header Actions (Desktop) -->
+    <div class="header-actions desktop-actions">
       <NSpace align="center" size="small">
-        <!-- System Stats (local box) -->
+        <!-- System Stats (local box) - Desktop version with progress bars -->
         <NTooltip v-if="localStats && !localStats.error" :delay="300">
           <template #trigger>
             <div
@@ -265,23 +265,42 @@ onUnmounted(() => {
         </NButton>
         <CommandPalette />
         <ShortcutsOverlay />
-        
-        <!-- Mobile Menu Button -->
-        <NButton 
-          v-if="isMobile"
-          quaternary 
-          circle 
-          size="small" 
-          @click="toggleMobileMenu"
-          :aria-label="isMobileMenuOpen ? 'Close menu' : 'Open menu'"
-          :aria-expanded="isMobileMenuOpen"
-          class="mobile-menu-button"
-        >
-          <NIcon size="18" aria-hidden="true">
-            <component :is="isMobileMenuOpen ? PhX : PhList" />
-          </NIcon>
-        </NButton>
       </NSpace>
+    </div>
+
+    <!-- Header Actions (Mobile) - ultra compact -->
+    <div class="header-actions mobile-actions">
+      <!-- Micro stats: text only, no progress bars -->
+      <span
+        v-if="localStats && !localStats.error"
+        class="micro-stats"
+        :class="{
+          'stats-warning': (localStats.cpu_percent ?? 0) >= 80 || (localStats.memory_percent ?? 0) >= 80,
+          'stats-critical': isStatCritical(localStats.cpu_percent) || isStatCritical(localStats.memory_percent)
+        }"
+      >
+        <span class="micro-stat" :style="{ color: getStatColor(localStats.cpu_percent, 'rgba(255,255,255,0.4)') }">C{{ localStats.cpu_percent?.toFixed(0) }}</span>
+        <span class="micro-stat" :style="{ color: getStatColor(localStats.memory_percent, 'rgba(255,255,255,0.4)') }">M{{ localStats.memory_percent?.toFixed(0) }}</span>
+      </span>
+      <button
+        class="micro-btn"
+        @click="toggleTheme"
+        :aria-label="`Switch to ${appStore.isDark ? 'light' : 'dark'} theme`"
+      >
+        <NIcon size="12" aria-hidden="true">
+          <component :is="themeIcon" />
+        </NIcon>
+      </button>
+      <button
+        class="micro-btn menu-btn"
+        @click="toggleMobileMenu"
+        :aria-label="isMobileMenuOpen ? 'Close menu' : 'Open menu'"
+        :aria-expanded="isMobileMenuOpen"
+      >
+        <NIcon size="14" aria-hidden="true">
+          <component :is="isMobileMenuOpen ? PhX : PhList" />
+        </NIcon>
+      </button>
     </div>
 
     <!-- Mobile Navigation Drawer -->
@@ -487,8 +506,46 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.mobile-menu-button {
+/* Mobile micro header elements */
+.mobile-actions {
   display: none;
+}
+
+.micro-stats {
+  display: inline-flex;
+  gap: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.micro-stat {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.micro-stats.stats-warning .micro-stat {
+  color: #f97316;
+}
+
+.micro-stats.stats-critical {
+  animation: stats-pulse 1.5s ease-in-out infinite;
+}
+
+.micro-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 16px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  padding: 0;
+}
+
+.micro-btn:active {
+  color: rgba(255, 255, 255, 0.7);
 }
 
 /* Mobile Navigation */
@@ -544,47 +601,34 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .app-header {
     grid-template-columns: auto 1fr auto;
-    padding: 6px 12px;
-    gap: 8px;
+    padding: 0 6px;
+    gap: 4px;
+    min-height: 16px;
+    height: 16px;
   }
 
   .desktop-nav {
     display: none;
   }
 
-  .mobile-menu-button {
+  .desktop-actions {
+    display: none;
+  }
+
+  .mobile-actions {
     display: flex;
-  }
-
-  .mode-label {
-    display: none;
-  }
-
-  .auth-username {
-    display: none;
-  }
-
-  .auth-indicator {
-    padding: 4px 6px;
+    align-items: center;
+    gap: 4px;
   }
 
   .brand-logo {
-    height: 24px;
+    height: 12px;
+    border-radius: 2px;
   }
 
-  .header-stats {
-    display: none;
-  }
-}
-
-@media (max-width: 480px) {
-  .app-header {
-    padding: 4px 8px;
-    gap: 8px;
-  }
-
-  .brand-logo {
-    height: 20px;
+  .brand {
+    line-height: 1;
+    gap: 0;
   }
 }
 
