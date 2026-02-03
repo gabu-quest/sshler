@@ -24,13 +24,6 @@ class APIDependencies:
         supplied = request.headers.get("x-sshler-token")
         expected = self.settings.csrf_token
 
-        # Debug logging - print all headers to see what's actually being received
-        all_headers = {k: v for k, v in request.headers.items()}
-        logger.debug(f"[require_token] {request.method} {request.url.path}")
-        logger.debug(f"[require_token] All headers: {all_headers}")
-        logger.debug(f"[require_token] Supplied token: {supplied[:8] + '...' if supplied else 'None'}")
-        logger.debug(f"[require_token] Expected token: {expected[:8] + '...' if expected else 'None'}")
-
         if supplied != expected:
             logger.warning(
                 f"Token mismatch on {request.url.path}: "

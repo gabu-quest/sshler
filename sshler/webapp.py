@@ -2463,7 +2463,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         _require_token(request)
 
-        await state.replace_favorites_async(name, [])
+        # NOTE: Do NOT clear favorites here - favorites should persist
+        # independently of connection overrides. Removed line:
+        # await state.replace_favorites_async(name, [])
 
         stored_override = application_config.stored.get(name)
         if stored_override is not None:
