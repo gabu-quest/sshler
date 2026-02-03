@@ -485,13 +485,15 @@ const columns = [
   {
     title: "name", key: "name",
     render(row: any) {
+      const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
       return h("div", { 
         style: "display:flex;align-items:center;gap:8px;cursor:pointer;",
         onDblclick: () => row.is_directory ? navigateToDirectory(row.path) : handlePreview(row),
         onContextmenu: (e: MouseEvent) => showContextMenu(e, row)
       }, [
         h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile)),
-        h("span", row.name)
+        h("span", row.name),
+        isFav && h(NIcon, { size: 14, color: "#faad14", style: "margin-left: 4px;" }, () => h(PhStar, { weight: "fill" }))
       ]);
     },
   },
@@ -501,7 +503,26 @@ const columns = [
   {
     title: "actions", key: "actions",
     render(row: any) {
+      const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
       return h("div", { style: "display:flex;gap:4px;align-items:center;" }, [
+        // Directory actions: favorite toggle & open terminal
+        row.is_directory && h(NTooltip, { trigger: "hover" }, {
+          trigger: () => h(NButton, { 
+            size: "tiny", 
+            quaternary: true, 
+            onClick: () => toggleFavoriteDir(row.path)
+          }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "regular" })) }),
+          default: () => isFav ? "Remove from Favorites" : "Add to Favorites"
+        }),
+        row.is_directory && h(NTooltip, { trigger: "hover" }, {
+          trigger: () => h(NButton, { 
+            size: "tiny", 
+            quaternary: true, 
+            onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
+          }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow)) }),
+          default: () => "Open Terminal Here"
+        }),
+        // File actions: preview, edit, download
         !row.is_directory && h(NTooltip, { trigger: "hover" }, {
           trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye)) }),
           default: () => "Preview"
@@ -514,6 +535,7 @@ const columns = [
           trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple)) }),
           default: () => "Download"
         }),
+        // Common actions: rename, delete
         h(NTooltip, { trigger: "hover" }, {
           trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa)) }),
           default: () => "Rename"

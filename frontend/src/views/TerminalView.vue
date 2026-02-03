@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput, NSpace, NButtonGroup, NDivider } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhCaretLeft, PhCaretRight, PhPlusCircle, PhFolderOpen } from '@phosphor-icons/vue'
+import { PhTerminalWindow, PhArrowLeft, PhStar, PhCaretLeft, PhCaretRight, PhPlusCircle, PhFolderOpen, PhClipboard } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
@@ -37,7 +37,21 @@ const tmuxNewWindow = () => sendTmuxCommand('c')
 
 const goToFiles = () => {
   if (selectedBox.value) {
-    router.push({ path: '/files', query: { box: selectedBox.value } })
+    // Open in new tab at the terminal's current directory
+    const path = initialDirectory.value || '~'
+    window.open(`/app/files?box=${encodeURIComponent(selectedBox.value)}&path=${encodeURIComponent(path)}`, '_blank')
+  }
+}
+
+const pasteFromClipboard = async () => {
+  try {
+    const text = await navigator.clipboard.readText()
+    if (text) {
+      terminalRef.value?.send(text)
+      terminalRef.value?.focus()
+    }
+  } catch (err) {
+    console.error('Failed to paste:', err)
   }
 }
 
@@ -256,12 +270,23 @@ watch(() => boxesStore.items, () => {
               <NButton 
                 size="small"
                 @click="goToFiles"
-                title="Browse Files"
+                title="Browse Files (opens in new tab)"
               >
                 <template #icon>
                   <NIcon size="14"><PhFolderOpen /></NIcon>
                 </template>
                 Files
+              </NButton>
+              
+              <NButton 
+                size="small"
+                @click="pasteFromClipboard"
+                title="Paste from clipboard"
+              >
+                <template #icon>
+                  <NIcon size="14"><PhClipboard /></NIcon>
+                </template>
+                Paste
               </NButton>
               
               <NButton 
@@ -288,6 +313,7 @@ watch(() => boxesStore.items, () => {
       <Terminal
         v-if="selectedBox"
         ref="terminalRef"
+        :key="selectedBox + '-' + initialDirectory"
         :box-name="selectedBox"
         :session-name="sessionName"
         :directory="initialDirectory"
@@ -328,6 +354,11 @@ watch(() => boxesStore.items, () => {
   gap: 16px;
   height: calc(100vh - 96px);
   overflow: hidden;
+  width: 100%;
+  max-width: none;  /* Override any parent constraints */
+  min-width: 0;     /* Allow flex shrinking */
+  padding: 0 16px;
+  box-sizing: border-box;
 }
 
 .page-header {
@@ -375,6 +406,8 @@ h1 {
 .terminal-container {
   flex: 1;
   min-height: 0;
+  min-width: 0;  /* Critical for flex layouts - allows shrinking */
+  width: 100%;
   border-radius: 8px;
   overflow: hidden;
 }

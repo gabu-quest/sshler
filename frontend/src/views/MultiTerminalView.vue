@@ -73,13 +73,9 @@ const getTerminalColor = (index: number) => {
   return terminalColors[index % terminalColors.length]
 }
 
-// T7: Directory options for dropdown - favorites from selected box + common paths
+// T7: Directory options for dropdown - favorites from selected box only
 const directoryOptions = computed(() => {
-  const options: Array<{ label: string; value: string }> = [
-    { label: '~ (Home)', value: '~' },
-    { label: '/tmp', value: '/tmp' },
-    { label: '/var/log', value: '/var/log' },
-  ]
+  const options: Array<{ label: string; value: string }> = []
   
   // Add favorites from selected box
   if (newTerminal.value.boxName) {
@@ -87,7 +83,7 @@ const directoryOptions = computed(() => {
     if (boxData?.favorites) {
       boxData.favorites.forEach(fav => {
         const label = fav.split('/').pop() || fav
-        options.unshift({ label: `★ ${label}`, value: fav })
+        options.push({ label: `★ ${label}`, value: fav })
       })
     }
     // Also check favoritesStore
@@ -95,9 +91,14 @@ const directoryOptions = computed(() => {
     storeFavs.forEach(fav => {
       if (!options.some(o => o.value === fav)) {
         const label = fav.split('/').pop() || fav
-        options.unshift({ label: `★ ${label}`, value: fav })
+        options.push({ label: `★ ${label}`, value: fav })
       }
     })
+  }
+  
+  // Default home if no favorites
+  if (options.length === 0) {
+    options.push({ label: '~ (Home)', value: '~' })
   }
   
   // Add Browse option
