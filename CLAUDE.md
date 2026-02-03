@@ -183,14 +183,16 @@ pnpm test -- --run    # Run tests
 ### Full Stack Dev
 
 ```bash
-# Terminal 1: Backend
-uv run sshler serve
+# Terminal 1: Backend (IMPORTANT: use --dev for Vite origin support!)
+uv run sshler serve --dev
 
 # Terminal 2: Frontend dev server
 cd frontend && pnpm dev
 ```
 
 Access: `http://localhost:5173/app/` (Vite) or `http://localhost:8822/app/` (built)
+
+**IMPORTANT:** When running with the Vite dev server, you MUST use `sshler serve --dev`. The `--dev` flag adds `http://localhost:5173` and `http://127.0.0.1:5173` to the allowed origins list. Without this flag, all POST requests from the Vite dev server will fail with 403 Forbidden due to origin validation.
 
 ---
 
@@ -238,6 +240,25 @@ Legacy HTMX UI at `/` for stability while Vue SPA at `/app` reaches feature pari
 
 ### ADR-003: Local Box Special Case
 `box.name == "local"` triggers subprocess-based tmux instead of SSH. Enables local filesystem browsing without SSH.
+
+---
+
+## Known Gotchas
+
+### Origin Validation (403 on POST)
+The backend validates the `Origin` header on all state-changing requests. If you get 403 errors on POST/PUT/DELETE:
+1. Check you're running with `--dev` flag when using Vite dev server
+2. Check `SSHLER_PUBLIC_URL` is set correctly if behind a proxy
+
+### Favorites Persistence
+Favorites are stored in both:
+- SQLite state database (via `state.replace_favorites_async`)
+- YAML config (via `save_config`)
+
+The `refresh_box` endpoint resets connection overrides but should NOT touch favorites.
+
+### Asset Paths in Frontend
+Use **relative paths** in `index.html` and `manifest.webmanifest` (e.g., `favicon.png` not `/app/favicon.png`). Vite handles base path resolution during build. Absolute paths break the dev server.
 
 ---
 
