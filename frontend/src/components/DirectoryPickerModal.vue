@@ -43,7 +43,7 @@ const loadDirectory = async (path: string) => {
   error.value = null
 
   try {
-    const url = `/api/v1/boxes/${encodeURIComponent(props.boxName)}/ls?path=${encodeURIComponent(path)}`
+    const url = `/api/v1/boxes/${encodeURIComponent(props.boxName)}/ls?directory=${encodeURIComponent(path)}`
     const response = await http.get<{ entries: DirectoryEntry[], directory: string }>(url, {
       headers: buildHeaders(props.token)
     })

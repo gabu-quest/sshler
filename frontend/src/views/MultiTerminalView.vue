@@ -128,16 +128,28 @@ const ensureData = async () => {
   }
 }
 
+// Generate session name from directory (last component only, matching TerminalView)
+const generateSessionName = (directory: string) => {
+  if (!directory || directory === '~') {
+    return 'home'
+  }
+  // Extract last path component (directory name)
+  const pathParts = directory.split('/').filter(Boolean)
+  const dirName = pathParts[pathParts.length - 1] || 'root'
+  // Sanitize: replace non-alphanumeric with underscore
+  const sanitized = dirName.replace(/[^a-zA-Z0-9]/g, '_')
+  // Remove leading/trailing underscores
+  return sanitized.replace(/^_+|_+$/g, '') || 'root'
+}
+
 const addTerminal = () => {
   if (!newTerminal.value.boxName) {
     message.error('Please select a box')
     return
   }
-  
+
   // Generate session name based on directory for tmux window sharing
-  const dirBasedSession = newTerminal.value.directory 
-    ? newTerminal.value.directory.replace(/[^a-zA-Z0-9]/g, '_').replace(/^_+|_+$/g, '') || 'root'
-    : 'home'
+  const dirBasedSession = generateSessionName(newTerminal.value.directory || '~')
   
   const id = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   terminals.value.push({

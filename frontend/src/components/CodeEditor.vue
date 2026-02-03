@@ -183,5 +183,14 @@ defineExpose({
 
 .code-editor :deep(.cm-scroller) {
   font-family: inherit;
+  overflow: auto !important;
+}
+
+.code-editor :deep(.cm-editor) {
+  height: 100%;
+}
+
+.code-editor :deep(.cm-content) {
+  min-height: 100%;
 }
 </style>

@@ -25,11 +25,16 @@ const showManualDir = ref(false)
 const showDirPicker = ref(false)
 const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
 
+const filesUrl = computed(() => {
+  if (!selectedBox.value) return '#'
+  const path = initialDirectory.value || '~'
+  return `/app/files?box=${encodeURIComponent(selectedBox.value)}&path=${encodeURIComponent(path)}`
+})
+
 const goToFiles = () => {
   if (selectedBox.value) {
     // Open in new tab at the terminal's current directory
-    const path = initialDirectory.value || '~'
-    window.open(`/app/files?box=${encodeURIComponent(selectedBox.value)}&path=${encodeURIComponent(path)}`, '_blank')
+    window.open(filesUrl.value, '_blank')
   }
 }
 
@@ -244,14 +249,15 @@ watch(() => boxesStore.items, () => {
             </NIcon>
           </NButton>
 
-          <NButton
+          <a
             v-if="selectedBox"
-            size="small"
-            @click="goToFiles"
-            title="Browse Files"
+            :href="filesUrl"
+            class="header-link-btn"
+            title="Browse Files (middle-click for new tab)"
+            @click.prevent="goToFiles"
           >
             <NIcon size="14"><PhFolderOpen /></NIcon>
-          </NButton>
+          </a>
         </div>
       </div>
     </header>
@@ -428,6 +434,24 @@ watch(() => boxesStore.items, () => {
 
 .favorite-btn:hover {
   transform: scale(1.1);
+}
+
+.header-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--text);
+  text-decoration: none;
+  background: transparent;
+  border: 1px solid var(--stroke);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.header-link-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent);
 }
 
 @media (prefers-contrast: high) {
