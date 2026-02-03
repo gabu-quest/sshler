@@ -5,36 +5,42 @@
  * Uses a hash of the string to pick from a curated list of visually distinct emojis.
  */
 
-// Curated list of visually distinct emojis that look good as favicons
+// Curated list of ~150 visually distinct emojis that look good as favicons
 const EMOJIS = [
-  // Animals
+  // Animals (30)
   '🦊', '🐼', '🦁', '🐸', '🦉', '🦋', '🐙', '🦈', '🐢', '🦄',
   '🐳', '🦩', '🦜', '🐝', '🦎', '🐲', '🦚', '🦀', '🐬', '🦅',
-  // Nature & Weather
+  '🐺', '🦇', '🐧', '🦔', '🐨', '🦥', '🦫', '🐹', '🦘', '🦬',
+  // Nature & Weather (25)
   '🌸', '🌺', '🌻', '🍀', '🌴', '🌵', '🍄', '🌙', '⭐', '🌈',
   '❄️', '🔥', '💧', '🌊', '⚡', '☀️', '🌕', '🍁', '🌿', '🌾',
-  // Food & Drink
+  '🪻', '🪷', '🌲', '🏔️', '🌋',
+  // Food & Drink (30)
   '🍎', '🍊', '🍋', '🍇', '🍓', '🥑', '🌶️', '🍕', '🍔', '🧁',
   '🍩', '🍪', '🍦', '🧀', '🥐', '🍿', '🥝', '🍑', '🥭', '🫐',
-  // Objects & Symbols
+  '🍒', '🍍', '🥥', '🌽', '🥕', '🧅', '🥨', '🥯', '🧇', '🥞',
+  // Objects & Tech (30)
   '💎', '🎯', '🎨', '🎭', '🎪', '🎸', '🎺', '🎲', '🧩', '🔮',
   '💡', '🔧', '⚙️', '🧲', '🧪', '🔬', '📡', '🛸', '🚀', '⚓',
-  // Abstract & Shapes
+  '🎹', '🎻', '🎤', '📷', '💾', '📱', '⌚', '🔑', '🧭', '⏰',
+  // Symbols & Shapes (35)
   '💜', '💙', '💚', '💛', '🧡', '❤️', '🖤', '💗', '💝', '💫',
   '✨', '🌟', '💥', '🎆', '🎇', '🔶', '🔷', '🔴', '🟢', '🟣',
+  '🟡', '🟠', '🔵', '⬛', '⬜', '🟥', '🟦', '🟩', '🟪', '🟧',
+  '♠️', '♥️', '♦️', '♣️', '🃏',
 ];
 
 /**
- * Simple string hash function
+ * FNV-1a hash function - better distribution than simple hash
+ * Uses 32-bit FNV prime and offset basis
  */
-function hashString(str: string): number {
-  let hash = 0;
+function fnv1aHash(str: string): number {
+  let hash = 2166136261; // FNV offset basis
   for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619); // FNV prime
   }
-  return Math.abs(hash);
+  return hash >>> 0; // Convert to unsigned 32-bit
 }
 
 /**
@@ -42,7 +48,7 @@ function hashString(str: string): number {
  */
 export function getEmojiForString(str: string): string {
   if (!str) return '📁'; // Default for empty string
-  const hash = hashString(str);
+  const hash = fnv1aHash(str);
   return EMOJIS[hash % EMOJIS.length];
 }
 

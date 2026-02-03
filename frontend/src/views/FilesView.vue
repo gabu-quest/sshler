@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
@@ -19,6 +20,7 @@ import ContextMenu from "@/components/ContextMenu.vue";
 import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 
+const route = useRoute();
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
 const directoryStore = useDirectoryStore();
@@ -99,10 +101,10 @@ const displayDirName = computed(() => {
 // Update browser tab title and favicon
 watch([selectedBox, currentDir], () => {
   if (selectedBox.value) {
-    document.title = `${displayDirName.value} — ${selectedBox.value} — sshler`;
+    document.title = `${displayDirName.value} — ${selectedBox.value}`;
     setEmojiFavicon(`${selectedBox.value}:${currentDir.value}`);
   } else {
-    document.title = 'Files — sshler';
+    document.title = 'Files';
     resetFavicon();
   }
 }, { immediate: true });
@@ -237,7 +239,20 @@ async function ensureData() {
   if (!bootstrapStore.payload && !bootstrapStore.loading) await bootstrapStore.bootstrap();
   if (!boxesStore.items.length && !boxesStore.loading) await boxesStore.load(tokenValue.value || null);
   if (boxesStore.items.length) favoritesStore.hydrateFromBoxes(boxesStore.items);
-  if (!selectedBox.value && boxesStore.items.length) {
+
+  // Read box and path from URL query params
+  const boxFromUrl = route.query.box as string | undefined;
+  const pathFromUrl = route.query.path as string | undefined;
+
+  if (boxFromUrl && boxesStore.items.some(b => b.name === boxFromUrl)) {
+    selectedBox.value = boxFromUrl;
+    if (pathFromUrl) {
+      currentDir.value = pathFromUrl;
+    } else {
+      const box = boxesStore.items.find(b => b.name === boxFromUrl);
+      if (box?.default_dir) currentDir.value = box.default_dir;
+    }
+  } else if (!selectedBox.value && boxesStore.items.length) {
     const firstBox = boxesStore.items[0];
     if (firstBox) {
       selectedBox.value = firstBox.name;

@@ -106,13 +106,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIFavoriteToggle:
         box = deps.get_box_or_404(application_config, name)
         stored = application_config.get_or_create_stored(name)
-        favorites = set(stored.favorites or [])
+        # Use box.favorites (from SQLite) not stored.favorites (from YAML)
+        favorites = set(box.favorites or [])
         if payload.favorite:
             favorites.add(payload.path)
         else:
             favorites.discard(payload.path)
-        stored.favorites = sorted(favorites)
-        await state.replace_favorites_async(name, stored.favorites)
+        sorted_favorites = sorted(favorites)
+        stored.favorites = sorted_favorites
+        box.favorites = sorted_favorites
+        await state.replace_favorites_async(name, sorted_favorites)
         save_config(application_config)
         rebuild_boxes(application_config)
         return APIFavoriteToggle(path=payload.path, favorite=payload.favorite)

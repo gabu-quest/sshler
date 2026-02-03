@@ -113,7 +113,7 @@ const formatDuration = (minutes: number | null): string => {
 
 onMounted(async () => {
   // Reset to default favicon on settings page
-  document.title = 'Settings — sshler'
+  document.title = 'Settings'
   resetFavicon()
 
   // Ensure bootstrap is complete before loading pool config

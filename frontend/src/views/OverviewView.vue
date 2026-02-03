@@ -135,7 +135,7 @@ const quickStats = computed(() => ({
 
 onMounted(async () => {
   // Reset to default favicon on overview page
-  document.title = 'Overview — sshler';
+  document.title = 'Overview';
   resetFavicon();
 
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
@@ -365,9 +365,13 @@ const handleBrowseServerFiles = (serverName: string) => {
                       v-for="session in getBoxSessions(box.name)"
                       :key="session.id"
                       class="session-item"
+                      :class="{ inactive: !session.active }"
                       @click="handleJumpToSession(box.name, session.session_name)"
                     >
-                      <span class="session-name">{{ session.session_name || 'unnamed' }}</span>
+                      <span class="session-row">
+                        <span class="session-status" :class="session.active ? 'active' : 'inactive'"></span>
+                        <span class="session-name">{{ session.session_name || 'unnamed' }}</span>
+                      </span>
                       <span class="session-dir">{{ session.working_directory }}</span>
                     </div>
                   </div>
@@ -711,8 +715,8 @@ const handleBrowseServerFiles = (serverName: string) => {
 .session-tooltip {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-width: 200px;
+  gap: 4px;
+  min-width: 180px;
   max-height: 280px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -739,27 +743,57 @@ const handleBrowseServerFiles = (serverName: string) => {
 .session-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
+  gap: 1px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.session-item.inactive {
+  opacity: 0.6;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.session-status.active {
+  background: #22c55e;
+}
+
+.session-status.inactive {
+  background: #6b7280;
 }
 
 .session-name {
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: 500;
+  font-size: 12px;
 }
 
 .session-dir {
-  font-size: 11px;
-  opacity: 0.7;
+  font-size: 10px;
+  opacity: 0.6;
   font-family: var(--font-mono);
+  margin-left: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
 }
 
 /* Favorites Section */

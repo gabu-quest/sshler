@@ -120,11 +120,11 @@ const displayDirName = computed(() => {
 // Update browser tab title and favicon
 watch([selectedBox, initialDirectory], () => {
   if (selectedBox.value) {
-    document.title = `${displayDirName.value} — ${selectedBox.value} — sshler`
+    document.title = `${displayDirName.value} — ${selectedBox.value}`
     // Set deterministic emoji favicon based on box + directory
     setEmojiFavicon(`${selectedBox.value}:${initialDirectory.value}`)
   } else {
-    document.title = 'Terminal — sshler'
+    document.title = 'Terminal'
     resetFavicon()
   }
 }, { immediate: true })
