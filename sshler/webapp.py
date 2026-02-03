@@ -374,6 +374,140 @@ async def _convert_path_to_wsl(path: str) -> str | None:
     return await asyncio.to_thread(_worker)
 
 
+# Import PTY-related modules for local terminal resize
+import fcntl
+import pty
+import signal
+import struct
+import termios
+from typing import IO
+
+
+class LocalPTYProcess:
+    """Wrapper for a local PTY process with resize support.
+    
+    This class manages a process running in a pseudo-terminal, allowing
+    proper terminal resize via ioctl TIOCSWINSZ + SIGWINCH.
+    """
+    
+    def __init__(self, master_fd: int, pid: int, stdin: IO[bytes], stdout: IO[bytes]):
+        self.master_fd = master_fd
+        self.pid = pid
+        self.stdin = stdin
+        self.stdout = stdout
+        self._returncode: int | None = None
+    
+    @property
+    def returncode(self) -> int | None:
+        return self._returncode
+    
+    def resize(self, cols: int, rows: int) -> None:
+        """Resize the PTY to the given dimensions."""
+        if self.master_fd < 0:
+            return
+        try:
+            # Pack rows/cols into winsize struct: rows, cols, xpixel, ypixel
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
+            # Send SIGWINCH to the process group so child processes notice
+            try:
+                os.killpg(os.getpgid(self.pid), signal.SIGWINCH)
+            except (ProcessLookupError, PermissionError):
+                # Process may have exited or we may not have permission
+                try:
+                    os.kill(self.pid, signal.SIGWINCH)
+                except ProcessLookupError:
+                    pass
+            logger.debug(f"[PTY] Resized to {cols}x{rows}")
+        except Exception as exc:
+            logger.warning(f"[PTY] Failed to resize: {exc}")
+    
+    async def wait(self) -> int:
+        """Wait for the process to exit."""
+        _, status = await asyncio.to_thread(os.waitpid, self.pid, 0)
+        self._returncode = os.waitstatus_to_exitcode(status)
+        return self._returncode
+    
+    def terminate(self) -> None:
+        """Terminate the process."""
+        try:
+            os.kill(self.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    
+    def close(self) -> None:
+        """Close the PTY file descriptors."""
+        try:
+            os.close(self.master_fd)
+        except OSError:
+            pass
+
+
+async def _open_local_pty_tmux(
+    working_directory: str,
+    session: str,
+    cols: int = 80,
+    rows: int = 24,
+) -> LocalPTYProcess:
+    """Open a local tmux session using a real PTY for proper resize support."""
+    command = list(_local_tmux_base_command()) + ["new", "-As", session]
+    if working_directory:
+        target_dir = working_directory
+        if LOCAL_IS_WINDOWS:
+            converted = await _convert_path_to_wsl(working_directory)
+            if converted:
+                target_dir = converted
+        command.extend(["-c", target_dir])
+    
+    def _spawn_pty() -> tuple[int, int]:
+        """Spawn the process in a PTY (runs in thread)."""
+        # Create a new PTY
+        master_fd, slave_fd = pty.openpty()
+        
+        # Set initial window size
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+        
+        # Fork
+        pid = os.fork()
+        if pid == 0:
+            # Child process
+            os.close(master_fd)
+            os.setsid()  # Create new session
+            
+            # Make slave the controlling terminal
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+            
+            # Redirect std streams to slave
+            os.dup2(slave_fd, 0)
+            os.dup2(slave_fd, 1)
+            os.dup2(slave_fd, 2)
+            
+            if slave_fd > 2:
+                os.close(slave_fd)
+            
+            # Set up environment
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
+            
+            # Execute the command
+            os.execvpe(command[0], command, env)
+        
+        # Parent process
+        os.close(slave_fd)
+        return master_fd, pid
+    
+    master_fd, pid = await asyncio.to_thread(_spawn_pty)
+    
+    # Create file objects for async I/O
+    # Note: We use os.fdopen with buffering=0 for raw access
+    stdin = os.fdopen(master_fd, 'wb', buffering=0, closefd=False)
+    stdout = os.fdopen(master_fd, 'rb', buffering=0, closefd=False)
+    
+    logger.info(f"[PTY] Spawned local tmux with PID {pid}, fd {master_fd}")
+    return LocalPTYProcess(master_fd, pid, stdin, stdout)
+
+
 async def _open_local_tmux(
     working_directory: str,
     session: str,
@@ -2789,7 +2923,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             )
 
             connection: asyncssh.SSHClientConnection | None = None
-            process: asyncssh.SSHClientProcess[str] | asyncio.subprocess.Process | None = None
+            process: asyncssh.SSHClientProcess[str] | LocalPTYProcess | None = None
 
             if transport == "local":
                 try:
@@ -2805,8 +2939,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 )
 
                 try:
-                    process = await _open_local_tmux(normalized_directory, session)
-                    logger.info(f"[Connection] Local tmux process started successfully")
+                    # Use PTY-based local terminal for proper resize support
+                    process = await _open_local_pty_tmux(normalized_directory, session)
+                    logger.info(f"[Connection] Local PTY tmux process started successfully")
                 except Exception as exc:
                     logger.error(f"[Connection] Failed to start local tmux: {exc}", exc_info=True)
                     error_msg = f"Connection failed: {exc}\r\n"
@@ -2879,8 +3014,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         num_bytes = len(bytes_value)
                         logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
                         if process is not None and process.stdin is not None:
-                            # SSH process expects str, local process expects bytes
-                            if isinstance(process, asyncio.subprocess.Process):
+                            # LocalPTYProcess uses sync file objects
+                            if isinstance(process, LocalPTYProcess):
+                                await asyncio.to_thread(process.stdin.write, bytes_value)
+                            elif isinstance(process, asyncio.subprocess.Process):
+                                # Old script-based local process (deprecated)
                                 process.stdin.write(bytes_value)
                             else:
                                 # SSHClientProcess expects str
@@ -2923,7 +3061,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         return
                     while True:
                         logger.debug("Reader: waiting for stdout data...")
-                        data = await process.stdout.read(32768)
+                        # LocalPTYProcess uses sync file objects, need to read in thread
+                        if isinstance(process, LocalPTYProcess):
+                            data = await asyncio.to_thread(process.stdout.read, 32768)
+                        else:
+                            data = await process.stdout.read(32768)
                         if not data:
                             logger.info("Reader: got empty data, ending")
                             break
@@ -3024,12 +3166,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 if process:
                     if transport == "local":
                         # Don't terminate! Just close stdin/stdout to detach gracefully
-                        # The tmux session will continue running in WSL
-                        try:
-                            if process.stdin is not None:
-                                process.stdin.close()
-                        except Exception as exc:
-                            logger.debug(f"Error closing process stdin: {exc}")
+                        # The tmux session will continue running
+                        if isinstance(process, LocalPTYProcess):
+                            process.close()
+                        else:
+                            try:
+                                if process.stdin is not None:
+                                    process.stdin.close()
+                            except Exception as exc:
+                                logger.debug(f"Error closing process stdin: {exc}")
                         try:
                             # Give it a moment to flush
                             await asyncio.sleep(0.1)
@@ -3111,19 +3256,31 @@ async def _handle_control_message(
     if operation == "resize":
         cols = int(message.get("cols", 0) or 0)
         rows = int(message.get("rows", 0) or 0)
+        logger.info(f"[Resize] Received resize: {cols}x{rows} for {session} ({transport})")
         if cols > 0 and rows > 0:
             if transport == "local":
-                # Resize local tmux client
-                try:
-                    await _run_local_tmux_command(["refresh-client", "-C", f"{cols}x{rows}"])
-                except Exception as exc:
-                    logger.debug(f"Failed to resize local tmux: {exc}")
+                # Use the PTY resize method which does proper ioctl + SIGWINCH
+                if isinstance(process, LocalPTYProcess):
+                    try:
+                        process.resize(cols, rows)
+                        logger.info(f"[Resize] Local PTY resized to {cols}x{rows}")
+                    except Exception as exc:
+                        logger.warning(f"Failed to resize local PTY: {exc}")
+                else:
+                    # Fallback for old script-based process (shouldn't happen)
+                    try:
+                        await _run_local_tmux_command(["refresh-client", "-C", f"{cols}x{rows}"])
+                        await _run_local_tmux_command(["resize-window", "-t", session, "-x", str(cols), "-y", str(rows)])
+                        logger.info(f"[Resize] Local tmux resized to {cols}x{rows}")
+                    except Exception as exc:
+                        logger.debug(f"Failed to resize local tmux: {exc}")
             else:
-                # Resize SSH PTY
+                # Resize SSH PTY - asyncssh handles the ioctl/SIGWINCH internally
                 try:
-                    process.set_pty_size(cols, rows)
+                    process.change_terminal_size(cols, rows)
+                    logger.info(f"[Resize] SSH PTY resized to {cols}x{rows}")
                 except Exception as exc:
-                    logger.debug(f"Failed to resize SSH PTY: {exc}")
+                    logger.warning(f"Failed to resize SSH PTY: {exc}")
     elif operation == "select-window":
         target = message.get("target")
         if target is not None:
