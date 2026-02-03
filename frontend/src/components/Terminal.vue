@@ -30,7 +30,8 @@ const props = withDefaults(defineProps<Props>(), {
   directory: '~',
   theme: 'cyberpunk',
   fontSize: 14,
-  fontFamily: '"Monaspace Neon", "JetBrains Mono", "Fira Code", "SF Mono", Monaco, Consolas, monospace',
+  // Monaspace Neon for text, Nerd Fonts for Starship symbols
+  fontFamily: '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace',
   showTitleBar: true
 })
 

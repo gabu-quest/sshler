@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NSelect, NButton, NIcon, NInput, NSpace, NButtonGroup, NDivider } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhCaretLeft, PhCaretRight, PhPlusCircle, PhFolderOpen, PhClipboard } from '@phosphor-icons/vue'
+import { NSelect, NButton, NIcon, NInput } from 'naive-ui'
+import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
@@ -24,34 +24,11 @@ const showManualDir = ref(false)
 const showDirPicker = ref(false)
 const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
 
-// Tmux control sequences (Ctrl+B prefix)
-const TMUX_PREFIX = '\x02' // Ctrl+B
-const sendTmuxCommand = (key: string) => {
-  terminalRef.value?.send(TMUX_PREFIX + key)
-  terminalRef.value?.focus()
-}
-
-const tmuxPrevWindow = () => sendTmuxCommand('p')
-const tmuxNextWindow = () => sendTmuxCommand('n')
-const tmuxNewWindow = () => sendTmuxCommand('c')
-
 const goToFiles = () => {
   if (selectedBox.value) {
     // Open in new tab at the terminal's current directory
     const path = initialDirectory.value || '~'
     window.open(`/app/files?box=${encodeURIComponent(selectedBox.value)}&path=${encodeURIComponent(path)}`, '_blank')
-  }
-}
-
-const pasteFromClipboard = async () => {
-  try {
-    const text = await navigator.clipboard.readText()
-    if (text) {
-      terminalRef.value?.send(text)
-      terminalRef.value?.focus()
-    }
-  } catch (err) {
-    console.error('Failed to paste:', err)
   }
 }
 
@@ -130,6 +107,24 @@ const generateSessionName = (directory: string) => {
   return sanitized.replace(/^_+|_+$/g, '') || 'root'
 }
 
+// Display name for the directory (last component)
+const displayDirName = computed(() => {
+  if (!initialDirectory.value || initialDirectory.value === '~') {
+    return 'Home'
+  }
+  const parts = initialDirectory.value.split('/').filter(Boolean)
+  return parts[parts.length - 1] || 'Root'
+})
+
+// Update browser tab title
+watch([selectedBox, initialDirectory], () => {
+  if (selectedBox.value) {
+    document.title = `${displayDirName.value} — ${selectedBox.value} — sshler`
+  } else {
+    document.title = 'Terminal — sshler'
+  }
+}, { immediate: true })
+
 const ensureData = async () => {
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
     await bootstrapStore.bootstrap()
@@ -189,121 +184,70 @@ watch(() => boxesStore.items, () => {
 
 <template>
   <div class="page">
-    <!-- Header -->
+    <!-- Compact Header - Directory Name Prominent -->
     <header class="page-header">
       <div class="header-content">
-        <div class="header-info">
+        <div class="header-left">
           <NButton size="small" quaternary @click="goBack" title="Go Back">
             <NIcon size="16"><PhArrowLeft /></NIcon>
           </NButton>
-          <div>
-            <p class="eyebrow">terminal</p>
-            <h1>Single Terminal</h1>
-            <p class="text-muted">Full-screen terminal session</p>
-          </div>
+          <h1 class="dir-title">{{ displayDirName }}</h1>
+          <span class="box-badge">{{ selectedBox || 'No box' }}</span>
         </div>
-        
-        <div class="header-actions">
-          <NSpace align="center">
-            <NSelect
-              v-model:value="selectedBox"
-              :options="boxOptions"
-              placeholder="Choose box"
-              :disabled="boxesStore.loading"
-              @update:value="handleBoxChange"
-              style="min-width: 180px"
-            />
-            <NSelect
-              v-if="selectedBox && !showManualDir"
-              :value="initialDirectory"
-              :options="directoryOptions"
-              placeholder="Directory"
-              @update:value="handleDirectoryChange"
-              style="min-width: 180px"
-            />
-            <NInput
-              v-if="showManualDir"
-              v-model:value="initialDirectory"
-              placeholder="/path/to/dir"
-              @blur="sessionName = generateSessionName(initialDirectory)"
-              @keyup.enter="sessionName = generateSessionName(initialDirectory)"
-              style="min-width: 200px"
-            />
-            <NButton v-if="showManualDir" size="small" @click="showManualDir = false">
-              Cancel
-            </NButton>
-            
-            <!-- Tmux Window Controls -->
-            <template v-if="selectedBox">
-              <NDivider vertical />
-              <NButtonGroup size="small">
-                <NButton 
-                  class="tmux-nav-btn tmux-prev"
-                  @click="tmuxPrevWindow" 
-                  title="Previous Window (Ctrl+B p)"
-                >
-                  <NIcon size="14"><PhCaretLeft weight="bold" /></NIcon>
-                </NButton>
-                <NButton 
-                  class="tmux-nav-btn tmux-next"
-                  @click="tmuxNextWindow" 
-                  title="Next Window (Ctrl+B n)"
-                >
-                  <NIcon size="14"><PhCaretRight weight="bold" /></NIcon>
-                </NButton>
-              </NButtonGroup>
-              
-              <NButton 
-                size="small"
-                class="tmux-new-btn"
-                @click="tmuxNewWindow" 
-                title="New Window (Ctrl+B c)"
-              >
-                <template #icon>
-                  <NIcon size="14"><PhPlusCircle weight="fill" /></NIcon>
-                </template>
-                New
-              </NButton>
-              
-              <NDivider vertical />
-              
-              <NButton 
-                size="small"
-                @click="goToFiles"
-                title="Browse Files (opens in new tab)"
-              >
-                <template #icon>
-                  <NIcon size="14"><PhFolderOpen /></NIcon>
-                </template>
-                Files
-              </NButton>
-              
-              <NButton 
-                size="small"
-                @click="pasteFromClipboard"
-                title="Paste from clipboard"
-              >
-                <template #icon>
-                  <NIcon size="14"><PhClipboard /></NIcon>
-                </template>
-                Paste
-              </NButton>
-              
-              <NButton 
-                size="small"
-                :type="isCurrentDirFavorite ? 'warning' : 'default'"
-                @click="toggleCurrentDirFavorite"
-                :title="isCurrentDirFavorite ? 'Remove from favorites' : 'Add to favorites'"
-                class="favorite-btn"
-              >
-                <template #icon>
-                  <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
-                    <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'regular'" />
-                  </NIcon>
-                </template>
-              </NButton>
-            </template>
-          </NSpace>
+
+        <div class="header-controls">
+          <NSelect
+            v-model:value="selectedBox"
+            :options="boxOptions"
+            placeholder="Box"
+            :disabled="boxesStore.loading"
+            @update:value="handleBoxChange"
+            size="small"
+            style="min-width: 140px"
+          />
+          <NSelect
+            v-if="selectedBox && !showManualDir"
+            :value="initialDirectory"
+            :options="directoryOptions"
+            placeholder="Dir"
+            @update:value="handleDirectoryChange"
+            size="small"
+            style="min-width: 140px"
+          />
+          <NInput
+            v-if="showManualDir"
+            v-model:value="initialDirectory"
+            placeholder="/path/to/dir"
+            size="small"
+            @blur="sessionName = generateSessionName(initialDirectory)"
+            @keyup.enter="sessionName = generateSessionName(initialDirectory)"
+            style="min-width: 160px"
+          />
+          <NButton v-if="showManualDir" size="small" @click="showManualDir = false">
+            ✕
+          </NButton>
+
+          <NButton
+            v-if="selectedBox"
+            size="small"
+            :type="isCurrentDirFavorite ? 'warning' : 'default'"
+            @click="toggleCurrentDirFavorite"
+            :title="isCurrentDirFavorite ? 'Remove from favorites' : 'Add to favorites'"
+            class="favorite-btn"
+          >
+            <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
+              <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'regular'" />
+            </NIcon>
+          </NButton>
+
+          <NButton
+            v-if="selectedBox"
+            size="small"
+            @click="goToFiles"
+            title="Browse Files"
+          >
+            <NIcon size="14"><PhFolderOpen /></NIcon>
+          </NButton>
         </div>
       </div>
     </header>
@@ -351,12 +295,12 @@ watch(() => boxesStore.items, () => {
 .page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   height: calc(100vh - 96px);
   overflow: hidden;
   width: 100%;
-  max-width: none;  /* Override any parent constraints */
-  min-width: 0;     /* Allow flex shrinking */
+  max-width: none;
+  min-width: 0;
   padding: 0 16px;
   box-sizing: border-box;
 }
@@ -367,34 +311,38 @@ watch(() => boxesStore.items, () => {
 
 .header-content {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
 
-.header-info {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.header-actions {
+.header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+.dir-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.box-badge {
   font-size: 12px;
-  margin: 0 0 4px 0;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
   color: var(--muted);
 }
 
-h1 {
-  margin: 0 0 8px 0;
-  font-size: 26px;
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .text-muted {
@@ -444,61 +392,30 @@ h1 {
 
 @media (max-width: 768px) {
   .page {
-    gap: 12px;
+    gap: 8px;
   }
-  
+
   .header-content {
     flex-direction: column;
     align-items: stretch;
-  }
-  
-  .header-info {
-    flex-direction: column;
     gap: 8px;
   }
+
+  .header-left {
+    justify-content: flex-start;
+  }
+
+  .dir-title {
+    font-size: 18px;
+  }
+
+  .header-controls {
+    flex-wrap: wrap;
+  }
 }
 
-.terminal-container :deep(.terminal-container) {
+.terminal-container :deep(.terminal-wrapper) {
   height: 100%;
-}
-
-/* Tmux control buttons - colorful and cute */
-.tmux-nav-btn {
-  transition: all 0.15s ease;
-}
-
-.tmux-prev {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-  border-color: #667eea !important;
-  color: white !important;
-}
-
-.tmux-prev:hover {
-  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
-  transform: translateX(-1px);
-}
-
-.tmux-next {
-  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%) !important;
-  border-color: #764ba2 !important;
-  color: white !important;
-}
-
-.tmux-next:hover {
-  background: linear-gradient(135deg, #6b46c1 0%, #5a67d8 100%) !important;
-  transform: translateX(1px);
-}
-
-.tmux-new-btn {
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%) !important;
-  border-color: #48bb78 !important;
-  color: white !important;
-  margin-left: 8px;
-}
-
-.tmux-new-btn:hover {
-  background: linear-gradient(135deg, #38a169 0%, #2f855a 100%) !important;
-  transform: scale(1.02);
 }
 
 .favorite-btn {

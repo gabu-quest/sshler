@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { NModal, NButton, NIcon, NSpace, NSpin, NEmpty, NInput } from 'naive-ui'
 import { PhFolder, PhFolderOpen, PhStar, PhArrowLeft, PhHouse, PhCheck } from '@phosphor-icons/vue'
 
-import { http } from '@/api/http'
+import { http, buildHeaders } from '@/api/http'
 import { useFavoritesStore } from '@/stores/favorites'
 import type { DirectoryEntry } from '@/api/types'
 
@@ -41,10 +41,12 @@ const isFavorite = (path: string) => favoritesStore.isFavorite(props.boxName, pa
 const loadDirectory = async (path: string) => {
   loading.value = true
   error.value = null
-  
+
   try {
     const url = `/api/v1/boxes/${encodeURIComponent(props.boxName)}/ls?path=${encodeURIComponent(path)}`
-    const response = await http.get<{ entries: DirectoryEntry[], directory: string }>(url)
+    const response = await http.get<{ entries: DirectoryEntry[], directory: string }>(url, {
+      headers: buildHeaders(props.token)
+    })
     entries.value = response.data.entries
     currentPath.value = response.data.directory // Use resolved path from server
   } catch (e) {
