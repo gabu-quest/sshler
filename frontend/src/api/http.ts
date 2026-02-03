@@ -1,5 +1,6 @@
 import type {
   ApiBox,
+  BoxStats,
   BoxStatus,
   BootstrapPayload,
   DirectoryListing,
@@ -477,6 +478,14 @@ export async function boxStatus(name: string, token: string | null) {
     credentials: 'include'
   });
   return handle<BoxStatus>(res);
+}
+
+export async function boxStats(name: string, token: string | null) {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/stats`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<BoxStats>(res);
 }
 
 export async function downloadFile(

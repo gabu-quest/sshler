@@ -150,3 +150,15 @@ class APIPoolConfigUpdate(BaseModel):
     idle_timeout: int | None = None
     max_lifetime: int | None = None
     max_connections_per_box: int | None = None
+
+
+class APIBoxStats(BaseModel):
+    """System statistics for a box (CPU, memory, uptime)."""
+
+    name: str
+    cpu_percent: float | None = None
+    memory_used_mb: float | None = None
+    memory_total_mb: float | None = None
+    memory_percent: float | None = None
+    uptime_seconds: int | None = None
+    error: str | None = None

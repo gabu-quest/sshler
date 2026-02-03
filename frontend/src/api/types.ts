@@ -90,6 +90,16 @@ export interface BoxStatus {
   latency_ms: number | null;
 }
 
+export interface BoxStats {
+  name: string;
+  cpu_percent: number | null;
+  memory_used_mb: number | null;
+  memory_total_mb: number | null;
+  memory_percent: number | null;
+  uptime_seconds: number | null;
+  error: string | null;
+}
+
 export interface DownloadResponse {
   blob: Blob;
   filename: string;

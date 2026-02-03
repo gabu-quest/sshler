@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import { 
-  NButton, 
-  NCard, 
-  NGrid, 
-  NGridItem, 
-  NIcon, 
-  NSpin, 
+import {
+  NButton,
+  NCard,
+  NGrid,
+  NGridItem,
+  NIcon,
+  NSpin,
   NTag,
   NEmpty,
   NTooltip,
+  NProgress,
   useMessage
 } from "naive-ui";
 import {
@@ -21,13 +22,17 @@ import {
   PhFolder,
   PhCircle,
   PhChartBar,
-  PhStar
+  PhStar,
+  PhCpu,
+  PhMemory
 } from "@phosphor-icons/vue";
 
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
+import { boxStats } from "@/api/http";
+import type { BoxStats } from "@/api/types";
 
 const router = useRouter();
 const message = useMessage();
@@ -40,9 +45,46 @@ const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload
 const hasServers = computed(() => boxesStore.items.length > 0);
 const recentServer = computed(() => boxesStore.items.find(box => box.pinned) || boxesStore.items[0]);
 const pinnedBoxes = computed(() => boxesStore.items.filter(box => box.pinned));
-const totalFavorites = computed(() => 
+const totalFavorites = computed(() =>
   boxesStore.items.reduce((acc, box) => acc + (box.favorites?.length || 0), 0)
 );
+
+// System stats per box
+const statsMap = ref<Map<string, BoxStats>>(new Map());
+const statsLoading = ref<Set<string>>(new Set());
+
+async function loadBoxStats(boxName: string) {
+  if (statsLoading.value.has(boxName)) return;
+  statsLoading.value.add(boxName);
+  try {
+    const stats = await boxStats(boxName, tokenValue.value || null);
+    statsMap.value.set(boxName, stats);
+  } catch (e) {
+    // Stats are optional, don't break the UI
+  } finally {
+    statsLoading.value.delete(boxName);
+  }
+}
+
+function getBoxStats(boxName: string): BoxStats | undefined {
+  return statsMap.value.get(boxName);
+}
+
+function formatUptime(seconds: number | null | undefined): string {
+  if (!seconds) return '';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h`;
+  const mins = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function formatMemory(mb: number | null | undefined): string {
+  if (!mb) return '';
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
+  return `${Math.round(mb)}MB`;
+}
 
 // Flatten all favorites across all boxes for display
 const allFavorites = computed(() => {
@@ -97,6 +139,8 @@ onMounted(async () => {
       boxesStore.items.map(b => b.name),
       tokenValue.value || null
     );
+    // Load stats for all boxes in parallel
+    boxesStore.items.forEach(box => loadBoxStats(box.name));
   }
 });
 
@@ -239,6 +283,45 @@ const handleBrowseServerFiles = (serverName: string) => {
             
             <div class="server-info">
               <p class="server-host">{{ box.host }}</p>
+
+              <!-- System Stats -->
+              <div v-if="getBoxStats(box.name)" class="server-stats">
+                <div class="stat-row">
+                  <NIcon size="14" class="stat-icon"><PhCpu /></NIcon>
+                  <span class="stat-label">CPU</span>
+                  <NProgress
+                    type="line"
+                    :percentage="getBoxStats(box.name)?.cpu_percent ?? 0"
+                    :show-indicator="false"
+                    :height="6"
+                    :border-radius="3"
+                    :color="(getBoxStats(box.name)?.cpu_percent ?? 0) > 80 ? '#ef4444' : '#3b82f6'"
+                    class="stat-progress"
+                  />
+                  <span class="stat-value">{{ getBoxStats(box.name)?.cpu_percent?.toFixed(0) ?? '-' }}%</span>
+                </div>
+                <div class="stat-row">
+                  <NIcon size="14" class="stat-icon"><PhMemory /></NIcon>
+                  <span class="stat-label">RAM</span>
+                  <NProgress
+                    type="line"
+                    :percentage="getBoxStats(box.name)?.memory_percent ?? 0"
+                    :show-indicator="false"
+                    :height="6"
+                    :border-radius="3"
+                    :color="(getBoxStats(box.name)?.memory_percent ?? 0) > 80 ? '#ef4444' : '#22c55e'"
+                    class="stat-progress"
+                  />
+                  <span class="stat-value">{{ formatMemory(getBoxStats(box.name)?.memory_used_mb) }}</span>
+                </div>
+                <div v-if="getBoxStats(box.name)?.uptime_seconds" class="stat-uptime">
+                  Up: {{ formatUptime(getBoxStats(box.name)?.uptime_seconds) }}
+                </div>
+              </div>
+              <div v-else-if="statsLoading.has(box.name)" class="server-stats-loading">
+                <NSpin size="small" />
+              </div>
+
               <p class="server-meta">
                 <NTooltip v-if="getBoxSessions(box.name).length > 0" trigger="hover">
                   <template #trigger>
@@ -247,8 +330,8 @@ const handleBrowseServerFiles = (serverName: string) => {
                     </span>
                   </template>
                   <div class="session-tooltip">
-                    <div 
-                      v-for="session in getBoxSessions(box.name)" 
+                    <div
+                      v-for="session in getBoxSessions(box.name)"
                       :key="session.id"
                       class="session-item"
                       @click="handleJumpToSession(box.name, session.session_name)"
@@ -387,10 +470,66 @@ const handleBrowseServerFiles = (serverName: string) => {
 }
 
 .server-host {
-  margin: 0 0 4px 0;
+  margin: 0 0 8px 0;
   color: var(--muted);
   font-size: 14px;
   font-family: 'JetBrains Mono', monospace;
+}
+
+/* Server Stats */
+.server-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+}
+
+.server-stats-loading {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stat-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  width: 28px;
+  flex-shrink: 0;
+}
+
+.stat-progress {
+  flex: 1;
+  min-width: 60px;
+}
+
+.stat-value {
+  font-size: 11px;
+  color: var(--text);
+  width: 42px;
+  text-align: right;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.stat-uptime {
+  font-size: 10px;
+  color: var(--muted);
+  text-align: right;
+  margin-top: 2px;
 }
 
 .server-meta {
