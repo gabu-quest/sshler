@@ -544,7 +544,8 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .app-header {
     grid-template-columns: auto 1fr auto;
-    padding: 12px 16px;
+    padding: 6px 12px;
+    gap: 8px;
   }
 
   .desktop-nav {
@@ -564,22 +565,26 @@ onUnmounted(() => {
   }
 
   .auth-indicator {
-    padding: 6px 8px;
+    padding: 4px 6px;
+  }
+
+  .brand-logo {
+    height: 24px;
+  }
+
+  .header-stats {
+    display: none;
   }
 }
 
 @media (max-width: 480px) {
   .app-header {
-    padding: 8px 12px;
-    gap: 12px;
+    padding: 4px 8px;
+    gap: 8px;
   }
 
-  .brand-mark {
-    gap: 6px;
-  }
-
-  .brand-mark span {
-    font-size: 14px;
+  .brand-logo {
+    height: 20px;
   }
 }
 
