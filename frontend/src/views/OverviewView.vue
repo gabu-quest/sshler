@@ -18,31 +18,66 @@ import {
   PhPlus,
   PhTerminal,
   PhFolderOpen,
+  PhFolder,
   PhRocketLaunch,
   PhCircle,
   PhChartBar,
-  PhDesktop,
-  PhLightning
+  PhLightning,
+  PhStar
 } from "@phosphor-icons/vue";
 
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useSessionsStore } from "@/stores/sessions";
+import { useFavoritesStore } from "@/stores/favorites";
 
 const router = useRouter();
 const message = useMessage();
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
 const sessionsStore = useSessionsStore();
+const favoritesStore = useFavoritesStore();
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token);
 const hasServers = computed(() => boxesStore.items.length > 0);
-const onlineServers = computed(() => boxesStore.items.filter(box => !box.name.includes('offline')));
 const recentServer = computed(() => boxesStore.items.find(box => box.pinned) || boxesStore.items[0]);
 const pinnedBoxes = computed(() => boxesStore.items.filter(box => box.pinned));
 const totalFavorites = computed(() => 
   boxesStore.items.reduce((acc, box) => acc + (box.favorites?.length || 0), 0)
 );
+
+// Flatten all favorites across all boxes for display
+const allFavorites = computed(() => {
+  const favorites: Array<{ box: string; path: string; label: string }> = []
+  boxesStore.items.forEach(box => {
+    // Get favorites from box data
+    const boxFavs = box.favorites || []
+    boxFavs.forEach(path => {
+      const label = path.split('/').pop() || path
+      favorites.push({ box: box.name, path, label })
+    })
+    // Also get from favorites store (may have additional ones)
+    const storeFavs = Array.from(favoritesStore.favoritesForBox(box.name).values())
+    storeFavs.forEach(path => {
+      if (!favorites.some(f => f.box === box.name && f.path === path)) {
+        const label = path.split('/').pop() || path
+        favorites.push({ box: box.name, path, label })
+      }
+    })
+  })
+  return favorites
+});
+
+// Open favorite in new tab
+const openFavoriteTerminal = (box: string, path: string) => {
+  const url = `/app/terminal?box=${encodeURIComponent(box)}&dir=${encodeURIComponent(path)}`
+  window.open(url, '_blank')
+};
+
+const openFavoriteFiles = (box: string, path: string) => {
+  const url = `/app/files?box=${encodeURIComponent(box)}&path=${encodeURIComponent(path)}`
+  window.open(url, '_blank')
+};
 
 // Real stats only - no fake data
 const quickStats = computed(() => ({
@@ -190,6 +225,36 @@ const handleBrowseServerFiles = (serverName: string) => {
       </div>
     </section>
 
+    <!-- Compact Stats Pill -->
+    <div class="stats-pill">
+      <NIcon size="14"><PhChartBar /></NIcon>
+      <span>{{ quickStats.servers }} server{{ quickStats.servers === 1 ? '' : 's' }}</span>
+      <span class="stats-separator">•</span>
+      <span>{{ quickStats.pinnedBoxes }} pinned</span>
+      <span class="stats-separator">•</span>
+      <span>{{ quickStats.favorites }} favorite{{ quickStats.favorites === 1 ? '' : 's' }}</span>
+    </div>
+
+    <!-- Favorites At a Glance Row -->
+    <section v-if="allFavorites.length > 0" class="favorites-row-section">
+      <div class="section-header-inline">
+        <NIcon size="18" color="#faad14"><PhStar weight="fill" /></NIcon>
+        <h3>Favorites</h3>
+      </div>
+      <div class="favorites-row">
+        <div 
+          v-for="fav in allFavorites" 
+          :key="fav.box + '-' + fav.path"
+          class="favorite-chip"
+          @click="openFavoriteTerminal(fav.box, fav.path)"
+          title="Click to open terminal in new tab"
+        >
+          <span class="chip-box">{{ fav.box }}</span>
+          <span class="chip-path">{{ fav.label }}</span>
+        </div>
+      </div>
+    </section>
+
     <!-- Server Grid -->
     <section class="servers-section">
       <h2 class="section-title">Your Servers</h2>
@@ -282,94 +347,50 @@ const handleBrowseServerFiles = (serverName: string) => {
       </NGrid>
     </section>
 
-    <!-- Activity & Stats -->
-    <NGrid :x-gap="24" :y-gap="16" :cols="2" responsive="screen">
-      <!-- Quick Actions -->
-      <NGridItem>
-        <NCard class="activity-card">
-          <div class="section-header">
-            <NIcon size="18">
-              <PhRocketLaunch />
-            </NIcon>
-            <h3>Quick Actions</h3>
-          </div>
-          
-          <div class="activity-list">
-            <div class="activity-item" @click="router.push('/terminal')" style="cursor: pointer;">
-              <NIcon size="16" class="activity-icon">
-                <PhTerminal />
-              </NIcon>
-              <div class="activity-content">
-                <p class="activity-action">Open Multi-Terminal</p>
-                <p class="activity-meta">Manage multiple sessions in a grid</p>
+    <!-- Favorites Section (only shown if no favorites in chip row OR has many favorites) -->
+    <section v-if="allFavorites.length > 0" class="favorites-section">
+      <NCard class="activity-card">
+        <div class="section-header">
+          <NIcon size="18" color="#faad14">
+            <PhStar weight="fill" />
+          </NIcon>
+          <h3>All Favorites</h3>
+        </div>
+        
+        <div class="favorites-list">
+          <div 
+            v-for="fav in allFavorites" 
+            :key="fav.box + '-' + fav.path"
+            class="favorite-item"
+          >
+            <div class="favorite-info">
+              <NIcon size="16" color="#faad14"><PhStar weight="fill" /></NIcon>
+              <div class="favorite-text">
+                <p class="favorite-path">{{ fav.label }}</p>
+                <p class="favorite-box">{{ fav.box }} • {{ fav.path }}</p>
               </div>
             </div>
-            <div class="activity-item" @click="router.push('/boxes')" style="cursor: pointer;">
-              <NIcon size="16" class="activity-icon">
-                <PhDesktop />
-              </NIcon>
-              <div class="activity-content">
-                <p class="activity-action">Manage Boxes</p>
-                <p class="activity-meta">View and configure your servers</p>
-              </div>
-            </div>
-            <div class="activity-item" @click="router.push('/settings')" style="cursor: pointer;">
-              <NIcon size="16" class="activity-icon">
-                <PhLightning />
-              </NIcon>
-              <div class="activity-content">
-                <p class="activity-action">Settings</p>
-                <p class="activity-meta">Configure connection pool and preferences</p>
-              </div>
-            </div>
-          </div>
-        </NCard>
-      </NGridItem>
-      
-      <!-- Quick Stats -->
-      <NGridItem>
-        <NCard class="stats-card">
-          <div class="section-header">
-            <NIcon size="18">
-              <PhChartBar />
-            </NIcon>
-            <h3>At a Glance</h3>
-          </div>
-          
-          <div class="stats-grid">
-            <div class="stat-item">
-              <NIcon size="20" class="stat-icon">
-                <PhDesktop />
-              </NIcon>
-              <div>
-                <p class="stat-number">{{ quickStats.servers }}</p>
-                <p class="stat-label">Servers</p>
-              </div>
-            </div>
-            
-            <div class="stat-item">
-              <NIcon size="20" class="stat-icon">
-                <PhCircle />
-              </NIcon>
-              <div>
-                <p class="stat-number">{{ quickStats.pinnedBoxes }}</p>
-                <p class="stat-label">Pinned</p>
-              </div>
-            </div>
-            
-            <div class="stat-item">
-              <NIcon size="20" class="stat-icon">
-                <PhFolderOpen />
-              </NIcon>
-              <div>
-                <p class="stat-number">{{ quickStats.favorites }}</p>
-                <p class="stat-label">Favorites</p>
-              </div>
+            <div class="favorite-actions">
+              <NButton 
+                size="tiny" 
+                type="primary"
+                @click="openFavoriteTerminal(fav.box, fav.path)"
+                title="Open terminal in new tab"
+              >
+                <template #icon><NIcon><PhTerminal /></NIcon></template>
+              </NButton>
+              <NButton 
+                size="tiny"
+                @click="openFavoriteFiles(fav.box, fav.path)"
+                title="Open files in new tab"
+              >
+                <template #icon><NIcon><PhFolder /></NIcon></template>
+              </NButton>
             </div>
           </div>
-        </NCard>
-      </NGridItem>
-    </NGrid>
+        </div>
+      </NCard>
+    </section>
   </div>
 </template>
 
@@ -427,6 +448,29 @@ const handleBrowseServerFiles = (serverName: string) => {
 
 .hero-btn {
   min-width: 140px;
+}
+
+/* Compact Stats Pill */
+.stats-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--muted);
+  width: fit-content;
+}
+
+.stats-separator {
+  opacity: 0.4;
+}
+
+/* Favorites Section */
+.favorites-section {
+  margin-top: -16px;
 }
 
 /* Sections */
@@ -682,5 +726,146 @@ const handleBrowseServerFiles = (serverName: string) => {
   font-size: 11px;
   opacity: 0.7;
   font-family: var(--font-mono);
+}
+
+/* Favorites Row Section (At a Glance) */
+.favorites-row-section {
+  margin-bottom: 8px;
+}
+
+.section-header-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.section-header-inline h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.favorites-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 0 8px 0;
+}
+
+.favorite-chip {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.favorite-chip:hover {
+  border-color: var(--accent);
+  background: rgba(52, 152, 219, 0.1);
+  transform: translateY(-2px);
+}
+
+.chip-box {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chip-path {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Favorites List Card */
+.empty-favorites {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-favorites p {
+  margin: 8px 0 0 0;
+}
+
+.empty-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.favorites-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.favorite-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.favorite-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.favorite-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.favorite-text {
+  min-width: 0;
+}
+
+.favorite-path {
+  margin: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.favorite-box {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.favorite-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.favorites-more {
+  text-align: center;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
 }
 </style>
