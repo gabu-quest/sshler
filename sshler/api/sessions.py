@@ -1,11 +1,52 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import platform
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import state
 from ..config import AppConfig
 from .dependencies import APIDependencies
 from .models import APISession, APISessionCreate, APISessionInfo, APISessionUpdate, APISimpleMessage
+
+logger = logging.getLogger(__name__)
+
+
+def _local_tmux_command() -> list[str]:
+    """Get the base tmux command for local execution."""
+    if platform.system() == "Windows":
+        return ["wsl", "--", "tmux"]
+    return ["tmux"]
+
+
+async def _get_live_tmux_sessions_local() -> set[str]:
+    """Get live tmux session names from local system."""
+    command = _local_tmux_command() + ["list-sessions", "-F", "#{session_name}"]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await process.communicate()
+        if process.returncode == 0 and stdout:
+            return set(line.strip() for line in stdout.decode().strip().split("\n") if line.strip())
+    except Exception as exc:
+        logger.debug(f"Failed to list local tmux sessions: {exc}")
+    return set()
+
+
+async def _get_live_tmux_sessions_remote(connection) -> set[str]:
+    """Get live tmux session names from remote host via SSH."""
+    try:
+        result = await connection.run("tmux list-sessions -F '#{session_name}'", check=False)
+        if result.returncode == 0 and result.stdout:
+            return set(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
+    except Exception as exc:
+        logger.debug(f"Failed to list remote tmux sessions: {exc}")
+    return set()
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -120,5 +161,56 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if not deleted:
             raise HTTPException(status_code=500, detail="Failed to delete session")
         return APISimpleMessage(status="ok", message="deleted", path=session_id)
+
+    @router.post("/boxes/{name}/sessions/sync", response_model=list[APISession])
+    async def api_sync_sessions(
+        name: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> list[APISession]:
+        """Sync DB sessions with actual tmux sessions.
+
+        Queries tmux for live sessions and marks DB sessions as inactive
+        if they no longer exist. Returns the updated session list.
+        """
+        box = deps.get_box_or_404(application_config, name)
+
+        # Get live tmux sessions
+        if box.transport == "local":
+            live_sessions = await _get_live_tmux_sessions_local()
+        else:
+            try:
+                connection = await deps.connect_for_box(box, application_config)
+                live_sessions = await _get_live_tmux_sessions_remote(connection)
+            except Exception as exc:
+                logger.warning(f"Failed to connect to {name} for session sync: {exc}")
+                live_sessions = set()
+
+        # Get DB sessions and mark stale ones inactive
+        db_sessions = await state.list_sessions_async(name, active_only=False)
+        updated_count = 0
+        for session in db_sessions:
+            if session.active and session.session_name not in live_sessions:
+                await state.update_session_activity_async(session.id, active=False)
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Synced {name}: marked {updated_count} stale sessions inactive")
+
+        # Return updated list
+        records = await state.list_sessions_async(name, active_only=False)
+        return [
+            APISession(
+                id=item.id,
+                box=item.box,
+                session_name=item.session_name,
+                working_directory=item.working_directory,
+                created_at=item.created_at,
+                last_accessed_at=item.last_accessed_at,
+                active=item.active,
+                window_count=item.window_count,
+                metadata=item.metadata,
+            )
+            for item in records
+        ]
 
     return router

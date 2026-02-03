@@ -91,9 +91,9 @@ onMounted(async () => {
   if (!boxesStore.items.length && !boxesStore.loading) {
     await boxesStore.load(tokenValue.value || null);
   }
-  // Load sessions for all boxes
+  // Sync sessions with actual tmux state (marks stale sessions inactive)
   if (boxesStore.items.length > 0) {
-    await sessionsStore.loadAllBoxSessions(
+    await sessionsStore.syncAllBoxSessions(
       boxesStore.items.map(b => b.name),
       tokenValue.value || null
     );
@@ -286,51 +286,6 @@ const handleBrowseServerFiles = (serverName: string) => {
         </NGridItem>
       </NGrid>
     </section>
-
-    <!-- Favorites Section (only shown if no favorites in chip row OR has many favorites) -->
-    <section v-if="allFavorites.length > 0" class="favorites-section">
-      <NCard class="activity-card">
-        <div class="section-header">
-          <NIcon size="18" color="#faad14">
-            <PhStar weight="fill" />
-          </NIcon>
-          <h3>All Favorites</h3>
-        </div>
-        
-        <div class="favorites-list">
-          <div 
-            v-for="fav in allFavorites" 
-            :key="fav.box + '-' + fav.path"
-            class="favorite-item"
-          >
-            <div class="favorite-info">
-              <NIcon size="16" color="#faad14"><PhStar weight="fill" /></NIcon>
-              <div class="favorite-text">
-                <p class="favorite-path">{{ fav.label }}</p>
-                <p class="favorite-box">{{ fav.box }} • {{ fav.path }}</p>
-              </div>
-            </div>
-            <div class="favorite-actions">
-              <NButton 
-                size="tiny" 
-                type="primary"
-                @click="openFavoriteTerminal(fav.box, fav.path)"
-                title="Open terminal in new tab"
-              >
-                <template #icon><NIcon><PhTerminal /></NIcon></template>
-              </NButton>
-              <NButton 
-                size="tiny"
-                @click="openFavoriteFiles(fav.box, fav.path)"
-                title="Open files in new tab"
-              >
-                <template #icon><NIcon><PhFolder /></NIcon></template>
-              </NButton>
-            </div>
-          </div>
-        </div>
-      </NCard>
-    </section>
   </div>
 </template>
 
@@ -359,11 +314,6 @@ const handleBrowseServerFiles = (serverName: string) => {
 
 .stats-separator {
   opacity: 0.4;
-}
-
-/* Favorites Section */
-.favorites-section {
-  margin-top: -16px;
 }
 
 /* Sections */
@@ -593,6 +543,27 @@ const handleBrowseServerFiles = (serverName: string) => {
   flex-direction: column;
   gap: 8px;
   min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.session-tooltip::-webkit-scrollbar {
+  width: 6px;
+}
+
+.session-tooltip::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.session-tooltip::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.session-tooltip::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .session-item {
@@ -696,69 +667,5 @@ const handleBrowseServerFiles = (serverName: string) => {
 .empty-hint {
   font-size: 12px;
   opacity: 0.7;
-}
-
-.favorites-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.favorite-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 8px;
-  transition: background 0.15s ease;
-}
-
-.favorite-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.favorite-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-}
-
-.favorite-text {
-  min-width: 0;
-}
-
-.favorite-path {
-  margin: 0;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.favorite-box {
-  margin: 2px 0 0 0;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.favorite-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.favorites-more {
-  text-align: center;
-  padding: 8px;
-  font-size: 12px;
-  color: var(--muted);
 }
 </style>

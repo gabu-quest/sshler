@@ -47,6 +47,8 @@ const reconnectAttempts = ref(0)
 const maxReconnectAttempts = ref(10)
 const mouseMode = ref(true) // tmux mouse mode state
 const hasActivity = ref(false) // for glow effect
+const isFullscreen = ref(false) // fullscreen mode
+const titleBarCollapsed = ref(false) // minimize title bar
 let activityTimeout: number | null = null
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
@@ -305,6 +307,49 @@ const triggerActivity = () => {
   activityTimeout = window.setTimeout(() => {
     hasActivity.value = false
   }, 150)
+}
+
+// Toggle fullscreen mode
+const toggleFullscreen = async () => {
+  const wrapper = document.querySelector('.terminal-wrapper')
+  if (!wrapper) return
+
+  if (!document.fullscreenElement) {
+    await wrapper.requestFullscreen()
+    isFullscreen.value = true
+  } else {
+    await document.exitFullscreen()
+    isFullscreen.value = false
+  }
+  // Re-fit terminal after fullscreen change
+  nextTick(() => fitAddon?.fit())
+}
+
+// Toggle title bar collapse
+const toggleTitleBar = () => {
+  titleBarCollapsed.value = !titleBarCollapsed.value
+  // Re-fit terminal after title bar change
+  nextTick(() => fitAddon?.fit())
+}
+
+// Tmux control sequences (Ctrl+B prefix)
+const TMUX_PREFIX = '\x02' // Ctrl+B
+
+// Kill current tmux window
+const tmuxKillWindow = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    // Send Ctrl+B & to kill window (will prompt for confirmation)
+    websocket.send(textEncoder.encode(TMUX_PREFIX + '&'))
+    terminal?.focus()
+  }
+}
+
+// Create new tmux window
+const tmuxNewWindow = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + 'c'))
+    terminal?.focus()
+  }
 }
 
 const createTerminal = () => {
@@ -861,28 +906,45 @@ defineExpose({
   search,
   send,
   toggleMouseMode,
+  toggleFullscreen,
+  tmuxNewWindow,
+  tmuxKillWindow,
   copySelection,
   pasteFromClipboard,
   terminal: () => terminal,
   connected: () => connected.value,
   connecting: () => connecting.value,
-  mouseMode: () => mouseMode.value
+  mouseMode: () => mouseMode.value,
+  isFullscreen: () => isFullscreen.value
 })
 </script>
 
 <template>
-  <div class="terminal-wrapper" :class="{ 'has-activity': hasActivity }">
+  <div class="terminal-wrapper" :class="{ 'has-activity': hasActivity, 'is-fullscreen': isFullscreen }">
     <!-- macOS-style Title Bar -->
-    <div v-if="showTitleBar" class="terminal-titlebar">
+    <div v-if="showTitleBar && !titleBarCollapsed" class="terminal-titlebar">
       <div class="titlebar-left">
         <div class="traffic-lights">
-          <span class="dot dot-close" title="Close" />
-          <span class="dot dot-minimize" title="Minimize" />
-          <span class="dot dot-maximize" title="Maximize" />
+          <span
+            class="dot dot-close"
+            title="Kill tmux window (Ctrl+B &)"
+            @click="tmuxKillWindow"
+          />
+          <span
+            class="dot dot-new"
+            title="New tmux window (Ctrl+B c)"
+            @click="tmuxNewWindow"
+          />
+          <span
+            class="dot dot-maximize"
+            :class="{ active: isFullscreen }"
+            :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+            @click="toggleFullscreen"
+          />
         </div>
+        <span class="connection-indicator" :class="{ connected, connecting }" />
       </div>
       <div class="titlebar-center">
-        <span class="connection-dot" :class="{ connected, connecting }" />
         <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
       </div>
       <div class="titlebar-right">
@@ -917,8 +979,15 @@ defineExpose({
       </div>
     </div>
 
+    <!-- Collapsed Title Bar -->
+    <div v-if="showTitleBar && titleBarCollapsed" class="terminal-titlebar-collapsed" @click="toggleTitleBar">
+      <span class="connection-indicator" :class="{ connected, connecting }" />
+      <span class="collapsed-text">{{ boxName }}</span>
+      <span class="expand-hint">click to expand</span>
+    </div>
+
     <!-- Terminal Container with Effects -->
-    <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar }">
+    <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar || titleBarCollapsed }">
       <!-- CRT Scanlines Overlay -->
       <div class="scanlines" />
 
@@ -1043,7 +1112,7 @@ defineExpose({
   letter-spacing: 0.02em;
 }
 
-/* Traffic light dots */
+/* Traffic light dots - functional */
 .traffic-lights {
   display: flex;
   gap: 6px;
@@ -1055,41 +1124,90 @@ defineExpose({
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.1);
   transition: all 0.15s ease;
-  cursor: default;
+  cursor: pointer;
 }
 
-.terminal-titlebar:hover .dot-close {
+/* Close dot (red) - kill tmux window */
+.dot-close:hover {
   background: #ff5f56;
   box-shadow: 0 0 6px rgba(255, 95, 86, 0.4);
 }
 
-.terminal-titlebar:hover .dot-minimize {
+/* New window dot (yellow) */
+.dot-new:hover {
   background: #ffbd2e;
   box-shadow: 0 0 6px rgba(255, 189, 46, 0.4);
 }
 
-.terminal-titlebar:hover .dot-maximize {
+/* Maximize dot (green) - fullscreen */
+.dot-maximize:hover,
+.dot-maximize.active {
   background: #27c93f;
   box-shadow: 0 0 6px rgba(39, 201, 63, 0.4);
 }
 
-/* Connection status dot */
-.connection-dot {
-  width: 8px;
-  height: 8px;
+/* Connection indicator - small dot next to traffic lights */
+.connection-indicator {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #ff5f56;
+  margin-left: 8px;
   transition: all 0.3s ease;
 }
 
-.connection-dot.connected {
+.connection-indicator.connected {
   background: #27c93f;
   animation: breathe 2s ease-in-out infinite;
 }
 
-.connection-dot.connecting {
+.connection-indicator.connecting {
   background: #ffbd2e;
   animation: pulse 1s ease-in-out infinite;
+}
+
+/* Collapsed title bar */
+.terminal-titlebar-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 20px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.terminal-titlebar-collapsed:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.terminal-titlebar-collapsed .connection-indicator {
+  width: 6px;
+  height: 6px;
+  margin-left: 0;
+}
+
+.collapsed-text {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.expand-hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.2);
+  margin-left: auto;
+}
+
+/* Fullscreen mode adjustments */
+.terminal-wrapper.is-fullscreen {
+  border-radius: 0;
+}
+
+.terminal-wrapper.is-fullscreen .terminal-titlebar {
+  border-radius: 0;
 }
 
 @keyframes breathe {

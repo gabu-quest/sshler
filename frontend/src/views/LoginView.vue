@@ -70,11 +70,14 @@ const handleKeypress = (event: KeyboardEvent) => {
   <div class="login-container">
     <div class="login-box">
       <div class="login-header">
-        <NIcon size="48" color="var(--primary-color)">
-          <PhLock weight="regular" />
-        </NIcon>
-        <h1>Authentication Required</h1>
-        <p class="subtitle">Please sign in to access sshler</p>
+        <img src="/logo.png" alt="sshler" class="login-logo" />
+        <h1>sshler</h1>
+        <p class="subtitle">
+          <NIcon size="16" color="var(--text-color-3)" style="vertical-align: middle; margin-right: 4px;">
+            <PhLock weight="regular" />
+          </NIcon>
+          Authentication Required
+        </p>
       </div>
 
       <NCard>
@@ -149,6 +152,14 @@ const handleKeypress = (event: KeyboardEvent) => {
 .login-header {
   text-align: center;
   margin-bottom: 24px;
+}
+
+.login-logo {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .login-header h1 {

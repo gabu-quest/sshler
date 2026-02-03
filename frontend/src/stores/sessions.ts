@@ -43,13 +43,57 @@ export const useSessionsStore = defineStore('sessions', () => {
   async function loadAllBoxSessions(boxNames: string[], token: string | null, activeOnly = false): Promise<void> {
     loading.value = true
     error.value = null
-    
+
     try {
       await Promise.all(
         boxNames.map(name => loadBoxSessions(name, token, activeOnly))
       )
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to load sessions'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Sync sessions for a box with actual tmux state
+   * Marks stale DB sessions as inactive
+   */
+  async function syncBoxSessions(boxName: string, token: string | null): Promise<ApiSession[]> {
+    try {
+      const url = `/api/v1/boxes/${encodeURIComponent(boxName)}/sessions/sync`
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: buildHeaders(token),
+        credentials: 'include'
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to sync sessions: ${response.status}`)
+      }
+
+      const sessions = await response.json() as ApiSession[]
+      sessionsByBox.value.set(boxName, sessions)
+      return sessions
+    } catch (e) {
+      console.warn(`Failed to sync sessions for ${boxName}:`, e)
+      return sessionsByBox.value.get(boxName) || []
+    }
+  }
+
+  /**
+   * Sync sessions for all boxes in parallel
+   */
+  async function syncAllBoxSessions(boxNames: string[], token: string | null): Promise<void> {
+    loading.value = true
+    error.value = null
+
+    try {
+      await Promise.all(
+        boxNames.map(name => syncBoxSessions(name, token))
+      )
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to sync sessions'
     } finally {
       loading.value = false
     }
@@ -108,6 +152,8 @@ export const useSessionsStore = defineStore('sessions', () => {
     error,
     loadBoxSessions,
     loadAllBoxSessions,
+    syncBoxSessions,
+    syncAllBoxSessions,
     getBoxSessions,
     getActiveSessionCount,
     getMostRecentSession,

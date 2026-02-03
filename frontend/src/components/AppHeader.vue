@@ -8,7 +8,6 @@ import {
   PhGearSix,
   PhHouseLine,
   PhMoon,
-  PhRocketLaunch,
   PhSun,
   PhTerminal,
   PhList,
@@ -49,7 +48,6 @@ const links = [
   { to: "/settings", label: "Settings", icon: PhGearSix, shortcut: "Alt+S" },
 ];
 
-const brandIcon = PhRocketLaunch;
 const themeIcon = computed(() => (appStore.isDark ? PhMoon : PhSun));
 const themeLabel = computed(() => {
   if (appStore.colorMode === "system") {
@@ -124,16 +122,14 @@ onUnmounted(() => {
 <template>
   <header class="app-header surface" role="banner">
     <!-- Brand -->
-    <RouterLink 
-      class="brand" 
-      to="/" 
+    <RouterLink
+      class="brand"
+      to="/"
       aria-label="sshler home"
       @click="closeMobileMenu"
     >
       <div class="brand-mark">
-        <NIcon size="18" aria-hidden="true">
-          <component :is="brandIcon" />
-        </NIcon>
+        <img src="/logo.png" alt="sshler" class="brand-logo" />
         <span>sshler</span>
       </div>
       <span class="brand-subtitle text-muted">SSH management interface</span>
@@ -276,6 +272,13 @@ onUnmounted(() => {
   gap: 8px;
   font-weight: 700;
   letter-spacing: 0.4px;
+}
+
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .brand-subtitle {

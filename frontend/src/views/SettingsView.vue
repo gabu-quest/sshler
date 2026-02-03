@@ -112,10 +112,13 @@ onMounted(() => {
 <template>
   <div class="page">
     <header class="page-header">
-      <div>
-        <p class="eyebrow">settings</p>
-        <h1>Application Settings</h1>
-        <p class="text-muted">Manage your sshler configuration and troubleshoot issues</p>
+      <div class="header-content">
+        <img src="/logo.png" alt="sshler" class="settings-logo" />
+        <div>
+          <p class="eyebrow">settings</p>
+          <h1>Application Settings</h1>
+          <p class="text-muted">Manage your sshler configuration and troubleshoot issues</p>
+        </div>
       </div>
     </header>
 
@@ -314,6 +317,19 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .eyebrow {
