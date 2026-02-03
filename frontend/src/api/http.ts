@@ -6,6 +6,7 @@ import type {
   DirectoryListing,
   FavoriteToggle,
   FilePreview,
+  GitInfo,
   PinToggle,
   SessionInfo,
   TerminalHandshake,
@@ -486,6 +487,15 @@ export async function boxStats(name: string, token: string | null) {
     credentials: 'include'
   });
   return handle<BoxStats>(res);
+}
+
+export async function gitInfo(name: string, directory: string, token: string | null) {
+  const url = `${API_BASE}/boxes/${encodeURIComponent(name)}/git?directory=${encodeURIComponent(directory)}`;
+  const res = await fetch(url, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<GitInfo>(res);
 }
 
 export async function downloadFile(

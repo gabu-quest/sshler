@@ -100,6 +100,13 @@ export interface BoxStats {
   error: string | null;
 }
 
+export interface GitInfo {
+  branch: string | null;
+  is_repo: boolean;
+  dirty: boolean;
+  error?: string | null;
+}
+
 export interface DownloadResponse {
   blob: Blob;
   filename: string;

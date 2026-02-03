@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
 from .. import state
 from .dependencies import APIDependencies
-from .models import APIBox, APIBoxStats, APIBoxStatus, APIFavoriteToggle, APIPinToggle
+from .models import APIBox, APIBoxStats, APIBoxStatus, APIFavoriteToggle, APIGitInfo, APIPinToggle
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,30 @@ def get_router(deps: APIDependencies) -> APIRouter:
         except Exception as e:
             logger.warning(f"Failed to get stats for {name}: {e}")
             return APIBoxStats(name=name, error=str(e))
+
+    @router.get("/boxes/{name}/git", response_model=APIGitInfo)
+    async def api_git_info(
+        name: str,
+        directory: str = "/",
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> APIGitInfo:
+        """Get git repository info for a directory on a box."""
+        box = deps.get_box_or_404(application_config, name)
+
+        if box.transport == "local":
+            return await _get_local_git_info(directory)
+
+        # Remote box: use SSH commands
+        try:
+            conn = await deps.connect_for_box(box, application_config)
+            try:
+                return await _get_remote_git_info(conn, directory)
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to get git info for {name}:{directory}: {e}")
+            return APIGitInfo(error=str(e))
 
     return router
 
@@ -277,3 +301,81 @@ def _parse_uptime(output: str) -> int | None:
     except (ValueError, IndexError):
         pass
     return None
+
+
+async def _get_local_git_info(directory: str) -> APIGitInfo:
+    """Get git info for a local directory."""
+    import asyncio
+    import os
+    from pathlib import Path
+
+    try:
+        # Expand ~ and resolve path
+        if directory.startswith("~"):
+            directory = os.path.expanduser(directory)
+        target = Path(directory).resolve()
+
+        if not target.exists():
+            return APIGitInfo(is_repo=False)
+
+        # Run git commands
+        async def run_git(cmd: list[str]) -> tuple[bool, str]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(target),
+                )
+                stdout, _ = await proc.communicate()
+                return proc.returncode == 0, stdout.decode().strip()
+            except Exception:
+                return False, ""
+
+        # Check if git repo
+        ok, _ = await run_git(["git", "rev-parse", "--git-dir"])
+        if not ok:
+            return APIGitInfo(is_repo=False)
+
+        # Get branch name
+        ok, branch = await run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        if not ok or not branch:
+            branch = None
+
+        # Check if dirty
+        ok, status = await run_git(["git", "status", "--porcelain"])
+        dirty = bool(status)
+
+        return APIGitInfo(is_repo=True, branch=branch, dirty=dirty)
+    except Exception as e:
+        logger.warning(f"Failed to get local git info for {directory}: {e}")
+        return APIGitInfo(error=str(e))
+
+
+async def _get_remote_git_info(conn, directory: str) -> APIGitInfo:
+    """Get git info for a remote directory via SSH."""
+    try:
+        # Check if git repo and get branch in one command
+        result = await conn.run(
+            f'cd {directory} 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null',
+            check=False,
+        )
+
+        if result.returncode != 0:
+            return APIGitInfo(is_repo=False)
+
+        branch = (result.stdout or "").strip()
+        if not branch:
+            return APIGitInfo(is_repo=False)
+
+        # Check if dirty
+        status_result = await conn.run(
+            f'cd {directory} && git status --porcelain 2>/dev/null | head -1',
+            check=False,
+        )
+        dirty = bool((status_result.stdout or "").strip())
+
+        return APIGitInfo(is_repo=True, branch=branch, dirty=dirty)
+    except Exception as e:
+        logger.warning(f"Failed to get remote git info for {directory}: {e}")
+        return APIGitInfo(error=str(e))

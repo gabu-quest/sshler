@@ -162,3 +162,12 @@ class APIBoxStats(BaseModel):
     memory_percent: float | None = None
     uptime_seconds: int | None = None
     error: str | None = None
+
+
+class APIGitInfo(BaseModel):
+    """Git repository info for a directory."""
+
+    branch: str | None = None
+    is_repo: bool = False
+    dirty: bool = False
+    error: str | None = None

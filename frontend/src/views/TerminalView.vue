@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen } from '@phosphor-icons/vue'
+import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
@@ -10,6 +10,8 @@ import { useFavoritesStore } from '@/stores/favorites'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
+import { gitInfo } from '@/api/http'
+import type { GitInfo } from '@/api/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +26,20 @@ const sessionName = ref<string>('main')
 const showManualDir = ref(false)
 const showDirPicker = ref(false)
 const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
+const currentGitInfo = ref<GitInfo | null>(null)
+
+// Load git info for current directory
+const loadGitInfo = async () => {
+  if (!selectedBox.value || !initialDirectory.value) {
+    currentGitInfo.value = null
+    return
+  }
+  try {
+    currentGitInfo.value = await gitInfo(selectedBox.value, initialDirectory.value, tokenValue.value)
+  } catch {
+    currentGitInfo.value = null
+  }
+}
 
 const filesUrl = computed(() => {
   if (!selectedBox.value) return '#'
@@ -122,15 +138,18 @@ const displayDirName = computed(() => {
   return parts[parts.length - 1] || 'Root'
 })
 
-// Update browser tab title and favicon
+// Update browser tab title, favicon, and git info
 watch([selectedBox, initialDirectory], () => {
   if (selectedBox.value) {
     document.title = `${displayDirName.value} — ${selectedBox.value}`
     // Set deterministic emoji favicon based on box + directory
     setEmojiFavicon(`${selectedBox.value}:${initialDirectory.value}`)
+    // Load git info for this directory
+    loadGitInfo()
   } else {
     document.title = 'Terminal'
     resetFavicon()
+    currentGitInfo.value = null
   }
 }, { immediate: true })
 
@@ -202,6 +221,11 @@ watch(() => boxesStore.items, () => {
           </NButton>
           <h1 class="dir-title">{{ displayDirName }}</h1>
           <span class="box-badge">{{ selectedBox || 'No box' }}</span>
+          <span v-if="currentGitInfo?.is_repo" class="git-badge" :class="{ dirty: currentGitInfo.dirty }">
+            <NIcon size="12"><PhGitBranch /></NIcon>
+            {{ currentGitInfo.branch }}
+            <span v-if="currentGitInfo.dirty" class="dirty-indicator">*</span>
+          </span>
         </div>
 
         <div class="header-controls">
@@ -347,6 +371,30 @@ watch(() => boxesStore.items, () => {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   color: var(--muted);
+}
+
+.git-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  background: rgba(136, 58, 234, 0.15);
+  border: 1px solid rgba(136, 58, 234, 0.3);
+  border-radius: 12px;
+  color: #a78bfa;
+  font-family: var(--font-mono);
+}
+
+.git-badge.dirty {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.3);
+  color: #fbbf24;
+}
+
+.dirty-indicator {
+  color: #fbbf24;
+  font-weight: bold;
 }
 
 .header-controls {
