@@ -797,7 +797,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 expected_origin = f"{parsed_public.scheme}://{parsed_public.netloc}"
 
                 # Check if origin matches public_url or is in allowed_origins
-                allowed_origins = [expected_origin] + app_settings.allowed_origins_list
+                # Include both env-based origins (SshlerSettings) and CLI-based origins (ServerSettings)
+                cli_settings: ServerSettings = request.app.state.settings
+                allowed_origins = (
+                    [expected_origin]
+                    + app_settings.allowed_origins_list
+                    + cli_settings.allow_origins
+                )
 
                 if origin_base not in allowed_origins:
                     logging.warning(
