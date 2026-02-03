@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput } from 'naive-ui'
 import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch, PhCaretDown } from '@phosphor-icons/vue'
@@ -9,6 +9,7 @@ import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import { useResponsive } from '@/composables/useResponsive'
 import Terminal from '@/components/Terminal.vue'
+import MobileInputBar from '@/components/MobileInputBar.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
 import { gitInfo } from '@/api/http'
@@ -30,6 +31,33 @@ const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
 const currentGitInfo = ref<GitInfo | null>(null)
 const { isMobile } = useResponsive()
 const mobileControlsExpanded = ref(false)
+const rawMode = ref(false)
+const terminalConnected = ref(false)
+
+// Track terminal connection state
+const onTerminalConnected = () => {
+  terminalConnected.value = true
+}
+const onTerminalDisconnected = () => {
+  terminalConnected.value = false
+}
+
+// MobileInputBar handlers
+const handleSmartSend = (data: string) => {
+  terminalRef.value?.send(data)
+}
+
+const handleRawSend = (data: string) => {
+  terminalRef.value?.sendRaw(data)
+}
+
+const handleToggleRawMode = () => {
+  rawMode.value = !rawMode.value
+  if (rawMode.value) {
+    // Switching to raw: re-enable xterm stdin and focus it
+    nextTick(() => terminalRef.value?.focus())
+  }
+}
 
 // Toggle mobile controls dropdown
 const toggleMobileControls = () => {
@@ -376,6 +404,9 @@ watch(() => boxesStore.items, () => {
         :session-name="sessionName"
         :directory="initialDirectory"
         :show-title-bar="!isMobile"
+        :external-input="isMobile && !rawMode"
+        @connected="onTerminalConnected"
+        @disconnected="onTerminalDisconnected"
       />
 
       <div v-else class="no-box-selected">
@@ -393,6 +424,16 @@ watch(() => boxesStore.items, () => {
         </div>
       </div>
     </div>
+
+    <!-- Mobile Smart Input Bar -->
+    <MobileInputBar
+      v-if="isMobile && selectedBox"
+      :raw-mode="rawMode"
+      :connected="terminalConnected"
+      @send="handleSmartSend"
+      @send-raw="handleRawSend"
+      @toggle-raw-mode="handleToggleRawMode"
+    />
 
     <!-- Directory Picker Modal -->
     <DirectoryPickerModal

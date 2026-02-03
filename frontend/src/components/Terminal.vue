@@ -16,6 +16,8 @@ interface Props {
   fontSize?: number
   fontFamily?: string
   showTitleBar?: boolean
+  /** When true, suppress xterm.js keyboard capture — external input handles it */
+  externalInput?: boolean
 }
 
 interface Emits {
@@ -33,7 +35,8 @@ const props = withDefaults(defineProps<Props>(), {
   fontSize: 14,
   // Monaspace Neon for text, Nerd Fonts for Starship symbols
   fontFamily: '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace',
-  showTitleBar: true
+  showTitleBar: true,
+  externalInput: false
 })
 
 const emit = defineEmits<Emits>()
@@ -381,7 +384,9 @@ const createTerminal = () => {
     convertEol: true,
     allowProposedApi: true,
     // Use canvas renderer for more stable rendering (avoid WebGL glitches)
-    rendererType: 'canvas'
+    rendererType: 'canvas',
+    // When external input is active, suppress xterm keyboard capture
+    disableStdin: props.externalInput
   })
 
   fitAddon = new FitAddon()
@@ -949,8 +954,22 @@ watch(effectiveFontSize, (newSize) => {
   }
 })
 
+// Toggle stdin capture when externalInput prop changes
+watch(() => props.externalInput, (external) => {
+  if (terminal) {
+    terminal.options.disableStdin = external
+  }
+})
+
 // Send data directly to terminal (for tmux commands etc)
 const send = (data: string) => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(data))
+  }
+}
+
+// Send raw bytes (for control sequences from MobileInputBar)
+const sendRaw = (data: string) => {
   if (websocket && websocket.readyState === WebSocket.OPEN) {
     websocket.send(textEncoder.encode(data))
   }
@@ -964,6 +983,7 @@ defineExpose({
   clear,
   search,
   send,
+  sendRaw,
   toggleMouseMode,
   toggleFullscreen,
   tmuxNewWindow,
