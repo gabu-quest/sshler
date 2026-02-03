@@ -17,6 +17,19 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:8822",
         changeOrigin: true,
+        configure: (proxy) => {
+          // Log proxy requests for debugging
+          proxy.on('proxyReq', (proxyReq, req) => {
+            // Ensure X-SSHLER-TOKEN header is forwarded
+            const token = req.headers['x-sshler-token'];
+            if (token) {
+              proxyReq.setHeader('X-SSHLER-TOKEN', token);
+              console.log('[Proxy] Forwarding token:', String(token).substring(0, 8) + '...');
+            } else {
+              console.log('[Proxy] No token in request headers');
+            }
+          });
+        },
       },
       "/ws": {
         target: "ws://127.0.0.1:8822",

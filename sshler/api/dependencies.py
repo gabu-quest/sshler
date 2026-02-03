@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 
 from fastapi import HTTPException, Request
@@ -7,6 +8,8 @@ from fastapi import HTTPException, Request
 from ..config import AppConfig, Box, find_box, get_config_path, load_config
 from ..config_cache import get_cache
 from ..ssh import connect
+
+logger = logging.getLogger(__name__)
 
 
 class APIDependencies:
@@ -19,7 +22,21 @@ class APIDependencies:
         if request.url.path.endswith("/api/v1/bootstrap"):
             return
         supplied = request.headers.get("x-sshler-token")
-        if supplied != self.settings.csrf_token:
+        expected = self.settings.csrf_token
+
+        # Debug logging - print all headers to see what's actually being received
+        all_headers = {k: v for k, v in request.headers.items()}
+        logger.debug(f"[require_token] {request.method} {request.url.path}")
+        logger.debug(f"[require_token] All headers: {all_headers}")
+        logger.debug(f"[require_token] Supplied token: {supplied[:8] + '...' if supplied else 'None'}")
+        logger.debug(f"[require_token] Expected token: {expected[:8] + '...' if expected else 'None'}")
+
+        if supplied != expected:
+            logger.warning(
+                f"Token mismatch on {request.url.path}: "
+                f"supplied={supplied[:8] + '...' if supplied else 'None'}, "
+                f"expected={expected[:8] + '...' if expected else 'None'}"
+            )
             raise HTTPException(status_code=403, detail="Missing or invalid X-SSHLER-TOKEN header")
 
     async def get_application_config(self) -> AppConfig:
