@@ -146,9 +146,9 @@ onMounted(() => {
   window.addEventListener('resize', checkMobile);
   window.addEventListener('keydown', handleKeydown);
 
-  // Load stats initially and refresh every 10 seconds
+  // Load stats initially and refresh every 5 seconds
   loadLocalStats();
-  statsInterval = window.setInterval(loadLocalStats, 10000);
+  statsInterval = window.setInterval(loadLocalStats, 5000);
 });
 
 onUnmounted(() => {
