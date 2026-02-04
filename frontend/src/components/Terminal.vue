@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { useMessage } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
+import { useResponsive } from '@/composables/useResponsive'
 
 interface Props {
   boxName: string
@@ -38,6 +39,10 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>()
 const message = useMessage()
 const bootstrapStore = useBootstrapStore()
+const { isMobile, isTouch } = useResponsive()
+
+// Computed font size: cap at 12px on mobile
+const effectiveFontSize = computed(() => isMobile.value ? Math.min(props.fontSize, 12) : props.fontSize)
 
 const terminalRef = ref<HTMLDivElement>()
 const connected = ref(false)
@@ -360,7 +365,7 @@ const createTerminal = () => {
   
   terminal = new Terminal({
     theme,
-    fontSize: props.fontSize,
+    fontSize: effectiveFontSize.value,
     fontFamily: props.fontFamily,
     lineHeight: isCyberpunk ? 1.25 : 1.2,
     letterSpacing: 0,
@@ -859,6 +864,13 @@ onMounted(async () => {
   }, 100)
 })
 
+// Auto-disable tmux mouse mode on touch devices so native scroll/selection works
+watch([isTouch, connected], ([touch, conn]) => {
+  if (touch && conn && mouseMode.value) {
+    toggleMouseMode()
+  }
+})
+
 onUnmounted(() => {
   // Cleanup viewport handler
   cleanupViewport?.()
@@ -893,6 +905,14 @@ watch(() => props.boxName, () => {
 watch(() => props.theme, () => {
   if (terminal) {
     terminal.options.theme = TERMINAL_THEMES[props.theme]
+  }
+})
+
+// Refit when responsive font size changes
+watch(effectiveFontSize, (newSize) => {
+  if (terminal) {
+    terminal.options.fontSize = newSize
+    nextTick(() => fitAddon?.fit())
   }
 })
 
@@ -1476,7 +1496,7 @@ defineExpose({
   }
 
   .terminal-titlebar {
-    height: 32px;
+    height: 36px;
     padding: 0 8px;
   }
 
@@ -1485,6 +1505,18 @@ defineExpose({
   }
 
   .traffic-lights {
+    display: none;
+  }
+
+  /* Enlarge titlebar buttons for touch */
+  .titlebar-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* Hide copy/paste buttons on mobile — use OS gestures instead */
+  .titlebar-right .titlebar-btn:nth-child(2),
+  .titlebar-right .titlebar-btn:nth-child(3) {
     display: none;
   }
 

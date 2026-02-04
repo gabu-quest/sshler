@@ -290,7 +290,7 @@ const handleBrowseServerFiles = (serverName: string) => {
         </template>
       </NEmpty>
       
-      <NGrid v-else :x-gap="16" :y-gap="16" :cols="3" responsive="screen">
+      <NGrid v-else :x-gap="16" :y-gap="16" cols="1 s:2 l:3" responsive="screen">
         <NGridItem v-for="box in boxesStore.items" :key="box.name">
           <NCard class="server-card" hoverable>
             <div class="server-header">
@@ -661,32 +661,40 @@ const handleBrowseServerFiles = (serverName: string) => {
 
 /* Responsive Design */
 @media (max-width: 768px) {
-  .hero {
-    flex-direction: column;
-    text-align: center;
-  }
-  
-  .hero-actions {
-    justify-content: center;
-  }
-  
-  .hero-btn {
-    min-width: 120px;
-  }
-  
   .dashboard {
     gap: 24px;
+  }
+
+  .stats-pill {
+    font-size: 12px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .favorite-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .favorite-actions {
+    width: 100%;
+  }
+
+  .favorite-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .section-title {
+    font-size: 18px;
   }
 }
 
 @media (max-width: 480px) {
-  .hero-actions {
-    flex-direction: column;
+  .stats-pill {
     width: 100%;
-  }
-  
-  .hero-btn {
-    width: 100%;
+    justify-content: center;
   }
 }
 

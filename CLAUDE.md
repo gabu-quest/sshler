@@ -99,22 +99,40 @@
 
 ---
 
+## Project CLI (just)
+
+Run `just` with no args to see all recipes.
+
+```bash
+just test              # All tests (backend + frontend)
+just test-backend      # pytest only
+just test-frontend     # Vitest only
+just test-e2e          # Playwright E2E
+just test-mobile       # Mobile responsive E2E
+just build             # Build frontend
+just typecheck         # Type check everything
+just dev               # Start dev server (backend + Vite HMR)
+just ci                # Full CI: build + test + typecheck
+just install           # Install all dependencies
+```
+
+---
+
 ## Testing
 
 ### Running Tests
 
 ```bash
-# Backend (pytest)
-uv run pytest                    # All tests
+# Via just (preferred)
+just test              # Everything
+just test-backend      # Backend only
+just test-frontend     # Frontend only
+
+# Or directly
+uv run pytest                    # All backend tests
 uv run pytest tests/test_*.py    # Unit/integration only
 uv run pytest tests/e2e/         # Playwright E2E
-
-# Frontend (Vitest)
-npm --prefix frontend test -- --run
-
-# Type checking
-uv run mypy sshler/
-npm --prefix frontend run type-check
+pnpm --prefix frontend test -- --run  # Frontend Vitest
 ```
 
 ### Test Coverage

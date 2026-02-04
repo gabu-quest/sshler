@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { NButton, NIcon, NSpace, NTag, useMessage } from 'naive-ui'
+import { useResponsive } from '@/composables/useResponsive'
 import {
   PhPlus,
   PhSplitHorizontal,
@@ -28,6 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const message = useMessage()
+const { isMobile } = useResponsive()
 
 const panes = ref<TerminalPane[]>([])
 const activePane = ref<string | null>(null)
@@ -272,7 +274,7 @@ defineExpose({
 <template>
   <div class="multi-pane-terminal">
     <!-- Terminal tabs -->
-    <div class="terminal-tabs" v-if="panes.length > 1">
+    <div class="terminal-tabs" v-if="panes.length > 1 || isMobile">
       <div class="tabs-container">
         <NTag
           v-for="pane in panes"
@@ -312,15 +314,16 @@ defineExpose({
     </div>
 
     <!-- Terminal panes -->
-    <div 
+    <div
       class="terminal-panes"
-      :class="`layout-${layout}`"
+      :class="[`layout-${layout}`, { 'layout-mobile': isMobile }]"
     >
       <div
         v-for="pane in panes"
         :key="pane.id"
+        v-show="!isMobile || pane.active"
         class="terminal-pane"
-        :class="{ 
+        :class="{
           active: pane.active,
           connected: pane.connected
         }"
@@ -543,21 +546,42 @@ defineExpose({
   50% { opacity: 0.5; background: var(--warning); }
 }
 
+/* Mobile: single active pane fills available space */
+.layout-mobile {
+  grid-template-columns: 1fr !important;
+  grid-template-rows: 1fr !important;
+}
+
+.layout-mobile .terminal-pane {
+  height: calc(var(--vh-full, 100vh) - 200px);
+  min-height: 0;
+}
+
 /* Mobile optimizations */
 @media (max-width: 768px) {
   .terminal-tabs {
     padding: 6px 8px;
   }
-  
+
+  .tabs-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .tabs-container::-webkit-scrollbar {
+    display: none;
+  }
+
   .shortcuts-hint {
     display: none;
   }
-  
+
   .layout-grid {
     grid-template-columns: 1fr;
     grid-template-rows: repeat(4, 1fr);
   }
-  
+
   .layout-horizontal,
   .layout-vertical {
     grid-template-columns: 1fr;

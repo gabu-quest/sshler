@@ -21,6 +21,7 @@ import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
+import { useResponsive } from "@/composables/useResponsive";
 import { boxStats } from "@/api/http";
 import type { BoxStats } from "@/api/types";
 import CommandPalette from "@/components/CommandPalette.vue";
@@ -31,6 +32,7 @@ const authStore = useAuthStore();
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
 const route = useRoute();
+const { isMobile } = useResponsive();
 
 // System stats for local box (shown in header)
 const localStats = ref<BoxStats | null>(null);
@@ -71,7 +73,6 @@ const authTooltip = computed(() => {
 
 // Mobile navigation state
 const isMobileMenuOpen = ref(false);
-const isMobile = ref(false);
 
 const links = [
   { to: "/", label: "Overview", icon: PhHouseLine, shortcut: "Alt+H" },
@@ -109,13 +110,10 @@ const closeMobileMenu = () => {
   isMobileMenuOpen.value = false;
 };
 
-// Handle responsive behavior
-const checkMobile = () => {
-  isMobile.value = window.innerWidth < 768;
-  if (!isMobile.value) {
-    isMobileMenuOpen.value = false;
-  }
-};
+// Close mobile menu when switching to desktop
+watch(isMobile, (mobile) => {
+  if (!mobile) isMobileMenuOpen.value = false;
+});
 
 // Handle keyboard shortcuts
 const handleKeydown = (event: KeyboardEvent) => {
@@ -142,8 +140,6 @@ const handleKeydown = (event: KeyboardEvent) => {
 };
 
 onMounted(() => {
-  checkMobile();
-  window.addEventListener('resize', checkMobile);
   window.addEventListener('keydown', handleKeydown);
 
   // Load stats initially and refresh every 5 seconds
@@ -152,7 +148,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile);
   window.removeEventListener('keydown', handleKeydown);
   if (statsInterval) {
     clearInterval(statsInterval);

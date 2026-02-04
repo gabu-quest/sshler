@@ -418,4 +418,38 @@ li {
   font-size: 13px;
   font-weight: 500;
 }
+
+@media (max-width: 768px) {
+  .header-content {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .settings-logo {
+    width: 120px;
+    max-height: 80px;
+  }
+
+  h1 {
+    font-size: 22px;
+  }
+
+  .pool-setting-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .pool-setting :deep(.n-input-number) {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-logo {
+    width: 80px;
+    max-height: 60px;
+  }
+}
 </style>

@@ -40,11 +40,11 @@ const theme = computed(() => (appStore.isDark ? darkTheme : lightTheme));
 
 <style scoped>
 .app-layout {
-  height: 100vh;
+  height: var(--vh-full, 100vh);
 }
 
 .app-main {
-  height: calc(100vh - 64px);
+  height: calc(var(--vh-full, 100vh) - 64px);
   overflow: auto;
 }
 
@@ -57,6 +57,12 @@ const theme = computed(() => (appStore.isDark ? darkTheme : lightTheme));
 @media (max-width: 768px) {
   .app-content {
     padding: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-content {
+    padding: 4px;
   }
 }
 </style>

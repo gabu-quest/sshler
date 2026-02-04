@@ -328,7 +328,7 @@ onMounted(async () => {
 
 <style scoped>
 .multi-terminal-page {
-  height: 100vh;
+  height: var(--vh-full, 100vh);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -477,19 +477,28 @@ onMounted(async () => {
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .terminal-grid {
     grid-template-columns: 1fr !important;
+    grid-auto-rows: minmax(250px, 1fr);
   }
-  
+
   .header {
     flex-direction: column;
     gap: 8px;
     align-items: stretch;
   }
-  
+
   .header-left {
     justify-content: center;
+  }
+
+  .terminal-container {
+    min-height: 250px;
+  }
+
+  .directory-name {
+    display: none;
   }
 }
 
