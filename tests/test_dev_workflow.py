@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given, settings, strategies as st
 
 from sshler.cli import _cleanup_processes, _start_vite_dev_server, serve_dev
 
@@ -23,6 +23,7 @@ from sshler.cli import _cleanup_processes, _start_vite_dev_server, serve_dev
 class TestDevWorkflowProperties:
     """Property-based tests for development workflow."""
 
+    @settings(deadline=2000)  # Allow 2s for temp file I/O + mocking overhead
     @given(
         host=st.sampled_from(["127.0.0.1", "localhost", "0.0.0.0"]),
         port=st.integers(min_value=8000, max_value=9999),
