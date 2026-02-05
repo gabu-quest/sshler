@@ -97,6 +97,11 @@
 
 **Terminal component** wraps xterm.js with WebSocket management.
 
+**Directory search** uses frecency-based ranking:
+- Local box: queries zoxide directly for instant results
+- Remote boxes: SQLite frecency table + SSH `find` for discovery
+- Formula: `score = visit_count * exp(-0.1 * days_since_last_visit)`
+
 ---
 
 ## Project CLI (just)
@@ -143,6 +148,7 @@ pnpm --prefix frontend test -- --run  # Frontend Vitest
 | API | test_api_v1.py | REST endpoints |
 | Security | test_command_injection.py, test_path_validation.py | Input sanitization |
 | Auth | test_session_auth.py, test_rate_limit.py | Session + rate limiting |
+| Search | test_search.py | Frecency tracking + zoxide |
 | E2E | tests/e2e/ | Playwright browser tests |
 | Frontend | src/**/*.spec.ts | Vitest component tests |
 
