@@ -131,8 +131,7 @@ const actions = computed((): CommandAction[] => [
     shortcut: "Ctrl+Shift+F",
     category: "Search",
     action: () => {
-      // TODO: Implement global search
-      console.log("Global search not yet implemented");
+      // Global search coming soon
     },
     keywords: ["find", "locate"],
   },

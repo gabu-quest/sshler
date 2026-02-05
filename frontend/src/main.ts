@@ -33,11 +33,9 @@ async function initApp() {
         headers: { 'X-SSHLER-TOKEN': cachedToken }
       });
       if (!testResponse.ok) {
-        console.log('Cached token invalid, clearing...');
         bootstrapStore.setToken(null);
       }
     } catch {
-      console.log('Token validation failed, clearing...');
       bootstrapStore.setToken(null);
     }
   }

@@ -31,9 +31,9 @@ def test_directory_listing_returns_error_message(monkeypatch, tmp_path):
     ssh_config = tmp_path / "ssh_config"
     ssh_config.write_text(
         """
-Host gabu-server
-  HostName gabu.example.com
-  User gabu
+Host test-server
+  HostName test.example.com
+  User alice
 """.strip(),
         encoding="utf-8",
     )
@@ -47,14 +47,7 @@ Host gabu-server
 
         monkeypatch.setattr("sshler.webapp.connect", fake_connect)
 
-        response = client.get("/box/gabu-server/ls", params={"path": "/home/gabu"})
-        if response.status_code != 200:
-            print('RESPONSE', response.status_code, response.text)
-            try:
-                detail = response.json()
-            except Exception:
-                detail = response.text
-            raise AssertionError(detail)
+        response = client.get("/box/test-server/ls", params={"path": "/home/alice"})
         assert response.status_code == 200
         assert "SSH connection failed: boom" in response.text
     finally:

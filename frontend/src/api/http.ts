@@ -32,8 +32,6 @@ async function handle<T>(response: Response, originalRequest?: { url: string, op
 
         // Retry the original request with new token
         const newToken = bootstrapStore.token;
-        console.log('[API] Token refresh complete, old:', oldToken?.slice(0, 8), 'new:', newToken?.slice(0, 8));
-        
         if (newToken) {
           // Convert existing headers to plain object if needed
           const existingHeaders: Record<string, string> = {};
@@ -50,15 +48,12 @@ async function handle<T>(response: Response, originalRequest?: { url: string, op
           
           // Build new headers with fresh token
           const newHeaders = { ...existingHeaders, ...buildHeaders(newToken) };
-          console.log('[API] Retrying with headers:', Object.keys(newHeaders));
-          
           const retryResponse = await fetch(originalRequest.url, {
             ...originalRequest.options,
             headers: newHeaders,
             credentials: 'include',
           });
           
-          console.log('[API] Retry response status:', retryResponse.status);
           if (retryResponse.ok) {
             return retryResponse.json() as Promise<T>;
           }

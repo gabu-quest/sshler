@@ -58,18 +58,18 @@ async def test_connect_uses_alias_when_dns_fails(monkeypatch):
     monkeypatch.setattr(ssh_module, "_is_resolvable", lambda name: False)
 
     result = await connect(
-        host="gabu-server",
-        user="gabu",
+        host="test-server",
+        user="alice",
         port=22,
         keyfile=None,
         known_hosts=None,
         ssh_config_path=None,
-        ssh_alias="gabu-server",
+        ssh_alias="test-server",
     )
 
     assert result == "connection"
     assert calls["host"] == "1.2.3.4"
-    assert calls["username"] == "gabu"
+    assert calls["username"] == "alice"
     assert calls["port"] == 2200
     assert calls["client_keys"] == ["/keys/alias"]
 
@@ -94,16 +94,16 @@ async def test_connect_skips_alias_when_disabled(monkeypatch):
     monkeypatch.setattr(ssh_module, "_is_resolvable", lambda name: False)
 
     result = await connect(
-        host="gabu-server",
-        user="gabu",
+        host="test-server",
+        user="alice",
         port=22,
         keyfile=None,
         known_hosts=None,
         ssh_config_path=None,
-        ssh_alias="gabu-server",
+        ssh_alias="test-server",
         allow_alias=False,
     )
 
     assert result == "connection"
     assert expand_called is False
-    assert calls["host"] == "gabu-server"
+    assert calls["host"] == "test-server"

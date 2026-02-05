@@ -215,7 +215,6 @@ const TERMINAL_THEMES = {
 }
 
 const handleTerminalClick = () => {
-  console.log('Terminal clicked, focusing...') // Debug
   terminal?.focus()
 }
 
@@ -241,7 +240,6 @@ const copyWithFallback = (text: string) => {
   textarea.select()
   try {
     document.execCommand('copy')
-    console.log('[Terminal] Fallback copy succeeded')
   } catch (err) {
     console.warn('[Terminal] Fallback copy failed:', err)
   }
@@ -413,8 +411,6 @@ const createTerminal = () => {
     if (websocket && websocket.readyState === WebSocket.OPEN) {
       // Backend expects binary frames for stdin
       websocket.send(textEncoder.encode(data))
-    } else {
-      console.log('WebSocket not open, cannot send data. State:', websocket?.readyState)
     }
   })
 
@@ -468,9 +464,6 @@ const createTerminal = () => {
     await (document as any).fonts?.ready
     fitAddon?.fit()
     terminal?.focus()
-    
-    // Debug: log actual dimensions
-    console.log('[Terminal] Initial fit complete - cols:', terminal?.cols, 'rows:', terminal?.rows)
   })
 }
 
@@ -482,13 +475,7 @@ const setupResizeObserver = () => {
       clearTimeout(resizeTimeout)
     }
     resizeTimeout = window.setTimeout(() => {
-      const entry = entries[0]
-      if (entry) {
-        console.log('[Terminal] Container size:', entry.contentRect.width, 'x', entry.contentRect.height)
-      }
       fitAddon?.fit()
-      const dims = fitAddon?.proposeDimensions()
-      console.log('[Terminal] After fit - cols:', dims?.cols, 'rows:', dims?.rows)
     }, 150)
   })
 
@@ -593,13 +580,11 @@ const scheduleReconnect = () => {
 
   // Don't reconnect if it was an intentional disconnect
   if (intentionalDisconnect) {
-    console.log('[Connection] Skipping reconnect - intentional disconnect')
     return
   }
 
   // Check if we've exceeded max attempts
   if (reconnectAttempts.value >= maxReconnectAttempts.value) {
-    console.log('[Connection] Max reconnect attempts reached')
     message.error('Connection lost - max reconnect attempts reached', {
       duration: 5000
     })
@@ -609,8 +594,6 @@ const scheduleReconnect = () => {
 
   const delay = calculateReconnectDelay(reconnectAttempts.value)
   reconnecting.value = true
-
-  console.log(`[Connection] Scheduling reconnect attempt ${reconnectAttempts.value + 1}/${maxReconnectAttempts.value} in ${delay}ms`)
 
   reconnectTimeout = window.setTimeout(() => {
     reconnectAttempts.value++
@@ -623,8 +606,6 @@ const connect = async () => {
 
   connecting.value = true
   intentionalDisconnect = false
-
-  console.log(`[Connection] Connecting to ${props.boxName} (attempt ${reconnectAttempts.value + 1})`)
 
   try {
     // Get WebSocket URL from backend handshake to ensure proper host resolution
@@ -667,8 +648,6 @@ const connect = async () => {
       reconnecting.value = false
       emit('connected')
 
-      console.log(`[Connection] Connected to ${props.boxName}`)
-      
       // Re-fit after connection and ALWAYS send resize to backend
       // This is critical - the PTY defaults to 80x24 and needs the real dimensions
       nextTick(() => {
@@ -677,7 +656,6 @@ const connect = async () => {
         if (terminal && websocket?.readyState === WebSocket.OPEN) {
           const cols = terminal.cols
           const rows = terminal.rows
-          console.log(`[Connection] Sending initial resize: ${cols}x${rows}`)
           websocket.send(JSON.stringify({ op: 'resize', cols, rows }))
         }
       })
@@ -727,8 +705,7 @@ const connect = async () => {
           if (message.op === 'ping' || message.op === 'windows') {
             return // Ignore these control messages
           }
-          // Any other JSON messages we don't recognize - ignore for now
-          console.log('Unknown control message:', message)
+          // Any other JSON messages we don't recognize - ignore silently
         } catch {
           // Not JSON - this is raw terminal text data
           terminal?.write(event.data)
@@ -740,9 +717,6 @@ const connect = async () => {
       connected.value = false
       connecting.value = false
       emit('disconnected')
-
-      // Log close reason for debugging
-      console.log(`[Connection] WebSocket closed: code=${event.code} reason="${event.reason}"`)
 
       if (event.code === 4403) {
         message.error('Authentication failed - please refresh the page', {
@@ -756,11 +730,9 @@ const connect = async () => {
         reconnecting.value = false
       } else if (event.code === 1000) {
         // Normal closure - don't reconnect
-        console.log('[Connection] Normal close - not reconnecting')
         reconnecting.value = false
       } else {
         // Unexpected disconnect - attempt reconnect with backoff
-        console.log('[Connection] Unexpected disconnect - scheduling reconnect')
         scheduleReconnect()
       }
     }
@@ -791,7 +763,6 @@ const connect = async () => {
 }
 
 const disconnect = () => {
-  console.log('[Connection] Intentional disconnect')
   intentionalDisconnect = true
   reconnecting.value = false
   reconnectAttempts.value = 0

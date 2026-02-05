@@ -1,5 +1,11 @@
 """Playwright E2E tests for mobile responsiveness.
 
+Tests the actual mobile implementation:
+- Ultra-thin 14px header with logo + CPU/MEM stats
+- No hamburger menu (mobile navigation removed for maximum screen space)
+- Desktop nav hidden on mobile
+- Pages fit within mobile viewport (no horizontal scroll)
+
 Run with:
     uv run pytest tests/e2e/test_mobile_responsive.py -v
 """
@@ -16,12 +22,37 @@ expect = playwright_async.expect
 
 # Common mobile/tablet viewports
 MOBILE_VIEWPORT = {"width": 375, "height": 667}  # iPhone SE
-TABLET_VIEWPORT = {"width": 768, "height": 1024}  # iPad
+TABLET_VIEWPORT = {"width": 800, "height": 1024}  # Slightly above 768px breakpoint
 
 
 @pytest.mark.asyncio
-async def test_mobile_nav_drawer(app_server):
-    """Mobile hamburger menu opens the navigation drawer."""
+async def test_mobile_header_ultra_thin(app_server):
+    """Mobile header should be ultra-thin (approx 14px) for maximum terminal space."""
+    base_url, token = app_server
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(viewport=MOBILE_VIEWPORT)
+        page = await context.new_page()
+        await page.set_extra_http_headers({"X-SSHLER-TOKEN": token})
+
+        await page.goto(f"{base_url}/app/", wait_until="load")
+        await page.wait_for_timeout(2000)
+
+        # Header should exist and be very thin on mobile
+        header = page.locator(".app-header")
+        await expect(header).to_be_visible()
+
+        # Check header height is thin (around 14-20px range)
+        header_height = await header.evaluate("el => el.getBoundingClientRect().height")
+        assert header_height <= 30, f"Mobile header too tall: {header_height}px (expected ~14px)"
+
+        await browser.close()
+
+
+@pytest.mark.asyncio
+async def test_mobile_desktop_nav_hidden(app_server):
+    """Desktop nav should be hidden on mobile viewport."""
     base_url, token = app_server
 
     async with async_playwright() as p:
@@ -36,23 +67,6 @@ async def test_mobile_nav_drawer(app_server):
         # Desktop nav should be hidden on mobile
         desktop_nav = page.locator(".desktop-nav")
         await expect(desktop_nav).to_be_hidden()
-
-        # Mobile hamburger button should be visible
-        mobile_btn = page.locator(".mobile-menu-button")
-        await expect(mobile_btn).to_be_visible()
-
-        # Click hamburger to open drawer
-        await mobile_btn.click()
-        await page.wait_for_timeout(500)
-
-        # Drawer should be visible with navigation links
-        drawer_nav = page.locator(".mobile-nav")
-        await expect(drawer_nav).to_be_visible()
-
-        # Should have navigation links
-        nav_links = page.locator(".mobile-nav-link")
-        link_count = await nav_links.count()
-        assert link_count >= 5, f"Expected at least 5 nav links, got {link_count}"
 
         await browser.close()
 
@@ -131,7 +145,7 @@ async def test_overview_grid_collapses_on_mobile(app_server):
 
 @pytest.mark.asyncio
 async def test_tablet_viewport_layout(app_server):
-    """At tablet size, desktop nav should still be visible."""
+    """At tablet size, desktop nav should be visible."""
     base_url, token = app_server
 
     async with async_playwright() as p:
@@ -143,12 +157,8 @@ async def test_tablet_viewport_layout(app_server):
         await page.goto(f"{base_url}/app/", wait_until="load")
         await page.wait_for_timeout(2000)
 
-        # Desktop nav should be visible at tablet width
+        # At tablet width, desktop nav should be visible
         desktop_nav = page.locator(".desktop-nav")
         await expect(desktop_nav).to_be_visible()
-
-        # Mobile hamburger should be hidden
-        mobile_btn = page.locator(".mobile-menu-button")
-        await expect(mobile_btn).to_be_hidden()
 
         await browser.close()

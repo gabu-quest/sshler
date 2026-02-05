@@ -60,7 +60,6 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
           if (newPayload.token) {
             token.value = newPayload.token;
             persistToken(token.value);
-            console.log('Token refreshed automatically');
           }
         }).catch(err => {
           console.warn('Background token refresh failed:', err);
@@ -82,14 +81,9 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
   }
 
   async function refreshToken() {
-    console.log('Refreshing token...');
     token.value = null;
     persistToken(null);
     await bootstrap();
-    if (token.value) {
-      console.log('Token refreshed successfully');
-      // Don't reload the page automatically - let the app continue with new token
-    }
   }
 
   function setToken(value: string | null) {

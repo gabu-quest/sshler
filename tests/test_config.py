@@ -78,10 +78,10 @@ def test_legacy_seed_favorites_are_cleared(tmp_path, monkeypatch):
             {
                 "boxes": [
                     {
-                        "name": "gabu-server",
+                        "name": "test-server",
                         "host": "example.tailnet.ts.net",
-                        "user": "gabu",
-                        "favorites": ["/home/gabu"],
+                        "user": "alice",
+                        "favorites": ["/home/alice"],
                     }
                 ]
             },
@@ -93,10 +93,10 @@ def test_legacy_seed_favorites_are_cleared(tmp_path, monkeypatch):
     monkeypatch.setenv("SSHLER_SSH_CONFIG", "")
 
     config = load_config()
-    stored = config.stored.get("gabu-server")
+    stored = config.stored.get("test-server")
     assert isinstance(stored, StoredBox)
     assert stored.favorites == []
-    assert state.list_favorites("gabu-server") == ["/home/gabu"]
+    assert state.list_favorites("test-server") == ["/home/alice"]
 
     data = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
     assert data["boxes"][0].get("favorites") is None
