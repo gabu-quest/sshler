@@ -55,6 +55,14 @@ function getStatColor(percent: number | null | undefined, normalColor: string): 
   return normalColor;
 }
 
+// Green/orange/red scale for mobile stats
+function getStatColorGreen(percent: number | null | undefined): string {
+  const p = percent ?? 0;
+  if (p >= 90) return '#ef4444'; // Red - critical
+  if (p >= 75) return '#f97316'; // Orange - warning
+  return '#22c55e'; // Green - good
+}
+
 function isStatCritical(percent: number | null | undefined): boolean {
   return (percent ?? 0) >= 90;
 }
@@ -268,39 +276,14 @@ onUnmounted(() => {
       </NSpace>
     </div>
 
-    <!-- Header Actions (Mobile) - ultra compact -->
+    <!-- Header Actions (Mobile) - ultra minimal stats -->
     <div class="header-actions mobile-actions">
-      <!-- Micro stats: text only, no progress bars -->
-      <span
-        v-if="localStats && !localStats.error"
-        class="micro-stats"
-        :class="{
-          'stats-warning': (localStats.cpu_percent ?? 0) >= 80 || (localStats.memory_percent ?? 0) >= 80,
-          'stats-critical': isStatCritical(localStats.cpu_percent) || isStatCritical(localStats.memory_percent)
-        }"
-      >
-        <span class="micro-stat" :style="{ color: getStatColor(localStats.cpu_percent, 'rgba(255,255,255,0.4)') }">C{{ localStats.cpu_percent?.toFixed(0) }}</span>
-        <span class="micro-stat" :style="{ color: getStatColor(localStats.memory_percent, 'rgba(255,255,255,0.4)') }">M{{ localStats.memory_percent?.toFixed(0) }}</span>
+      <span v-if="localStats && !localStats.error" class="mobile-stats">
+        <span class="stat-label">CPU</span>
+        <span class="stat-value" :style="{ color: getStatColorGreen(localStats.cpu_percent) }">{{ localStats.cpu_percent?.toFixed(0) }}</span>
+        <span class="stat-label">MEM</span>
+        <span class="stat-value" :style="{ color: getStatColorGreen(localStats.memory_percent) }">{{ localStats.memory_percent?.toFixed(0) }}</span>
       </span>
-      <button
-        class="micro-btn"
-        @click="toggleTheme"
-        :aria-label="`Switch to ${appStore.isDark ? 'light' : 'dark'} theme`"
-      >
-        <NIcon size="12" aria-hidden="true">
-          <component :is="themeIcon" />
-        </NIcon>
-      </button>
-      <button
-        class="micro-btn menu-btn"
-        @click="toggleMobileMenu"
-        :aria-label="isMobileMenuOpen ? 'Close menu' : 'Open menu'"
-        :aria-expanded="isMobileMenuOpen"
-      >
-        <NIcon size="14" aria-hidden="true">
-          <component :is="isMobileMenuOpen ? PhX : PhList" />
-        </NIcon>
-      </button>
     </div>
 
     <!-- Mobile Navigation Drawer -->
@@ -506,46 +489,28 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* Mobile micro header elements */
+/* Mobile header elements */
 .mobile-actions {
   display: none;
 }
 
-.micro-stats {
-  display: inline-flex;
-  gap: 4px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
-  letter-spacing: 0.02em;
-}
-
-.micro-stat {
-  color: rgba(255, 255, 255, 0.4);
-}
-
-.micro-stats.stats-warning .micro-stat {
-  color: #f97316;
-}
-
-.micro-stats.stats-critical {
-  animation: stats-pulse 1.5s ease-in-out infinite;
-}
-
-.micro-btn {
+.mobile-stats {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 16px;
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.4);
-  cursor: pointer;
-  padding: 0;
+  gap: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
 }
 
-.micro-btn:active {
-  color: rgba(255, 255, 255, 0.7);
+.mobile-stats .stat-label {
+  color: #53bdfa;
+  font-size: 8px;
+}
+
+.mobile-stats .stat-value {
+  min-width: 16px;
 }
 
 /* Mobile Navigation */
@@ -602,9 +567,11 @@ onUnmounted(() => {
   .app-header {
     grid-template-columns: auto 1fr auto;
     padding: 0 6px;
-    gap: 4px;
-    min-height: 16px;
-    height: 16px;
+    gap: 8px;
+    min-height: 14px;
+    height: 14px;
+    background: rgba(10, 14, 20, 0.98);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   }
 
   .desktop-nav {
@@ -618,17 +585,17 @@ onUnmounted(() => {
   .mobile-actions {
     display: flex;
     align-items: center;
-    gap: 4px;
+    justify-content: flex-end;
   }
 
   .brand-logo {
-    height: 12px;
+    height: 10px;
     border-radius: 2px;
   }
 
   .brand {
-    line-height: 1;
-    gap: 0;
+    display: flex;
+    align-items: center;
   }
 }
 

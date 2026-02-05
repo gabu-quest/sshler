@@ -1,7 +1,26 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, watch, type Component } from 'vue'
 import { NIcon } from 'naive-ui'
-import { PhKeyReturn, PhArrowUp, PhArrowDown, PhKeyboard } from '@phosphor-icons/vue'
+import {
+  PhKeyReturn,
+  PhArrowUp,
+  PhArrowDown,
+  PhArrowLeft,
+  PhArrowRight,
+  PhKeyboard,
+  PhHandPalm,
+  PhStopCircle,
+  PhScroll,
+  PhArrowFatLinesUp,
+  PhArrowFatLinesDown,
+  PhSignOut,
+  PhArrowElbowDownRight,
+  PhCaretUp,
+  PhCaretDown,
+  PhCaretLeft,
+  PhCaretRight,
+  PhQuestion,
+} from '@phosphor-icons/vue'
 
 interface Emits {
   (e: 'send', data: string): void
@@ -25,20 +44,40 @@ const inputText = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const historyStack = ref<string[]>([])
 const historyIndex = ref(-1)
+const showLegend = ref(false)
 
 // Quick-action keys: things that are hard to type on mobile
-const quickKeys = [
-  { label: 'Tab', raw: '\t' },
-  { label: 'Esc', raw: '\x1b' },
-  { label: 'C-c', raw: '\x03' },
-  { label: 'C-d', raw: '\x04' },
-  { label: 'C-z', raw: '\x1a' },
-  { label: 'C-l', raw: '\x0c' },
-  { label: '|', raw: '|' },
-  { label: '/', raw: '/' },
-  { label: '-', raw: '-' },
-  { label: '~', raw: '~' },
-  { label: './', raw: './' },
+// Using Phosphor icons for a clean, consistent look
+interface QuickKey {
+  icon?: Component
+  label?: string
+  raw?: string
+  tmuxCommand?: string
+  title: string
+  isCommand?: boolean
+  color?: 'blue' | 'purple' | 'yellow' | 'red' | 'orange' | 'teal'
+}
+
+const quickKeys: QuickKey[] = [
+  // Arrow keys for menu navigation (default/neutral)
+  { icon: PhCaretUp, raw: '\x1b[A', title: 'Up' },
+  { icon: PhCaretDown, raw: '\x1b[B', title: 'Down' },
+  { icon: PhCaretLeft, raw: '\x1b[D', title: 'Left' },
+  { icon: PhCaretRight, raw: '\x1b[C', title: 'Right' },
+  // Confirm (blue)
+  { icon: PhKeyReturn, raw: '\r', title: 'Enter', color: 'blue' },
+  // Tab (purple)
+  { icon: PhArrowElbowDownRight, raw: '\t', title: 'Tab', color: 'purple' },
+  // Escape (yellow - caution, stops things)
+  { icon: PhStopCircle, raw: '\x1b', title: 'Escape / Stop', color: 'yellow' },
+  // Interrupt (red - dangerous, kills processes)
+  { icon: PhHandPalm, raw: '\x03', title: 'Interrupt (Ctrl+C)', color: 'red' },
+  // Tmux scroll (orange group)
+  { icon: PhScroll, raw: '\x02[', title: 'Scroll mode', color: 'orange' },
+  { icon: PhArrowFatLinesUp, raw: '\x1b[5~', title: 'Page Up', color: 'orange' },
+  { icon: PhArrowFatLinesDown, raw: '\x1b[6~', title: 'Page Down', color: 'orange' },
+  // Exit (teal - graceful exit, sends EOF)
+  { icon: PhSignOut, raw: '\x04', title: 'Exit (Ctrl+D)', color: 'teal' },
 ]
 
 const handleSubmit = () => {
@@ -63,10 +102,26 @@ const handleSubmit = () => {
   inputText.value = ''
 }
 
-const handleQuickKey = (raw: string) => {
-  emit('send-raw', raw)
-  // Refocus textarea after quick key
-  nextTick(() => textareaRef.value?.focus())
+const handleQuickKey = (key: any) => {
+  if (key.isCommand) {
+    // Send as a command (like typing and hitting enter)
+    emit('send', key.raw + '\r')
+    // Refocus textarea after quick key
+    nextTick(() => textareaRef.value?.focus())
+  } else if (key.tmuxCommand) {
+    // Tmux command mode: send Ctrl+B : first, then the command after a delay
+    emit('send-raw', '\x02:')
+    setTimeout(() => {
+      emit('send-raw', key.tmuxCommand + '\r')
+      // Refocus AFTER the command is sent
+      nextTick(() => textareaRef.value?.focus())
+    }, 150)
+  } else {
+    // Send as raw escape sequence
+    emit('send-raw', key.raw)
+    // Refocus textarea after quick key
+    nextTick(() => textareaRef.value?.focus())
+  }
 }
 
 const handleArrowUp = () => {
@@ -130,31 +185,49 @@ watch(() => props.rawMode, (raw) => {
     <!-- Quick keys row -->
     <div v-if="!rawMode" class="quick-keys">
       <button
-        v-for="key in quickKeys"
-        :key="key.label"
+        v-for="(key, index) in quickKeys"
+        :key="index"
         class="quick-key"
-        @click="handleQuickKey(key.raw)"
+        :class="key.color"
+        @click="handleQuickKey(key)"
         :disabled="!connected"
+        :title="key.title"
       >
-        {{ key.label }}
+        <component v-if="key.icon" :is="key.icon" :size="18" weight="bold" />
+        <span v-else>{{ key.label }}</span>
       </button>
+      <!-- Help button -->
       <button
-        class="quick-key arrow-key"
-        @click="handleArrowUp"
-        :disabled="!connected"
-        title="Up"
+        class="quick-key help-btn"
+        @click="showLegend = true"
+        title="Show key legend"
       >
-        <NIcon size="12"><PhArrowUp weight="bold" /></NIcon>
-      </button>
-      <button
-        class="quick-key arrow-key"
-        @click="handleArrowDown"
-        :disabled="!connected"
-        title="Down"
-      >
-        <NIcon size="12"><PhArrowDown weight="bold" /></NIcon>
+        <PhQuestion :size="18" weight="bold" />
       </button>
     </div>
+
+    <!-- Legend overlay -->
+    <Teleport to="body">
+      <div v-if="showLegend" class="legend-overlay" @click="showLegend = false">
+        <div class="legend-card" @click.stop>
+          <div class="legend-header">
+            <span>Quick Keys</span>
+            <button class="legend-close" @click="showLegend = false">✕</button>
+          </div>
+          <div class="legend-grid">
+            <div class="legend-item" v-for="(key, index) in quickKeys" :key="index">
+              <span class="legend-icon" :class="key.color">
+                <component v-if="key.icon" :is="key.icon" :size="20" weight="bold" />
+              </span>
+              <span class="legend-label">{{ key.title }}</span>
+            </div>
+          </div>
+          <div class="legend-footer">
+            Tap anywhere outside to close
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Input row -->
     <div class="input-row">
@@ -248,6 +321,61 @@ watch(() => props.rawMode, (raw) => {
 .quick-key:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+/* Color variants */
+.quick-key.blue {
+  background: rgba(83, 189, 250, 0.12);
+  border-color: rgba(83, 189, 250, 0.25);
+  color: #53bdfa;
+}
+.quick-key.blue:active {
+  background: rgba(83, 189, 250, 0.25);
+}
+
+.quick-key.purple {
+  background: rgba(180, 130, 250, 0.12);
+  border-color: rgba(180, 130, 250, 0.25);
+  color: #b482fa;
+}
+.quick-key.purple:active {
+  background: rgba(180, 130, 250, 0.25);
+}
+
+.quick-key.yellow {
+  background: rgba(250, 200, 80, 0.12);
+  border-color: rgba(250, 200, 80, 0.25);
+  color: #fac850;
+}
+.quick-key.yellow:active {
+  background: rgba(250, 200, 80, 0.25);
+}
+
+.quick-key.red {
+  background: rgba(250, 100, 100, 0.12);
+  border-color: rgba(250, 100, 100, 0.25);
+  color: #fa6464;
+}
+.quick-key.red:active {
+  background: rgba(250, 100, 100, 0.25);
+}
+
+.quick-key.orange {
+  background: rgba(250, 160, 80, 0.12);
+  border-color: rgba(250, 160, 80, 0.25);
+  color: #faa050;
+}
+.quick-key.orange:active {
+  background: rgba(250, 160, 80, 0.25);
+}
+
+.quick-key.teal {
+  background: rgba(80, 200, 180, 0.12);
+  border-color: rgba(80, 200, 180, 0.25);
+  color: #50c8b4;
+}
+.quick-key.teal:active {
+  background: rgba(80, 200, 180, 0.25);
 }
 
 .quick-key.arrow-key {
@@ -367,5 +495,128 @@ watch(() => props.rawMode, (raw) => {
 
 .mobile-input-bar.raw-mode .input-row {
   padding: 4px 6px;
+}
+
+/* Help button */
+.help-btn {
+  background: rgba(83, 189, 250, 0.1) !important;
+  border-color: rgba(83, 189, 250, 0.2) !important;
+  color: #53bdfa !important;
+}
+
+.help-btn:active {
+  background: rgba(83, 189, 250, 0.25) !important;
+}
+
+/* Legend overlay */
+.legend-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+.legend-card {
+  background: rgba(20, 24, 32, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  max-width: 320px;
+  width: 100%;
+  max-height: 80vh;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.legend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-weight: 600;
+  color: #e6e6e6;
+  font-size: 14px;
+}
+
+.legend-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.legend-close:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.legend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  padding: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.legend-item:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.legend-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Legend icon colors */
+.legend-icon.blue { color: #53bdfa; background: rgba(83, 189, 250, 0.15); }
+.legend-icon.purple { color: #b482fa; background: rgba(180, 130, 250, 0.15); }
+.legend-icon.yellow { color: #fac850; background: rgba(250, 200, 80, 0.15); }
+.legend-icon.red { color: #fa6464; background: rgba(250, 100, 100, 0.15); }
+.legend-icon.orange { color: #faa050; background: rgba(250, 160, 80, 0.15); }
+.legend-icon.teal { color: #50c8b4; background: rgba(80, 200, 180, 0.15); }
+
+.legend-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.3;
+}
+
+.legend-footer {
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: center;
 }
 </style>

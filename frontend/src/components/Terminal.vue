@@ -1594,11 +1594,11 @@ defineExpose({
   }
 
   .terminal :deep(.xterm-viewport) {
-    touch-action: manipulation;
+    touch-action: pan-y pinch-zoom;
   }
 
   .terminal :deep(.xterm-screen) {
-    touch-action: none;
+    touch-action: pan-y;
   }
 
   /* Hide scrollbar on mobile to save space */

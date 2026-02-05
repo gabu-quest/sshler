@@ -68,6 +68,22 @@ The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`
 - **Passive Touch Events** - Smooth scrolling with no jank
 - **Mobile Fullscreen** - Minimal UI in fullscreen for maximum typing space
 
+**📱 Mobile Terminal Input Bar**
+- **Quick Keys** - Phosphor icon buttons for keys hard to type on mobile
+- **Arrow Navigation** - ▲▼◀▶ for menu navigation (Claude Code, vim, etc.)
+- **Enter/Tab** - Confirm selections and autocomplete
+- **Escape/Stop** - Interrupt Claude Code turns or cancel operations (yellow)
+- **Ctrl+C** - Kill processes (red - danger indicator)
+- **Tmux Scroll Mode** - 📜 enters copy mode, ⏫⏬ for page up/down (orange group)
+- **Ctrl+D** - Graceful exit/EOF (teal)
+- **Help Legend** - Tap `?` to see what each button does
+- **Color-Coded** - Visual grouping by function (blue=confirm, red=danger, orange=scroll)
+
+**📱 Ultra-Thin Mobile Header**
+- **14px Height** - Maximum terminal real estate (JuiceSSH-inspired)
+- **Live Stats** - CPU/MEM percentages with color indicators (green/orange/red)
+- **Minimal Chrome** - Just logo and stats, no buttons
+
 **♿ Accessibility**
 - **WCAG 2.1 AA Compliant** - Semantic HTML, ARIA labels, keyboard navigation
 - **Screen Reader Support** - Proper focus management and announcements

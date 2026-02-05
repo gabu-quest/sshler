@@ -287,6 +287,48 @@ Use **relative paths** in `index.html` and `manifest.webmanifest` (e.g., `favico
 
 ---
 
+## Mobile Terminal UX
+
+### MobileInputBar Component
+
+Located at `frontend/src/components/MobileInputBar.vue`. Provides quick-access buttons for keys that are hard to type on mobile keyboards.
+
+**Quick Keys (Phosphor Icons):**
+
+| Icon | Key | Color | Purpose |
+|------|-----|-------|---------|
+| PhCaretUp/Down/Left/Right | Arrow keys | neutral | Menu navigation |
+| PhKeyReturn | Enter | blue | Confirm/submit |
+| PhArrowElbowDownRight | Tab | purple | Autocomplete/next |
+| PhStopCircle | Escape | yellow | Stop/cancel (interrupt Claude) |
+| PhHandPalm | Ctrl+C | red | Kill process (danger) |
+| PhScroll | Ctrl+B [ | orange | Enter tmux copy mode |
+| PhArrowFatLinesUp/Down | PgUp/PgDn | orange | Scroll in copy mode |
+| PhSignOut | Ctrl+D | teal | Exit/EOF |
+| PhQuestion | ? | blue | Show help legend |
+
+**Help Legend Modal:**
+- Tap `?` button to show all icons with descriptions
+- Color-coded icons match button colors
+- Tap outside to dismiss
+
+### Mobile Header (AppHeader.vue)
+
+Ultra-thin 14px header for maximum terminal space:
+- Logo (10px) on left
+- CPU/MEM stats on right (9px mono font)
+- Stats color: green (<75%), orange (75-89%), red (90%+)
+- No theme toggle or menu buttons on mobile
+
+### Key Files
+
+- `frontend/src/components/MobileInputBar.vue` — Quick keys + help legend
+- `frontend/src/components/Terminal.vue` — xterm.js wrapper with mobile viewport handling
+- `frontend/src/components/AppHeader.vue` — Responsive header with mobile stats
+- `frontend/src/composables/useResponsive.ts` — Mobile detection hooks
+
+---
+
 ## Before Committing
 
 - [ ] Tests pass (`uv run pytest && npm --prefix frontend test -- --run`)
