@@ -76,6 +76,16 @@ def _ensure_composite_indexes(db: SQLerDB) -> None:
         """
     )
 
+    # Composite index for directory visit lookups
+    # Used by: record_directory_visit(), search_directories()
+    # Query: WHERE box = ? AND path = ?
+    adapter.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_directory_visits_box_path
+        ON directory_visits(json_extract(data, '$.box'), json_extract(data, '$.path'))
+        """
+    )
+
 
 class Favorite(SQLerModel):
     """Persisted favourite directories per box."""
@@ -87,6 +97,18 @@ class Favorite(SQLerModel):
     position: int = 0
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
+
+
+class DirectoryVisit(SQLerModel):
+    """Track directory visits for frecency-based search."""
+
+    __tablename__ = "directory_visits"
+
+    box: str
+    path: str
+    visit_count: int = 1
+    last_visited: float = Field(default_factory=time.time)
+    first_visited: float = Field(default_factory=time.time)
 
 
 class Session(SQLerModel):
@@ -157,6 +179,12 @@ def initialize(config_dir: Path) -> None:
         Session.ensure_index("last_accessed_at")
         Session.ensure_index("active")
         Session.ensure_index("session_name")
+
+        # Initialize DirectoryVisit model
+        DirectoryVisit.set_db(db)
+        DirectoryVisit.ensure_index("box")
+        DirectoryVisit.ensure_index("path")
+        DirectoryVisit.ensure_index("last_visited")
 
         # Create composite indexes for performance optimization
         # Note: sqler only supports single-column indexes via ensure_index(),
@@ -560,3 +588,87 @@ def cleanup_old_sessions(max_age_days: int = 30) -> int:
 
 async def cleanup_old_sessions_async(max_age_days: int = 30) -> int:
     return await asyncio.to_thread(cleanup_old_sessions, max_age_days)
+
+
+# Directory Visit Tracking (Frecency)
+
+import math
+
+
+def _calculate_frecency_score(visit_count: int, last_visited: float) -> float:
+    """Calculate frecency score using exponential decay.
+
+    Formula: score = visit_count * exp(-0.1 * days_since_last_visit)
+
+    This weighs both frequency (visit_count) and recency (exponential decay).
+    A directory visited 10 times yesterday scores higher than one visited
+    100 times 30 days ago.
+    """
+    days_since = (time.time() - last_visited) / (24 * 60 * 60)
+    return visit_count * math.exp(-0.1 * days_since)
+
+
+def record_directory_visit(box_name: str, path: str) -> DirectoryVisit:
+    """Record or update a directory visit for frecency tracking."""
+    _require_db()
+    now = time.time()
+
+    with _DB_LOCK:
+        existing = (
+            DirectoryVisit.query()
+            .filter((F("box") == box_name) & (F("path") == path))
+            .first()
+        )
+
+        if existing:
+            existing.visit_count += 1
+            existing.last_visited = now
+            existing.save()
+            return existing
+
+        visit = DirectoryVisit(
+            box=box_name,
+            path=path,
+            visit_count=1,
+            last_visited=now,
+            first_visited=now,
+        )
+        visit.save()
+        return visit
+
+
+async def record_directory_visit_async(box_name: str, path: str) -> DirectoryVisit:
+    return await asyncio.to_thread(record_directory_visit, box_name, path)
+
+
+def search_directories(
+    box_name: str,
+    query: str,
+    limit: int = 20,
+) -> list[tuple[str, float]]:
+    """Search directories by substring match, ranked by frecency.
+
+    Returns list of (path, score) tuples sorted by score descending.
+    """
+    _require_db()
+    query_lower = query.lower()
+
+    with _DB_LOCK:
+        all_visits = DirectoryVisit.query().filter(F("box") == box_name).all()
+
+        results: list[tuple[str, float]] = []
+        for visit in all_visits:
+            if query_lower in visit.path.lower():
+                score = _calculate_frecency_score(visit.visit_count, visit.last_visited)
+                results.append((visit.path, score))
+
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:limit]
+
+
+async def search_directories_async(
+    box_name: str,
+    query: str,
+    limit: int = 20,
+) -> list[tuple[str, float]]:
+    return await asyncio.to_thread(search_directories, box_name, query, limit)

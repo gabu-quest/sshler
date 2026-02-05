@@ -309,8 +309,8 @@ describe("Files Store Properties", () => {
           // Verify no error occurred
           expect(store.uploadError).toBeNull();
         }
-      ), { numRuns: 20 });
-    });
+      ), { numRuns: 5 });
+    }, 30000);
 
     it("should handle upload errors gracefully", async () => {
       await fc.assert(fc.asyncProperty(

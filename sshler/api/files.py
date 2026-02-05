@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
+from .. import state
 from ..config import AppConfig
 from ..ssh import SSHError, sftp_list_directory
 from ..ssh_pool import get_pool
@@ -102,6 +103,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     modified=float(str(entry["modified"])) if entry.get("modified") is not None else None,
                 )
             )
+
+        # Track directory visit for frecency-based search (remote boxes only)
+        await state.record_directory_visit_async(box.name, normalized_remote)
 
         return APIDirectoryListing(box=box.name, directory=normalized_remote, entries=entries)
 
