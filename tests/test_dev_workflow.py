@@ -60,15 +60,16 @@ class TestDevWorkflowProperties:
                             # Test that serve_dev calls uvicorn with reload=True
                             with patch('sshler.cli.time.sleep'):  # Skip the sleep
                                 with patch('sshler.cli._open_browser_later'):  # Skip browser opening
-                                    try:
-                                        serve_dev(
-                                            host=host,
-                                            port=port,
-                                            log_level=log_level,
-                                            open_browser=False
-                                        )
-                                    except KeyboardInterrupt:
-                                        pass  # Expected when mocking
+                                    with patch('sshler.spa.mount_spa'):  # Skip SPA mount (no dist in CI)
+                                        try:
+                                            serve_dev(
+                                                host=host,
+                                                port=port,
+                                                log_level=log_level,
+                                                open_browser=False
+                                            )
+                                        except KeyboardInterrupt:
+                                            pass  # Expected when mocking
                             
                             # Verify that uvicorn was called with reload=True
                             mock_uvicorn.assert_called_once()
