@@ -263,6 +263,8 @@ const pasteFromClipboard = async () => {
     if (text && terminal) {
       // Use xterm's built-in paste method
       terminal.paste(text)
+      // Refocus terminal so Enter sends to terminal, not the button
+      terminal.focus()
     }
   } catch (err) {
     message.error('Failed to paste from clipboard')
