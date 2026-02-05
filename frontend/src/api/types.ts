@@ -111,3 +111,15 @@ export interface DownloadResponse {
   blob: Blob;
   filename: string;
 }
+
+export interface SearchResult {
+  path: string;
+  score: number;
+  source: "frecency" | "discovery";
+}
+
+export interface SearchResponse {
+  box: string;
+  query: string;
+  results: SearchResult[];
+}

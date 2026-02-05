@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch } from '@phosphor-icons/vue'
+import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch, PhCaretDown } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
+import { useResponsive } from '@/composables/useResponsive'
 import Terminal from '@/components/Terminal.vue'
+import MobileInputBar from '@/components/MobileInputBar.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
 import { gitInfo } from '@/api/http'
@@ -27,6 +29,47 @@ const showManualDir = ref(false)
 const showDirPicker = ref(false)
 const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
 const currentGitInfo = ref<GitInfo | null>(null)
+const { isMobile } = useResponsive()
+const mobileControlsExpanded = ref(false)
+const rawMode = ref(false)
+const terminalConnected = ref(false)
+
+// Track terminal connection state
+const onTerminalConnected = () => {
+  terminalConnected.value = true
+}
+const onTerminalDisconnected = () => {
+  terminalConnected.value = false
+}
+
+// MobileInputBar handlers
+const handleSmartSend = (data: string) => {
+  terminalRef.value?.send(data)
+}
+
+const handleRawSend = (data: string) => {
+  terminalRef.value?.sendRaw(data)
+}
+
+const handleToggleRawMode = () => {
+  rawMode.value = !rawMode.value
+  if (rawMode.value) {
+    // Switching to raw: re-enable xterm stdin and focus it
+    nextTick(() => terminalRef.value?.focus())
+  }
+}
+
+// Toggle mobile controls dropdown
+const toggleMobileControls = () => {
+  mobileControlsExpanded.value = !mobileControlsExpanded.value
+}
+
+// Collapse mobile controls when terminal gets focus
+const onTerminalFocus = () => {
+  if (isMobile.value) {
+    mobileControlsExpanded.value = false
+  }
+}
 
 // Load git info for current directory
 const loadGitInfo = async () => {
@@ -211,9 +254,9 @@ watch(() => boxesStore.items, () => {
 </script>
 
 <template>
-  <div class="page">
-    <!-- Compact Header - Directory Name Prominent -->
-    <header class="page-header">
+  <div class="page" :class="{ 'mobile': isMobile }">
+    <!-- Desktop Header -->
+    <header v-if="!isMobile" class="page-header">
       <div class="header-content">
         <div class="header-left">
           <NButton size="small" quaternary @click="goBack" title="Go Back">
@@ -286,8 +329,73 @@ watch(() => boxesStore.items, () => {
       </div>
     </header>
 
+    <!-- Mobile Header: ultra-compact single row -->
+    <header v-if="isMobile" class="mobile-header">
+      <button class="mobile-back-btn" @click="goBack" title="Back">
+        <NIcon size="14"><PhArrowLeft /></NIcon>
+      </button>
+      <button class="mobile-title-btn" @click="toggleMobileControls">
+        <span class="mobile-title-text">{{ displayDirName }}</span>
+        <span class="mobile-box-text">{{ selectedBox }}</span>
+        <NIcon size="10" class="mobile-caret" :class="{ expanded: mobileControlsExpanded }"><PhCaretDown /></NIcon>
+      </button>
+      <div class="mobile-header-actions">
+        <button
+          v-if="selectedBox"
+          class="mobile-action-btn"
+          :class="{ active: isCurrentDirFavorite }"
+          @click="toggleCurrentDirFavorite"
+        >
+          <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
+            <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'regular'" />
+          </NIcon>
+        </button>
+        <a
+          v-if="selectedBox"
+          :href="filesUrl"
+          class="mobile-action-btn"
+          @click.prevent="goToFiles"
+        >
+          <NIcon size="14"><PhFolderOpen /></NIcon>
+        </a>
+      </div>
+    </header>
+
+    <!-- Mobile Controls Dropdown -->
+    <div v-if="isMobile && mobileControlsExpanded" class="mobile-controls-dropdown">
+      <NSelect
+        v-model:value="selectedBox"
+        :options="boxOptions"
+        placeholder="Box"
+        :disabled="boxesStore.loading"
+        @update:value="handleBoxChange"
+        size="small"
+      />
+      <NSelect
+        v-if="selectedBox && !showManualDir"
+        :value="initialDirectory"
+        :options="directoryOptions"
+        placeholder="Dir"
+        @update:value="handleDirectoryChange"
+        size="small"
+      />
+      <NInput
+        v-if="showManualDir"
+        v-model:value="initialDirectory"
+        placeholder="/path/to/dir"
+        size="small"
+        @blur="sessionName = generateSessionName(initialDirectory)"
+        @keyup.enter="sessionName = generateSessionName(initialDirectory)"
+      />
+      <div v-if="currentGitInfo?.is_repo" class="mobile-git-info">
+        <NIcon size="12"><PhGitBranch /></NIcon>
+        {{ currentGitInfo.branch }}
+        <span v-if="currentGitInfo.dirty" class="dirty-indicator">*</span>
+      </div>
+    </div>
+
     <!-- Terminal Container -->
-    <div class="terminal-container">
+    <div class="terminal-container" @focusin="onTerminalFocus">
       <Terminal
         v-if="selectedBox"
         ref="terminalRef"
@@ -295,16 +403,20 @@ watch(() => boxesStore.items, () => {
         :box-name="selectedBox"
         :session-name="sessionName"
         :directory="initialDirectory"
+        :show-title-bar="!isMobile"
+        :external-input="isMobile && !rawMode"
+        @connected="onTerminalConnected"
+        @disconnected="onTerminalDisconnected"
       />
-      
+
       <div v-else class="no-box-selected">
         <div class="empty-state">
           <NIcon size="48" class="empty-icon"><PhTerminalWindow /></NIcon>
           <h3>No Box Selected</h3>
           <p class="text-muted">Choose a box from the dropdown above to start a terminal session.</p>
-          <NButton 
-            v-if="boxOptions.length > 0" 
-            type="primary" 
+          <NButton
+            v-if="boxOptions.length > 0"
+            type="primary"
             @click="selectedBox = boxOptions[0]?.value || null"
           >
             Connect to {{ boxOptions[0]?.label }}
@@ -312,7 +424,17 @@ watch(() => boxesStore.items, () => {
         </div>
       </div>
     </div>
-    
+
+    <!-- Mobile Smart Input Bar -->
+    <MobileInputBar
+      v-if="isMobile && selectedBox"
+      :raw-mode="rawMode"
+      :connected="terminalConnected"
+      @send="handleSmartSend"
+      @send-raw="handleRawSend"
+      @toggle-raw-mode="handleToggleRawMode"
+    />
+
     <!-- Directory Picker Modal -->
     <DirectoryPickerModal
       v-if="selectedBox"
@@ -337,6 +459,12 @@ watch(() => boxesStore.items, () => {
   min-width: 0;
   padding: 0 16px;
   box-sizing: border-box;
+}
+
+.page.mobile {
+  gap: 0;
+  height: 100%;
+  padding: 0;
 }
 
 .page-header {
@@ -412,10 +540,14 @@ watch(() => boxesStore.items, () => {
 .terminal-container {
   flex: 1;
   min-height: 0;
-  min-width: 0;  /* Critical for flex layouts - allows shrinking */
+  min-width: 0;
   width: 100%;
   border-radius: 8px;
   overflow: hidden;
+}
+
+.page.mobile .terminal-container {
+  border-radius: 0;
 }
 
 .no-box-selected {
@@ -448,58 +580,123 @@ watch(() => boxesStore.items, () => {
   margin: 0 0 24px 0;
 }
 
-@media (max-width: 768px) {
-  .page {
-    gap: 8px;
-    height: calc(var(--vh-full, 100vh) - 80px);
-    padding: 0 8px;
-  }
-
-  .header-content {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .header-left {
-    justify-content: flex-start;
-  }
-
-  .dir-title {
-    font-size: 18px;
-  }
-
-  .header-controls {
-    flex-wrap: wrap;
-  }
-
-  .header-controls :deep(.n-select),
-  .header-controls :deep(.n-input) {
-    min-width: 0 !important;
-    flex: 1 1 120px;
-  }
+/* ==============================
+   MOBILE HEADER - ultra compact
+   ============================== */
+.mobile-header {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 32px;
+  padding: 0 4px;
+  background: rgba(10, 14, 20, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  z-index: 10;
 }
 
-@media (max-width: 480px) {
-  .page {
-    padding: 0 4px;
-  }
+.mobile-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  flex-shrink: 0;
+}
 
-  .header-left {
-    gap: 8px;
-  }
+.mobile-back-btn:active {
+  color: rgba(255, 255, 255, 0.8);
+}
 
-  .dir-title {
-    font-size: 16px;
-  }
+.mobile-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+}
 
-  .box-badge {
-    display: none;
-  }
+.mobile-title-text {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-  .git-badge {
-    display: none;
-  }
+.mobile-box-text {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mobile-caret {
+  color: rgba(255, 255, 255, 0.3);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.mobile-caret.expanded {
+  transform: rotate(180deg);
+}
+
+.mobile-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.mobile-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.mobile-action-btn:active,
+.mobile-action-btn.active {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Mobile controls dropdown */
+.mobile-controls-dropdown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(10, 14, 20, 0.98);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  z-index: 9;
+}
+
+.mobile-git-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #a78bfa;
+  font-family: var(--font-mono);
+  padding: 2px 0;
 }
 
 .terminal-container :deep(.terminal-wrapper) {
@@ -536,11 +733,5 @@ watch(() => boxesStore.items, () => {
   .no-box-selected {
     border: 2px solid var(--stroke);
   }
-}
-
-.terminal-container:focus-within {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: 8px;
 }
 </style>

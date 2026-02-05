@@ -70,6 +70,21 @@ class MockWebSocket {
 const globalAny = globalThis as any;
 globalAny.WebSocket = MockWebSocket;
 
+// Mock matchMedia for useResponsive composable
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
 vi.mock("naive-ui", () => {
   const Stub = defineComponent({ template: "<div><slot /></div>" });
   return {

@@ -97,6 +97,11 @@
 
 **Terminal component** wraps xterm.js with WebSocket management.
 
+**Directory search** uses frecency-based ranking:
+- Local box: queries zoxide directly for instant results
+- Remote boxes: SQLite frecency table + SSH `find` for discovery
+- Formula: `score = visit_count * exp(-0.1 * days_since_last_visit)`
+
 ---
 
 ## Project CLI (just)
@@ -143,6 +148,7 @@ pnpm --prefix frontend test -- --run  # Frontend Vitest
 | API | test_api_v1.py | REST endpoints |
 | Security | test_command_injection.py, test_path_validation.py | Input sanitization |
 | Auth | test_session_auth.py, test_rate_limit.py | Session + rate limiting |
+| Search | test_search.py | Frecency tracking + zoxide |
 | E2E | tests/e2e/ | Playwright browser tests |
 | Frontend | src/**/*.spec.ts | Vitest component tests |
 
@@ -284,6 +290,48 @@ The `refresh_box` endpoint resets connection overrides but should NOT touch favo
 
 ### Asset Paths in Frontend
 Use **relative paths** in `index.html` and `manifest.webmanifest` (e.g., `favicon.png` not `/app/favicon.png`). Vite handles base path resolution during build. Absolute paths break the dev server.
+
+---
+
+## Mobile Terminal UX
+
+### MobileInputBar Component
+
+Located at `frontend/src/components/MobileInputBar.vue`. Provides quick-access buttons for keys that are hard to type on mobile keyboards.
+
+**Quick Keys (Phosphor Icons):**
+
+| Icon | Key | Color | Purpose |
+|------|-----|-------|---------|
+| PhCaretUp/Down/Left/Right | Arrow keys | neutral | Menu navigation |
+| PhKeyReturn | Enter | blue | Confirm/submit |
+| PhArrowElbowDownRight | Tab | purple | Autocomplete/next |
+| PhStopCircle | Escape | yellow | Stop/cancel (interrupt Claude) |
+| PhHandPalm | Ctrl+C | red | Kill process (danger) |
+| PhScroll | Ctrl+B [ | orange | Enter tmux copy mode |
+| PhArrowFatLinesUp/Down | PgUp/PgDn | orange | Scroll in copy mode |
+| PhSignOut | Ctrl+D | teal | Exit/EOF |
+| PhQuestion | ? | blue | Show help legend |
+
+**Help Legend Modal:**
+- Tap `?` button to show all icons with descriptions
+- Color-coded icons match button colors
+- Tap outside to dismiss
+
+### Mobile Header (AppHeader.vue)
+
+Ultra-thin 14px header for maximum terminal space:
+- Logo (10px) on left
+- CPU/MEM stats on right (9px mono font)
+- Stats color: green (<75%), orange (75-89%), red (90%+)
+- No theme toggle or menu buttons on mobile
+
+### Key Files
+
+- `frontend/src/components/MobileInputBar.vue` — Quick keys + help legend
+- `frontend/src/components/Terminal.vue` — xterm.js wrapper with mobile viewport handling
+- `frontend/src/components/AppHeader.vue` — Responsive header with mobile stats
+- `frontend/src/composables/useResponsive.ts` — Mobile detection hooks
 
 ---
 

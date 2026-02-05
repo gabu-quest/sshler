@@ -18,6 +18,7 @@ import { useFavoritesStore } from "@/stores/favorites";
 import FavoritesPanel from "@/components/FavoritesPanel.vue";
 import CodeEditor from "@/components/CodeEditor.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
+import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
 import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 
@@ -676,8 +677,13 @@ const columns = computed(() => {
         <NIcon size="18"><PhList /></NIcon>
         <span>Files</span>
         <div class="card-actions">
-          <NSpace size="small">
-            <NInput v-model:value="filterQuery" placeholder="Filter files..." size="small" style="width: 200px">
+          <NSpace size="small" :wrap="isMobile">
+            <DirectorySearchInput
+              :box="selectedBox"
+              :token="tokenValue"
+              @select="navigateToDirectory"
+            />
+            <NInput v-model:value="filterQuery" placeholder="Filter..." size="small" style="width: 140px">
               <template #prefix><NIcon size="14"><PhMagnifyingGlass /></NIcon></template>
             </NInput>
             <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">All</NButton>

@@ -55,6 +55,14 @@ function getStatColor(percent: number | null | undefined, normalColor: string): 
   return normalColor;
 }
 
+// Green/orange/red scale for mobile stats
+function getStatColorGreen(percent: number | null | undefined): string {
+  const p = percent ?? 0;
+  if (p >= 90) return '#ef4444'; // Red - critical
+  if (p >= 75) return '#f97316'; // Orange - warning
+  return '#22c55e'; // Green - good
+}
+
 function isStatCritical(percent: number | null | undefined): boolean {
   return (percent ?? 0) >= 90;
 }
@@ -185,10 +193,10 @@ onUnmounted(() => {
       </RouterLink>
     </nav>
 
-    <!-- Header Actions -->
-    <div class="header-actions">
+    <!-- Header Actions (Desktop) -->
+    <div class="header-actions desktop-actions">
       <NSpace align="center" size="small">
-        <!-- System Stats (local box) -->
+        <!-- System Stats (local box) - Desktop version with progress bars -->
         <NTooltip v-if="localStats && !localStats.error" :delay="300">
           <template #trigger>
             <div
@@ -265,23 +273,17 @@ onUnmounted(() => {
         </NButton>
         <CommandPalette />
         <ShortcutsOverlay />
-        
-        <!-- Mobile Menu Button -->
-        <NButton 
-          v-if="isMobile"
-          quaternary 
-          circle 
-          size="small" 
-          @click="toggleMobileMenu"
-          :aria-label="isMobileMenuOpen ? 'Close menu' : 'Open menu'"
-          :aria-expanded="isMobileMenuOpen"
-          class="mobile-menu-button"
-        >
-          <NIcon size="18" aria-hidden="true">
-            <component :is="isMobileMenuOpen ? PhX : PhList" />
-          </NIcon>
-        </NButton>
       </NSpace>
+    </div>
+
+    <!-- Header Actions (Mobile) - ultra minimal stats -->
+    <div class="header-actions mobile-actions">
+      <span v-if="localStats && !localStats.error" class="mobile-stats">
+        <span class="stat-label">CPU</span>
+        <span class="stat-value" :style="{ color: getStatColorGreen(localStats.cpu_percent) }">{{ localStats.cpu_percent?.toFixed(0) }}</span>
+        <span class="stat-label">MEM</span>
+        <span class="stat-value" :style="{ color: getStatColorGreen(localStats.memory_percent) }">{{ localStats.memory_percent?.toFixed(0) }}</span>
+      </span>
     </div>
 
     <!-- Mobile Navigation Drawer -->
@@ -487,8 +489,28 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.mobile-menu-button {
+/* Mobile header elements */
+.mobile-actions {
   display: none;
+}
+
+.mobile-stats {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.mobile-stats .stat-label {
+  color: #53bdfa;
+  font-size: 8px;
+}
+
+.mobile-stats .stat-value {
+  min-width: 16px;
 }
 
 /* Mobile Navigation */
@@ -544,42 +566,36 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .app-header {
     grid-template-columns: auto 1fr auto;
-    padding: 12px 16px;
+    padding: 0 6px;
+    gap: 8px;
+    min-height: 14px;
+    height: 14px;
+    background: rgba(10, 14, 20, 0.98);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   }
 
   .desktop-nav {
     display: none;
   }
 
-  .mobile-menu-button {
+  .desktop-actions {
+    display: none;
+  }
+
+  .mobile-actions {
     display: flex;
+    align-items: center;
+    justify-content: flex-end;
   }
 
-  .mode-label {
-    display: none;
+  .brand-logo {
+    height: 10px;
+    border-radius: 2px;
   }
 
-  .auth-username {
-    display: none;
-  }
-
-  .auth-indicator {
-    padding: 6px 8px;
-  }
-}
-
-@media (max-width: 480px) {
-  .app-header {
-    padding: 8px 12px;
-    gap: 12px;
-  }
-
-  .brand-mark {
-    gap: 6px;
-  }
-
-  .brand-mark span {
-    font-size: 14px;
+  .brand {
+    display: flex;
+    align-items: center;
   }
 }
 

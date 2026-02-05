@@ -16,6 +16,8 @@ interface Props {
   fontSize?: number
   fontFamily?: string
   showTitleBar?: boolean
+  /** When true, suppress xterm.js keyboard capture — external input handles it */
+  externalInput?: boolean
 }
 
 interface Emits {
@@ -33,7 +35,8 @@ const props = withDefaults(defineProps<Props>(), {
   fontSize: 14,
   // Monaspace Neon for text, Nerd Fonts for Starship symbols
   fontFamily: '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace',
-  showTitleBar: true
+  showTitleBar: true,
+  externalInput: false
 })
 
 const emit = defineEmits<Emits>()
@@ -381,7 +384,9 @@ const createTerminal = () => {
     convertEol: true,
     allowProposedApi: true,
     // Use canvas renderer for more stable rendering (avoid WebGL glitches)
-    rendererType: 'canvas'
+    rendererType: 'canvas',
+    // When external input is active, suppress xterm keyboard capture
+    disableStdin: props.externalInput
   })
 
   fitAddon = new FitAddon()
@@ -821,26 +826,59 @@ const search = (term: string) => {
   searchAddon?.findNext(term)
 }
 
-// Handle mobile viewport changes
+// Handle mobile viewport changes (keyboard show/hide)
 const handleViewportChange = () => {
-  if (window.visualViewport) {
-    const viewport = window.visualViewport
-    const handleResize = () => {
-      if (resizeTimeout) {
-        clearTimeout(resizeTimeout)
-      }
-      resizeTimeout = window.setTimeout(() => {
-        fitAddon?.fit()
-      }, 150)
+  if (!window.visualViewport) return undefined
+
+  const viewport = window.visualViewport
+  const wrapperEl = () => document.querySelector('.terminal-wrapper') as HTMLElement | null
+
+  const handleResize = () => {
+    if (resizeTimeout) {
+      clearTimeout(resizeTimeout)
     }
-    
-    viewport.addEventListener('resize', handleResize)
-    
-    return () => {
-      viewport.removeEventListener('resize', handleResize)
+    resizeTimeout = window.setTimeout(() => {
+      if (isMobile.value) {
+        // On mobile, the visual viewport shrinks when keyboard opens.
+        // We need to resize the terminal container to fit the visible area.
+        const wrapper = wrapperEl()
+        if (wrapper) {
+          const viewportHeight = viewport.height
+          const wrapperTop = wrapper.getBoundingClientRect().top
+          const availableHeight = viewportHeight - wrapperTop
+          if (availableHeight > 100) {
+            wrapper.style.height = `${availableHeight}px`
+          }
+        }
+        // Scroll the page so terminal input is visible
+        viewport.addEventListener('scroll', () => {
+          window.scrollTo(0, 0)
+        }, { once: true })
+      }
+      fitAddon?.fit()
+    }, 50) // Faster response for keyboard events
+  }
+
+  // Reset height when keyboard closes (viewport returns to full height)
+  const handleScroll = () => {
+    // Prevent browser from scrolling the page behind the keyboard
+    if (isMobile.value) {
+      window.scrollTo(0, 0)
     }
   }
-  return undefined
+
+  viewport.addEventListener('resize', handleResize)
+  viewport.addEventListener('scroll', handleScroll)
+
+  return () => {
+    viewport.removeEventListener('resize', handleResize)
+    viewport.removeEventListener('scroll', handleScroll)
+    // Reset any inline height
+    const wrapper = wrapperEl()
+    if (wrapper) {
+      wrapper.style.height = ''
+    }
+  }
 }
 
 // Store cleanup function for viewport
@@ -916,8 +954,22 @@ watch(effectiveFontSize, (newSize) => {
   }
 })
 
+// Toggle stdin capture when externalInput prop changes
+watch(() => props.externalInput, (external) => {
+  if (terminal) {
+    terminal.options.disableStdin = external
+  }
+})
+
 // Send data directly to terminal (for tmux commands etc)
 const send = (data: string) => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(data))
+  }
+}
+
+// Send raw bytes (for control sequences from MobileInputBar)
+const sendRaw = (data: string) => {
   if (websocket && websocket.readyState === WebSocket.OPEN) {
     websocket.send(textEncoder.encode(data))
   }
@@ -931,6 +983,7 @@ defineExpose({
   clear,
   search,
   send,
+  sendRaw,
   toggleMouseMode,
   toggleFullscreen,
   tmuxNewWindow,
@@ -1493,25 +1546,32 @@ defineExpose({
 @media (max-width: 768px) {
   .terminal-wrapper {
     border-radius: 0;
+    border: none;
+    box-shadow: none;
+    background: #0a0e14;
+  }
+
+  .terminal-wrapper:focus-within {
+    border-color: transparent;
+    box-shadow: none;
   }
 
   .terminal-titlebar {
-    height: 36px;
-    padding: 0 8px;
+    height: 28px;
+    padding: 0 6px;
   }
 
   .titlebar-text {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .traffic-lights {
     display: none;
   }
 
-  /* Enlarge titlebar buttons for touch */
   .titlebar-btn {
-    width: 36px;
-    height: 36px;
+    width: 28px;
+    height: 28px;
   }
 
   /* Hide copy/paste buttons on mobile — use OS gestures instead */
@@ -1521,15 +1581,33 @@ defineExpose({
   }
 
   .terminal-container {
-    padding: 4px 6px 8px;
+    padding: 2px 2px 0;
+  }
+
+  /* Remove text glow on mobile for perf */
+  .terminal :deep(.xterm-rows) {
+    text-shadow: none;
+  }
+
+  .scanlines {
+    display: none;
   }
 
   .terminal :deep(.xterm-viewport) {
-    touch-action: manipulation;
+    touch-action: pan-y pinch-zoom;
   }
 
   .terminal :deep(.xterm-screen) {
-    touch-action: none;
+    touch-action: pan-y;
+  }
+
+  /* Hide scrollbar on mobile to save space */
+  .terminal :deep(.xterm-viewport)::-webkit-scrollbar {
+    width: 0;
+  }
+
+  .terminal :deep(.xterm-viewport) {
+    scrollbar-width: none;
   }
 }
 

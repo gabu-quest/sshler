@@ -8,6 +8,7 @@ import type {
   FilePreview,
   GitInfo,
   PinToggle,
+  SearchResponse,
   SessionInfo,
   TerminalHandshake,
   SimpleMessage,
@@ -513,4 +514,20 @@ export async function downloadFile(
     throw new Error(`download failed ${res.status}`);
   }
   return res.blob();
+}
+
+export async function searchDirectories(
+  name: string,
+  query: string,
+  token: string | null,
+  limit: number = 20,
+): Promise<SearchResponse> {
+  const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/search`, window.location.origin);
+  url.searchParams.set("q", query);
+  url.searchParams.set("limit", String(limit));
+  const res = await fetch(url.toString().replace(window.location.origin, ""), {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SearchResponse>(res);
 }

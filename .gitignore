@@ -1,6 +1,9 @@
 debug.log
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
+build/
 .venv/
 frontend/node_modules
 sshler/static/dist
@@ -8,8 +11,10 @@ sshler/static/dist
 
 # Environment variables (sensitive)
 .env
+.env.*
 .env.local
 .env.*.local
+.env.production
 
 # Test cache
 .hypothesis/
@@ -20,3 +25,6 @@ CLAUDE.local.md
 
 # Sandbox
 .sandbox/
+
+# Kiro specs (local planning)
+.kiro/
