@@ -18,6 +18,7 @@ import {
 
 import { useRouter } from "vue-router";
 import { useAppStore } from "@/stores/app";
+import { useI18n } from "@/i18n";
 
 interface CommandAction {
   id: string;
@@ -32,6 +33,7 @@ interface CommandAction {
 
 const router = useRouter();
 const appStore = useAppStore();
+const { t } = useI18n();
 const show = ref(false);
 const query = ref("");
 const selectedIndex = ref(0);
@@ -39,85 +41,85 @@ const selectedIndex = ref(0);
 const actions = computed((): CommandAction[] => [
   {
     id: "nav-overview",
-    label: "Overview",
-    description: "Go to overview page",
+    label: t('palette.action_overview'),
+    description: t('palette.action_overview_desc'),
     icon: PhHouseLine,
     shortcut: "Alt+H",
-    category: "Navigation",
+    category: t('nav.navigation'),
     action: () => router.push("/"),
     keywords: ["home", "dashboard", "main"],
   },
   {
     id: "nav-boxes",
-    label: "Boxes",
-    description: "Manage SSH server connections",
+    label: t('palette.action_boxes'),
+    description: t('palette.action_boxes_desc'),
     icon: PhFolderSimple,
     shortcut: "Alt+B",
-    category: "Navigation",
+    category: t('nav.navigation'),
     action: () => router.push("/boxes"),
     keywords: ["servers", "ssh", "connections"],
   },
   {
     id: "nav-files",
-    label: "Files",
-    description: "Browse and manage remote files",
+    label: t('palette.action_files'),
+    description: t('palette.action_files_desc'),
     icon: PhFolderSimple,
     shortcut: "Alt+F",
-    category: "Navigation",
+    category: t('nav.navigation'),
     action: () => router.push("/files"),
     keywords: ["browse", "sftp", "directory"],
   },
   {
     id: "nav-terminal",
-    label: "Terminal",
-    description: "Access remote terminal sessions",
+    label: t('palette.action_terminal'),
+    description: t('palette.action_terminal_desc'),
     icon: PhTerminal,
     shortcut: "Alt+T",
-    category: "Navigation",
+    category: t('nav.navigation'),
     action: () => router.push("/terminal"),
     keywords: ["shell", "tmux", "console"],
   },
   {
     id: "nav-settings",
-    label: "Settings",
-    description: "Application preferences and configuration",
+    label: t('palette.action_settings'),
+    description: t('palette.action_settings_desc'),
     icon: PhGearSix,
     shortcut: "Alt+S",
-    category: "Navigation",
+    category: t('nav.navigation'),
     action: () => router.push("/settings"),
     keywords: ["preferences", "config", "options"],
   },
   {
     id: "nav-favorites",
-    label: "Favorites",
-    description: "Quick access to bookmarked locations",
+    label: t('palette.action_favorites'),
+    description: t('palette.action_favorites_desc'),
     icon: PhStar,
-    category: "Navigation",
+    category: t('nav.navigation'),
     action: () => router.push({ path: "/files", hash: "#favorites" }),
     keywords: ["bookmarks", "starred", "saved", "file"],
   },
   {
     id: "theme-toggle",
-    label: "Toggle Theme",
-    description: `Switch to ${appStore.isDark ? 'light' : 'dark'} theme`,
+    label: t('palette.action_toggle_theme'),
+    description: t('palette.action_toggle_theme_desc'),
     icon: appStore.isDark ? PhSun : PhMoonStars,
-    category: "Appearance",
+    category: t('settings.appearance'),
     action: () => appStore.toggleTheme(),
     keywords: ["dark", "light", "appearance"],
   },
   {
     id: "theme-cycle",
-    label: "Cycle Theme",
-    description: "Cycle through light, dark, and system themes",
+    label: t('palette.action_cycle_theme'),
+    description: t('palette.action_cycle_theme_desc'),
     icon: PhArrowClockwise,
-    category: "Appearance",
+    category: t('settings.appearance'),
     action: () => appStore.cycleTheme(),
     keywords: ["theme", "system", "auto"],
   },
   {
     id: "reload",
-    label: "Reload Application",
-    description: "Refresh the entire application",
+    label: t('palette.action_reload'),
+    description: t('palette.action_reload_desc'),
     icon: PhLightning,
     category: "System",
     action: () => window.location.reload(),
@@ -125,8 +127,8 @@ const actions = computed((): CommandAction[] => [
   },
   {
     id: "search-global",
-    label: "Global Search",
-    description: "Search across all files and boxes",
+    label: t('palette.action_search'),
+    description: t('palette.action_search_desc'),
     icon: PhMagnifyingGlass,
     shortcut: "Ctrl+Shift+F",
     category: "Search",
@@ -311,13 +313,13 @@ watch(
 </script>
 
 <template>
-  <NButton 
-    quaternary 
-    circle 
-    size="small" 
+  <NButton
+    quaternary
+    circle
+    size="small"
     @click="show = true"
-    :aria-label="'Open command palette (Cmd/Ctrl+K)'"
-    title="Command Palette - Cmd/Ctrl+K"
+    :aria-label="t('palette.open')"
+    :title="t('palette.tooltip')"
   >
     <NIcon size="18" aria-hidden="true">
       <PhCommand />
@@ -340,23 +342,23 @@ watch(
         <NIcon size="18" aria-hidden="true">
           <PhCommand />
         </NIcon>
-        <span id="palette-title">Command Palette</span>
+        <span id="palette-title">{{ t('palette.title') }}</span>
       </div>
     </template>
     
     <div class="palette">
       <div class="palette-search">
-        <NInput 
+        <NInput
           id="cmd-input"
-          v-model:value="query" 
-          placeholder="Type a command or search..." 
-          autofocus 
+          v-model:value="query"
+          :placeholder="t('palette.placeholder')"
+          autofocus
           clearable
           size="large"
           :aria-describedby="'palette-description'"
         />
         <div id="palette-description" class="sr-only">
-          Use arrow keys to navigate, Enter to select, Escape to close
+          {{ t('palette.nav_help') }}
         </div>
       </div>
       
@@ -401,17 +403,17 @@ watch(
           <PhMagnifyingGlass />
         </NIcon>
         <div class="palette-empty-text">
-          <div>No commands found</div>
-          <div class="text-muted">Try a different search term</div>
+          <div>{{ t('palette.no_results') }}</div>
+          <div class="text-muted">{{ t('palette.no_results_hint') }}</div>
         </div>
       </div>
       
       <div v-else class="palette-help">
         <div class="palette-help-section">
-          <strong>Navigation:</strong> Use ↑↓ arrows to navigate, Enter to select
+          <strong>{{ t('palette.nav_label') }}</strong> {{ t('palette.nav_detail') }}
         </div>
         <div class="palette-help-section">
-          <strong>Shortcuts:</strong> Cmd/Ctrl+K to toggle, Escape to close
+          <strong>{{ t('palette.shortcuts_label') }}</strong> {{ t('palette.shortcuts_detail') }}
         </div>
       </div>
     </div>

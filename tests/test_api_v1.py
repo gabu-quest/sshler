@@ -187,3 +187,49 @@ def test_sessions_crud(tmp_path):
     finally:
         client.close()
         state.reset_state()
+
+
+def test_refresh_box_clears_overrides(tmp_path):
+    """Refreshing a box removes stored connection overrides but preserves favorites."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "boxes": [
+                    {
+                        "name": "demo-box",
+                        "host": "stale-host",
+                        "user": "override",
+                        "ssh_alias": "override-alias",
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text(
+        "Host demo-box\n  HostName fresh.example\n  User deploy",
+        encoding="utf-8",
+    )
+    os.environ["SSHLER_SSH_CONFIG"] = str(ssh_config)
+
+    client = build_client(config_dir)
+    try:
+        resp = client.post(
+            "/api/v1/boxes/demo-box/refresh",
+            headers=auth_headers(),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "demo-box"
+        assert data["refreshed"] is True
+
+        stored = yaml.safe_load((config_dir / "boxes.yaml").read_text(encoding="utf-8"))
+        assert stored["boxes"] == []
+    finally:
+        client.close()
+        os.environ.pop("SSHLER_SSH_CONFIG", None)

@@ -15,6 +15,7 @@ import {
   NProgress,
   useMessage
 } from "naive-ui";
+import { useI18n } from "@/i18n";
 import {
   PhPlus,
   PhTerminal,
@@ -37,6 +38,7 @@ import { resetFavicon } from "@/utils/emoji-favicon";
 
 const router = useRouter();
 const message = useMessage();
+const { t } = useI18n();
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
 const sessionsStore = useSessionsStore();
@@ -135,7 +137,7 @@ const quickStats = computed(() => ({
 
 onMounted(async () => {
   // Reset to default favicon on overview page
-  document.title = 'Overview';
+  document.title = t('overview.title');
   resetFavicon();
 
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
@@ -162,7 +164,7 @@ const getBoxSessionCount = (boxName: string): number => {
 
 const getBoxLastUsed = (boxName: string): string => {
   const session = sessionsStore.getMostRecentSession(boxName);
-  if (!session) return 'never';
+  if (!session) return t('overview.never');
   return sessionsStore.formatRelativeTime(session.last_accessed_at);
 };
 
@@ -193,7 +195,7 @@ const handleQuickConnect = () => {
   if (recentServer.value) {
     router.push(`/terminal?box=${recentServer.value.name}`);
   } else {
-    message.warning('No servers available');
+    message.warning(t('overview.no_servers_available'));
   }
 };
 
@@ -201,7 +203,7 @@ const handleBrowseFiles = () => {
   if (recentServer.value) {
     router.push(`/files?box=${recentServer.value.name}`);
   } else {
-    message.warning('No servers available');
+    message.warning(t('overview.no_servers_available'));
   }
 };
 
@@ -223,18 +225,18 @@ const handleBrowseServerFiles = (serverName: string) => {
     <!-- Compact Stats Pill -->
     <div class="stats-pill">
       <NIcon size="14"><PhChartBar /></NIcon>
-      <span>{{ quickStats.servers }} server{{ quickStats.servers === 1 ? '' : 's' }}</span>
+      <span>{{ quickStats.servers }} {{ quickStats.servers === 1 ? t('overview.server') : t('overview.servers') }}</span>
       <span class="stats-separator">•</span>
-      <span>{{ quickStats.pinnedBoxes }} pinned</span>
+      <span>{{ quickStats.pinnedBoxes }} {{ t('overview.pinned') }}</span>
       <span class="stats-separator">•</span>
-      <span>{{ quickStats.favorites }} favorite{{ quickStats.favorites === 1 ? '' : 's' }}</span>
+      <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
     </div>
 
     <!-- Favorites Bar -->
     <section v-if="allFavorites.length > 0" class="favorites-section">
       <div class="section-header-inline">
         <NIcon size="18" color="#faad14"><PhStar weight="fill" /></NIcon>
-        <h3>Favorites</h3>
+        <h3>{{ t('overview.favorites_title') }}</h3>
       </div>
       <div class="favorites-list">
         <div
@@ -250,20 +252,20 @@ const handleBrowseServerFiles = (serverName: string) => {
             <a
               :href="getFavoriteTerminalUrl(fav.box, fav.path)"
               class="favorite-btn favorite-btn-terminal"
-              title="Open terminal (middle-click for background tab)"
+              :title="t('overview.terminal')"
               @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
             >
               <NIcon size="14"><PhTerminal /></NIcon>
-              <span>Terminal</span>
+              <span>{{ t('overview.terminal') }}</span>
             </a>
             <a
               :href="getFavoriteFilesUrl(fav.box, fav.path)"
               class="favorite-btn favorite-btn-files"
-              title="Browse files (middle-click for background tab)"
+              :title="t('overview.files')"
               @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
             >
               <NIcon size="14"><PhFolderOpen /></NIcon>
-              <span>Files</span>
+              <span>{{ t('overview.files') }}</span>
             </a>
           </div>
         </div>
@@ -272,20 +274,20 @@ const handleBrowseServerFiles = (serverName: string) => {
 
     <!-- Server Grid -->
     <section class="servers-section">
-      <h2 class="section-title">Your Servers</h2>
-      
+      <h2 class="section-title">{{ t('overview.your_servers') }}</h2>
+
       <div v-if="boxesStore.loading" class="loading-state">
         <NSpin size="large" />
-        <p>Loading your servers...</p>
+        <p>{{ t('overview.loading_servers') }}</p>
       </div>
       
-      <NEmpty v-else-if="!hasServers" description="No servers configured">
+      <NEmpty v-else-if="!hasServers" :description="t('overview.no_servers')">
         <template #extra>
           <NButton type="primary" @click="router.push('/boxes')">
             <template #icon>
               <NIcon><PhPlus /></NIcon>
             </template>
-            Add Your First Server
+            {{ t('overview.add_first_server') }}
           </NButton>
         </template>
       </NEmpty>
@@ -303,12 +305,12 @@ const handleBrowseServerFiles = (serverName: string) => {
                 </NIcon>
                 <span class="server-name">{{ box.name }}</span>
               </div>
-              <NTag 
-                v-if="box.pinned" 
-                size="small" 
+              <NTag
+                v-if="box.pinned"
+                size="small"
                 type="info"
               >
-                Favorite
+                {{ t('overview.favorite_label') }}
               </NTag>
             </div>
             
@@ -319,7 +321,7 @@ const handleBrowseServerFiles = (serverName: string) => {
               <div v-if="getBoxStats(box.name)" class="server-stats">
                 <div class="stat-row">
                   <NIcon size="14" class="stat-icon"><PhCpu /></NIcon>
-                  <span class="stat-label">CPU</span>
+                  <span class="stat-label">{{ t('overview.cpu') }}</span>
                   <NProgress
                     type="line"
                     :percentage="getBoxStats(box.name)?.cpu_percent ?? 0"
@@ -333,7 +335,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                 </div>
                 <div class="stat-row">
                   <NIcon size="14" class="stat-icon"><PhMemory /></NIcon>
-                  <span class="stat-label">RAM</span>
+                  <span class="stat-label">{{ t('overview.ram') }}</span>
                   <NProgress
                     type="line"
                     :percentage="getBoxStats(box.name)?.memory_percent ?? 0"
@@ -346,7 +348,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                   <span class="stat-value">{{ formatMemory(getBoxStats(box.name)?.memory_used_mb) }}</span>
                 </div>
                 <div v-if="getBoxStats(box.name)?.uptime_seconds" class="stat-uptime">
-                  Up: {{ formatUptime(getBoxStats(box.name)?.uptime_seconds) }}
+                  {{ t('overview.uptime') }} {{ formatUptime(getBoxStats(box.name)?.uptime_seconds) }}
                 </div>
               </div>
               <div v-else-if="statsLoading.has(box.name)" class="server-stats-loading">
@@ -357,7 +359,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                 <NTooltip v-if="getBoxSessions(box.name).length > 0" trigger="hover">
                   <template #trigger>
                     <span class="session-link">
-                      {{ getBoxSessionCount(box.name) }} active session{{ getBoxSessionCount(box.name) === 1 ? '' : 's' }}
+                      {{ getBoxSessionCount(box.name) }} {{ getBoxSessionCount(box.name) === 1 ? t('overview.active_session') : t('overview.active_sessions') }}
                     </span>
                   </template>
                   <div class="session-tooltip">
@@ -370,34 +372,34 @@ const handleBrowseServerFiles = (serverName: string) => {
                     >
                       <span class="session-row">
                         <span class="session-status" :class="session.active ? 'active' : 'inactive'"></span>
-                        <span class="session-name">{{ session.session_name || 'unnamed' }}</span>
+                        <span class="session-name">{{ session.session_name || t('overview.unnamed') }}</span>
                       </span>
                       <span class="session-dir">{{ session.working_directory }}</span>
                     </div>
                   </div>
                 </NTooltip>
-                <span v-else class="no-sessions">No active sessions</span>
+                <span v-else class="no-sessions">{{ t('overview.no_active_sessions') }}</span>
               </p>
               <p class="server-last-used">
-                Last used: {{ getBoxLastUsed(box.name) }}
+                {{ t('overview.last_used') }} {{ getBoxLastUsed(box.name) }}
               </p>
             </div>
             
             <div class="server-actions">
-              <NButton 
-                type="primary" 
+              <NButton
+                type="primary"
                 size="small"
                 @click="handleConnectToServer(box.name)"
                 :disabled="getServerStatus(box) === 'offline'"
               >
-                Connect
+                {{ t('overview.connect') }}
               </NButton>
-              <NButton 
+              <NButton
                 size="small"
                 @click="handleBrowseServerFiles(box.name)"
                 :disabled="getServerStatus(box) === 'offline'"
               >
-                Files
+                {{ t('overview.files') }}
               </NButton>
             </div>
           </NCard>

@@ -5,10 +5,12 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { http, buildHeaders } from '@/api/http'
 import { resetFavicon } from '@/utils/emoji-favicon'
+import { useI18n } from '@/i18n'
 
 const bootstrapStore = useBootstrapStore()
 const appStore = useAppStore()
 const message = useMessage()
+const { t } = useI18n()
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 
@@ -39,23 +41,23 @@ const tokenStatus = computed(() => {
 const refreshToken = async () => {
   try {
     await bootstrapStore.refreshToken()
-    message.success('Token refreshed successfully')
+    message.success(t('settings.token_refreshed'))
   } catch (error) {
-    message.error('Failed to refresh token: ' + (error instanceof Error ? error.message : String(error)))
+    message.error(t('settings.token_refresh_failed') + ' ' + (error instanceof Error ? error.message : String(error)))
   }
 }
 
 const clearCache = () => {
   localStorage.clear()
   sessionStorage.clear()
-  message.success('Cache cleared - please refresh the page')
+  message.success(t('settings.cache_cleared'))
 }
 
 const setTheme = (theme: string) => {
   if (appStore.setTheme) {
     appStore.setTheme(theme as any)
   } else {
-    message.warning('Theme switching not available')
+    message.warning(t('settings.theme_unavailable'))
   }
 }
 
@@ -77,7 +79,7 @@ const loadPoolConfig = async () => {
       poolConfig.value.max_lifetime = Math.round(response.data.max_lifetime / 60)
     }
   } catch (error) {
-    message.error('Failed to load pool configuration: ' + (error instanceof Error ? error.message : String(error)))
+    message.error(t('settings.pool_load_failed') + ' ' + (error instanceof Error ? error.message : String(error)))
   } finally {
     poolLoading.value = false
   }
@@ -95,9 +97,9 @@ const savePoolConfig = async () => {
     await http.put('/api/v1/pool/config', payload, {
       headers: buildHeaders(tokenValue.value)
     })
-    message.success('Pool configuration updated successfully')
+    message.success(t('settings.pool_saved'))
   } catch (error) {
-    message.error('Failed to save pool configuration: ' + (error instanceof Error ? error.message : String(error)))
+    message.error(t('settings.pool_save_failed') + ' ' + (error instanceof Error ? error.message : String(error)))
   } finally {
     poolSaving.value = false
   }
@@ -130,78 +132,78 @@ onMounted(async () => {
       <div class="header-content">
         <img src="/logo.png" alt="sshler" class="settings-logo" />
         <div>
-          <p class="eyebrow">settings</p>
-          <h1>Application Settings</h1>
-          <p class="text-muted">Manage your sshler configuration and troubleshoot issues</p>
+          <p class="eyebrow">{{ t('settings.heading') }}</p>
+          <h1>{{ t('settings.subtitle') }}</h1>
+          <p class="text-muted">{{ t('settings.description') }}</p>
         </div>
       </div>
     </header>
 
     <!-- Token Status -->
-    <NCard title="Authentication" size="medium">
+    <NCard :title="t('settings.auth')" size="medium">
       <NSpace vertical size="medium">
         <div>
-          <p><strong>Status:</strong> {{ tokenStatus }}</p>
-          <p v-if="bootstrapStore.token"><strong>Token:</strong> <NCode>{{ bootstrapStore.token.substring(0, 20) }}...</NCode></p>
-          <p><strong>Version:</strong> {{ bootstrapStore.version || 'Unknown' }}</p>
+          <p><strong>{{ t('settings.auth_status') }}</strong> {{ tokenStatus }}</p>
+          <p v-if="bootstrapStore.token"><strong>{{ t('settings.auth_token') }}</strong> <NCode>{{ bootstrapStore.token.substring(0, 20) }}...</NCode></p>
+          <p><strong>{{ t('settings.auth_version') }}</strong> {{ bootstrapStore.version || 'Unknown' }}</p>
         </div>
-        
-        <NAlert v-if="bootstrapStore.error" type="error" title="Authentication Error">
+
+        <NAlert v-if="bootstrapStore.error" type="error" :title="t('settings.auth_error')">
           {{ bootstrapStore.error }}
           <template #action>
-            <NButton size="small" @click="refreshToken">Retry</NButton>
+            <NButton size="small" @click="refreshToken">{{ t('common.retry') }}</NButton>
           </template>
         </NAlert>
-        
+
         <NSpace>
           <NButton type="primary" @click="refreshToken" :loading="bootstrapStore.loading">
-            Refresh Token
+            {{ t('settings.refresh_token') }}
           </NButton>
           <NButton @click="clearCache">
-            Clear Cache
+            {{ t('settings.clear_cache') }}
           </NButton>
         </NSpace>
       </NSpace>
     </NCard>
 
     <!-- Theme Settings -->
-    <NCard title="Appearance" size="medium">
+    <NCard :title="t('settings.appearance')" size="medium">
       <NSpace>
         <NButton
           :type="appStore.isDark ? 'default' : 'primary'"
           @click="setTheme('light')"
         >
-          Light Theme
+          {{ t('settings.theme_light') }}
         </NButton>
         <NButton
           :type="appStore.isDark ? 'primary' : 'default'"
           @click="setTheme('dark')"
         >
-          Dark Theme
+          {{ t('settings.theme_dark') }}
         </NButton>
         <NButton @click="setTheme('system')">
-          System Theme
+          {{ t('settings.theme_system') }}
         </NButton>
       </NSpace>
     </NCard>
 
     <!-- Connection Pool Settings -->
-    <NCard title="Connection Pool" size="medium">
+    <NCard :title="t('settings.pool')" size="medium">
       <NSpace vertical size="large">
         <div>
           <p class="text-muted" style="margin-bottom: 16px">
-            Configure how long SSH connections are kept alive. Higher values reduce connection overhead but use more resources.
+            {{ t('settings.pool_description') }}
           </p>
 
           <div class="pool-setting">
             <div class="pool-setting-header">
-              <label><strong>Idle Timeout</strong></label>
+              <label><strong>{{ t('settings.pool_idle_timeout') }}</strong></label>
               <NSwitch v-model:value="useForeverIdle" size="small">
-                <template #checked>Forever</template>
-                <template #unchecked>Custom</template>
+                <template #checked>{{ t('settings.pool_forever') }}</template>
+                <template #unchecked>{{ t('settings.pool_custom') }}</template>
               </NSwitch>
             </div>
-            <p class="setting-description">Close connections after this many minutes of inactivity</p>
+            <p class="setting-description">{{ t('settings.pool_idle_help') }}</p>
             <NInputNumber
               v-if="!useForeverIdle"
               v-model:value="poolConfig.idle_timeout"
@@ -211,22 +213,22 @@ onMounted(async () => {
               style="width: 200px"
               :disabled="poolLoading || poolSaving"
             >
-              <template #suffix>minutes</template>
+              <template #suffix>{{ t('settings.pool_minutes') }}</template>
             </NInputNumber>
             <div v-else class="forever-badge">
-              Connections never timeout due to inactivity
+              {{ t('settings.pool_idle_forever') }}
             </div>
           </div>
 
           <div class="pool-setting">
             <div class="pool-setting-header">
-              <label><strong>Maximum Lifetime</strong></label>
+              <label><strong>{{ t('settings.pool_max_lifetime') }}</strong></label>
               <NSwitch v-model:value="useForeverLifetime" size="small">
-                <template #checked>Forever</template>
-                <template #unchecked>Custom</template>
+                <template #checked>{{ t('settings.pool_forever') }}</template>
+                <template #unchecked>{{ t('settings.pool_custom') }}</template>
               </NSwitch>
             </div>
-            <p class="setting-description">Close connections after this total lifetime regardless of activity</p>
+            <p class="setting-description">{{ t('settings.pool_lifetime_help') }}</p>
             <NInputNumber
               v-if="!useForeverLifetime"
               v-model:value="poolConfig.max_lifetime"
@@ -236,16 +238,16 @@ onMounted(async () => {
               style="width: 200px"
               :disabled="poolLoading || poolSaving"
             >
-              <template #suffix>minutes</template>
+              <template #suffix>{{ t('settings.pool_minutes') }}</template>
             </NInputNumber>
             <div v-else class="forever-badge">
-              Connections never expire based on age
+              {{ t('settings.pool_lifetime_forever') }}
             </div>
           </div>
 
           <div class="pool-setting">
-            <label><strong>Max Connections Per Box</strong></label>
-            <p class="setting-description">Maximum number of pooled connections per server</p>
+            <label><strong>{{ t('settings.pool_max_connections') }}</strong></label>
+            <p class="setting-description">{{ t('settings.pool_max_connections_help') }}</p>
             <NInputNumber
               v-model:value="poolConfig.max_connections_per_box"
               :min="1"
@@ -253,13 +255,13 @@ onMounted(async () => {
               style="width: 200px"
               :disabled="poolLoading || poolSaving"
             >
-              <template #suffix>connections</template>
+              <template #suffix>{{ t('settings.pool_connections_unit') }}</template>
             </NInputNumber>
           </div>
         </div>
 
         <NAlert v-if="poolLoading" type="info">
-          Loading pool configuration...
+          {{ t('settings.pool_loading') }}
         </NAlert>
 
         <NSpace>
@@ -269,51 +271,51 @@ onMounted(async () => {
             :loading="poolSaving"
             :disabled="poolLoading"
           >
-            Save Pool Settings
+            {{ t('settings.pool_save') }}
           </NButton>
           <NButton
             @click="loadPoolConfig"
             :disabled="poolLoading || poolSaving"
           >
-            Reset
+            {{ t('common.reset') }}
           </NButton>
         </NSpace>
 
-        <NAlert type="info" title="Connection Pool Info" :bordered="false">
-          <p><strong>Current Settings:</strong></p>
+        <NAlert type="info" :title="t('settings.pool_info')" :bordered="false">
+          <p><strong>{{ t('settings.pool_current') }}</strong></p>
           <ul>
-            <li>Idle Timeout: {{ useForeverIdle ? 'Forever' : formatDuration(poolConfig.idle_timeout) }}</li>
-            <li>Max Lifetime: {{ useForeverLifetime ? 'Forever' : formatDuration(poolConfig.max_lifetime) }}</li>
-            <li>Max Connections: {{ poolConfig.max_connections_per_box }} per box</li>
+            <li>{{ t('settings.pool_current_idle') }}: {{ useForeverIdle ? t('settings.pool_forever') : formatDuration(poolConfig.idle_timeout) }}</li>
+            <li>{{ t('settings.pool_current_lifetime') }}: {{ useForeverLifetime ? t('settings.pool_forever') : formatDuration(poolConfig.max_lifetime) }}</li>
+            <li>{{ t('settings.pool_current_max') }}: {{ poolConfig.max_connections_per_box }} per box</li>
           </ul>
         </NAlert>
       </NSpace>
     </NCard>
 
     <!-- Debug Info -->
-    <NCard title="Debug Information" size="medium">
+    <NCard :title="t('settings.debug')" size="medium">
       <NSpace vertical size="small">
-        <p><strong>Current URL:</strong> {{ location.href }}</p>
-        <p><strong>User Agent:</strong> {{ userAgent }}</p>
-        <p><strong>Local Storage:</strong> {{ localStorageCount }} items</p>
-        <p><strong>Session Storage:</strong> {{ sessionStorageCount }} items</p>
+        <p><strong>{{ t('settings.debug_url') }}</strong> {{ location.href }}</p>
+        <p><strong>{{ t('settings.debug_ua') }}</strong> {{ userAgent }}</p>
+        <p><strong>{{ t('settings.debug_ls') }}</strong> {{ localStorageCount }} items</p>
+        <p><strong>{{ t('settings.debug_ss') }}</strong> {{ sessionStorageCount }} items</p>
       </NSpace>
     </NCard>
 
     <!-- Troubleshooting -->
-    <NCard title="Troubleshooting" size="medium">
+    <NCard :title="t('settings.troubleshooting')" size="medium">
       <NSpace vertical size="medium">
         <div>
-          <h3>Common Issues</h3>
+          <h3>{{ t('settings.common_issues') }}</h3>
           <ul>
-            <li><strong>Missing token errors:</strong> Click "Refresh Token" above</li>
-            <li><strong>UI not updating:</strong> Click "Clear Cache" and refresh the page</li>
-            <li><strong>Terminal not connecting:</strong> Check that the box is online and accessible</li>
+            <li><strong>{{ t('settings.issue_token') }}</strong> {{ t('settings.issue_token_fix') }}</li>
+            <li><strong>{{ t('settings.issue_ui') }}</strong> {{ t('settings.issue_ui_fix') }}</li>
+            <li><strong>{{ t('settings.issue_terminal') }}</strong> {{ t('settings.issue_terminal_fix') }}</li>
           </ul>
         </div>
-        
-        <NAlert type="info" title="Need Help?">
-          If you're still having issues, try running <NCode>sshler fix</NCode> in your terminal to rebuild the frontend.
+
+        <NAlert type="info" :title="t('settings.need_help')">
+          {{ t('settings.help_text') }} <NCode>sshler fix</NCode> {{ t('settings.help_rebuild') }}
         </NAlert>
       </NSpace>
     </NCard>

@@ -1,32 +1,38 @@
 import { computed, inject, ref, type App, type Ref } from "vue";
+import { en } from "@/locales/en";
+import { ja } from "@/locales/ja";
 
-type Locale = "en" | "ja";
+export type Locale = "en" | "ja";
 
-const messages: Record<Locale, Record<string, string>> = {
-  en: {
-    overview_heading: "FastAPI + Vue shell for sshler",
-  },
-  ja: {
-    overview_heading: "sshler 向け FastAPI + Vue シェル",
-  },
-};
+export const availableLocales: { label: string; value: Locale }[] = [
+  { label: "English", value: "en" },
+  { label: "日本語", value: "ja" },
+];
+
+const messages: Record<Locale, Record<string, string>> = { en, ja };
 
 const LOCALE_KEY = "sshler:locale";
 const I18N_KEY = Symbol("i18n");
 
 type I18nContext = {
   locale: Ref<Locale>;
-  t: (key: string) => string;
+  t: (key: string, params?: Record<string, string | number>) => string;
   setLocale: (value: Locale) => void;
 };
 
 export function createI18n(app: App) {
   const stored = (typeof localStorage !== "undefined" && localStorage.getItem(LOCALE_KEY)) as Locale | null;
-  const locale = ref<Locale>(stored || "en");
+  const locale = ref<Locale>(stored === "ja" ? "ja" : "en");
 
-  const t = (key: string) => {
+  const t = (key: string, params?: Record<string, string | number>): string => {
     const table = messages[locale.value] || messages.en;
-    return table[key] || key;
+    let result = table[key] ?? messages.en[key] ?? key;
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        result = result.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+      }
+    }
+    return result;
   };
 
   const setLocale = (value: Locale) => {

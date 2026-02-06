@@ -5,7 +5,9 @@ import { NCard, NForm, NFormItem, NInput, NButton, NAlert, NIcon } from 'naive-u
 import { PhLock } from '@phosphor-icons/vue'
 import { useAuthStore } from '@/stores/auth'
 import { http } from '@/api/http'
+import { useI18n } from '@/i18n'
 
+const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 
@@ -19,7 +21,7 @@ const handleLogin = async () => {
 
   // Basic validation
   if (!username.value || !password.value) {
-    error.value = 'Please enter both username and password'
+    error.value = t('login.error_empty')
     return
   }
 
@@ -45,14 +47,14 @@ const handleLogin = async () => {
   } catch (err: any) {
     // Handle errors
     if (err?.response?.status === 401) {
-      error.value = 'Invalid username or password'
+      error.value = t('login.error_invalid')
     } else if (err?.response?.status === 429) {
       const retryAfter = err.response?.headers?.['retry-after'] || 'a few minutes'
-      error.value = `Too many failed attempts. Please try again in ${retryAfter} seconds`
+      error.value = t('login.error_rate_limit', { seconds: retryAfter })
     } else if (err?.message) {
       error.value = err.message
     } else {
-      error.value = 'Authentication failed. Please try again.'
+      error.value = t('login.error_generic')
     }
   } finally {
     loading.value = false
@@ -75,16 +77,16 @@ const handleKeypress = (event: KeyboardEvent) => {
           <NIcon size="16" color="var(--text-color-3)" style="vertical-align: middle; margin-right: 4px;">
             <PhLock weight="regular" />
           </NIcon>
-          Authentication Required
+          {{ t('login.auth_required') }}
         </p>
       </div>
 
       <NCard>
         <NForm>
-          <NFormItem label="Username" :show-require-mark="false">
+          <NFormItem :label="t('login.username')" :show-require-mark="false">
             <NInput
               v-model:value="username"
-              placeholder="Enter username"
+              :placeholder="t('login.username_placeholder')"
               size="large"
               :disabled="loading"
               @keypress="handleKeypress"
@@ -92,11 +94,11 @@ const handleKeypress = (event: KeyboardEvent) => {
             />
           </NFormItem>
 
-          <NFormItem label="Password" :show-require-mark="false">
+          <NFormItem :label="t('login.password')" :show-require-mark="false">
             <NInput
               v-model:value="password"
               type="password"
-              placeholder="Enter password"
+              :placeholder="t('login.password_placeholder')"
               size="large"
               show-password-on="click"
               :disabled="loading"
@@ -115,17 +117,16 @@ const handleKeypress = (event: KeyboardEvent) => {
             :loading="loading"
             @click="handleLogin"
           >
-            Sign In
+            {{ t('login.sign_in') }}
           </NButton>
         </NForm>
 
         <div class="security-notice">
           <p>
-            <strong>Security Notice:</strong> sshler uses secure session cookies with
-            Argon2id password hashing. Your credentials are never stored in the browser.
+            <strong>{{ t('login.security_notice') }}</strong> {{ t('login.security_detail') }}
           </p>
           <p class="muted-text">
-            Sessions expire after 8 hours of inactivity for your security.
+            {{ t('login.session_expiry') }}
           </p>
         </div>
       </NCard>

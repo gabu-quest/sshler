@@ -4,6 +4,7 @@ import { computed, onMounted } from "vue";
 import { NAlert, NButton, NCard, NGrid, NGridItem, NIcon, NSpace, useMessage } from "naive-ui";
 import { PhFolderSimple, PhPushPinSimple, PhStar, PhTerminalWindow } from "@phosphor-icons/vue";
 
+import { useI18n } from "@/i18n";
 import { boxStatus } from "@/api/http";
 import type { ApiBox } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
@@ -14,6 +15,7 @@ const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
 const favoritesStore = useFavoritesStore();
 const message = useMessage();
+const { t } = useI18n();
 
 const token = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null);
 
@@ -42,7 +44,7 @@ async function togglePin(boxName: string) {
     return;
   }
   patchBox(boxName, { pinned });
-  message.success(pinned ? "pinned" : "unpinned");
+  message.success(pinned ? t('boxes.pinned') : t('boxes.unpinned'));
 }
 
 async function toggleFavoritePath(boxName: string, path: string) {
@@ -61,12 +63,12 @@ async function toggleFavoritePath(boxName: string, path: string) {
   } else {
     patchBox(boxName, { favorites: Array.from(favoritesStore.favoritesForBox(boxName).values()) });
   }
-  message.success(nowFavorite ? "favorited" : "unfavorited");
+  message.success(nowFavorite ? t('boxes.favorited') : t('boxes.unfavorited'));
 }
 
 async function checkStatus(boxName: string) {
   const stat = await boxStatus(boxName, token.value);
-  message.info(`status: ${stat.status} (${stat.latency_ms || 0} ms)`);
+  message.info(t('boxes.status_info', { status: stat.status, latency: String(stat.latency_ms || 0) }));
 }
 
 onMounted(async () => {
@@ -78,9 +80,9 @@ onMounted(async () => {
   <div class="page">
     <header class="page-header">
       <div>
-        <p class="eyebrow">boxes</p>
-        <h1>Available boxes</h1>
-        <p class="text-muted">pin boxes and quick-toggle favorites for the SPA file browser</p>
+        <p class="eyebrow">{{ t('boxes.title') }}</p>
+        <h1>{{ t('boxes.subtitle') }}</h1>
+        <p class="text-muted">{{ t('boxes.description') }}</p>
       </div>
     </header>
 
@@ -97,26 +99,26 @@ onMounted(async () => {
           <NSpace size="small" style="margin-bottom: 8px;">
             <NButton size="tiny" type="primary" @click="() => $router.push(`/files?box=${box.name}`)">
               <NIcon size="14"><PhFolderSimple /></NIcon>
-              Files
+              {{ t('boxes.files') }}
             </NButton>
             <NButton size="tiny" type="primary" @click="() => $router.push(`/terminal?box=${box.name}`)">
               <NIcon size="14"><PhTerminalWindow /></NIcon>
-              Terminal
+              {{ t('boxes.terminal') }}
             </NButton>
             <NButton size="tiny" @click="() => $router.push(`/multi-terminal?box=${box.name}`)">
-              Multi
+              {{ t('boxes.multi') }}
             </NButton>
           </NSpace>
           <NSpace size="small">
             <NButton size="tiny" secondary @click="() => togglePin(box.name)">
               <NIcon size="14"><PhPushPinSimple /></NIcon>
-              {{ favoritesStore.isPinned(box.name) ? "unpin" : "pin" }}
+              {{ favoritesStore.isPinned(box.name) ? t('boxes.unpin') : t('boxes.pin') }}
             </NButton>
             <NButton size="tiny" secondary @click="() => toggleFavoritePath(box.name, box.default_dir || '/')">
               <NIcon size="14"><PhStar /></NIcon>
-              {{ favoritesStore.isFavorite(box.name, box.default_dir || '/') ? "unfavorite" : "favorite default" }}
+              {{ favoritesStore.isFavorite(box.name, box.default_dir || '/') ? t('boxes.unfavorite') : t('boxes.favorite') }}
             </NButton>
-            <NButton size="tiny" quaternary @click="() => checkStatus(box.name)">status</NButton>
+            <NButton size="tiny" quaternary @click="() => checkStatus(box.name)">{{ t('common.status') }}</NButton>
           </NSpace>
         </NCard>
       </NGridItem>

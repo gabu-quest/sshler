@@ -5,11 +5,13 @@ import { NAlert, NButton, NCard, NIcon, NList, NListItem } from "naive-ui";
 import { PhStar, PhPushPinSimple } from "@phosphor-icons/vue";
 
 import { useFavoritesStore } from "@/stores/favorites";
+import { useI18n } from "@/i18n";
 
 const props = defineProps<{ box: string | null }>();
 const emit = defineEmits<{ (e: "openPath", path: string): void; (e: "togglePin"): void }>();
 
 const favoritesStore = useFavoritesStore();
+const { t } = useI18n();
 
 const favoritesList = computed(() =>
   props.box ? Array.from(favoritesStore.favoritesForBox(props.box).values()) : [],
@@ -23,10 +25,10 @@ const pinned = computed(() => favoritesStore.isPinned(props.box));
       <NIcon size="16">
         <PhStar />
       </NIcon>
-      <span>favorites</span>
+      <span>{{ t('favorites.title') }}</span>
     </div>
-    <NAlert v-if="!box" type="info" closable>select a box to view favorites</NAlert>
-    <NAlert v-else-if="!favoritesList.length" type="default" closable>no favorites yet</NAlert>
+    <NAlert v-if="!box" type="info" closable>{{ t('favorites.select_box') }}</NAlert>
+    <NAlert v-else-if="!favoritesList.length" type="default" closable>{{ t('favorites.empty') }}</NAlert>
     <NList v-else class="list">
       <NListItem
         v-for="item in favoritesList"
@@ -42,7 +44,7 @@ const pinned = computed(() => favoritesStore.isPinned(props.box));
         <NIcon size="14">
           <PhPushPinSimple />
         </NIcon>
-        <span>{{ pinned ? "unpin" : "pin" }}</span>
+        <span>{{ pinned ? t('favorites.unpin') : t('favorites.pin') }}</span>
       </NButton>
     </div>
     <NAlert v-if="favoritesStore.error" type="error" closable>{{ favoritesStore.error }}</NAlert>

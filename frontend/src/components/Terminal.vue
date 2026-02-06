@@ -7,6 +7,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import { useMessage } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useResponsive } from '@/composables/useResponsive'
+import { useI18n } from '@/i18n'
 
 interface Props {
   boxName: string
@@ -43,6 +44,7 @@ const emit = defineEmits<Emits>()
 const message = useMessage()
 const bootstrapStore = useBootstrapStore()
 const { isMobile, isTouch } = useResponsive()
+const { t } = useI18n()
 
 // Computed font size: cap at 12px on mobile
 const effectiveFontSize = computed(() => isMobile.value ? Math.min(props.fontSize, 12) : props.fontSize)
@@ -250,7 +252,7 @@ const copySelection = () => {
   const selection = terminal?.getSelection()
   if (selection) {
     navigator.clipboard.writeText(selection).then(() => {
-      message.success('Copied to clipboard', { duration: 1000 })
+      message.success(t('terminal.copied'), { duration: 1000 })
     }).catch(() => {
       copyWithFallback(selection)
     })
@@ -267,7 +269,7 @@ const pasteFromClipboard = async () => {
       terminal.focus()
     }
   } catch (err) {
-    message.error('Failed to paste from clipboard')
+    message.error(t('terminal.paste_failed'))
   }
 }
 
@@ -302,8 +304,8 @@ const toggleMouseMode = () => {
 
   message.info(
     mouseMode.value
-      ? 'Mouse mode ON - tmux handles selection'
-      : 'Mouse mode OFF - native selection enabled',
+      ? t('terminal.mouse_on_msg')
+      : t('terminal.mouse_off_msg'),
     { duration: 2000 }
   )
 }
@@ -427,15 +429,15 @@ const createTerminal = () => {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(selection).then(() => {
             // Show brief confirmation
-            message.success(`Copied ${selection.length} chars`, { duration: 1000 })
+            message.success(t('terminal.copied_chars', { n: selection.length }), { duration: 1000 })
           }).catch((err) => {
             console.warn('[Terminal] Clipboard API failed, trying fallback:', err)
             copyWithFallback(selection)
-            message.success(`Copied ${selection.length} chars`, { duration: 1000 })
+            message.success(t('terminal.copied_chars', { n: selection.length }), { duration: 1000 })
           })
         } else {
           copyWithFallback(selection)
-          message.success(`Copied ${selection.length} chars`, { duration: 1000 })
+          message.success(t('terminal.copied_chars', { n: selection.length }), { duration: 1000 })
         }
       }
     }, 50)
@@ -587,7 +589,7 @@ const scheduleReconnect = () => {
 
   // Check if we've exceeded max attempts
   if (reconnectAttempts.value >= maxReconnectAttempts.value) {
-    message.error('Connection lost - max reconnect attempts reached', {
+    message.error(t('terminal.max_reconnect'), {
       duration: 5000
     })
     reconnecting.value = false
@@ -664,12 +666,12 @@ const connect = async () => {
 
       // Show success message - more prominent if recovering from reconnect
       if (reconnectAttempts.value > 0) {
-        message.success(`Reconnected to ${props.boxName}`, {
+        message.success(t('terminal.reconnected_to', { box: props.boxName }), {
           duration: 3000,
           closable: false
         })
       } else {
-        message.success(`Connected to ${props.boxName}`, {
+        message.success(t('terminal.connected_to', { box: props.boxName }), {
           duration: 2000,
           closable: false
         })
@@ -721,12 +723,12 @@ const connect = async () => {
       emit('disconnected')
 
       if (event.code === 4403) {
-        message.error('Authentication failed - please refresh the page', {
+        message.error(t('terminal.auth_failed'), {
           duration: 5000
         })
         reconnecting.value = false
       } else if (event.code === 4401) {
-        message.error('Authorization failed', {
+        message.error(t('terminal.auth_denied'), {
           duration: 5000
         })
         reconnecting.value = false
@@ -746,7 +748,7 @@ const connect = async () => {
 
       // Only show error message if not already reconnecting
       if (!reconnecting.value && reconnectAttempts.value === 0) {
-        message.error('Terminal connection failed')
+        message.error(t('terminal.connection_failed'))
       }
     }
 
@@ -756,7 +758,7 @@ const connect = async () => {
 
     // Only show error message if not already reconnecting
     if (!reconnecting.value && reconnectAttempts.value === 0) {
-      message.error(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      message.error(t('terminal.connection_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error'))
     }
 
     // Schedule reconnect on connection failure
@@ -979,18 +981,18 @@ defineExpose({
         <div class="traffic-lights">
           <span
             class="dot dot-close"
-            title="Kill tmux window (Ctrl+B &)"
+            :title="t('terminal.kill_window')"
             @click="tmuxKillWindow"
           />
           <span
             class="dot dot-new"
-            title="New tmux window (Ctrl+B c)"
+            :title="t('terminal.new_window')"
             @click="tmuxNewWindow"
           />
           <span
             class="dot dot-maximize"
             :class="{ active: isFullscreen }"
-            :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+            :title="isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen')"
             @click="toggleFullscreen"
           />
         </div>
@@ -1004,25 +1006,25 @@ defineExpose({
           class="titlebar-btn"
           :class="{ active: !mouseMode }"
           @click="toggleMouseMode"
-          :title="mouseMode ? 'Mouse mode ON (tmux) - Click to enable native selection' : 'Mouse mode OFF (native) - Click to restore tmux mouse'"
+          :title="mouseMode ? t('terminal.mouse_on') : t('terminal.mouse_off')"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M4 4l7.07 17 2.51-7.39L21 11.07z"/>
           </svg>
         </button>
-        <button class="titlebar-btn" @click="copySelection" title="Copy selection">
+        <button class="titlebar-btn" @click="copySelection" :title="t('terminal.copy_selection')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
         </button>
-        <button class="titlebar-btn" @click="pasteFromClipboard" title="Paste">
+        <button class="titlebar-btn" @click="pasteFromClipboard" :title="t('terminal.paste')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
             <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
           </svg>
         </button>
-        <button class="titlebar-btn" @click="clear" title="Clear">
+        <button class="titlebar-btn" @click="clear" :title="t('terminal.clear')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -1035,7 +1037,7 @@ defineExpose({
     <div v-if="showTitleBar && titleBarCollapsed" class="terminal-titlebar-collapsed" @click="toggleTitleBar">
       <span class="connection-indicator" :class="{ connected, connecting }" />
       <span class="collapsed-text">{{ boxName }}</span>
-      <span class="expand-hint">click to expand</span>
+      <span class="expand-hint">{{ t('terminal.click_expand') }}</span>
     </div>
 
     <!-- Terminal Container with Effects -->
@@ -1055,16 +1057,16 @@ defineExpose({
         <div class="connecting-indicator">
           <div class="spinner" />
           <span v-if="reconnecting">
-            Reconnecting to {{ boxName }}...
+            {{ t('terminal.reconnecting_to', { box: boxName }) }}
             <small v-if="reconnectAttempts > 0">(attempt {{ reconnectAttempts }}/{{ maxReconnectAttempts }})</small>
           </span>
-          <span v-else>Connecting to {{ boxName }}...</span>
+          <span v-else>{{ t('terminal.connecting_to', { box: boxName }) }}</span>
         </div>
       </div>
       <div v-else-if="!connected" class="terminal-overlay">
         <div class="disconnected-indicator">
-          <span>Disconnected from {{ boxName }}</span>
-          <button @click="connect" class="reconnect-btn">Reconnect</button>
+          <span>{{ t('terminal.disconnected_from', { box: boxName }) }}</span>
+          <button @click="connect" class="reconnect-btn">{{ t('terminal.reconnect') }}</button>
         </div>
       </div>
 

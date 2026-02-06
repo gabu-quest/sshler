@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
-import { NButton, NIcon, NSpace, NDrawer, NDrawerContent, NTooltip, NProgress } from "naive-ui";
+import { NButton, NIcon, NSpace, NDrawer, NDrawerContent, NTooltip, NProgress, NSelect } from "naive-ui";
 import {
   PhFolderSimple,
   PhGearSix,
@@ -22,6 +22,8 @@ import { useAuthStore } from "@/stores/auth";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useResponsive } from "@/composables/useResponsive";
+import { useI18n, availableLocales } from "@/i18n";
+import type { Locale } from "@/i18n";
 import { boxStats } from "@/api/http";
 import type { BoxStats } from "@/api/types";
 import CommandPalette from "@/components/CommandPalette.vue";
@@ -33,6 +35,13 @@ const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
 const route = useRoute();
 const { isMobile } = useResponsive();
+const { t, locale, setLocale } = useI18n();
+
+const localeOptions = availableLocales.map(l => ({ label: l.label, value: l.value }));
+const currentLocale = computed({
+  get: () => locale.value,
+  set: (v: Locale) => setLocale(v),
+});
 
 // System stats for local box (shown in header)
 const localStats = ref<BoxStats | null>(null);
@@ -75,21 +84,21 @@ const showAuthIndicator = computed(() => bootstrapStore.basicAuthRequired && aut
 const authTooltip = computed(() => {
   if (!bootstrapStore.basicAuthRequired) return '';
   return authStore.isAuthenticated
-    ? `Authenticated as ${authStore.displayUsername}`
-    : 'Authentication required';
+    ? t('header.authenticated_as', { user: authStore.displayUsername })
+    : t('header.auth_required');
 });
 
 // Mobile navigation state
 const isMobileMenuOpen = ref(false);
 
-const links = [
-  { to: "/", label: "Overview", icon: PhHouseLine, shortcut: "Alt+H" },
-  { to: "/boxes", label: "Boxes", icon: PhFolderSimple, shortcut: "Alt+B" },
-  { to: "/files", label: "Files", icon: PhFolderSimple, shortcut: "Alt+F" },
-  { to: "/terminal", label: "Terminal", icon: PhTerminal, shortcut: "Alt+T" },
-  { to: "/multi-terminal", label: "Multi-Terminal", icon: PhTerminal, shortcut: "Alt+M" },
-  { to: "/settings", label: "Settings", icon: PhGearSix, shortcut: "Alt+S" },
-];
+const links = computed(() => [
+  { to: "/", label: t("nav.overview"), icon: PhHouseLine, shortcut: "Alt+H" },
+  { to: "/boxes", label: t("nav.boxes"), icon: PhFolderSimple, shortcut: "Alt+B" },
+  { to: "/files", label: t("nav.files"), icon: PhFolderSimple, shortcut: "Alt+F" },
+  { to: "/terminal", label: t("nav.terminal"), icon: PhTerminal, shortcut: "Alt+T" },
+  { to: "/multi-terminal", label: t("nav.multi_terminal"), icon: PhTerminal, shortcut: "Alt+M" },
+  { to: "/settings", label: t("nav.settings"), icon: PhGearSix, shortcut: "Alt+S" },
+]);
 
 const themeIcon = computed(() => (appStore.isDark ? PhMoon : PhSun));
 const themeLabel = computed(() => {
@@ -239,7 +248,7 @@ onUnmounted(() => {
             </div>
           </template>
           <div>
-            <strong>Local System</strong><br>
+            <strong>{{ t('header.local_system') }}</strong><br>
             CPU: {{ localStats.cpu_percent?.toFixed(1) }}%<br>
             RAM: {{ ((localStats.memory_used_mb ?? 0) / 1024).toFixed(1) }}GB / {{ ((localStats.memory_total_mb ?? 0) / 1024).toFixed(1) }}GB
           </div>
@@ -258,14 +267,21 @@ onUnmounted(() => {
           {{ authTooltip }}
         </NTooltip>
 
+        <NSelect
+          v-model:value="currentLocale"
+          :options="localeOptions"
+          size="tiny"
+          style="width: 90px"
+          :consistent-menu-width="false"
+        />
         <span class="text-muted mode-label" aria-live="polite">{{ themeLabel }}</span>
         <NButton
           quaternary
           circle
           size="small"
           @click="toggleTheme"
-          :aria-label="`Switch to ${appStore.isDark ? 'light' : 'dark'} theme`"
-          title="Toggle theme"
+          :aria-label="t('header.theme_switch', { mode: appStore.isDark ? 'light' : 'dark' })"
+          :title="t('header.toggle_theme')"
         >
           <NIcon size="18" aria-hidden="true">
             <component :is="themeIcon" />
@@ -294,7 +310,7 @@ onUnmounted(() => {
       :trap-focus="false"
       :block-scroll="false"
     >
-      <NDrawerContent title="Navigation" closable>
+      <NDrawerContent :title="t('nav.navigation')" closable>
         <nav class="mobile-nav" role="navigation" aria-label="Mobile navigation">
           <RouterLink
             v-for="link in links"
@@ -313,6 +329,14 @@ onUnmounted(() => {
               <span class="mobile-nav-shortcut text-muted">{{ link.shortcut }}</span>
             </div>
           </RouterLink>
+          <div class="mobile-nav-footer">
+            <NSelect
+              v-model:value="currentLocale"
+              :options="localeOptions"
+              size="small"
+              style="width: 100%"
+            />
+          </div>
         </nav>
       </NDrawerContent>
     </NDrawer>
@@ -560,6 +584,12 @@ onUnmounted(() => {
 .mobile-nav-shortcut {
   font-size: 12px;
   opacity: 0.7;
+}
+
+.mobile-nav-footer {
+  margin-top: 16px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--divider-color);
 }
 
 /* Responsive Design */

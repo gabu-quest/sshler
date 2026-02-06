@@ -7,6 +7,7 @@ import { PhPlus, PhTerminalWindow, PhArrowLeft } from '@phosphor-icons/vue'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
+import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 
@@ -22,6 +23,7 @@ const message = useMessage()
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
 const favoritesStore = useFavoritesStore()
+const { t } = useI18n()
 
 const terminals = ref<TerminalInstance[]>([])
 const showAddModal = ref(false)
@@ -144,7 +146,7 @@ const generateSessionName = (directory: string) => {
 
 const addTerminal = () => {
   if (!newTerminal.value.boxName) {
-    message.error('Please select a box')
+    message.error(t('multi.select_box'))
     return
   }
 
@@ -209,18 +211,18 @@ onMounted(async () => {
     <!-- Header -->
     <div class="header">
       <div class="header-left">
-        <NButton size="small" quaternary @click="goBack" title="Go Back">
+        <NButton size="small" quaternary @click="goBack" :title="t('terminal.go_back')">
           <NIcon size="16"><PhArrowLeft /></NIcon>
         </NButton>
         <div>
-          <h1>Multi-Terminal Grid</h1>
-          <p class="text-muted">{{ terminals.length }} terminal{{ terminals.length !== 1 ? 's' : '' }} active</p>
+          <h1>{{ t('multi.title') }}</h1>
+          <p class="text-muted">{{ terminals.length }} {{ terminals.length !== 1 ? t('multi.terminals') : t('multi.terminal') }} {{ t('multi.active') }}</p>
         </div>
       </div>
       
       <NButton type="primary" @click="openAddModal">
         <NIcon size="16"><PhPlus /></NIcon>
-        Add Terminal
+        {{ t('multi.add_terminal') }}
       </NButton>
     </div>
 
@@ -251,7 +253,7 @@ onMounted(async () => {
             <span class="session-name">{{ terminal.sessionName }}</span>
             <span class="directory-name">{{ terminal.directory }}</span>
           </div>
-          <NButton size="tiny" quaternary @click="removeTerminal(terminal.id)" title="Close">
+          <NButton size="tiny" quaternary @click="removeTerminal(terminal.id)" :title="t('common.close')">
             ×
           </NButton>
         </div>
@@ -268,48 +270,48 @@ onMounted(async () => {
       <!-- Empty state -->
       <div v-if="terminals.length === 0" class="empty-state">
         <NIcon size="48" class="empty-icon"><PhTerminalWindow /></NIcon>
-        <h3>No Terminals</h3>
-        <p class="text-muted">Click "Add Terminal" to start</p>
+        <h3>{{ t('multi.no_terminals') }}</h3>
+        <p class="text-muted">{{ t('multi.no_terminals_hint') }}</p>
       </div>
     </div>
 
     <!-- Add Terminal Modal -->
-    <NModal v-model:show="showAddModal" preset="card" title="Add Terminal" style="max-width: 400px">
+    <NModal v-model:show="showAddModal" preset="card" :title="t('multi.add_terminal')" style="max-width: 400px">
       <NSpace vertical size="medium">
         <div>
-          <label class="form-label">Box</label>
+          <label class="form-label">{{ t('multi.box') }}</label>
           <NSelect
             v-model:value="newTerminal.boxName"
             :options="boxOptions"
-            placeholder="Choose box"
+            :placeholder="t('multi.choose_box')"
           />
         </div>
         
         <div>
-          <label class="form-label">Session Name</label>
+          <label class="form-label">{{ t('multi.session_name') }}</label>
           <NInput
             v-model:value="newTerminal.sessionName"
-            placeholder="Auto-generated from directory"
+            :placeholder="t('multi.session_placeholder')"
           />
-          <p class="form-help">Leave empty to auto-generate from directory (same dir = same tmux window)</p>
+          <p class="form-help">{{ t('multi.session_help') }}</p>
         </div>
         
         <div>
-          <label class="form-label">Directory</label>
+          <label class="form-label">{{ t('multi.directory') }}</label>
           <NSelect
             :value="newTerminal.directory"
             :options="directoryOptions"
-            placeholder="~ or select from favorites"
+            :placeholder="t('multi.dir_placeholder')"
             @update:value="handleDirectoryChange"
           />
-          <p class="form-help">Select a favorite or browse for a directory</p>
+          <p class="form-help">{{ t('multi.dir_help') }}</p>
         </div>
       </NSpace>
       
       <template #footer>
         <NSpace justify="end">
-          <NButton @click="showAddModal = false">Cancel</NButton>
-          <NButton type="primary" @click="addTerminal">Add Terminal</NButton>
+          <NButton @click="showAddModal = false">{{ t('common.cancel') }}</NButton>
+          <NButton type="primary" @click="addTerminal">{{ t('multi.add_terminal') }}</NButton>
         </NSpace>
       </template>
     </NModal>

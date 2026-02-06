@@ -594,7 +594,7 @@ systemctl --user enable --now sshler.service
 ## Dependencies & licenses
 
 - FastAPI, uvicorn, asyncssh, platformdirs, yaml (PyPI packages, permissive licenses)
-- HTMX (MIT) and xterm.js (MIT) are loaded from unpkg
+- xterm.js (MIT) is loaded from unpkg
 - CodeMirror (MIT) powers the editor
 
 All assets are used under their respective MIT/BSD-style licenses. sshler itself ships under the MIT license.

@@ -16,19 +16,19 @@ def test_config_created() -> None:
     assert len(application_config.boxes) >= 1
 
 
-def test_boxes_route() -> None:
+def test_root_redirects_to_spa() -> None:
     app = make_app(ServerSettings(csrf_token="test-token"))
     client = TestClient(app)
-    response = client.get("/boxes")
-    assert response.status_code == 200
-    assert "Boxes" in response.text
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code in {302, 307}
+    assert response.headers["location"] == "/app/"
 
 
 def test_csp_allows_inline_styles() -> None:
     """Test that Content-Security-Policy allows inline styles for terminal rendering."""
     app = make_app(ServerSettings(csrf_token="test-token"))
     client = TestClient(app)
-    response = client.get("/boxes")
+    response = client.get("/health")
     assert response.status_code == 200
     csp_header = response.headers.get("Content-Security-Policy")
     assert csp_header is not None

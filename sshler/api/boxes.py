@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
 from .. import state
 from .dependencies import APIDependencies
-from .models import APIBox, APIBoxStats, APIBoxStatus, APIFavoriteToggle, APIGitInfo, APIPinToggle
+from .models import APIBox, APIBoxStats, APIBoxStatus, APIFavoriteToggle, APIGitInfo, APIPinToggle, APIRefreshResult
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,41 @@ def get_router(deps: APIDependencies) -> APIRouter:
         save_config(application_config)
         rebuild_boxes(application_config)
         return APIFavoriteToggle(path=payload.path, favorite=payload.favorite)
+
+    @router.post("/boxes/{name}/refresh", response_model=APIRefreshResult)
+    async def api_refresh_box(
+        name: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> APIRefreshResult:
+        """Remove connection overrides so SSH config values apply."""
+        box = deps.get_box_or_404(application_config, name)
+        stored_override = application_config.stored.get(name)
+        if stored_override is not None:
+            stored_override.host = None
+            stored_override.user = None
+            stored_override.port = None
+            stored_override.keyfile = None
+            stored_override.known_hosts = None
+            stored_override.ssh_alias = None
+
+            if not any(
+                [
+                    stored_override.host,
+                    stored_override.user,
+                    stored_override.port,
+                    stored_override.keyfile,
+                    stored_override.known_hosts,
+                    stored_override.ssh_alias,
+                    stored_override.default_dir,
+                    stored_override.agent,
+                ]
+            ):
+                application_config.stored.pop(name, None)
+
+            save_config(application_config)
+
+        rebuild_boxes(application_config)
+        return APIRefreshResult(name=name, refreshed=True)
 
     @router.get("/boxes/{name}/stats", response_model=APIBoxStats)
     async def api_box_stats(

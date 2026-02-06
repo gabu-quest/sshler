@@ -8,6 +8,7 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import { useResponsive } from '@/composables/useResponsive'
+import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
@@ -21,6 +22,7 @@ const router = useRouter()
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
 const favoritesStore = useFavoritesStore()
+const { t } = useI18n()
 
 const selectedBox = ref<string | null>(null)
 const initialDirectory = ref<string>('~')
@@ -259,11 +261,11 @@ watch(() => boxesStore.items, () => {
     <header v-if="!isMobile" class="page-header">
       <div class="header-content">
         <div class="header-left">
-          <NButton size="small" quaternary @click="goBack" title="Go Back">
+          <NButton size="small" quaternary @click="goBack" :title="t('terminal.go_back')">
             <NIcon size="16"><PhArrowLeft /></NIcon>
           </NButton>
           <h1 class="dir-title">{{ displayDirName }}</h1>
-          <span class="box-badge">{{ selectedBox || 'No box' }}</span>
+          <span class="box-badge">{{ selectedBox || t('terminal.no_box') }}</span>
           <span v-if="currentGitInfo?.is_repo" class="git-badge" :class="{ dirty: currentGitInfo.dirty }">
             <NIcon size="12"><PhGitBranch /></NIcon>
             {{ currentGitInfo.branch }}
@@ -275,7 +277,7 @@ watch(() => boxesStore.items, () => {
           <NSelect
             v-model:value="selectedBox"
             :options="boxOptions"
-            placeholder="Box"
+            :placeholder="t('terminal.box')"
             :disabled="boxesStore.loading"
             @update:value="handleBoxChange"
             size="small"
@@ -285,7 +287,7 @@ watch(() => boxesStore.items, () => {
             v-if="selectedBox && !showManualDir"
             :value="initialDirectory"
             :options="directoryOptions"
-            placeholder="Dir"
+            :placeholder="t('terminal.dir')"
             @update:value="handleDirectoryChange"
             size="small"
             style="min-width: 140px"
@@ -293,7 +295,7 @@ watch(() => boxesStore.items, () => {
           <NInput
             v-if="showManualDir"
             v-model:value="initialDirectory"
-            placeholder="/path/to/dir"
+            :placeholder="t('terminal.dir_placeholder')"
             size="small"
             @blur="sessionName = generateSessionName(initialDirectory)"
             @keyup.enter="sessionName = generateSessionName(initialDirectory)"
@@ -308,7 +310,7 @@ watch(() => boxesStore.items, () => {
             size="small"
             :type="isCurrentDirFavorite ? 'warning' : 'default'"
             @click="toggleCurrentDirFavorite"
-            :title="isCurrentDirFavorite ? 'Remove from favorites' : 'Add to favorites'"
+            :title="isCurrentDirFavorite ? t('terminal.remove_favorite') : t('terminal.add_favorite')"
             class="favorite-btn"
           >
             <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
@@ -320,7 +322,7 @@ watch(() => boxesStore.items, () => {
             v-if="selectedBox"
             :href="filesUrl"
             class="header-link-btn"
-            title="Browse Files (middle-click for new tab)"
+            :title="t('terminal.browse_files')"
             @click.prevent="goToFiles"
           >
             <NIcon size="14"><PhFolderOpen /></NIcon>
@@ -331,7 +333,7 @@ watch(() => boxesStore.items, () => {
 
     <!-- Mobile Header: ultra-compact single row -->
     <header v-if="isMobile" class="mobile-header">
-      <button class="mobile-back-btn" @click="goBack" title="Back">
+      <button class="mobile-back-btn" @click="goBack" :title="t('common.back')">
         <NIcon size="14"><PhArrowLeft /></NIcon>
       </button>
       <button class="mobile-title-btn" @click="toggleMobileControls">
@@ -366,7 +368,7 @@ watch(() => boxesStore.items, () => {
       <NSelect
         v-model:value="selectedBox"
         :options="boxOptions"
-        placeholder="Box"
+        :placeholder="t('terminal.box')"
         :disabled="boxesStore.loading"
         @update:value="handleBoxChange"
         size="small"
@@ -375,14 +377,14 @@ watch(() => boxesStore.items, () => {
         v-if="selectedBox && !showManualDir"
         :value="initialDirectory"
         :options="directoryOptions"
-        placeholder="Dir"
+        :placeholder="t('terminal.dir')"
         @update:value="handleDirectoryChange"
         size="small"
       />
       <NInput
         v-if="showManualDir"
         v-model:value="initialDirectory"
-        placeholder="/path/to/dir"
+        :placeholder="t('terminal.dir_placeholder')"
         size="small"
         @blur="sessionName = generateSessionName(initialDirectory)"
         @keyup.enter="sessionName = generateSessionName(initialDirectory)"
@@ -412,8 +414,8 @@ watch(() => boxesStore.items, () => {
       <div v-else class="no-box-selected">
         <div class="empty-state">
           <NIcon size="48" class="empty-icon"><PhTerminalWindow /></NIcon>
-          <h3>No Box Selected</h3>
-          <p class="text-muted">Choose a box from the dropdown above to start a terminal session.</p>
+          <h3>{{ t('terminal.no_box') }}</h3>
+          <p class="text-muted">{{ t('terminal.no_box_hint') }}</p>
           <NButton
             v-if="boxOptions.length > 0"
             type="primary"

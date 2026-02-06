@@ -21,6 +21,7 @@ import {
   PhCaretRight,
   PhQuestion,
 } from '@phosphor-icons/vue'
+import { useI18n } from '@/i18n'
 
 interface Emits {
   (e: 'send', data: string): void
@@ -39,6 +40,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<Emits>()
+const { t } = useI18n()
 
 const inputText = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -211,7 +213,7 @@ watch(() => props.rawMode, (raw) => {
       <div v-if="showLegend" class="legend-overlay" @click="showLegend = false">
         <div class="legend-card" @click.stop>
           <div class="legend-header">
-            <span>Quick Keys</span>
+            <span>{{ t('mobile.quick_keys') }}</span>
             <button class="legend-close" @click="showLegend = false">✕</button>
           </div>
           <div class="legend-grid">
@@ -223,7 +225,7 @@ watch(() => props.rawMode, (raw) => {
             </div>
           </div>
           <div class="legend-footer">
-            Tap anywhere outside to close
+            {{ t('mobile.close_hint') }}
           </div>
         </div>
       </div>
@@ -235,7 +237,7 @@ watch(() => props.rawMode, (raw) => {
         class="mode-toggle"
         :class="{ active: rawMode }"
         @click="toggleRawMode"
-        :title="rawMode ? 'Smart input (autocorrect ON)' : 'Raw mode (xterm direct)'"
+        :title="rawMode ? t('mobile.smart_input') : t('mobile.raw_mode')"
       >
         <NIcon size="14"><PhKeyboard weight="bold" /></NIcon>
       </button>
@@ -245,7 +247,7 @@ watch(() => props.rawMode, (raw) => {
           ref="textareaRef"
           v-model="inputText"
           class="smart-input"
-          placeholder="command..."
+          :placeholder="t('mobile.command_placeholder')"
           rows="1"
           autocomplete="off"
           autocapitalize="none"
@@ -264,7 +266,7 @@ watch(() => props.rawMode, (raw) => {
       </div>
 
       <div v-else class="raw-mode-label">
-        <span>Raw mode — tapping terminal directly</span>
+        <span>{{ t('mobile.raw_mode_hint') }}</span>
       </div>
     </div>
   </div>

@@ -4,6 +4,7 @@ import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFolder, PhClockCounterClockwise } from "@phosphor-icons/vue";
 import { searchDirectories } from "@/api/http";
 import type { SearchResult } from "@/api/types";
+import { useI18n } from "@/i18n";
 
 const props = defineProps<{
   box: string | null;
@@ -13,6 +14,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "select", path: string): void;
 }>();
+
+const { t } = useI18n();
 
 const query = ref("");
 const results = ref<SearchResult[]>([]);
@@ -94,7 +97,7 @@ function formatPath(path: string): string {
   <div class="directory-search">
     <NInput
       v-model:value="query"
-      placeholder="Search directories..."
+      :placeholder="t('dirsearch.placeholder')"
       size="small"
       clearable
       @focus="handleFocus"
@@ -113,7 +116,7 @@ function formatPath(path: string): string {
     <div v-if="showDropdown" class="search-dropdown">
       <div v-if="loading && !hasResults" class="search-loading">
         <NSpin size="small" />
-        <span>Searching...</span>
+        <span>{{ t('dirsearch.searching') }}</span>
       </div>
 
       <div v-else-if="hasResults" class="search-results">
@@ -129,7 +132,7 @@ function formatPath(path: string): string {
           </NIcon>
           <span class="result-path" :title="result.path">{{ formatPath(result.path) }}</span>
           <span class="result-score" :class="result.source">
-            {{ result.source === "frecency" ? "visited" : "found" }}
+            {{ result.source === "frecency" ? t('dirsearch.visited') : t('dirsearch.found') }}
           </span>
         </div>
       </div>
@@ -137,7 +140,7 @@ function formatPath(path: string): string {
       <NEmpty
         v-else
         size="small"
-        description="No directories found"
+        :description="t('dirsearch.no_results')"
         class="search-empty"
       />
     </div>

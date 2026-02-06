@@ -6,6 +6,7 @@ import { PhFolder, PhFolderOpen, PhStar, PhArrowLeft, PhHouse, PhCheck } from '@
 import { http, buildHeaders } from '@/api/http'
 import { useFavoritesStore } from '@/stores/favorites'
 import type { DirectoryEntry } from '@/api/types'
+import { useI18n } from '@/i18n'
 
 const props = defineProps<{
   show: boolean
@@ -20,6 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const favoritesStore = useFavoritesStore()
+const { t } = useI18n()
 
 const currentPath = ref(props.initialPath || '~')
 const entries = ref<DirectoryEntry[]>([])
@@ -102,12 +104,12 @@ watch(() => props.show, (show) => {
 </script>
 
 <template>
-  <NModal 
-    :show="show" 
+  <NModal
+    :show="show"
     @update:show="emit('update:show', $event)"
     preset="card"
     style="width: 500px; max-width: 90vw;"
-    title="Choose Directory"
+    :title="t('dirpicker.title')"
     :bordered="false"
   >
     <div class="directory-picker">
@@ -138,12 +140,12 @@ watch(() => props.show, (show) => {
           </template>
         </div>
         
-        <NButton 
-          size="small" 
+        <NButton
+          size="small"
           :type="isFavorite(currentPath) ? 'warning' : 'default'"
           quaternary
           @click="toggleFavorite(currentPath)"
-          title="Toggle favorite"
+          :title="t('dirpicker.toggle_favorite')"
         >
           <NIcon :color="isFavorite(currentPath) ? '#faad14' : undefined">
             <PhStar :weight="isFavorite(currentPath) ? 'fill' : 'regular'" />
@@ -153,11 +155,11 @@ watch(() => props.show, (show) => {
       
       <!-- Favorites section -->
       <div v-if="favorites.length > 0" class="favorites-section">
-        <div class="section-label">Favorites</div>
+        <div class="section-label">{{ t('dirpicker.favorites') }}</div>
         <div class="favorites-list">
-          <div 
-            v-for="fav in favorites" 
-            :key="fav" 
+          <div
+            v-for="fav in favorites"
+            :key="fav"
             class="favorite-item"
             @click="selectPath(fav)"
           >
@@ -174,8 +176,8 @@ watch(() => props.show, (show) => {
         </div>
         
         <NEmpty v-else-if="error" :description="error" />
-        
-        <NEmpty v-else-if="directories.length === 0" description="No subdirectories" />
+
+        <NEmpty v-else-if="directories.length === 0" :description="t('dirpicker.no_subdirs')" />
         
         <template v-else>
           <div 
@@ -206,7 +208,7 @@ watch(() => props.show, (show) => {
       
       <!-- Footer actions -->
       <div class="footer-actions">
-        <NButton @click="emit('update:show', false)">Cancel</NButton>
+        <NButton @click="emit('update:show', false)">{{ t('common.cancel') }}</NButton>
         <NButton type="primary" @click="selectCurrent">
           <template #icon>
             <NIcon><PhCheck /></NIcon>

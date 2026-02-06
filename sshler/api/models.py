@@ -164,6 +164,13 @@ class APIBoxStats(BaseModel):
     error: str | None = None
 
 
+class APIRefreshResult(BaseModel):
+    """Result of refreshing a box's connection overrides."""
+
+    name: str
+    refreshed: bool
+
+
 class APIGitInfo(BaseModel):
     """Git repository info for a directory."""
 

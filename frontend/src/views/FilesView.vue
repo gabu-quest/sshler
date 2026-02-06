@@ -21,6 +21,7 @@ import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
 import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
+import { useI18n } from "@/i18n";
 
 const route = useRoute();
 const bootstrapStore = useBootstrapStore();
@@ -30,6 +31,7 @@ const favoritesStore = useFavoritesStore();
 const filesStore = useFilesStore();
 const message = useMessage();
 const { isMobile } = useResponsive();
+const { t } = useI18n();
 
 // State
 const selectedBox = ref<string | null>(null);
@@ -181,7 +183,7 @@ const handleContextMenuSelect = async (itemId: string) => {
     case 'download': await handleDownload(file); break;
     case 'rename': handleRenamePrompt(file); break;
     case 'copy': renameTarget.value = file.path; copyDestination.value = currentDir.value; copyNewName.value = `${file.name}_copy`; break;
-    case 'copy-path': await navigator.clipboard.writeText(file.path); message.success('Path copied to clipboard'); break;
+    case 'copy-path': await navigator.clipboard.writeText(file.path); message.success(t('files.path_copied')); break;
     case 'favorite': if (file.is_directory) await toggleFavoriteDir(file.path); else await toggleFavoriteCurrentDir(); break;
     case 'delete': await removePath(file.path); break;
   }
@@ -194,7 +196,7 @@ const toggleFavoriteDir = async (path: string) => {
   const nowFavorite = await favoritesStore.setFavorite(selectedBox.value, path, desired, tokenValue.value || null);
   if (favoritesStore.error) { message.error(favoritesStore.error); return; }
   applyBoxPatch(selectedBox.value, { favorites: Array.from(favoritesForSelection.value.values()) });
-  message.success(nowFavorite ? `Favorited ${path}` : `Removed ${path}`);
+  message.success(nowFavorite ? t('files.favorite') + ' ' + path : t('files.unfavorite') + ' ' + path);
 };
 
 // Drag and drop functions
@@ -290,7 +292,7 @@ async function handlePinToggle() {
   const pinned = await favoritesStore.setPinned(selectedBox.value, tokenValue.value || null);
   applyBoxPatch(selectedBox.value, { pinned });
   if (favoritesStore.error) { message.error(favoritesStore.error); return; }
-  message.success(pinned ? "pinned box" : "unpinned box");
+  message.success(pinned ? t('boxes.pinned') : t('boxes.unpinned'));
 }
 
 async function toggleFavoriteCurrentDir() {
@@ -300,7 +302,7 @@ async function toggleFavoriteCurrentDir() {
   const nowFavorite = await favoritesStore.setFavorite(selectedBox.value, path, desired, tokenValue.value || null);
   if (favoritesStore.error) { message.error(favoritesStore.error); return; }
   applyBoxPatch(selectedBox.value, { favorites: Array.from(favoritesForSelection.value.values()) });
-  message.success(nowFavorite ? `favorited ${path}` : `removed ${path}`);
+  message.success(nowFavorite ? t('files.favorite') + ' ' + path : t('files.unfavorite') + ' ' + path);
 }
 
 async function onBoxChange(val: string) {
@@ -325,7 +327,7 @@ async function createEmptyFile() {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     newFileName.value = "";
-    message.success("File created");
+    message.success(t('files.file_created'));
   } catch (err) {
     directoryStore.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -339,7 +341,7 @@ async function removePath(path: string) {
   try {
     await filesStore.doDelete(selectedBox.value, path, tokenValue.value || null);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    message.success("deleted");
+    message.success(t('files.deleted'));
   } catch (err) {
     directoryStore.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -360,7 +362,7 @@ async function doRename() {
     await filesStore.doRename(selectedBox.value, renameTarget.value, renameValue.value.trim(), tokenValue.value || null);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    message.success("renamed");
+    message.success(t('files.renamed'));
     renameTarget.value = null;
     renameValue.value = "";
   } catch (err) {
@@ -376,10 +378,10 @@ async function doMoveCopy(kind: "move" | "copy") {
   try {
     if (kind === "move") {
       await filesStore.doMove(selectedBox.value, renameTarget.value, moveDestination.value, tokenValue.value || null);
-      message.success("moved");
+      message.success(t('files.moved'));
     } else {
       await filesStore.doCopy(selectedBox.value, renameTarget.value, copyDestination.value, copyNewName.value || null, tokenValue.value || null);
-      message.success("copied");
+      message.success(t('files.copied'));
     }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
@@ -399,7 +401,7 @@ async function handleUpload(files: FileList | null) {
   actionBusy.value = true;
   try {
     await filesStore.doUpload(selectedBox.value, currentDir.value, file, tokenValue.value || null);
-    message.success("uploaded");
+    message.success(t('files.uploaded'));
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
   } catch (err) {
@@ -474,7 +476,7 @@ async function saveEdit() {
   editLoading.value = true;
   try {
     await writeFile(selectedBox.value, editPath.value, editContent.value, tokenValue.value || null);
-    message.success("saved");
+    message.success(t('files.saved'));
     editing.value = false;
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
   } catch (err) {
@@ -493,7 +495,7 @@ async function bulkDelete() {
     }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     filesStore.setSelectedFiles([]);
-    message.success("deleted selection");
+    message.success(t('files.deleted_selection'));
   } catch (err) {
     message.error(err instanceof Error ? err.message : String(err));
   } finally {
@@ -620,19 +622,19 @@ const columns = computed(() => {
     <!-- Breadcrumb Navigation -->
     <div class="breadcrumb-nav">
       <NSpace size="small" align="center">
-        <NButton size="small" quaternary @click="navigateHome" title="Home">
+        <NButton size="small" quaternary @click="navigateHome" :title="t('common.home')">
           <NIcon size="16"><PhHouse /></NIcon>
         </NButton>
-        <NButton size="small" quaternary @click="navigateUp" :disabled="currentDir === '/'" title="Up">
+        <NButton size="small" quaternary @click="navigateUp" :disabled="currentDir === '/'" :title="t('common.up')">
           <NIcon size="16"><PhArrowLeft /></NIcon>
         </NButton>
         <span class="breadcrumb-path">{{ currentDir }}</span>
       </NSpace>
       <NSpace size="small">
-        <NButton size="small" @click="reloadDir" :disabled="!selectedBox" title="Refresh">
+        <NButton size="small" @click="reloadDir" :disabled="!selectedBox" :title="t('common.refresh')">
           <NIcon size="16"><PhUploadSimple /></NIcon>
         </NButton>
-        <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)" :disabled="!selectedBox" title="Open Terminal">
+        <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)" :disabled="!selectedBox" :title="t('terminal.open_terminal')">
           <NIcon size="16"><PhTerminalWindow /></NIcon>
         </NButton>
       </NSpace>
@@ -640,9 +642,9 @@ const columns = computed(() => {
 
     <header class="page-header">
       <div>
-        <p class="eyebrow">files</p>
-        <h1>File Browser & Editor</h1>
-        <p class="text-muted">Complete file management with drag & drop, context menus, CodeMirror editor, and bulk operations.</p>
+        <p class="eyebrow">{{ t('files.heading') }}</p>
+        <h1>{{ t('files.subtitle') }}</h1>
+        <p class="text-muted">{{ t('files.description') }}</p>
       </div>
     </header>
 
@@ -650,16 +652,16 @@ const columns = computed(() => {
     <NCard class="surface-card" size="medium">
       <div class="card-title">
         <NIcon size="18"><PhFolderSimple /></NIcon>
-        <span>Connection</span>
+        <span>{{ t('files.connection') }}</span>
       </div>
       <NSpace vertical size="small">
         <NSpace size="small" align="center" wrap>
-          <NSelect v-model:value="selectedBox" :options="boxOptions" placeholder="Choose box" :disabled="boxesStore.loading" @update:value="onBoxChange" style="min-width: 200px" />
-          <NInput v-model:value="currentDir" placeholder="Directory path" size="small" style="max-width: 320px" @keyup.enter="reloadDir" />
-          <NButton size="small" @click="reloadDir" :disabled="!selectedBox">Load</NButton>
+          <NSelect v-model:value="selectedBox" :options="boxOptions" :placeholder="t('files.choose_box')" :disabled="boxesStore.loading" @update:value="onBoxChange" style="min-width: 200px" />
+          <NInput v-model:value="currentDir" :placeholder="t('files.dir_placeholder')" size="small" style="max-width: 320px" @keyup.enter="reloadDir" />
+          <NButton size="small" @click="reloadDir" :disabled="!selectedBox">{{ t('files.load') }}</NButton>
           <NButton size="small" tertiary :disabled="!selectedBox" @click="toggleFavoriteCurrentDir">
             <NIcon size="14"><PhStar /></NIcon>
-            {{ isCurrentDirFavorite ? "Unfavorite" : "Favorite" }}
+            {{ isCurrentDirFavorite ? t('files.unfavorite') : t('files.favorite') }}
           </NButton>
         </NSpace>
         <NAlert :type="status === 'online' ? 'success' : 'error'" v-if="selectedBox">
@@ -675,7 +677,7 @@ const columns = computed(() => {
     <NCard class="surface-card" size="medium">
       <div class="card-title">
         <NIcon size="18"><PhList /></NIcon>
-        <span>Files</span>
+        <span>{{ t('common.files') }}</span>
         <div class="card-actions">
           <NSpace size="small" :wrap="isMobile">
             <DirectorySearchInput
@@ -683,12 +685,12 @@ const columns = computed(() => {
               :token="tokenValue"
               @select="navigateToDirectory"
             />
-            <NInput v-model:value="filterQuery" placeholder="Filter..." size="small" style="width: 140px">
+            <NInput v-model:value="filterQuery" :placeholder="t('files.filter_placeholder')" size="small" style="width: 140px">
               <template #prefix><NIcon size="14"><PhMagnifyingGlass /></NIcon></template>
             </NInput>
-            <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">All</NButton>
-            <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">Files</NButton>
-            <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">Folders</NButton>
+            <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">{{ t('common.all') }}</NButton>
+            <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">{{ t('common.files') }}</NButton>
+            <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">{{ t('common.folders') }}</NButton>
           </NSpace>
         </div>
       </div>
@@ -697,14 +699,14 @@ const columns = computed(() => {
         <!-- Bulk Actions -->
         <div v-if="selectedCount > 0" class="bulk-actions">
           <NSpace size="small" align="center">
-            <span class="text-muted">{{ selectedCount }} selected</span>
+            <span class="text-muted">{{ selectedCount }} {{ t('files.selected') }}</span>
             <NButton size="small" type="error" ghost @click="bulkDelete">
-              <NIcon size="14"><PhTrash /></NIcon>Delete Selected
+              <NIcon size="14"><PhTrash /></NIcon>{{ t('files.delete_selected') }}
             </NButton>
             <NButton size="small" @click="bulkDownload" :disabled="selectedCount > 10">
-              <NIcon size="14"><PhDownloadSimple /></NIcon>Download Selected
+              <NIcon size="14"><PhDownloadSimple /></NIcon>{{ t('files.download_selected') }}
             </NButton>
-            <NButton size="small" @click="filesStore.setSelectedFiles([])">Clear Selection</NButton>
+            <NButton size="small" @click="filesStore.setSelectedFiles([])">{{ t('files.clear_selection') }}</NButton>
           </NSpace>
         </div>
 
@@ -712,14 +714,14 @@ const columns = computed(() => {
         <div v-if="recentPaths.length" class="recent-paths">
           <NSpace size="small" align="center">
             <NIcon size="14"><PhClockCounterClockwise /></NIcon>
-            <span class="text-muted small">Recent:</span>
+            <span class="text-muted small">{{ t('files.recent') }}</span>
             <NTag v-for="path in recentPaths.slice(0, 5)" :key="path" size="small" checkable @click="navigateToDirectory(path)">{{ path }}</NTag>
           </NSpace>
         </div>
 
         <!-- Loading State -->
         <NSpin v-if="directoryStore.loading || boxesStore.loading" size="small">
-          <span class="text-muted">Loading directory...</span>
+          <span class="text-muted">{{ t('files.loading_dir') }}</span>
         </NSpin>
 
         <!-- File Table -->
@@ -727,7 +729,7 @@ const columns = computed(() => {
           <div v-if="isDragOver" class="drop-overlay">
             <div class="drop-message">
               <NIcon size="32"><PhUploadSimple /></NIcon>
-              <span>Drop files to upload to {{ currentDir }}</span>
+              <span>{{ t('files.drop_upload') }} {{ currentDir }}</span>
             </div>
           </div>
           
@@ -743,21 +745,21 @@ const columns = computed(() => {
     <NCard class="surface-card" size="medium">
       <div class="card-title">
         <NIcon size="18"><PhGear /></NIcon>
-        <span>Actions</span>
+        <span>{{ t('files.col_actions') }}</span>
       </div>
       <NSpace vertical size="small">
         <!-- Create File -->
         <NSpace size="small" align="center">
-          <NInput v-model:value="newFileName" placeholder="New filename" size="small" style="max-width: 220px" @keyup.enter="createEmptyFile" />
+          <NInput v-model:value="newFileName" :placeholder="t('files.new_filename')" size="small" style="max-width: 220px" @keyup.enter="createEmptyFile" />
           <NButton :disabled="actionBusy || !selectedBox || !newFileName.trim()" size="small" type="primary" @click="createEmptyFile">
-            <NIcon size="14"><PhUploadSimple /></NIcon>Create File
+            <NIcon size="14"><PhUploadSimple /></NIcon>{{ t('files.create_file') }}
           </NButton>
         </NSpace>
 
         <!-- File Upload -->
         <NSpace size="small" align="center">
           <input type="file" multiple @change="(e: any) => handleUpload(e.target.files)" style="max-width: 200px" />
-          <span class="text-muted small">or drag & drop files above</span>
+          <span class="text-muted small">{{ t('files.or_drag_drop') }}</span>
         </NSpace>
 
         <!-- Upload Progress -->
@@ -791,7 +793,7 @@ const columns = computed(() => {
       </template>
       
       <div class="preview-container">
-        <NSpin v-if="previewLoading" size="large"><span class="text-muted">Loading preview...</span></NSpin>
+        <NSpin v-if="previewLoading" size="large"><span class="text-muted">{{ t('files.loading_preview') }}</span></NSpin>
         <template v-else>
           <!-- Image Preview -->
           <div v-if="previewIsImage" class="preview-image-container">
@@ -809,16 +811,16 @@ const columns = computed(() => {
         <NSpace justify="space-between">
           <NSpace size="small">
             <NSwitch v-model:value="showLineNumbers" size="small">
-              <template #checked>Line Numbers</template>
-              <template #unchecked>No Lines</template>
+              <template #checked>{{ t('files.line_numbers') }}</template>
+              <template #unchecked>{{ t('files.no_lines') }}</template>
             </NSwitch>
             <NSwitch v-model:value="wordWrap" size="small">
-              <template #checked>Word Wrap</template>
-              <template #unchecked>No Wrap</template>
+              <template #checked>{{ t('files.word_wrap') }}</template>
+              <template #unchecked>{{ t('files.no_wrap') }}</template>
             </NSwitch>
-            <NSelect v-model:value="editorTheme" :options="[{ label: 'Dark', value: 'dark' }, { label: 'Light', value: 'light' }]" size="small" style="width: 100px" />
+            <NSelect v-model:value="editorTheme" :options="[{ label: t('files.dark'), value: 'dark' }, { label: t('files.light'), value: 'light' }]" size="small" style="width: 100px" />
           </NSpace>
-          <NButton @click="closePreview">Close</NButton>
+          <NButton @click="closePreview">{{ t('common.close') }}</NButton>
         </NSpace>
       </template>
     </NModal>
@@ -828,35 +830,35 @@ const columns = computed(() => {
       <template #header>
         <div class="modal-header">
           <NIcon size="16"><PhPencil /></NIcon>
-          <span>Edit: {{ editPath.split('/').pop() }}</span>
+          <span>{{ t('common.edit') }}: {{ editPath.split('/').pop() }}</span>
           <div class="modal-actions">
             <NSpace size="small">
               <NSwitch v-model:value="showLineNumbers" size="small">
-                <template #checked>Lines</template>
+                <template #checked>{{ t('files.lines') }}</template>
                 <template #unchecked>No Lines</template>
               </NSwitch>
               <NSwitch v-model:value="wordWrap" size="small">
-                <template #checked>Wrap</template>
+                <template #checked>{{ t('files.wrap') }}</template>
                 <template #unchecked>No Wrap</template>
               </NSwitch>
-              <NSelect v-model:value="editorTheme" :options="[{ label: 'Dark', value: 'dark' }, { label: 'Light', value: 'light' }]" size="small" style="width: 80px" />
+              <NSelect v-model:value="editorTheme" :options="[{ label: t('files.dark'), value: 'dark' }, { label: t('files.light'), value: 'light' }]" size="small" style="width: 80px" />
             </NSpace>
           </div>
         </div>
       </template>
       
       <div class="editor-container">
-        <NSpin v-if="editLoading" size="large"><span class="text-muted">Loading file...</span></NSpin>
-        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 70vh" placeholder="File content..." />
+        <NSpin v-if="editLoading" size="large"><span class="text-muted">{{ t('files.loading_file') }}</span></NSpin>
+        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 70vh" :placeholder="t('files.file_placeholder')" />
       </div>
       
       <template #footer>
         <NSpace justify="space-between">
           <div class="file-info"><span class="text-muted small">{{ editPath }}</span></div>
           <NSpace>
-            <NButton @click="editing = false">Cancel</NButton>
+            <NButton @click="editing = false">{{ t('common.cancel') }}</NButton>
             <NButton type="primary" :loading="editLoading" @click="saveEdit">
-              <NIcon size="14"><PhUploadSimple /></NIcon>Save
+              <NIcon size="14"><PhUploadSimple /></NIcon>{{ t('common.save') }}
             </NButton>
           </NSpace>
         </NSpace>
