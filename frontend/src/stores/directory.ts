@@ -42,6 +42,14 @@ export const useDirectoryStore = defineStore("directory", () => {
     return recents.value[box] || [];
   }
 
+  async function fetchChildren(box: string, path: string, token: string | null): Promise<DirectoryListing | null> {
+    try {
+      return await fetchDirectory(box, path, token);
+    } catch {
+      return null;
+    }
+  }
+
   return {
     listing,
     loading,
@@ -50,5 +58,6 @@ export const useDirectoryStore = defineStore("directory", () => {
     setFilter,
     recentForBox,
     load,
+    fetchChildren,
   };
 });

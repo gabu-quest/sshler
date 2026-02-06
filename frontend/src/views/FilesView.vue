@@ -6,7 +6,7 @@ import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
 import {
-  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow,
+  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple,
 } from "@phosphor-icons/vue";
 
 import type { ApiBox, FilePreview } from "@/api/types";
@@ -61,6 +61,9 @@ const editorTheme = ref<'light' | 'dark'>('dark');
 const contextMenu = ref({ visible: false, x: 0, y: 0, targetFile: null as any });
 const dragCounter = ref(0);
 const isDragOver = ref(false);
+const expandedDirs = ref<Set<string>>(new Set());
+const childrenCache = ref<Map<string, any[]>>(new Map());
+const expandingDir = ref<string | null>(null);
 
 // Computed
 const filterQuery = computed({
@@ -78,12 +81,37 @@ const isCurrentDirFavorite = computed(() => favoritesStore.isFavorite(selectedBo
 const filteredRows = computed(() => {
   const entries = directoryStore.listing?.entries || [];
   const q = filterQuery.value.trim().toLowerCase();
-  return entries.filter((entry) => {
+  const filtered = entries.filter((entry: any) => {
     if (viewFilter.value === "files" && entry.is_directory) return false;
     if (viewFilter.value === "dirs" && !entry.is_directory) return false;
     if (!q) return true;
     return entry.name.toLowerCase().includes(q);
   });
+
+  // Prepend parent (..) entry when not at root
+  const result: any[] = [];
+  if (currentDir.value !== '/' && currentDir.value !== '~') {
+    const parentPath = currentDir.value.replace(/\/[^/]+\/?$/, '') || '/';
+    result.push({
+      name: '..', path: parentPath, is_directory: true,
+      size: null, modified: null, _isParent: true,
+    });
+  }
+
+  // Insert entries with expanded children inline
+  for (const entry of filtered) {
+    result.push(entry);
+    if (entry.is_directory && expandedDirs.value.has(entry.path)) {
+      const children = childrenCache.value.get(entry.path);
+      if (children) {
+        for (const child of children) {
+          result.push({ ...child, _indent: 1, _parentDir: entry.path });
+        }
+      }
+    }
+  }
+
+  return result;
 });
 const previewIsImage = computed(() => !!(previewMeta.value?.image_data && previewMeta.value?.image_mime && !previewMeta.value?.image_too_large));
 const selectedPaths = computed({
@@ -139,8 +167,51 @@ const getLanguageFromFilename = (filename: string) => {
   return langMap[ext || ''] || 'text';
 };
 
+const toggleExpandDir = async (path: string) => {
+  if (expandedDirs.value.has(path)) {
+    expandedDirs.value.delete(path);
+    expandedDirs.value = new Set(expandedDirs.value);
+    return;
+  }
+  if (!selectedBox.value) return;
+  expandingDir.value = path;
+  const listing = await directoryStore.fetchChildren(selectedBox.value, path, tokenValue.value || null);
+  if (listing?.entries) {
+    childrenCache.value.set(path, listing.entries);
+    childrenCache.value = new Map(childrenCache.value);
+  }
+  expandedDirs.value.add(path);
+  expandedDirs.value = new Set(expandedDirs.value);
+  expandingDir.value = null;
+};
+
+const expandAllDirs = async () => {
+  if (!selectedBox.value) return;
+  const dirs = (directoryStore.listing?.entries || []).filter((e: any) => e.is_directory);
+  const batch = dirs.slice(0, 20); // limit to 20
+  expandingDir.value = '__all__';
+  await Promise.all(batch.map(async (dir: any) => {
+    if (!expandedDirs.value.has(dir.path)) {
+      const listing = await directoryStore.fetchChildren(selectedBox.value!, dir.path, tokenValue.value || null);
+      if (listing?.entries) {
+        childrenCache.value.set(dir.path, listing.entries);
+      }
+      expandedDirs.value.add(dir.path);
+    }
+  }));
+  childrenCache.value = new Map(childrenCache.value);
+  expandedDirs.value = new Set(expandedDirs.value);
+  expandingDir.value = null;
+};
+
+const collapseAllDirs = () => {
+  expandedDirs.value = new Set();
+};
+
 const navigateToDirectory = async (path: string) => {
   currentDir.value = path;
+  expandedDirs.value = new Set();
+  childrenCache.value = new Map();
   await reloadDir();
 };
 
@@ -227,8 +298,11 @@ const handleRowClick = (row: any, e: MouseEvent) => {
 
 // Row props factory for NDataTable (stable reference to avoid recreating on every render)
 const getRowProps = (row: any) => ({
-  style: 'cursor: pointer;',
-  onClick: (e: MouseEvent) => handleRowClick(row, e)
+  style: `cursor: pointer;${row._indent ? 'opacity:0.85;' : ''}${row._isParent ? 'background:var(--surface-variant);' : ''}`,
+  onClick: (e: MouseEvent) => {
+    if (row._isParent) { navigateToDirectory(row.path); return; }
+    handleRowClick(row, e);
+  }
 });
 
 function applyBoxPatch(boxName: string, patch: Partial<ApiBox>) {
@@ -534,19 +608,50 @@ const columns = computed(() => {
   const nameCol = {
     title: "name", key: "name",
     render(row: any) {
+      // Parent (..) entry — single click navigates
+      if (row._isParent) {
+        return h("div", {
+          style: "display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;",
+          onClick: () => navigateToDirectory(row.path),
+        }, [
+          h(NIcon, { size: 16 }, () => h(PhArrowBendUpLeft)),
+          h("span", { style: "font-weight:500;" }, '..'),
+        ]);
+      }
+
+      const indent = row._indent ? row._indent * 24 : 0;
       const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
-      const children = [
-        h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile)),
-        h("div", { style: "min-width:0;flex:1;" }, [
-          h("span", row.name),
-          isMobile.value && !row.is_directory && row.size
-            ? h("div", { style: "font-size:11px;color:var(--muted);" }, formatFileSize(row.size))
-            : null,
-        ]),
-        isFav && h(NIcon, { size: 14, color: "#faad14", style: "margin-left: 4px;flex-shrink:0;" }, () => h(PhStar, { weight: "fill" }))
-      ];
+      const isExpanded = expandedDirs.value.has(row.path);
+      const isExpanding = expandingDir.value === row.path;
+
+      const children: any[] = [];
+
+      // Expand/collapse button for directories (not indented children)
+      if (row.is_directory && !row._indent) {
+        children.push(h("button", {
+          style: "background:none;border:none;cursor:pointer;padding:2px;color:var(--muted);display:flex;align-items:center;flex-shrink:0;",
+          onClick: (e: MouseEvent) => { e.stopPropagation(); toggleExpandDir(row.path); },
+          title: isExpanded ? 'Collapse' : 'Expand',
+        }, [
+          isExpanding
+            ? h("div", { class: "spinner", style: "width:12px;height:12px;border-width:1.5px;" })
+            : h(NIcon, { size: 14 }, () => h(isExpanded ? PhCaretDown : PhCaretRight))
+        ]));
+      }
+
+      children.push(h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile)));
+      children.push(h("div", { style: "min-width:0;flex:1;" }, [
+        h("span", row.name),
+        isMobile.value && !row.is_directory && row.size
+          ? h("div", { style: "font-size:11px;color:var(--muted);" }, formatFileSize(row.size))
+          : null,
+      ]));
+      if (isFav) {
+        children.push(h(NIcon, { size: 14, color: "#faad14", style: "margin-left: 4px;flex-shrink:0;" }, () => h(PhStar, { weight: "fill" })));
+      }
+
       return h("div", {
-        style: "display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;",
+        style: `display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;padding-left:${indent}px;`,
         onDblclick: () => row.is_directory ? navigateToDirectory(row.path) : handlePreview(row),
         onContextmenu: (e: MouseEvent) => showContextMenu(e, row)
       }, children);
@@ -691,6 +796,12 @@ const columns = computed(() => {
             <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">{{ t('common.all') }}</NButton>
             <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">{{ t('common.files') }}</NButton>
             <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">{{ t('common.folders') }}</NButton>
+            <NButton size="small" quaternary @click="expandAllDirs" :disabled="!selectedBox || !!expandingDir" :title="'Expand All'">
+              <NIcon size="14"><PhArrowsOutSimple /></NIcon>
+            </NButton>
+            <NButton size="small" quaternary @click="collapseAllDirs" :disabled="expandedDirs.size === 0" :title="'Collapse All'">
+              <NIcon size="14"><PhArrowsInSimple /></NIcon>
+            </NButton>
           </NSpace>
         </div>
       </div>
@@ -733,7 +844,7 @@ const columns = computed(() => {
             </div>
           </div>
           
-          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" />
+          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" />
         </div>
 
         <!-- Error Display -->

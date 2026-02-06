@@ -275,7 +275,7 @@ watch(() => props.rawMode, (raw) => {
 <style scoped>
 .mobile-input-bar {
   flex-shrink: 0;
-  background: rgba(10, 14, 20, 0.98);
+  background: var(--panel-bg-solid);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   z-index: 20;
   /* Keep above keyboard */
@@ -438,7 +438,7 @@ watch(() => props.rawMode, (raw) => {
   background: transparent;
   border: none;
   outline: none;
-  color: #e6e6e6;
+  color: var(--text);
   font-family: 'JetBrains Mono', 'SF Mono', monospace;
   font-size: 14px;
   line-height: 1.4;
@@ -527,7 +527,7 @@ watch(() => props.rawMode, (raw) => {
 }
 
 .legend-card {
-  background: rgba(20, 24, 32, 0.98);
+  background: var(--panel-bg-solid);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 16px;
   max-width: 320px;

@@ -405,7 +405,7 @@ onUnmounted(() => {
 .nav-link:hover {
   color: var(--text);
   border-color: var(--stroke);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
 }
 
 .nav-link:focus-visible {
@@ -442,8 +442,8 @@ onUnmounted(() => {
   display: flex;
   gap: 12px;
   padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--hover-overlay);
+  border: 1px solid var(--hover-overlay);
   border-radius: 8px;
   transition: all 0.3s ease;
 }
@@ -560,7 +560,7 @@ onUnmounted(() => {
 .mobile-nav-link:hover,
 .mobile-nav-link:focus-visible {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
 }
 
 .mobile-nav-link.active {
@@ -600,8 +600,8 @@ onUnmounted(() => {
     gap: 8px;
     min-height: 14px;
     height: 14px;
-    background: rgba(10, 14, 20, 0.98);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    background: var(--panel-bg-solid);
+    border-bottom: 1px solid var(--hover-overlay);
   }
 
   .desktop-nav {

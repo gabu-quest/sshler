@@ -591,7 +591,7 @@ watch(() => boxesStore.items, () => {
   gap: 0;
   height: 32px;
   padding: 0 4px;
-  background: rgba(10, 14, 20, 0.95);
+  background: var(--panel-bg-translucent);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
   z-index: 10;
@@ -685,7 +685,7 @@ watch(() => boxesStore.items, () => {
   flex-direction: column;
   gap: 6px;
   padding: 6px 8px;
-  background: rgba(10, 14, 20, 0.98);
+  background: var(--panel-bg-solid);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
   z-index: 9;

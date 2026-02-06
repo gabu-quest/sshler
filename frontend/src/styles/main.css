@@ -7,50 +7,61 @@
   --accent-hover: #5a96ef;
   --accent-bg: rgba(106, 166, 255, 0.1);
   --accent-rgb: 106, 166, 255;
-  
+
   --success: #3ba86a;
   --success-hover: #2b9860;
   --success-bg: rgba(59, 168, 106, 0.1);
-  
+
   --warning: #f5c542;
   --warning-hover: #e5b532;
   --warning-bg: rgba(245, 197, 66, 0.1);
-  
+
   --error: #ff6a6a;
   --error-hover: #ff5a5a;
   --error-bg: rgba(255, 106, 106, 0.1);
-  
+
   --text: #1a1a1a;
   --text-secondary: #4a4a4a;
   --muted: #6b7280;
-  
+
   --surface: #ffffff;
   --surface-variant: #f8f9fa;
   --surface-hover: #f1f3f4;
-  
+
   --stroke: #e5e7eb;
   --stroke-hover: #d1d5db;
-  
+
   --shadow: rgba(0, 0, 0, 0.1);
   --shadow-lg: rgba(0, 0, 0, 0.15);
-  
+
+  /* Panel/overlay colors (theme-aware) */
+  --panel-bg: #ffffff;
+  --panel-bg-translucent: rgba(255, 255, 255, 0.95);
+  --panel-bg-solid: rgba(245, 247, 250, 0.98);
+  --overlay-bg: rgba(255, 255, 255, 0.92);
+  --hover-overlay: rgba(0, 0, 0, 0.04);
+  --font-weight-normal: 450;
+  --font-weight-medium: 550;
+  --border-width: 1.5px;
+  --icon-weight: 1.5;
+
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-  
+
   /* Spacing */
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
-  
+
   /* Border radius */
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
-  
+
   /* Terminal colors */
   --terminal-bg: #0f1115;
   --terminal-fg: #e6e6e6;
@@ -62,16 +73,26 @@
     --text: #ffffff;
     --text-secondary: #e5e5e5;
     --muted: #9ca3af;
-    
+
     --surface: #1a1a1a;
     --surface-variant: #2a2a2a;
     --surface-hover: #333333;
-    
+
     --stroke: #374151;
     --stroke-hover: #4b5563;
-    
+
     --shadow: rgba(0, 0, 0, 0.3);
     --shadow-lg: rgba(0, 0, 0, 0.4);
+
+    --panel-bg: #1a1a1a;
+    --panel-bg-translucent: rgba(10, 14, 20, 0.95);
+    --panel-bg-solid: rgba(10, 14, 20, 0.98);
+    --overlay-bg: rgba(10, 14, 20, 0.92);
+    --hover-overlay: rgba(255, 255, 255, 0.04);
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --border-width: 1px;
+    --icon-weight: 1;
   }
 }
 
@@ -80,16 +101,26 @@
   --text: #ffffff;
   --text-secondary: #e5e5e5;
   --muted: #9ca3af;
-  
+
   --surface: #1a1a1a;
   --surface-variant: #2a2a2a;
   --surface-hover: #333333;
-  
+
   --stroke: #374151;
   --stroke-hover: #4b5563;
-  
+
   --shadow: rgba(0, 0, 0, 0.3);
   --shadow-lg: rgba(0, 0, 0, 0.4);
+
+  --panel-bg: #1a1a1a;
+  --panel-bg-translucent: rgba(10, 14, 20, 0.95);
+  --panel-bg-solid: rgba(10, 14, 20, 0.98);
+  --overlay-bg: rgba(10, 14, 20, 0.92);
+  --hover-overlay: rgba(255, 255, 255, 0.04);
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --border-width: 1px;
+  --icon-weight: 1;
 }
 
 /* Base styles */
@@ -111,6 +142,7 @@ body {
   background: var(--surface);
   color: var(--text);
   font-size: 14px;
+  font-weight: var(--font-weight-normal);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -295,6 +327,10 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* Override Naive UI styles to match our design system */
+.n-button, .n-tag, .n-badge {
+  font-weight: var(--font-weight-medium);
+}
+
 .n-button {
   font-family: var(--font-sans);
 }

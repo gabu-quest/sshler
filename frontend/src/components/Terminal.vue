@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { useMessage } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
+import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 
@@ -13,7 +14,7 @@ interface Props {
   boxName: string
   sessionName?: string
   directory?: string
-  theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai'
+  theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai' | 'light'
   fontSize?: number
   fontFamily?: string
   showTitleBar?: boolean
@@ -43,6 +44,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>()
 const message = useMessage()
 const bootstrapStore = useBootstrapStore()
+const appStore = useAppStore()
 const { isMobile, isTouch } = useResponsive()
 const { t } = useI18n()
 
@@ -55,7 +57,6 @@ const connecting = ref(false)
 const reconnecting = ref(false)
 const reconnectAttempts = ref(0)
 const maxReconnectAttempts = ref(10)
-const mouseMode = ref(true) // tmux mouse mode state
 const hasActivity = ref(false) // for glow effect
 const isFullscreen = ref(false) // fullscreen mode
 const titleBarCollapsed = ref(false) // minimize title bar
@@ -213,6 +214,30 @@ const TERMINAL_THEMES = {
     brightMagenta: '#ae81ff',
     brightCyan: '#a1efe4',
     brightWhite: '#f9f8f5',
+  },
+  light: {
+    background: '#fafafa',
+    foreground: '#383a42',
+    cursor: '#526eff',
+    cursorAccent: '#fafafa',
+    selectionBackground: '#bfceff',
+    selectionForeground: '#383a42',
+    black: '#383a42',
+    red: '#e45649',
+    green: '#50a14f',
+    yellow: '#c18401',
+    blue: '#4078f2',
+    magenta: '#a626a4',
+    cyan: '#0184bc',
+    white: '#fafafa',
+    brightBlack: '#4f525e',
+    brightRed: '#e06c75',
+    brightGreen: '#98c379',
+    brightYellow: '#e5c07b',
+    brightBlue: '#61afef',
+    brightMagenta: '#c678dd',
+    brightCyan: '#56b6c2',
+    brightWhite: '#ffffff',
   }
 }
 
@@ -291,24 +316,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 }
 
-// Toggle tmux mouse mode for clipboard access
-const toggleMouseMode = () => {
-  if (!websocket || websocket.readyState !== WebSocket.OPEN) return
-
-  mouseMode.value = !mouseMode.value
-  const cmd = mouseMode.value
-    ? 'tmux set -g mouse on\n'
-    : 'tmux set -g mouse off\n'
-
-  websocket.send(textEncoder.encode(cmd))
-
-  message.info(
-    mouseMode.value
-      ? t('terminal.mouse_on_msg')
-      : t('terminal.mouse_off_msg'),
-    { duration: 2000 }
-  )
-}
 
 // Trigger activity indicator
 const triggerActivity = () => {
@@ -365,8 +372,10 @@ const tmuxNewWindow = () => {
 const createTerminal = () => {
   if (!terminalRef.value) return
 
-  const theme = TERMINAL_THEMES[props.theme]
-  const isCyberpunk = props.theme === 'cyberpunk'
+  // Auto-select light theme when app is in light mode (unless explicitly overridden)
+  const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
+  const theme = TERMINAL_THEMES[effectiveTheme]
+  const isCyberpunk = effectiveTheme === 'cyberpunk'
   
   terminal = new Terminal({
     theme,
@@ -380,7 +389,7 @@ const createTerminal = () => {
     allowTransparency: false,
     scrollback: 10000,
     smoothScrollDuration: isCyberpunk ? 150 : 100,
-    rightClickSelectsWord: true,
+    rightClickSelectsWord: false,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: false,
     convertEol: true,
@@ -442,6 +451,43 @@ const createTerminal = () => {
       }
     }, 50)
   })
+
+  // Wheel → tmux copy-mode scroll
+  let inCopyMode = false
+  let copyModeTimeout: ReturnType<typeof setTimeout> | null = null
+
+  terminalRef.value?.addEventListener('wheel', (e: WheelEvent) => {
+    e.preventDefault()
+    if (!websocket || websocket.readyState !== WebSocket.OPEN) return
+
+    const lines = Math.max(1, Math.ceil(Math.abs(e.deltaY) / 40))
+    const isUp = e.deltaY < 0
+
+    if (isUp && !inCopyMode) {
+      // Enter copy-mode on first scroll-up
+      websocket.send(textEncoder.encode('\x02['))  // Ctrl+B [
+      inCopyMode = true
+      setTimeout(() => {
+        for (let i = 0; i < lines; i++) {
+          websocket!.send(textEncoder.encode('\x1b[A'))
+        }
+      }, 50)
+    } else if (inCopyMode) {
+      const key = isUp ? '\x1b[A' : '\x1b[B'
+      for (let i = 0; i < lines; i++) {
+        websocket.send(textEncoder.encode(key))
+      }
+    }
+
+    // Auto-exit copy mode after 3s idle
+    if (copyModeTimeout) clearTimeout(copyModeTimeout)
+    copyModeTimeout = setTimeout(() => {
+      if (inCopyMode) {
+        websocket?.send(textEncoder.encode('q'))
+        inCopyMode = false
+      }
+    }, 3000)
+  }, { passive: false })
 
   // Handle resize
   terminal.onResize(({ cols, rows }) => {
@@ -684,6 +730,14 @@ const connect = async () => {
       nextTick(() => {
         terminal?.focus()
       })
+
+      // Disable tmux mouse mode so xterm.js owns all mouse events
+      // (selection, right-click paste, wheel scroll all work natively)
+      setTimeout(() => {
+        if (websocket?.readyState === WebSocket.OPEN) {
+          websocket.send(textEncoder.encode('tmux set -g mouse off\n'))
+        }
+      }, 500)
     }
     
     websocket.onmessage = async (event) => {
@@ -877,12 +931,6 @@ onMounted(async () => {
   }, 100)
 })
 
-// Auto-disable tmux mouse mode on touch devices so native scroll/selection works
-watch([isTouch, connected], ([touch, conn]) => {
-  if (touch && conn && mouseMode.value) {
-    toggleMouseMode()
-  }
-})
 
 onUnmounted(() => {
   // Cleanup viewport handler
@@ -915,9 +963,10 @@ watch(() => props.boxName, () => {
   }
 })
 
-watch(() => props.theme, () => {
+watch([() => props.theme, () => appStore.isDark], () => {
   if (terminal) {
-    terminal.options.theme = TERMINAL_THEMES[props.theme]
+    const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
+    terminal.options.theme = TERMINAL_THEMES[effectiveTheme]
   }
 })
 
@@ -959,7 +1008,6 @@ defineExpose({
   search,
   send,
   sendRaw,
-  toggleMouseMode,
   toggleFullscreen,
   tmuxNewWindow,
   tmuxKillWindow,
@@ -968,7 +1016,6 @@ defineExpose({
   terminal: () => terminal,
   connected: () => connected.value,
   connecting: () => connecting.value,
-  mouseMode: () => mouseMode.value,
   isFullscreen: () => isFullscreen.value
 })
 </script>
@@ -1002,16 +1049,6 @@ defineExpose({
         <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
       </div>
       <div class="titlebar-right">
-        <button
-          class="titlebar-btn"
-          :class="{ active: !mouseMode }"
-          @click="toggleMouseMode"
-          :title="mouseMode ? t('terminal.mouse_on') : t('terminal.mouse_off')"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 4l7.07 17 2.51-7.39L21 11.07z"/>
-          </svg>
-        </button>
         <button class="titlebar-btn" @click="copySelection" :title="t('terminal.copy_selection')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -1091,7 +1128,7 @@ defineExpose({
   border-radius: 14px;
   overflow: hidden;
   /* Glassmorphism base */
-  background: rgba(10, 14, 20, 0.92);
+  background: var(--overlay-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   /* Layered borders for depth */
@@ -1458,7 +1495,7 @@ defineExpose({
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(10, 14, 20, 0.95);
+  background: var(--panel-bg-translucent);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
@@ -1523,7 +1560,7 @@ defineExpose({
     border-radius: 0;
     border: none;
     box-shadow: none;
-    background: #0a0e14;
+    background: var(--panel-bg);
   }
 
   .terminal-wrapper:focus-within {
