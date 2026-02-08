@@ -212,7 +212,7 @@ onMounted(async () => {
     <div class="header">
       <div class="header-left">
         <NButton size="small" quaternary @click="goBack" :title="t('terminal.go_back')">
-          <NIcon size="16"><PhArrowLeft /></NIcon>
+          <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
         </NButton>
         <div>
           <h1>{{ t('multi.title') }}</h1>
@@ -221,7 +221,7 @@ onMounted(async () => {
       </div>
       
       <NButton type="primary" @click="openAddModal">
-        <NIcon size="16"><PhPlus /></NIcon>
+        <NIcon size="16"><PhPlus weight="duotone" /></NIcon>
         {{ t('multi.add_terminal') }}
       </NButton>
     </div>
@@ -248,7 +248,7 @@ onMounted(async () => {
           :style="{ backgroundColor: getTerminalColor(index) + '20' }"
         >
           <div class="terminal-info">
-            <NIcon size="14"><PhTerminalWindow /></NIcon>
+            <NIcon size="14"><PhTerminalWindow weight="duotone" /></NIcon>
             <span>{{ terminal.boxName }}</span>
             <span class="session-name">{{ terminal.sessionName }}</span>
             <span class="directory-name">{{ terminal.directory }}</span>
@@ -269,7 +269,7 @@ onMounted(async () => {
       
       <!-- Empty state -->
       <div v-if="terminals.length === 0" class="empty-state">
-        <NIcon size="48" class="empty-icon"><PhTerminalWindow /></NIcon>
+        <NIcon size="48" class="empty-icon"><PhTerminalWindow weight="duotone" /></NIcon>
         <h3>{{ t('multi.no_terminals') }}</h3>
         <p class="text-muted">{{ t('multi.no_terminals_hint') }}</p>
       </div>

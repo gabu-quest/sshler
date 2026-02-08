@@ -621,4 +621,48 @@ watch(() => props.rawMode, (raw) => {
   color: rgba(255, 255, 255, 0.3);
   text-align: center;
 }
+
+/* Light mode overrides */
+:global([data-theme="light"]) .mobile-input-bar {
+  background: var(--surface);
+  border-top: 1px solid var(--stroke);
+}
+
+:global([data-theme="light"]) .quick-key {
+  border-color: var(--stroke);
+  background: var(--surface-variant);
+  color: var(--text-secondary);
+}
+
+:global([data-theme="light"]) .input-wrapper {
+  background: var(--surface-variant);
+  border-color: var(--stroke);
+}
+
+:global([data-theme="light"]) .smart-input {
+  color: var(--text);
+}
+
+:global([data-theme="light"]) .smart-input::placeholder {
+  color: var(--muted);
+}
+
+:global([data-theme="light"]) .mode-toggle {
+  border-color: var(--stroke);
+  color: var(--muted);
+}
+
+:global([data-theme="light"]) .legend-card {
+  background: var(--surface);
+  border-color: var(--stroke);
+}
+
+:global([data-theme="light"]) .legend-header {
+  color: var(--text);
+  border-bottom-color: var(--stroke);
+}
+
+:global([data-theme="light"]) .legend-label {
+  color: var(--text-secondary);
+}
 </style>

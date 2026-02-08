@@ -105,7 +105,7 @@ function formatPath(path: string): string {
     >
       <template #prefix>
         <NIcon size="14">
-          <PhMagnifyingGlass />
+          <PhMagnifyingGlass weight="duotone" />
         </NIcon>
       </template>
       <template #suffix>
@@ -127,8 +127,8 @@ function formatPath(path: string): string {
           @mousedown.prevent="selectResult(result)"
         >
           <NIcon size="14" class="result-icon">
-            <PhFolder v-if="result.source === 'frecency'" />
-            <PhClockCounterClockwise v-else />
+            <PhFolder v-if="result.source === 'frecency'" weight="duotone" />
+            <PhClockCounterClockwise v-else weight="duotone" />
           </NIcon>
           <span class="result-path" :title="result.path">{{ formatPath(result.path) }}</span>
           <span class="result-score" :class="result.source">

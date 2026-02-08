@@ -322,7 +322,7 @@ watch(
     :title="t('palette.tooltip')"
   >
     <NIcon size="18" aria-hidden="true">
-      <PhCommand />
+      <PhCommand weight="duotone" />
     </NIcon>
   </NButton>
   
@@ -340,7 +340,7 @@ watch(
     <template #header>
       <div class="palette-header">
         <NIcon size="18" aria-hidden="true">
-          <PhCommand />
+          <PhCommand weight="duotone" />
         </NIcon>
         <span id="palette-title">{{ t('palette.title') }}</span>
       </div>
@@ -380,7 +380,7 @@ watch(
               <div class="palette-item-content">
                 <div class="palette-item-main">
                   <NIcon size="16" aria-hidden="true" class="palette-item-icon">
-                    <component :is="item.icon" />
+                    <component :is="item.icon" weight="duotone" />
                   </NIcon>
                   <div class="palette-item-text">
                     <div class="palette-item-label">{{ item.label }}</div>
@@ -400,7 +400,7 @@ watch(
       
       <div v-else-if="query && filtered.length === 0" class="palette-empty">
         <NIcon size="24" aria-hidden="true">
-          <PhMagnifyingGlass />
+          <PhMagnifyingGlass weight="duotone" />
         </NIcon>
         <div class="palette-empty-text">
           <div>{{ t('palette.no_results') }}</div>

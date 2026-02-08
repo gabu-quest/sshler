@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
-import { useMessage } from 'naive-ui'
+import { useMessage, NTooltip } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
@@ -247,9 +247,18 @@ const handleTerminalClick = () => {
 
 const handleContextMenu = (event: MouseEvent) => {
   event.preventDefault()
-  
+
+  // Temporarily disable tmux mouse so right-click paste works cleanly
+  if (mouseMode.value) {
+    setTmuxMouse(false)
+    // Re-enable after a short delay
+    setTimeout(() => {
+      if (mouseMode.value) setTmuxMouse(true)
+    }, 1000)
+  }
+
   const hasSelection = terminal?.hasSelection() || false
-  
+
   if (hasSelection) {
     copySelection()
   } else {
@@ -284,7 +293,15 @@ const copySelection = () => {
   }
 }
 
+// Paste debounce to prevent double-paste on right-click
+let lastPasteTime = 0
+const PASTE_DEBOUNCE_MS = 400
+
 const pasteFromClipboard = async () => {
+  const now = Date.now()
+  if (now - lastPasteTime < PASTE_DEBOUNCE_MS) return
+  lastPasteTime = now
+
   try {
     const text = await navigator.clipboard.readText()
     if (text && terminal) {
@@ -369,6 +386,35 @@ const tmuxNewWindow = () => {
   }
 }
 
+// Mouse mode toggle (tmux mouse on/off)
+const mouseMode = ref(true)
+
+// Send tmux mouse command without changing ref (internal use)
+const setTmuxMouse = (on: boolean) => {
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) return
+  websocket.send(textEncoder.encode('\x02:'))
+  setTimeout(() => {
+    const cmd = on ? 'set -g mouse on\n' : 'set -g mouse off\n'
+    websocket?.send(textEncoder.encode(cmd))
+  }, 100)
+}
+
+// Sync tmux mouse state after connect
+const syncMouseMode = () => {
+  // Always ensure tmux matches our ref on connect
+  setTmuxMouse(mouseMode.value)
+}
+
+const toggleMouseMode = () => {
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) return
+  mouseMode.value = !mouseMode.value
+  setTmuxMouse(mouseMode.value)
+  message.info(
+    mouseMode.value ? t('terminal.mouse_on_msg') : t('terminal.mouse_off_msg'),
+    { duration: 2000 }
+  )
+}
+
 const createTerminal = () => {
   if (!terminalRef.value) return
 
@@ -451,43 +497,6 @@ const createTerminal = () => {
       }
     }, 50)
   })
-
-  // Wheel → tmux copy-mode scroll
-  let inCopyMode = false
-  let copyModeTimeout: ReturnType<typeof setTimeout> | null = null
-
-  terminalRef.value?.addEventListener('wheel', (e: WheelEvent) => {
-    e.preventDefault()
-    if (!websocket || websocket.readyState !== WebSocket.OPEN) return
-
-    const lines = Math.max(1, Math.ceil(Math.abs(e.deltaY) / 40))
-    const isUp = e.deltaY < 0
-
-    if (isUp && !inCopyMode) {
-      // Enter copy-mode on first scroll-up
-      websocket.send(textEncoder.encode('\x02['))  // Ctrl+B [
-      inCopyMode = true
-      setTimeout(() => {
-        for (let i = 0; i < lines; i++) {
-          websocket!.send(textEncoder.encode('\x1b[A'))
-        }
-      }, 50)
-    } else if (inCopyMode) {
-      const key = isUp ? '\x1b[A' : '\x1b[B'
-      for (let i = 0; i < lines; i++) {
-        websocket.send(textEncoder.encode(key))
-      }
-    }
-
-    // Auto-exit copy mode after 3s idle
-    if (copyModeTimeout) clearTimeout(copyModeTimeout)
-    copyModeTimeout = setTimeout(() => {
-      if (inCopyMode) {
-        websocket?.send(textEncoder.encode('q'))
-        inCopyMode = false
-      }
-    }, 3000)
-  }, { passive: false })
 
   // Handle resize
   terminal.onResize(({ cols, rows }) => {
@@ -726,18 +735,13 @@ const connect = async () => {
       // Reset reconnect attempts on successful connection
       reconnectAttempts.value = 0
 
+      // Sync tmux mouse mode to match our state
+      setTimeout(() => syncMouseMode(), 500)
+
       // Focus terminal to enable input
       nextTick(() => {
         terminal?.focus()
       })
-
-      // Disable tmux mouse mode so xterm.js owns all mouse events
-      // (selection, right-click paste, wheel scroll all work natively)
-      setTimeout(() => {
-        if (websocket?.readyState === WebSocket.OPEN) {
-          websocket.send(textEncoder.encode('tmux set -g mouse off\n'))
-        }
-      }, 500)
     }
     
     websocket.onmessage = async (event) => {
@@ -1009,6 +1013,7 @@ defineExpose({
   send,
   sendRaw,
   toggleFullscreen,
+  toggleMouseMode,
   tmuxNewWindow,
   tmuxKillWindow,
   copySelection,
@@ -1016,7 +1021,8 @@ defineExpose({
   terminal: () => terminal,
   connected: () => connected.value,
   connecting: () => connecting.value,
-  isFullscreen: () => isFullscreen.value
+  isFullscreen: () => isFullscreen.value,
+  mouseMode: () => mouseMode.value
 })
 </script>
 
@@ -1026,22 +1032,24 @@ defineExpose({
     <div v-if="showTitleBar && !titleBarCollapsed" class="terminal-titlebar">
       <div class="titlebar-left">
         <div class="traffic-lights">
-          <span
-            class="dot dot-close"
-            :title="t('terminal.kill_window')"
-            @click="tmuxKillWindow"
-          />
-          <span
-            class="dot dot-new"
-            :title="t('terminal.new_window')"
-            @click="tmuxNewWindow"
-          />
-          <span
-            class="dot dot-maximize"
-            :class="{ active: isFullscreen }"
-            :title="isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen')"
-            @click="toggleFullscreen"
-          />
+          <NTooltip :delay="400">
+            <template #trigger>
+              <span class="dot dot-close" @click="tmuxKillWindow" />
+            </template>
+            {{ t('terminal.kill_window') }}
+          </NTooltip>
+          <NTooltip :delay="400">
+            <template #trigger>
+              <span class="dot dot-new" @click="tmuxNewWindow" />
+            </template>
+            {{ t('terminal.new_window') }}
+          </NTooltip>
+          <NTooltip :delay="400">
+            <template #trigger>
+              <span class="dot dot-maximize" :class="{ active: isFullscreen }" @click="toggleFullscreen" />
+            </template>
+            {{ isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen') }}
+          </NTooltip>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />
       </div>
@@ -1049,24 +1057,57 @@ defineExpose({
         <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
       </div>
       <div class="titlebar-right">
-        <button class="titlebar-btn" @click="copySelection" :title="t('terminal.copy_selection')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-        </button>
-        <button class="titlebar-btn" @click="pasteFromClipboard" :title="t('terminal.paste')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-          </svg>
-        </button>
-        <button class="titlebar-btn" @click="clear" :title="t('terminal.clear')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
-        </button>
+        <NTooltip :delay="300">
+          <template #trigger>
+            <button
+              class="titlebar-btn mouse-btn"
+              :class="{ 'mouse-on': mouseMode, 'mouse-off': !mouseMode }"
+              @click="toggleMouseMode"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a6 6 0 0 0-6 6v4a6 6 0 0 0 12 0V8a6 6 0 0 0-6-6z"/>
+                <line x1="12" y1="6" x2="12" y2="10"/>
+                <path d="M12 18v4"/>
+                <path d="M8 22h8"/>
+              </svg>
+              <span class="mouse-status-dot" />
+            </button>
+          </template>
+          {{ mouseMode ? t('terminal.mouse_on') : t('terminal.mouse_off') }}
+        </NTooltip>
+        <NTooltip :delay="400">
+          <template #trigger>
+            <button class="titlebar-btn" @click="copySelection">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+            </button>
+          </template>
+          {{ t('terminal.copy_selection') }}
+        </NTooltip>
+        <NTooltip :delay="400">
+          <template #trigger>
+            <button class="titlebar-btn" @click="pasteFromClipboard">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+              </svg>
+            </button>
+          </template>
+          {{ t('terminal.paste') }}
+        </NTooltip>
+        <NTooltip :delay="400">
+          <template #trigger>
+            <button class="titlebar-btn" @click="clear">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </template>
+          {{ t('terminal.clear') }}
+        </NTooltip>
       </div>
     </div>
 
@@ -1127,38 +1168,22 @@ defineExpose({
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  /* Glassmorphism base */
-  background: var(--overlay-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  /* Layered borders for depth */
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  /* Deep shadow stack */
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.5),
-    0 8px 32px rgba(0, 0, 0, 0.5),
-    0 2px 8px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  box-shadow: 0 2px 12px var(--shadow), 0 1px 4px var(--shadow);
   transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }
 
-/* Focus state - cyan glow */
+/* Focus state */
 .terminal-wrapper:focus-within {
-  border-color: rgba(83, 189, 250, 0.25);
-  box-shadow:
-    0 0 0 1px rgba(83, 189, 250, 0.15),
-    0 0 40px rgba(83, 189, 250, 0.1),
-    0 8px 32px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg), 0 2px 12px var(--shadow);
 }
 
 /* Activity pulse */
 .terminal-wrapper.has-activity {
-  border-color: rgba(230, 180, 80, 0.3);
-  box-shadow:
-    0 0 0 1px rgba(230, 180, 80, 0.2),
-    0 0 30px rgba(230, 180, 80, 0.08),
-    0 8px 32px rgba(0, 0, 0, 0.5);
+  border-color: var(--warning);
+  box-shadow: 0 0 0 2px var(--warning-bg), 0 2px 12px var(--shadow);
 }
 
 /* =============================================================================
@@ -1170,8 +1195,8 @@ defineExpose({
   justify-content: space-between;
   height: 36px;
   padding: 0 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--surface-variant);
+  border-bottom: 1px solid var(--stroke);
   user-select: none;
   flex-shrink: 0;
 }
@@ -1199,7 +1224,7 @@ defineExpose({
 .titlebar-text {
   font-size: 12px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--muted);
   letter-spacing: 0.02em;
 }
 
@@ -1213,7 +1238,7 @@ defineExpose({
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--stroke);
   transition: all 0.15s ease;
   cursor: pointer;
 }
@@ -1264,15 +1289,15 @@ defineExpose({
   gap: 8px;
   height: 20px;
   padding: 0 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  background: var(--surface-variant);
+  border-bottom: 1px solid var(--stroke);
   cursor: pointer;
   user-select: none;
   transition: background 0.15s ease;
 }
 
 .terminal-titlebar-collapsed:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-hover);
 }
 
 .terminal-titlebar-collapsed .connection-indicator {
@@ -1283,12 +1308,13 @@ defineExpose({
 
 .collapsed-text {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--muted);
 }
 
 .expand-hint {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.2);
+  color: var(--muted);
+  opacity: 0.6;
   margin-left: auto;
 }
 
@@ -1327,23 +1353,57 @@ defineExpose({
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--muted);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .titlebar-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.8);
+  background: var(--hover-overlay);
+  color: var(--text);
 }
 
-.titlebar-btn.active {
-  background: rgba(230, 180, 80, 0.2);
-  color: #e6b450;
+/* Mouse mode button - green when ON, red when OFF */
+.mouse-btn {
+  position: relative;
 }
 
-.titlebar-btn.active:hover {
-  background: rgba(230, 180, 80, 0.3);
+.mouse-status-dot {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  transition: background 0.2s ease;
+}
+
+.mouse-btn.mouse-on .mouse-status-dot {
+  background: #27c93f;
+  box-shadow: 0 0 4px rgba(39, 201, 63, 0.5);
+}
+
+.mouse-btn.mouse-off .mouse-status-dot {
+  background: #ff5f56;
+  box-shadow: 0 0 4px rgba(255, 95, 86, 0.5);
+}
+
+.mouse-btn.mouse-on {
+  color: rgba(39, 201, 63, 0.7);
+}
+
+.mouse-btn.mouse-off {
+  color: rgba(255, 95, 86, 0.7);
+}
+
+.mouse-btn.mouse-on:hover {
+  background: rgba(39, 201, 63, 0.15);
+  color: #27c93f;
+}
+
+.mouse-btn.mouse-off:hover {
+  background: rgba(255, 95, 86, 0.15);
+  color: #ff5f56;
 }
 
 /* =============================================================================
@@ -1655,5 +1715,16 @@ defineExpose({
   .terminal-wrapper.has-activity {
     transition: none;
   }
+}
+
+/* =============================================================================
+   LIGHT MODE OVERRIDES — only for things that can't use CSS vars
+   ============================================================================= */
+:global([data-theme="light"]) .scanlines {
+  display: none;
+}
+
+:global([data-theme="light"]) .terminal :deep(.xterm-rows) {
+  text-shadow: none;
 }
 </style>

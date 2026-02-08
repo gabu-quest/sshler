@@ -22,6 +22,7 @@ import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
 import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
+import { marked } from "marked";
 
 const route = useRoute();
 const bootstrapStore = useBootstrapStore();
@@ -64,6 +65,7 @@ const isDragOver = ref(false);
 const expandedDirs = ref<Set<string>>(new Set());
 const childrenCache = ref<Map<string, any[]>>(new Map());
 const expandingDir = ref<string | null>(null);
+const markdownRenderMode = ref(false);
 
 // Computed
 const filterQuery = computed({
@@ -98,22 +100,31 @@ const filteredRows = computed(() => {
     });
   }
 
-  // Insert entries with expanded children inline
-  for (const entry of filtered) {
-    result.push(entry);
-    if (entry.is_directory && expandedDirs.value.has(entry.path)) {
-      const children = childrenCache.value.get(entry.path);
-      if (children) {
-        for (const child of children) {
-          result.push({ ...child, _indent: 1, _parentDir: entry.path });
+  // Insert entries with expanded children inline (recursive)
+  const insertWithChildren = (entries: any[], indent: number) => {
+    for (const entry of entries) {
+      result.push(indent > 0 ? { ...entry, _indent: indent } : entry);
+      if (entry.is_directory && expandedDirs.value.has(entry.path)) {
+        const children = childrenCache.value.get(entry.path);
+        if (children) {
+          insertWithChildren(children, indent + 1);
         }
       }
     }
-  }
+  };
+  insertWithChildren(filtered, 0);
 
   return result;
 });
 const previewIsImage = computed(() => !!(previewMeta.value?.image_data && previewMeta.value?.image_mime && !previewMeta.value?.image_too_large));
+const isMarkdownFile = computed(() => {
+  const name = previewMeta.value?.name?.toLowerCase() || previewPath.value.split('/').pop()?.toLowerCase() || '';
+  return name.endsWith('.md') || name.endsWith('.markdown') || name.endsWith('.mdx');
+});
+const renderedMarkdown = computed(() => {
+  if (!markdownRenderMode.value || !previewContent.value) return '';
+  return marked.parse(previewContent.value) as string;
+});
 const selectedPaths = computed({
   get: () => filesStore.selectedFiles,
   set: (val: string[]) => filesStore.setSelectedFiles(val),
@@ -511,6 +522,7 @@ function closePreview() {
   previewContent.value = "";
   previewMeta.value = null;
   previewLoading.value = false;
+  markdownRenderMode.value = false;
 }
 
 async function handleDownload(row: any) {
@@ -614,7 +626,7 @@ const columns = computed(() => {
           style: "display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;",
           onClick: () => navigateToDirectory(row.path),
         }, [
-          h(NIcon, { size: 16 }, () => h(PhArrowBendUpLeft)),
+          h(NIcon, { size: 16 }, () => h(PhArrowBendUpLeft, { weight: 'duotone' })),
           h("span", { style: "font-weight:500;" }, '..'),
         ]);
       }
@@ -626,8 +638,8 @@ const columns = computed(() => {
 
       const children: any[] = [];
 
-      // Expand/collapse button for directories (not indented children)
-      if (row.is_directory && !row._indent) {
+      // Expand/collapse button for directories (all levels)
+      if (row.is_directory) {
         children.push(h("button", {
           style: "background:none;border:none;cursor:pointer;padding:2px;color:var(--muted);display:flex;align-items:center;flex-shrink:0;",
           onClick: (e: MouseEvent) => { e.stopPropagation(); toggleExpandDir(row.path); },
@@ -635,11 +647,11 @@ const columns = computed(() => {
         }, [
           isExpanding
             ? h("div", { class: "spinner", style: "width:12px;height:12px;border-width:1.5px;" })
-            : h(NIcon, { size: 14 }, () => h(isExpanded ? PhCaretDown : PhCaretRight))
+            : h(NIcon, { size: 14 }, () => h(isExpanded ? PhCaretDown : PhCaretRight, { weight: 'duotone' }))
         ]));
       }
 
-      children.push(h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile)));
+      children.push(h(NIcon, { size: 16 }, () => h(row.is_directory ? PhFolderSimple : PhFile, { weight: 'duotone' })));
       children.push(h("div", { style: "min-width:0;flex:1;" }, [
         h("span", row.name),
         isMobile.value && !row.is_directory && row.size
@@ -685,7 +697,7 @@ const columns = computed(() => {
               size: "tiny",
               quaternary: true,
               onClick: () => toggleFavoriteDir(row.path)
-            }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "regular" })) }),
+            }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "duotone" })) }),
             default: () => isFav ? "Remove from Favorites" : "Add to Favorites"
           }),
           row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
@@ -693,27 +705,27 @@ const columns = computed(() => {
               size: "tiny",
               quaternary: true,
               onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
-            }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow)) }),
+            }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow, { weight: 'duotone' })) }),
             default: () => "Open Terminal Here"
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye)) }),
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye, { weight: 'duotone' })) }),
             default: () => "Preview"
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleEdit(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhPencil)) }),
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleEdit(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhPencil, { weight: 'duotone' })) }),
             default: () => "Edit"
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
-            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple)) }),
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple, { weight: 'duotone' })) }),
             default: () => "Download"
           }),
           h(NTooltip, { trigger: "hover", placement: "left" }, {
-            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa)) }),
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa, { weight: 'duotone' })) }),
             default: () => "Rename"
           }),
           h(NTooltip, { trigger: "hover", placement: "left" }, {
-            trigger: () => h(NButton, { size: "tiny", quaternary: true, type: "error", onClick: () => removePath(row.path) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTrash)) }),
+            trigger: () => h(NButton, { size: "tiny", quaternary: true, type: "error", onClick: () => removePath(row.path) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTrash, { weight: 'duotone' })) }),
             default: () => "Delete"
           }),
         ]);
@@ -728,19 +740,19 @@ const columns = computed(() => {
     <div class="breadcrumb-nav">
       <NSpace size="small" align="center">
         <NButton size="small" quaternary @click="navigateHome" :title="t('common.home')">
-          <NIcon size="16"><PhHouse /></NIcon>
+          <NIcon size="16"><PhHouse weight="duotone" /></NIcon>
         </NButton>
         <NButton size="small" quaternary @click="navigateUp" :disabled="currentDir === '/'" :title="t('common.up')">
-          <NIcon size="16"><PhArrowLeft /></NIcon>
+          <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
         </NButton>
         <span class="breadcrumb-path">{{ currentDir }}</span>
       </NSpace>
       <NSpace size="small">
         <NButton size="small" @click="reloadDir" :disabled="!selectedBox" :title="t('common.refresh')">
-          <NIcon size="16"><PhUploadSimple /></NIcon>
+          <NIcon size="16"><PhUploadSimple weight="duotone" /></NIcon>
         </NButton>
         <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)" :disabled="!selectedBox" :title="t('terminal.open_terminal')">
-          <NIcon size="16"><PhTerminalWindow /></NIcon>
+          <NIcon size="16"><PhTerminalWindow weight="duotone" /></NIcon>
         </NButton>
       </NSpace>
     </div>
@@ -756,7 +768,7 @@ const columns = computed(() => {
     <!-- Box Selection & Status -->
     <NCard class="surface-card" size="medium">
       <div class="card-title">
-        <NIcon size="18"><PhFolderSimple /></NIcon>
+        <NIcon size="18"><PhFolderSimple weight="duotone" /></NIcon>
         <span>{{ t('files.connection') }}</span>
       </div>
       <NSpace vertical size="small">
@@ -765,7 +777,7 @@ const columns = computed(() => {
           <NInput v-model:value="currentDir" :placeholder="t('files.dir_placeholder')" size="small" style="max-width: 320px" @keyup.enter="reloadDir" />
           <NButton size="small" @click="reloadDir" :disabled="!selectedBox">{{ t('files.load') }}</NButton>
           <NButton size="small" tertiary :disabled="!selectedBox" @click="toggleFavoriteCurrentDir">
-            <NIcon size="14"><PhStar /></NIcon>
+            <NIcon size="14"><PhStar weight="duotone" /></NIcon>
             {{ isCurrentDirFavorite ? t('files.unfavorite') : t('files.favorite') }}
           </NButton>
         </NSpace>
@@ -781,7 +793,7 @@ const columns = computed(() => {
     <!-- File Browser -->
     <NCard class="surface-card" size="medium">
       <div class="card-title">
-        <NIcon size="18"><PhList /></NIcon>
+        <NIcon size="18"><PhList weight="duotone" /></NIcon>
         <span>{{ t('common.files') }}</span>
         <div class="card-actions">
           <NSpace size="small" :wrap="isMobile">
@@ -791,16 +803,16 @@ const columns = computed(() => {
               @select="navigateToDirectory"
             />
             <NInput v-model:value="filterQuery" :placeholder="t('files.filter_placeholder')" size="small" style="width: 140px">
-              <template #prefix><NIcon size="14"><PhMagnifyingGlass /></NIcon></template>
+              <template #prefix><NIcon size="14"><PhMagnifyingGlass weight="duotone" /></NIcon></template>
             </NInput>
             <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">{{ t('common.all') }}</NButton>
             <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">{{ t('common.files') }}</NButton>
             <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">{{ t('common.folders') }}</NButton>
             <NButton size="small" quaternary @click="expandAllDirs" :disabled="!selectedBox || !!expandingDir" :title="'Expand All'">
-              <NIcon size="14"><PhArrowsOutSimple /></NIcon>
+              <NIcon size="14"><PhArrowsOutSimple weight="duotone" /></NIcon>
             </NButton>
             <NButton size="small" quaternary @click="collapseAllDirs" :disabled="expandedDirs.size === 0" :title="'Collapse All'">
-              <NIcon size="14"><PhArrowsInSimple /></NIcon>
+              <NIcon size="14"><PhArrowsInSimple weight="duotone" /></NIcon>
             </NButton>
           </NSpace>
         </div>
@@ -812,10 +824,10 @@ const columns = computed(() => {
           <NSpace size="small" align="center">
             <span class="text-muted">{{ selectedCount }} {{ t('files.selected') }}</span>
             <NButton size="small" type="error" ghost @click="bulkDelete">
-              <NIcon size="14"><PhTrash /></NIcon>{{ t('files.delete_selected') }}
+              <NIcon size="14"><PhTrash weight="duotone" /></NIcon>{{ t('files.delete_selected') }}
             </NButton>
             <NButton size="small" @click="bulkDownload" :disabled="selectedCount > 10">
-              <NIcon size="14"><PhDownloadSimple /></NIcon>{{ t('files.download_selected') }}
+              <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>{{ t('files.download_selected') }}
             </NButton>
             <NButton size="small" @click="filesStore.setSelectedFiles([])">{{ t('files.clear_selection') }}</NButton>
           </NSpace>
@@ -824,7 +836,7 @@ const columns = computed(() => {
         <!-- Recent Paths -->
         <div v-if="recentPaths.length" class="recent-paths">
           <NSpace size="small" align="center">
-            <NIcon size="14"><PhClockCounterClockwise /></NIcon>
+            <NIcon size="14"><PhClockCounterClockwise weight="duotone" /></NIcon>
             <span class="text-muted small">{{ t('files.recent') }}</span>
             <NTag v-for="path in recentPaths.slice(0, 5)" :key="path" size="small" checkable @click="navigateToDirectory(path)">{{ path }}</NTag>
           </NSpace>
@@ -839,7 +851,7 @@ const columns = computed(() => {
         <div v-else class="file-browser" :class="{ 'drag-over': isDragOver }" @dragenter="handleDragEnter" @dragleave="handleDragLeave" @dragover="handleDragOver" @drop="handleDrop">
           <div v-if="isDragOver" class="drop-overlay">
             <div class="drop-message">
-              <NIcon size="32"><PhUploadSimple /></NIcon>
+              <NIcon size="32"><PhUploadSimple weight="duotone" /></NIcon>
               <span>{{ t('files.drop_upload') }} {{ currentDir }}</span>
             </div>
           </div>
@@ -855,7 +867,7 @@ const columns = computed(() => {
     <!-- File Actions -->
     <NCard class="surface-card" size="medium">
       <div class="card-title">
-        <NIcon size="18"><PhGear /></NIcon>
+        <NIcon size="18"><PhGear weight="duotone" /></NIcon>
         <span>{{ t('files.col_actions') }}</span>
       </div>
       <NSpace vertical size="small">
@@ -863,7 +875,7 @@ const columns = computed(() => {
         <NSpace size="small" align="center">
           <NInput v-model:value="newFileName" :placeholder="t('files.new_filename')" size="small" style="max-width: 220px" @keyup.enter="createEmptyFile" />
           <NButton :disabled="actionBusy || !selectedBox || !newFileName.trim()" size="small" type="primary" @click="createEmptyFile">
-            <NIcon size="14"><PhUploadSimple /></NIcon>{{ t('files.create_file') }}
+            <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('files.create_file') }}
           </NButton>
         </NSpace>
 
@@ -893,11 +905,15 @@ const columns = computed(() => {
     <NModal v-model:show="previewing" preset="card" style="max-width: 90vw; max-height: 90vh">
       <template #header>
         <div class="modal-header">
-          <NIcon size="16"><PhEye /></NIcon>
+          <NIcon size="16"><PhEye weight="duotone" /></NIcon>
           <span>Preview: {{ previewPath.split('/').pop() }}</span>
           <div class="modal-actions">
+            <NButton v-if="isMarkdownFile" size="small" @click="markdownRenderMode = !markdownRenderMode">
+              <NIcon size="14"><PhEye v-if="!markdownRenderMode" weight="duotone" /><PhFile v-else weight="duotone" /></NIcon>
+              {{ markdownRenderMode ? 'Source' : 'Render' }}
+            </NButton>
             <NButton size="small" @click="handleEdit({ path: previewPath, name: previewPath.split('/').pop() })">
-              <NIcon size="14"><PhPencil /></NIcon>Edit
+              <NIcon size="14"><PhPencil weight="duotone" /></NIcon>Edit
             </NButton>
           </div>
         </div>
@@ -913,7 +929,8 @@ const columns = computed(() => {
           </div>
           <!-- Text Preview -->
           <div v-else class="preview-text-container">
-            <CodeEditor :model-value="previewContent" :language="getLanguageFromFilename(previewPath)" :theme="editorTheme" :readonly="true" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 60vh" />
+            <div v-if="markdownRenderMode && isMarkdownFile" class="markdown-rendered" v-html="renderedMarkdown" />
+            <CodeEditor v-else :model-value="previewContent" :language="getLanguageFromFilename(previewPath)" :theme="editorTheme" :readonly="true" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 75vh" />
           </div>
         </template>
       </div>
@@ -940,7 +957,7 @@ const columns = computed(() => {
     <NModal v-model:show="editing" preset="card" style="max-width: 95vw; max-height: 95vh">
       <template #header>
         <div class="modal-header">
-          <NIcon size="16"><PhPencil /></NIcon>
+          <NIcon size="16"><PhPencil weight="duotone" /></NIcon>
           <span>{{ t('common.edit') }}: {{ editPath.split('/').pop() }}</span>
           <div class="modal-actions">
             <NSpace size="small">
@@ -960,7 +977,7 @@ const columns = computed(() => {
       
       <div class="editor-container">
         <NSpin v-if="editLoading" size="large"><span class="text-muted">{{ t('files.loading_file') }}</span></NSpin>
-        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 70vh" :placeholder="t('files.file_placeholder')" />
+        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 80vh" :placeholder="t('files.file_placeholder')" />
       </div>
       
       <template #footer>
@@ -969,7 +986,7 @@ const columns = computed(() => {
           <NSpace>
             <NButton @click="editing = false">{{ t('common.cancel') }}</NButton>
             <NButton type="primary" :loading="editLoading" @click="saveEdit">
-              <NIcon size="14"><PhUploadSimple /></NIcon>{{ t('common.save') }}
+              <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('common.save') }}
             </NButton>
           </NSpace>
         </NSpace>
@@ -1171,6 +1188,102 @@ h1 {
 .preview-text-container {
   border-radius: 8px;
   overflow: hidden;
+}
+
+.markdown-rendered {
+  height: 75vh;
+  overflow-y: auto;
+  padding: 24px 32px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+}
+
+.markdown-rendered h1,
+.markdown-rendered h2,
+.markdown-rendered h3,
+.markdown-rendered h4 {
+  margin: 1.5em 0 0.5em;
+  color: var(--text);
+}
+
+.markdown-rendered h1 { font-size: 1.8em; border-bottom: 1px solid var(--stroke); padding-bottom: 0.3em; }
+.markdown-rendered h2 { font-size: 1.4em; border-bottom: 1px solid var(--stroke); padding-bottom: 0.2em; }
+.markdown-rendered h3 { font-size: 1.2em; }
+
+.markdown-rendered p { margin: 0.8em 0; }
+
+.markdown-rendered ul,
+.markdown-rendered ol {
+  margin: 0.5em 0;
+  padding-left: 2em;
+}
+
+.markdown-rendered li { margin: 0.3em 0; }
+
+.markdown-rendered code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.2em 0.4em;
+  background: var(--surface-variant);
+  border-radius: 4px;
+}
+
+.markdown-rendered pre {
+  margin: 1em 0;
+  padding: 16px;
+  background: var(--surface-variant);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.markdown-rendered pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-rendered blockquote {
+  margin: 1em 0;
+  padding: 0.5em 1em;
+  border-left: 4px solid var(--accent);
+  background: var(--surface-variant);
+  border-radius: 0 4px 4px 0;
+}
+
+.markdown-rendered table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+
+.markdown-rendered th,
+.markdown-rendered td {
+  border: 1px solid var(--stroke);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.markdown-rendered th {
+  background: var(--surface-variant);
+  font-weight: 600;
+}
+
+.markdown-rendered a {
+  color: var(--accent);
+}
+
+.markdown-rendered img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.markdown-rendered hr {
+  border: none;
+  border-top: 1px solid var(--stroke);
+  margin: 1.5em 0;
 }
 
 .file-info {

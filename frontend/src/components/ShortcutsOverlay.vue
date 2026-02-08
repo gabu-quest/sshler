@@ -37,18 +37,18 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
 
 <template>
   <NButton quaternary circle size="small" @click="show = true">
-    <NIcon size="18"><PhKeyboard /></NIcon>
+    <NIcon size="18"><PhKeyboard weight="duotone" /></NIcon>
   </NButton>
   <NModal v-model:show="show" preset="card" style="max-width: 480px">
     <template #header>
       <div class="title">
-        <NIcon size="18"><PhKeyboard /></NIcon>
+        <NIcon size="18"><PhKeyboard weight="duotone" /></NIcon>
         <span>Shortcuts</span>
       </div>
     </template>
     <NList>
       <NListItem v-for="item in shortcuts" :key="item.label" class="row">
-        <NIcon size="16"><component :is="item.icon" /></NIcon>
+        <NIcon size="16"><component :is="item.icon" weight="duotone" /></NIcon>
         <span class="label">{{ item.label }}</span>
         <span class="combo">{{ item.combo }}</span>
       </NListItem>

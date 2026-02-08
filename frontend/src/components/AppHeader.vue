@@ -196,7 +196,7 @@ onUnmounted(() => {
         :title="`${link.label} - ${link.shortcut}`"
       >
         <NIcon size="16" aria-hidden="true">
-          <component :is="link.icon" />
+          <component :is="link.icon" weight="duotone" />
         </NIcon>
         <span>{{ link.label }}</span>
       </RouterLink>
@@ -216,7 +216,7 @@ onUnmounted(() => {
               }"
             >
               <div class="stat-mini" :class="{ critical: isStatCritical(localStats.cpu_percent) }">
-                <NIcon size="12"><PhCpu /></NIcon>
+                <NIcon size="12"><PhCpu weight="duotone" /></NIcon>
                 <NProgress
                   type="line"
                   :percentage="localStats.cpu_percent ?? 0"
@@ -231,7 +231,7 @@ onUnmounted(() => {
                 </span>
               </div>
               <div class="stat-mini" :class="{ critical: isStatCritical(localStats.memory_percent) }">
-                <NIcon size="12"><PhMemory /></NIcon>
+                <NIcon size="12"><PhMemory weight="duotone" /></NIcon>
                 <NProgress
                   type="line"
                   :percentage="localStats.memory_percent ?? 0"
@@ -259,7 +259,7 @@ onUnmounted(() => {
           <template #trigger>
             <div class="auth-indicator" :aria-label="authTooltip">
               <NIcon size="16" color="var(--success-color)">
-                <PhLockKey />
+                <PhLockKey weight="duotone" />
               </NIcon>
               <span class="auth-username">{{ authStore.displayUsername }}</span>
             </div>
@@ -284,7 +284,7 @@ onUnmounted(() => {
           :title="t('header.toggle_theme')"
         >
           <NIcon size="18" aria-hidden="true">
-            <component :is="themeIcon" />
+            <component :is="themeIcon" weight="duotone" />
           </NIcon>
         </NButton>
         <CommandPalette />
@@ -322,7 +322,7 @@ onUnmounted(() => {
             :aria-label="link.label"
           >
             <NIcon size="20" aria-hidden="true">
-              <component :is="link.icon" />
+              <component :is="link.icon" weight="duotone" />
             </NIcon>
             <div class="mobile-nav-content">
               <span class="mobile-nav-label">{{ link.label }}</span>
@@ -414,9 +414,9 @@ onUnmounted(() => {
 }
 
 .nav-link.active {
-  color: var(--text);
+  color: var(--accent);
   border-color: var(--accent);
-  background: rgba(124, 93, 255, 0.12);
+  background: var(--accent-bg);
 }
 
 .nav-link.active::after {
@@ -529,7 +529,7 @@ onUnmounted(() => {
 }
 
 .mobile-stats .stat-label {
-  color: #53bdfa;
+  color: var(--accent);
   font-size: 8px;
 }
 

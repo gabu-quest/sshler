@@ -287,7 +287,7 @@ defineExpose({
           @close="removePane(pane.id)"
         >
           <NIcon size="14" style="margin-right: 4px">
-            <PhTerminalWindow />
+            <PhTerminalWindow weight="duotone" />
           </NIcon>
           {{ pane.sessionName }}
           <span v-if="pane.connected" class="connection-dot" />
@@ -297,17 +297,17 @@ defineExpose({
       <NSpace size="small">
         <NButton size="tiny" @click="createPane()" title="New terminal (Ctrl+Shift+T)">
           <NIcon size="14">
-            <PhPlus />
+            <PhPlus weight="duotone" />
           </NIcon>
         </NButton>
         <NButton size="tiny" @click="splitHorizontal" title="Split horizontal (Ctrl+Shift+H)">
           <NIcon size="14">
-            <PhSplitHorizontal />
+            <PhSplitHorizontal weight="duotone" />
           </NIcon>
         </NButton>
         <NButton size="tiny" @click="splitVertical" title="Split vertical (Ctrl+Shift+V)">
           <NIcon size="14">
-            <PhSplitVertical />
+            <PhSplitVertical weight="duotone" />
           </NIcon>
         </NButton>
       </NSpace>
@@ -344,7 +344,7 @@ defineExpose({
         <div v-if="panes.length === 1" class="pane-header">
           <div class="pane-info">
             <NIcon size="16">
-              <PhTerminalWindow />
+              <PhTerminalWindow weight="duotone" />
             </NIcon>
             <span>{{ pane.sessionName }}</span>
             <span v-if="pane.connected" class="connection-status connected">●</span>

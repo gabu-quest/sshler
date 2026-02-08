@@ -75,7 +75,7 @@ const handleKeypress = (event: KeyboardEvent) => {
         <img src="/logo.png" alt="sshler" class="login-logo" />
         <p class="subtitle">
           <NIcon size="16" color="var(--text-color-3)" style="vertical-align: middle; margin-right: 4px;">
-            <PhLock weight="regular" />
+            <PhLock weight="duotone" />
           </NIcon>
           {{ t('login.auth_required') }}
         </p>
@@ -159,7 +159,7 @@ const handleKeypress = (event: KeyboardEvent) => {
   height: 120px;
   object-fit: contain;
   border-radius: 16px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 24px var(--shadow-lg);
 }
 
 .login-header h1 {

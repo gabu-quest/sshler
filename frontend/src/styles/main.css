@@ -5,7 +5,7 @@
   /* Colors */
   --accent: #6aa6ff;
   --accent-hover: #5a96ef;
-  --accent-bg: rgba(106, 166, 255, 0.1);
+  --accent-bg: rgba(106, 166, 255, 0.15);
   --accent-rgb: 106, 166, 255;
 
   --success: #3ba86a;
@@ -96,8 +96,35 @@
   }
 }
 
+/* Light theme class override — MUST come after dark media query to win specificity */
+[data-theme="light"] {
+  --text: #1a1a1a;
+  --text-secondary: #4a4a4a;
+  --muted: #6b7280;
+
+  --surface: #ffffff;
+  --surface-variant: #f8f9fa;
+  --surface-hover: #f1f3f4;
+
+  --stroke: #e5e7eb;
+  --stroke-hover: #d1d5db;
+
+  --shadow: rgba(0, 0, 0, 0.1);
+  --shadow-lg: rgba(0, 0, 0, 0.15);
+
+  --panel-bg: #ffffff;
+  --panel-bg-translucent: rgba(255, 255, 255, 0.95);
+  --panel-bg-solid: rgba(245, 247, 250, 0.98);
+  --overlay-bg: rgba(255, 255, 255, 0.92);
+  --hover-overlay: rgba(0, 0, 0, 0.04);
+  --font-weight-normal: 450;
+  --font-weight-medium: 550;
+  --border-width: 1.5px;
+  --icon-weight: 1.5;
+}
+
 /* Dark theme class override */
-.dark {
+.dark, [data-theme="dark"] {
   --text: #ffffff;
   --text-secondary: #e5e5e5;
   --muted: #9ca3af;
@@ -326,11 +353,7 @@ input:focus, textarea:focus, select:focus {
   flex-direction: column;
 }
 
-/* Override Naive UI styles to match our design system */
-.n-button, .n-tag, .n-badge {
-  font-weight: var(--font-weight-medium);
-}
-
+/* Override Naive UI font-family to match our design system */
 .n-button {
   font-family: var(--font-sans);
 }

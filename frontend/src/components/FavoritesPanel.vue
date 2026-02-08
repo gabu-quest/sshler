@@ -23,7 +23,7 @@ const pinned = computed(() => favoritesStore.isPinned(props.box));
   <NCard class="surface-card" size="small">
     <div class="card-title">
       <NIcon size="16">
-        <PhStar />
+        <PhStar weight="duotone" />
       </NIcon>
       <span>{{ t('favorites.title') }}</span>
     </div>
@@ -42,7 +42,7 @@ const pinned = computed(() => favoritesStore.isPinned(props.box));
     <div class="pin-row">
       <NButton size="tiny" secondary :disabled="!box" @click="emit('togglePin')">
         <NIcon size="14">
-          <PhPushPinSimple />
+          <PhPushPinSimple weight="duotone" />
         </NIcon>
         <span>{{ pinned ? t('favorites.unpin') : t('favorites.pin') }}</span>
       </NButton>

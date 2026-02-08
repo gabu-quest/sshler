@@ -117,10 +117,10 @@ watch(() => props.show, (show) => {
       <div class="nav-bar">
         <NSpace>
           <NButton size="small" quaternary @click="navigateUp" :disabled="currentPath === '/' || currentPath === '~'">
-            <NIcon><PhArrowLeft /></NIcon>
+            <NIcon><PhArrowLeft weight="duotone" /></NIcon>
           </NButton>
           <NButton size="small" quaternary @click="navigateHome">
-            <NIcon><PhHouse /></NIcon>
+            <NIcon><PhHouse weight="duotone" /></NIcon>
           </NButton>
         </NSpace>
         
@@ -148,7 +148,7 @@ watch(() => props.show, (show) => {
           :title="t('dirpicker.toggle_favorite')"
         >
           <NIcon :color="isFavorite(currentPath) ? '#faad14' : undefined">
-            <PhStar :weight="isFavorite(currentPath) ? 'fill' : 'regular'" />
+            <PhStar :weight="isFavorite(currentPath) ? 'fill' : 'duotone'" />
           </NIcon>
         </NButton>
       </div>
@@ -188,8 +188,8 @@ watch(() => props.show, (show) => {
             @dblclick="selectPath(dir.path)"
           >
             <NIcon class="folder-icon">
-              <PhFolderOpen v-if="isFavorite(dir.path)" />
-              <PhFolder v-else />
+              <PhFolderOpen v-if="isFavorite(dir.path)" weight="duotone" />
+              <PhFolder v-else weight="duotone" />
             </NIcon>
             <span class="dir-name">{{ dir.name }}</span>
             <NButton 
@@ -199,7 +199,7 @@ watch(() => props.show, (show) => {
               @click.stop="toggleFavorite(dir.path)"
             >
               <NIcon :color="isFavorite(dir.path) ? '#faad14' : 'var(--muted)'">
-                <PhStar :weight="isFavorite(dir.path) ? 'fill' : 'regular'" />
+                <PhStar :weight="isFavorite(dir.path) ? 'fill' : 'duotone'" />
               </NIcon>
             </NButton>
           </div>
@@ -211,7 +211,7 @@ watch(() => props.show, (show) => {
         <NButton @click="emit('update:show', false)">{{ t('common.cancel') }}</NButton>
         <NButton type="primary" @click="selectCurrent">
           <template #icon>
-            <NIcon><PhCheck /></NIcon>
+            <NIcon><PhCheck weight="duotone" /></NIcon>
           </template>
           Select "{{ currentPath }}"
         </NButton>

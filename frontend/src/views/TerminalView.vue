@@ -262,12 +262,12 @@ watch(() => boxesStore.items, () => {
       <div class="header-content">
         <div class="header-left">
           <NButton size="small" quaternary @click="goBack" :title="t('terminal.go_back')">
-            <NIcon size="16"><PhArrowLeft /></NIcon>
+            <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
           </NButton>
           <h1 class="dir-title">{{ displayDirName }}</h1>
           <span class="box-badge">{{ selectedBox || t('terminal.no_box') }}</span>
           <span v-if="currentGitInfo?.is_repo" class="git-badge" :class="{ dirty: currentGitInfo.dirty }">
-            <NIcon size="12"><PhGitBranch /></NIcon>
+            <NIcon size="12"><PhGitBranch weight="duotone" /></NIcon>
             {{ currentGitInfo.branch }}
             <span v-if="currentGitInfo.dirty" class="dirty-indicator">*</span>
           </span>
@@ -314,7 +314,7 @@ watch(() => boxesStore.items, () => {
             class="favorite-btn"
           >
             <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
-              <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'regular'" />
+              <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
             </NIcon>
           </NButton>
 
@@ -325,7 +325,7 @@ watch(() => boxesStore.items, () => {
             :title="t('terminal.browse_files')"
             @click.prevent="goToFiles"
           >
-            <NIcon size="14"><PhFolderOpen /></NIcon>
+            <NIcon size="14"><PhFolderOpen weight="duotone" /></NIcon>
           </a>
         </div>
       </div>
@@ -334,12 +334,12 @@ watch(() => boxesStore.items, () => {
     <!-- Mobile Header: ultra-compact single row -->
     <header v-if="isMobile" class="mobile-header">
       <button class="mobile-back-btn" @click="goBack" :title="t('common.back')">
-        <NIcon size="14"><PhArrowLeft /></NIcon>
+        <NIcon size="14"><PhArrowLeft weight="duotone" /></NIcon>
       </button>
       <button class="mobile-title-btn" @click="toggleMobileControls">
         <span class="mobile-title-text">{{ displayDirName }}</span>
         <span class="mobile-box-text">{{ selectedBox }}</span>
-        <NIcon size="10" class="mobile-caret" :class="{ expanded: mobileControlsExpanded }"><PhCaretDown /></NIcon>
+        <NIcon size="10" class="mobile-caret" :class="{ expanded: mobileControlsExpanded }"><PhCaretDown weight="duotone" /></NIcon>
       </button>
       <div class="mobile-header-actions">
         <button
@@ -349,7 +349,7 @@ watch(() => boxesStore.items, () => {
           @click="toggleCurrentDirFavorite"
         >
           <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
-            <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'regular'" />
+            <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
           </NIcon>
         </button>
         <a
@@ -413,7 +413,7 @@ watch(() => boxesStore.items, () => {
 
       <div v-else class="no-box-selected">
         <div class="empty-state">
-          <NIcon size="48" class="empty-icon"><PhTerminalWindow /></NIcon>
+          <NIcon size="48" class="empty-icon"><PhTerminalWindow weight="duotone" /></NIcon>
           <h3>{{ t('terminal.no_box') }}</h3>
           <p class="text-muted">{{ t('terminal.no_box_hint') }}</p>
           <NButton
@@ -497,8 +497,8 @@ watch(() => boxesStore.items, () => {
 .box-badge {
   font-size: 12px;
   padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--surface-variant);
+  border: 1px solid var(--stroke);
   border-radius: 12px;
   color: var(--muted);
 }
@@ -592,7 +592,7 @@ watch(() => boxesStore.items, () => {
   height: 32px;
   padding: 0 4px;
   background: var(--panel-bg-translucent);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--stroke);
   flex-shrink: 0;
   z-index: 10;
 }
@@ -605,13 +605,13 @@ watch(() => boxesStore.items, () => {
   height: 32px;
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--muted);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .mobile-back-btn:active {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--text);
 }
 
 .mobile-title-btn {
@@ -639,13 +639,13 @@ watch(() => boxesStore.items, () => {
 
 .mobile-box-text {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .mobile-caret {
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--muted);
   transition: transform 0.15s ease;
   flex-shrink: 0;
 }
@@ -669,14 +669,14 @@ watch(() => boxesStore.items, () => {
   height: 32px;
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--muted);
   cursor: pointer;
   text-decoration: none;
 }
 
 .mobile-action-btn:active,
 .mobile-action-btn.active {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text);
 }
 
 /* Mobile controls dropdown */
@@ -686,7 +686,7 @@ watch(() => boxesStore.items, () => {
   gap: 6px;
   padding: 6px 8px;
   background: var(--panel-bg-solid);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--stroke);
   flex-shrink: 0;
   z-index: 9;
 }
@@ -727,7 +727,7 @@ watch(() => boxesStore.items, () => {
 }
 
 .header-link-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-hover);
   border-color: var(--accent);
 }
 
@@ -736,4 +736,5 @@ watch(() => boxesStore.items, () => {
     border: 2px solid var(--stroke);
   }
 }
+
 </style>

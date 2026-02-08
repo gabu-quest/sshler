@@ -91,18 +91,18 @@ onMounted(async () => {
         <NCard class="surface-card" size="small">
           <div class="card-title">
             <NIcon size="16">
-              <PhFolderSimple />
+              <PhFolderSimple weight="duotone" />
             </NIcon>
             <span>{{ box.name }}</span>
           </div>
           <p class="text-muted small">{{ box.host }} • {{ box.transport }}</p>
           <NSpace size="small" style="margin-bottom: 8px;">
             <NButton size="tiny" type="primary" @click="() => $router.push(`/files?box=${box.name}`)">
-              <NIcon size="14"><PhFolderSimple /></NIcon>
+              <NIcon size="14"><PhFolderSimple weight="duotone" /></NIcon>
               {{ t('boxes.files') }}
             </NButton>
             <NButton size="tiny" type="primary" @click="() => $router.push(`/terminal?box=${box.name}`)">
-              <NIcon size="14"><PhTerminalWindow /></NIcon>
+              <NIcon size="14"><PhTerminalWindow weight="duotone" /></NIcon>
               {{ t('boxes.terminal') }}
             </NButton>
             <NButton size="tiny" @click="() => $router.push(`/multi-terminal?box=${box.name}`)">
@@ -111,11 +111,11 @@ onMounted(async () => {
           </NSpace>
           <NSpace size="small">
             <NButton size="tiny" secondary @click="() => togglePin(box.name)">
-              <NIcon size="14"><PhPushPinSimple /></NIcon>
+              <NIcon size="14"><PhPushPinSimple weight="duotone" /></NIcon>
               {{ favoritesStore.isPinned(box.name) ? t('boxes.unpin') : t('boxes.pin') }}
             </NButton>
             <NButton size="tiny" secondary @click="() => toggleFavoritePath(box.name, box.default_dir || '/')">
-              <NIcon size="14"><PhStar /></NIcon>
+              <NIcon size="14"><PhStar weight="duotone" /></NIcon>
               {{ favoritesStore.isFavorite(box.name, box.default_dir || '/') ? t('boxes.unfavorite') : t('boxes.favorite') }}
             </NButton>
             <NButton size="tiny" quaternary @click="() => checkStatus(box.name)">{{ t('common.status') }}</NButton>

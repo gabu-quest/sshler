@@ -20,7 +20,6 @@ import {
   PhPlus,
   PhTerminal,
   PhFolderOpen,
-  PhFolder,
   PhCircle,
   PhChartBar,
   PhStar,
@@ -34,7 +33,7 @@ import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
 import { boxStats } from "@/api/http";
 import type { BoxStats } from "@/api/types";
-import { resetFavicon } from "@/utils/emoji-favicon";
+import { resetFavicon, getEmojiForString } from "@/utils/emoji-favicon";
 
 const router = useRouter();
 const message = useMessage();
@@ -224,7 +223,7 @@ const handleBrowseServerFiles = (serverName: string) => {
   <div class="dashboard">
     <!-- Compact Stats Pill -->
     <div class="stats-pill">
-      <NIcon size="14"><PhChartBar /></NIcon>
+      <NIcon size="14"><PhChartBar weight="duotone" /></NIcon>
       <span>{{ quickStats.servers }} {{ quickStats.servers === 1 ? t('overview.server') : t('overview.servers') }}</span>
       <span class="stats-separator">•</span>
       <span>{{ quickStats.pinnedBoxes }} {{ t('overview.pinned') }}</span>
@@ -232,31 +231,31 @@ const handleBrowseServerFiles = (serverName: string) => {
       <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
     </div>
 
-    <!-- Favorites Bar -->
+    <!-- Favorites Grid -->
     <section v-if="allFavorites.length > 0" class="favorites-section">
       <div class="section-header-inline">
         <NIcon size="18" color="#faad14"><PhStar weight="fill" /></NIcon>
         <h3>{{ t('overview.favorites_title') }}</h3>
       </div>
-      <div class="favorites-list">
+      <div class="favorites-grid">
         <div
           v-for="fav in allFavorites"
           :key="fav.box + '-' + fav.path"
-          class="favorite-item"
+          class="favorite-card"
         >
-          <div class="favorite-info">
-            <span class="favorite-box">{{ fav.box }}</span>
+          <div class="favorite-card-body">
+            <span class="favorite-emoji">{{ getEmojiForString(fav.box + ':' + fav.path) }}</span>
             <span class="favorite-path">{{ fav.label }}</span>
+            <span class="favorite-box">{{ fav.box }}</span>
           </div>
-          <div class="favorite-actions">
+          <div class="favorite-card-actions">
             <a
               :href="getFavoriteTerminalUrl(fav.box, fav.path)"
               class="favorite-btn favorite-btn-terminal"
               :title="t('overview.terminal')"
               @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
             >
-              <NIcon size="14"><PhTerminal /></NIcon>
-              <span>{{ t('overview.terminal') }}</span>
+              <NIcon size="13"><PhTerminal weight="duotone" /></NIcon>
             </a>
             <a
               :href="getFavoriteFilesUrl(fav.box, fav.path)"
@@ -264,8 +263,7 @@ const handleBrowseServerFiles = (serverName: string) => {
               :title="t('overview.files')"
               @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
             >
-              <NIcon size="14"><PhFolderOpen /></NIcon>
-              <span>{{ t('overview.files') }}</span>
+              <NIcon size="13"><PhFolderOpen weight="duotone" /></NIcon>
             </a>
           </div>
         </div>
@@ -285,7 +283,7 @@ const handleBrowseServerFiles = (serverName: string) => {
         <template #extra>
           <NButton type="primary" @click="router.push('/boxes')">
             <template #icon>
-              <NIcon><PhPlus /></NIcon>
+              <NIcon><PhPlus weight="duotone" /></NIcon>
             </template>
             {{ t('overview.add_first_server') }}
           </NButton>
@@ -301,7 +299,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                   size="12" 
                   :color="getStatusColor(getServerStatus(box))"
                 >
-                  <PhCircle />
+                  <PhCircle weight="duotone" />
                 </NIcon>
                 <span class="server-name">{{ box.name }}</span>
               </div>
@@ -320,7 +318,7 @@ const handleBrowseServerFiles = (serverName: string) => {
               <!-- System Stats -->
               <div v-if="getBoxStats(box.name)" class="server-stats">
                 <div class="stat-row">
-                  <NIcon size="14" class="stat-icon"><PhCpu /></NIcon>
+                  <NIcon size="14" class="stat-icon"><PhCpu weight="duotone" /></NIcon>
                   <span class="stat-label">{{ t('overview.cpu') }}</span>
                   <NProgress
                     type="line"
@@ -334,7 +332,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                   <span class="stat-value">{{ getBoxStats(box.name)?.cpu_percent?.toFixed(0) ?? '-' }}%</span>
                 </div>
                 <div class="stat-row">
-                  <NIcon size="14" class="stat-icon"><PhMemory /></NIcon>
+                  <NIcon size="14" class="stat-icon"><PhMemory weight="duotone" /></NIcon>
                   <span class="stat-label">{{ t('overview.ram') }}</span>
                   <NProgress
                     type="line"
@@ -424,8 +422,8 @@ const handleBrowseServerFiles = (serverName: string) => {
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--hover-overlay);
+  border: 1px solid var(--stroke);
   border-radius: 20px;
   font-size: 13px;
   color: var(--muted);
@@ -520,7 +518,7 @@ const handleBrowseServerFiles = (serverName: string) => {
   gap: 6px;
   margin-bottom: 12px;
   padding: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hover-overlay);
   border-radius: 6px;
 }
 
@@ -673,19 +671,9 @@ const handleBrowseServerFiles = (serverName: string) => {
     gap: 6px;
   }
 
-  .favorite-item {
-    flex-direction: column;
-    align-items: stretch;
+  .favorites-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 8px;
-  }
-
-  .favorite-actions {
-    width: 100%;
-  }
-
-  .favorite-btn {
-    flex: 1;
-    justify-content: center;
   }
 
   .section-title {
@@ -755,14 +743,14 @@ const handleBrowseServerFiles = (serverName: string) => {
   flex-direction: column;
   gap: 1px;
   padding: 4px 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-overlay);
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--surface-hover);
 }
 
 .session-item.inactive {
@@ -825,61 +813,69 @@ const handleBrowseServerFiles = (serverName: string) => {
   color: var(--text);
 }
 
-.favorites-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.favorites-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
 }
 
-.favorite-item {
+.favorite-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
+  flex-direction: column;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   border-radius: 10px;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.favorite-item:hover {
-  border-color: var(--stroke);
+.favorite-card:hover {
+  border-color: var(--stroke-hover);
+  box-shadow: 0 2px 8px var(--shadow);
 }
 
-.favorite-info {
+.favorite-card-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
-.favorite-box {
-  font-size: 11px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.favorite-emoji {
+  font-size: 24px;
+  line-height: 1;
 }
 
 .favorite-path {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
 
-.favorite-actions {
+.favorite-box {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.favorite-card-actions {
   display: flex;
-  gap: 8px;
-  flex-shrink: 0;
+  gap: 6px;
 }
 
 .favorite-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  justify-content: center;
+  flex: 1;
+  padding: 6px 0;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
@@ -889,25 +885,25 @@ const handleBrowseServerFiles = (serverName: string) => {
 }
 
 .favorite-btn-terminal {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(59, 130, 246, 0.1);
   color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(59, 130, 246, 0.2);
 }
 
 .favorite-btn-terminal:hover {
-  background: rgba(59, 130, 246, 0.25);
-  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
 .favorite-btn-files {
-  background: rgba(34, 197, 94, 0.15);
+  background: rgba(34, 197, 94, 0.1);
   color: #22c55e;
-  border: 1px solid rgba(34, 197, 94, 0.3);
+  border: 1px solid rgba(34, 197, 94, 0.2);
 }
 
 .favorite-btn-files:hover {
-  background: rgba(34, 197, 94, 0.25);
-  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.4);
 }
 
 /* Favorites List Card */
