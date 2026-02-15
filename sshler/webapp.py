@@ -594,6 +594,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         # Check authentication if required
         # Skip auth for health check endpoint (needed for load balancers)
+        need_session_cookie = False
         if settings.auth_manager and request.method != "OPTIONS" and request.url.path != "/health":
             # Check if IP is locked out
             if auth_tracker.is_locked_out(client_ip):
@@ -608,35 +609,45 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     headers={"Retry-After": str(retry_after)},
                 )
 
-            # Verify authentication
-            auth_header = request.headers.get("authorization")
-            if not auth_header or not auth_header.startswith("Basic "):
-                return Response(
-                    status_code=401,
-                    headers={"WWW-Authenticate": 'Basic realm="sshler"'},
-                )
+            # Try session cookie first (browsers always send cookies,
+            # including with WebSocket upgrades, unlike Basic Auth headers)
+            app_settings = get_app_settings()
+            authenticated = False
 
-            # Use AuthManager to verify credentials
-            if not settings.auth_manager.verify_basic_auth_header(auth_header):
-                # Record failed attempt
-                auth_tracker.record_failure(client_ip)
-                failure_count = auth_tracker.get_failure_count(client_ip)
+            cookie_sid = request.cookies.get(app_settings.cookie_name)
+            if cookie_sid:
+                session_obj = get_session_store().get_session(cookie_sid)
+                if session_obj:
+                    authenticated = True
 
-                logging.warning(
-                    f"[Security] Failed auth attempt from {client_ip} "
-                    f"({failure_count}/5 failures)"
-                )
+            if not authenticated:
+                # Fall back to Basic Auth
+                auth_header = request.headers.get("authorization")
+                if not auth_header or not auth_header.startswith("Basic "):
+                    return Response(
+                        status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="sshler"'},
+                    )
 
-                # Slow down brute force attempts
-                await asyncio.sleep(2)
+                if not settings.auth_manager.verify_basic_auth_header(auth_header):
+                    auth_tracker.record_failure(client_ip)
+                    failure_count = auth_tracker.get_failure_count(client_ip)
 
-                return Response(
-                    status_code=401,
-                    headers={"WWW-Authenticate": 'Basic realm="sshler"'},
-                )
+                    logging.warning(
+                        f"[Security] Failed auth attempt from {client_ip} "
+                        f"({failure_count}/5 failures)"
+                    )
 
-            # Successful auth - reset failure counter
-            auth_tracker.reset_failures(client_ip)
+                    await asyncio.sleep(2)
+
+                    return Response(
+                        status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="sshler"'},
+                    )
+
+                # Successful Basic Auth - set session cookie so WebSocket works
+                auth_tracker.reset_failures(client_ip)
+                need_session_cookie = True
 
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -650,6 +661,33 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             "connect-src 'self' https://unpkg.com",
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
+
+        # Set session cookie after successful Basic Auth so subsequent
+        # requests (especially WebSocket upgrades) can authenticate via cookie
+        if need_session_cookie:
+            app_settings = get_app_settings()
+            username = "user"
+            try:
+                auth_header = request.headers.get("authorization", "")
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                username = decoded.split(":", 1)[0]
+            except Exception:
+                pass
+            session_obj = get_session_store().create_session(
+                username=username,
+                user_id=username,
+                ttl_seconds=app_settings.session_ttl_seconds,
+            )
+            response.set_cookie(
+                key=app_settings.cookie_name,
+                value=session_obj.session_id,
+                max_age=app_settings.session_ttl_seconds,
+                httponly=True,
+                secure=app_settings.cookie_secure,
+                samesite=app_settings.cookie_samesite,
+                path="/",
+            )
+
         return response
 
     @application.middleware("http")
@@ -790,6 +828,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         settings: ServerSettings = websocket.app.state.settings
         logger = logging.getLogger("sshler.webapp")
 
+        # Pre-initialize variables used in the finally block so early returns
+        # (auth failures, validation errors) don't cause UnboundLocalError.
+        box: Box | None = None
+        transport = "ssh"
+        client_host = "unknown"
+        connection: asyncssh.SSHClientConnection | None = None
+        process: asyncssh.SSHClientProcess | LocalPTYProcess | None = None
+        session_id: str | None = None
+
         try:
             # Sanitize session name to prevent command injection
             # Session names are passed to tmux/subprocess commands, so only allow safe characters
@@ -800,13 +847,27 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 await websocket.close(code=4400, reason="Invalid session name")
                 return
 
-            # Check HTTP Basic Auth if required
+            # Authenticate WebSocket connection
             if settings.auth_manager:
+                ws_authenticated = False
+
+                # Try Basic Auth header (works for API clients)
                 auth_header = websocket.headers.get("authorization")
-                if not auth_header or not settings.auth_manager.verify_basic_auth_header(
-                    auth_header
-                ):
-                    logger.warning("[Connection] WebSocket auth failed: invalid basic auth")
+                if auth_header and settings.auth_manager.verify_basic_auth_header(auth_header):
+                    ws_authenticated = True
+
+                # Try session cookie (browsers send cookies with WebSocket upgrades,
+                # but may not send the Authorization header)
+                if not ws_authenticated:
+                    app_settings = get_app_settings()
+                    cookie_sid = websocket.cookies.get(app_settings.cookie_name)
+                    if cookie_sid:
+                        session_obj = get_session_store().get_session(cookie_sid)
+                        if session_obj:
+                            ws_authenticated = True
+
+                if not ws_authenticated:
+                    logger.warning("[Connection] WebSocket auth failed: no valid credentials")
                     await websocket.close(code=4401, reason="Unauthorized")
                     return
 
@@ -836,9 +897,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 f"[Connection] WebSocket connected: box={box.name}, transport={transport}, "
                 f"dir={normalized_directory}, session={session}, client={client_host}"
             )
-
-            connection: asyncssh.SSHClientConnection | None = None
-            process: asyncssh.SSHClientProcess[str] | LocalPTYProcess | None = None
 
             if transport == "local":
                 try:
