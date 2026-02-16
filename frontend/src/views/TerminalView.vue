@@ -36,12 +36,29 @@ const mobileControlsExpanded = ref(false)
 const rawMode = ref(false)
 const terminalConnected = ref(false)
 
+// Periodic git info refresh
+let gitPollTimer: ReturnType<typeof setInterval> | null = null
+
+const startGitPolling = () => {
+  stopGitPolling()
+  gitPollTimer = setInterval(loadGitInfo, 15_000)
+}
+
+const stopGitPolling = () => {
+  if (gitPollTimer) {
+    clearInterval(gitPollTimer)
+    gitPollTimer = null
+  }
+}
+
 // Track terminal connection state
 const onTerminalConnected = () => {
   terminalConnected.value = true
+  startGitPolling()
 }
 const onTerminalDisconnected = () => {
   terminalConnected.value = false
+  stopGitPolling()
 }
 
 // MobileInputBar handlers
@@ -246,6 +263,10 @@ const goBack = () => {
 onMounted(async () => {
   await ensureData()
   initializeFromRoute()
+})
+
+onUnmounted(() => {
+  stopGitPolling()
 })
 
 watch(() => boxesStore.items, () => {

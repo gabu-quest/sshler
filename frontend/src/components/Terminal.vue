@@ -555,21 +555,30 @@ const setupResizeObserver = () => {
   }
 }
 
+let bellBlinkTimer: ReturnType<typeof setInterval> | null = null
+
 const handleBell = () => {
-  // Flash title if tab is not visible
   if (document.hidden) {
-    const originalTitle = document.title
-    document.title = '🔔 ' + originalTitle
-    
+    const originalTitle = document.title.replace(/^🔔 /, '')
+
+    // Blink the tab title until user returns
+    if (bellBlinkTimer) clearInterval(bellBlinkTimer)
+    let show = true
+    bellBlinkTimer = setInterval(() => {
+      document.title = show ? '🔔 ' + originalTitle : originalTitle
+      show = !show
+    }, 600)
+
     const handleVisibilityChange = () => {
       if (!document.hidden) {
+        if (bellBlinkTimer) { clearInterval(bellBlinkTimer); bellBlinkTimer = null }
         document.title = originalTitle
         document.removeEventListener('visibilitychange', handleVisibilityChange)
       }
     }
-    
+
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    
+
     // Show notification if permission granted
     if (Notification.permission === 'granted') {
       new Notification('Terminal Bell', {
@@ -955,6 +964,9 @@ onUnmounted(() => {
 
   // Remove beforeunload protection
   window.removeEventListener('beforeunload', handleBeforeUnload)
+
+  // Stop bell blink
+  if (bellBlinkTimer) { clearInterval(bellBlinkTimer); bellBlinkTimer = null }
 
   disconnect()
 
