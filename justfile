@@ -1,6 +1,8 @@
 # sshler project commands
 # Run `just` with no args to see all recipes
 
+pnpm := "npx pnpm"
+
 # Default: list all recipes
 default:
     @just --list
@@ -14,7 +16,7 @@ test-backend:
 
 # Run frontend tests
 test-frontend:
-    pnpm --prefix frontend test -- --run
+    {{pnpm}} --prefix frontend test -- --run
 
 # Run E2E tests (requires playwright)
 test-e2e:
@@ -26,7 +28,11 @@ test-mobile:
 
 # Build frontend
 build:
-    pnpm --prefix frontend run build
+    {{pnpm}} --prefix frontend run build
+
+# Build frontend and restart service
+deploy: build
+    systemctl --user restart sshler
 
 # Type check backend
 typecheck-backend:
@@ -34,7 +40,7 @@ typecheck-backend:
 
 # Type check frontend
 typecheck-frontend:
-    pnpm --prefix frontend run type-check
+    {{pnpm}} --prefix frontend run type-check
 
 # Type check everything
 typecheck: typecheck-backend typecheck-frontend
@@ -49,7 +55,7 @@ server:
 
 # Install frontend dependencies
 install-frontend:
-    pnpm --prefix frontend install
+    {{pnpm}} --prefix frontend install
 
 # Install all dependencies
 install: install-frontend
@@ -57,7 +63,7 @@ install: install-frontend
 
 # Lint frontend
 lint:
-    pnpm --prefix frontend run lint
+    {{pnpm}} --prefix frontend run lint
 
 # Full CI check: build + test + typecheck
 ci: build test typecheck

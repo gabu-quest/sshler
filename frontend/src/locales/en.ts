@@ -93,6 +93,9 @@ export const en: Record<string, string> = {
   "overview.last_used": "Last used:",
   "overview.connect": "Connect",
   "overview.never": "never",
+  "overview.fav_settings_title": "Favorite Settings",
+  "overview.fav_note": "Note",
+  "overview.fav_note_placeholder": "Add a reminder...",
 
   // Settings
   "settings.title": "Settings",
@@ -328,6 +331,7 @@ export const en: Record<string, string> = {
   "palette.action_reload_desc": "Refresh the entire application",
   "palette.action_search": "Global Search",
   "palette.action_search_desc": "Search across all files and boxes",
+  "palette.favorites_category": "Favorites",
 
   // Shortcuts Overlay
   "shortcuts.title": "Shortcuts",

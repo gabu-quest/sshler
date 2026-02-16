@@ -93,6 +93,9 @@ export const ja: Record<string, string> = {
   "overview.last_used": "最終使用:",
   "overview.connect": "接続",
   "overview.never": "未使用",
+  "overview.fav_settings_title": "お気に入り設定",
+  "overview.fav_note": "メモ",
+  "overview.fav_note_placeholder": "メモを追加...",
 
   // Settings
   "settings.title": "設定",
@@ -328,6 +331,7 @@ export const ja: Record<string, string> = {
   "palette.action_reload_desc": "アプリケーション全体を更新",
   "palette.action_search": "グローバル検索",
   "palette.action_search_desc": "すべてのファイルとボックスを検索",
+  "palette.favorites_category": "お気に入り",
 
   // Shortcuts Overlay
   "shortcuts.title": "ショートカット",
