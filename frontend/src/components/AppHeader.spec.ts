@@ -13,6 +13,9 @@ vi.mock("naive-ui", () => {
     NSpace: stub("<div><slot /></div>"),
     NDrawer: stub("<div><slot /></div>"),
     NDrawerContent: stub("<div><slot /></div>"),
+    NTooltip: stub("<span><slot /></span>"),
+    NProgress: stub("<div />"),
+    NSelect: stub("<select />"),
   };
 });
 

@@ -18,7 +18,9 @@ import {
 
 import { useRouter } from "vue-router";
 import { useAppStore } from "@/stores/app";
+import { useBoxesStore } from "@/stores/boxes";
 import { useI18n } from "@/i18n";
+import { getEmojiForString } from "@/utils/emoji-favicon";
 
 interface CommandAction {
   id: string;
@@ -33,6 +35,7 @@ interface CommandAction {
 
 const router = useRouter();
 const appStore = useAppStore();
+const boxesStore = useBoxesStore();
 const { t } = useI18n();
 const show = ref(false);
 const query = ref("");
@@ -139,6 +142,29 @@ const actions = computed((): CommandAction[] => [
   },
 ]);
 
+const favoriteActions = computed((): CommandAction[] => {
+  const result: CommandAction[] = [];
+  for (const box of boxesStore.items) {
+    const boxFavs = box.favorites || [];
+    for (const path of boxFavs) {
+      const basename = path.split("/").filter(Boolean).pop() || path;
+      const emoji = getEmojiForString(`${box.name}:${path}`);
+      result.push({
+        id: `fav-${box.name}-${path}`,
+        label: `${emoji} ${basename}`,
+        description: `${box.name}: ${path}`,
+        icon: PhStar,
+        category: t("palette.favorites_category"),
+        action: () => router.push({ path: "/terminal", query: { box: box.name, dir: path } }),
+        keywords: [box.name, path, basename, "favorite", "bookmark"],
+      });
+    }
+  }
+  return result;
+});
+
+const allActions = computed(() => [...actions.value, ...favoriteActions.value]);
+
 // Fuzzy search implementation
 const fuzzyMatch = (text: string, query: string): { score: number; matches: number[] } => {
   const textLower = text.toLowerCase();
@@ -175,9 +201,9 @@ const fuzzyMatch = (text: string, query: string): { score: number; matches: numb
 
 const filtered = computed(() => {
   const q = query.value.trim();
-  if (!q) return actions.value;
-  
-  const results = actions.value
+  if (!q) return allActions.value;
+
+  const results = allActions.value
     .map(action => {
       // Search in label, description, and keywords
       const labelMatch = fuzzyMatch(action.label, q);
@@ -379,8 +405,8 @@ watch(
             >
               <div class="palette-item-content">
                 <div class="palette-item-main">
-                  <NIcon size="16" aria-hidden="true" class="palette-item-icon">
-                    <component :is="item.icon" weight="duotone" />
+                  <NIcon size="16" aria-hidden="true" class="palette-item-icon" :class="{ 'palette-item-icon-favorite': item.id.startsWith('fav-') }">
+                    <component :is="item.icon" :weight="item.id.startsWith('fav-') ? 'fill' : 'duotone'" />
                   </NIcon>
                   <div class="palette-item-text">
                     <div class="palette-item-label">{{ item.label }}</div>
@@ -501,6 +527,10 @@ watch(
 .palette-item-icon {
   flex-shrink: 0;
   color: var(--muted);
+}
+
+.palette-item-icon-favorite {
+  color: var(--warning, #e8b339);
 }
 
 .palette-item-text {

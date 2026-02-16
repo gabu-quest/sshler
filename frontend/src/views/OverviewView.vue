@@ -8,6 +8,8 @@ import {
   NGrid,
   NGridItem,
   NIcon,
+  NModal,
+  NInput,
   NSpin,
   NTag,
   NEmpty,
@@ -24,7 +26,8 @@ import {
   PhChartBar,
   PhStar,
   PhCpu,
-  PhMemory
+  PhMemory,
+  PhDotsThreeVertical
 } from "@phosphor-icons/vue";
 
 import { useBootstrapStore } from "@/stores/bootstrap";
@@ -88,27 +91,36 @@ function formatMemory(mb: number | null | undefined): string {
   return `${Math.round(mb)}MB`;
 }
 
-// Flatten all favorites across all boxes for display
-const allFavorites = computed(() => {
-  const favorites: Array<{ box: string; path: string; label: string }> = []
+// Favorites grouped by box for display
+const favoritesByBox = computed(() => {
+  const groups: Array<{ box: string; items: Array<{ box: string; path: string; label: string }> }> = []
   boxesStore.items.forEach(box => {
+    const seen = new Set<string>()
+    const items: Array<{ box: string; path: string; label: string }> = []
     // Get favorites from box data
     const boxFavs = box.favorites || []
     boxFavs.forEach(path => {
+      seen.add(path)
       const label = path.split('/').pop() || path
-      favorites.push({ box: box.name, path, label })
+      items.push({ box: box.name, path, label })
     })
     // Also get from favorites store (may have additional ones)
     const storeFavs = Array.from(favoritesStore.favoritesForBox(box.name).values())
     storeFavs.forEach(path => {
-      if (!favorites.some(f => f.box === box.name && f.path === path)) {
+      if (!seen.has(path)) {
         const label = path.split('/').pop() || path
-        favorites.push({ box: box.name, path, label })
+        items.push({ box: box.name, path, label })
       }
     })
+    if (items.length > 0) {
+      groups.push({ box: box.name, items })
+    }
   })
-  return favorites
+  return groups
 });
+
+// Flat list for total count
+const allFavorites = computed(() => favoritesByBox.value.flatMap(g => g.items));
 
 // Build URLs for favorites (used as href for middle-click support)
 const getFavoriteTerminalUrl = (box: string, path: string) => {
@@ -127,6 +139,35 @@ const openInBackgroundTab = (event: MouseEvent, url: string) => {
   window.focus();
 };
 
+// Favorite notes (localStorage-based)
+const showFavSettings = ref(false)
+const editingFavorite = ref<{ box: string; path: string; label: string } | null>(null)
+const favNoteText = ref('')
+
+const favNoteKey = (box: string, path: string) => `sshler-fav-note:${box}:${path}`
+
+const getFavNote = (box: string, path: string): string => {
+  return localStorage.getItem(favNoteKey(box, path)) || ''
+}
+
+const openFavSettings = (fav: { box: string; path: string; label: string }) => {
+  editingFavorite.value = fav
+  favNoteText.value = getFavNote(fav.box, fav.path)
+  showFavSettings.value = true
+}
+
+const saveFavNote = () => {
+  if (!editingFavorite.value) return
+  const key = favNoteKey(editingFavorite.value.box, editingFavorite.value.path)
+  if (favNoteText.value.trim()) {
+    localStorage.setItem(key, favNoteText.value.trim())
+  } else {
+    localStorage.removeItem(key)
+  }
+  showFavSettings.value = false
+  editingFavorite.value = null
+}
+
 // Real stats only - no fake data
 const quickStats = computed(() => ({
   servers: boxesStore.items.length,
@@ -136,7 +177,7 @@ const quickStats = computed(() => ({
 
 onMounted(async () => {
   // Reset to default favicon on overview page
-  document.title = t('overview.title');
+  document.title = 'sshler';
   resetFavicon();
 
   if (!bootstrapStore.payload && !bootstrapStore.loading) {
@@ -231,40 +272,50 @@ const handleBrowseServerFiles = (serverName: string) => {
       <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
     </div>
 
-    <!-- Favorites Grid -->
+    <!-- Favorites Grid (grouped by box) -->
     <section v-if="allFavorites.length > 0" class="favorites-section">
       <div class="section-header-inline">
         <NIcon size="18" color="#faad14"><PhStar weight="fill" /></NIcon>
         <h3>{{ t('overview.favorites_title') }}</h3>
       </div>
-      <div class="favorites-grid">
-        <div
-          v-for="fav in allFavorites"
-          :key="fav.box + '-' + fav.path"
-          class="favorite-card"
-        >
-          <div class="favorite-card-body">
-            <span class="favorite-emoji">{{ getEmojiForString(fav.box + ':' + fav.path) }}</span>
-            <span class="favorite-path">{{ fav.label }}</span>
-            <span class="favorite-box">{{ fav.box }}</span>
-          </div>
-          <div class="favorite-card-actions">
-            <a
-              :href="getFavoriteTerminalUrl(fav.box, fav.path)"
-              class="favorite-btn favorite-btn-terminal"
-              :title="t('overview.terminal')"
-              @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
+      <div v-for="group in favoritesByBox" :key="group.box" class="favorites-group">
+        <span class="favorites-group-label">{{ group.box }}</span>
+        <div class="favorites-grid">
+          <div
+            v-for="fav in group.items"
+            :key="fav.path"
+            class="favorite-card"
+          >
+            <button
+              class="fav-settings-btn"
+              :title="t('overview.fav_settings_title')"
+              @click.stop="openFavSettings(fav)"
             >
-              <NIcon size="13"><PhTerminal weight="duotone" /></NIcon>
-            </a>
-            <a
-              :href="getFavoriteFilesUrl(fav.box, fav.path)"
-              class="favorite-btn favorite-btn-files"
-              :title="t('overview.files')"
-              @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
-            >
-              <NIcon size="13"><PhFolderOpen weight="duotone" /></NIcon>
-            </a>
+              <NIcon size="14"><PhDotsThreeVertical weight="duotone" /></NIcon>
+            </button>
+            <div class="favorite-card-body">
+              <span class="favorite-emoji">{{ getEmojiForString(fav.box + ':' + fav.path) }}</span>
+              <span class="favorite-path">{{ fav.label }}</span>
+              <span class="favorite-subtitle">{{ getFavNote(fav.box, fav.path) || '&nbsp;' }}</span>
+            </div>
+            <div class="favorite-card-actions">
+              <a
+                :href="getFavoriteTerminalUrl(fav.box, fav.path)"
+                class="favorite-btn favorite-btn-terminal"
+                :title="t('overview.terminal')"
+                @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
+              >
+                <NIcon size="13"><PhTerminal weight="duotone" /></NIcon>
+              </a>
+              <a
+                :href="getFavoriteFilesUrl(fav.box, fav.path)"
+                class="favorite-btn favorite-btn-files"
+                :title="t('overview.files')"
+                @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
+              >
+                <NIcon size="13"><PhFolderOpen weight="duotone" /></NIcon>
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -404,6 +455,35 @@ const handleBrowseServerFiles = (serverName: string) => {
         </NGridItem>
       </NGrid>
     </section>
+
+    <!-- Favorite Settings Modal -->
+    <NModal v-model:show="showFavSettings" :mask-closable="true">
+      <NCard
+        :title="t('overview.fav_settings_title')"
+        style="width: 400px; max-width: 90vw;"
+        :bordered="false"
+        size="small"
+        closable
+        @close="showFavSettings = false"
+      >
+        <div v-if="editingFavorite" class="fav-settings-form">
+          <p class="fav-settings-path">{{ editingFavorite.box }}:{{ editingFavorite.path }}</p>
+          <label class="fav-settings-label">{{ t('overview.fav_note') }}</label>
+          <NInput
+            v-model:value="favNoteText"
+            type="textarea"
+            :placeholder="t('overview.fav_note_placeholder')"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+          />
+        </div>
+        <template #footer>
+          <div class="fav-settings-actions">
+            <NButton size="small" @click="showFavSettings = false">{{ t('common.cancel') }}</NButton>
+            <NButton size="small" type="primary" @click="saveFavNote">{{ t('common.save') }}</NButton>
+          </div>
+        </template>
+      </NCard>
+    </NModal>
   </div>
 </template>
 
@@ -822,7 +902,8 @@ const handleBrowseServerFiles = (serverName: string) => {
 .favorite-card {
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  position: relative;
+  padding: 10px 8px 8px;
   background: var(--surface);
   border: 1px solid var(--stroke);
   border-radius: 10px;
@@ -839,13 +920,14 @@ const handleBrowseServerFiles = (serverName: string) => {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 2px;
+  margin-bottom: 6px;
 }
 
 .favorite-emoji {
-  font-size: 24px;
+  font-size: 52px;
   line-height: 1;
+  margin-bottom: 2px;
 }
 
 .favorite-path {
@@ -858,11 +940,86 @@ const handleBrowseServerFiles = (serverName: string) => {
   max-width: 100%;
 }
 
-.favorite-box {
+.favorite-subtitle {
   font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  min-height: 14px;
+}
+
+.favorites-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.favorites-group + .favorites-group {
+  margin-top: 12px;
+}
+
+.favorites-group-label {
+  font-size: 11px;
+  font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.fav-settings-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  z-index: 1;
+}
+
+.favorite-card:hover .fav-settings-btn {
+  opacity: 1;
+}
+
+.fav-settings-btn:hover {
+  background: var(--hover-overlay);
+  color: var(--text);
+}
+
+.fav-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fav-settings-path {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  word-break: break-all;
+}
+
+.fav-settings-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.fav-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .favorite-card-actions {

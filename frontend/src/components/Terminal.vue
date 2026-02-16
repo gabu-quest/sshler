@@ -229,7 +229,7 @@ const TERMINAL_THEMES = {
     blue: '#4078f2',
     magenta: '#a626a4',
     cyan: '#0184bc',
-    white: '#fafafa',
+    white: '#a0a1a7',
     brightBlack: '#4f525e',
     brightRed: '#e06c75',
     brightGreen: '#98c379',
@@ -237,7 +237,7 @@ const TERMINAL_THEMES = {
     brightBlue: '#61afef',
     brightMagenta: '#c678dd',
     brightCyan: '#56b6c2',
-    brightWhite: '#ffffff',
+    brightWhite: '#c0c1c7',
   }
 }
 
@@ -315,24 +315,12 @@ const pasteFromClipboard = async () => {
   }
 }
 
-const handleKeyDown = (event: KeyboardEvent) => {
-  // Smart Ctrl+C handling
-  if (event.ctrlKey && event.key === 'c') {
-    if (terminal?.hasSelection()) {
-      event.preventDefault()
-      copySelection()
-      return
-    }
-    // Otherwise let Ctrl+C send interrupt signal as normal
-  }
-
-  // Ctrl+V for paste
-  if (event.ctrlKey && event.key === 'v') {
+// beforeunload handler — protects against accidental Ctrl+W tab close
+const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+  if (connected.value) {
     event.preventDefault()
-    pasteFromClipboard()
   }
 }
-
 
 // Trigger activity indicator
 const triggerActivity = () => {
@@ -440,8 +428,6 @@ const createTerminal = () => {
     macOptionClickForcesSelection: false,
     convertEol: true,
     allowProposedApi: true,
-    // Use canvas renderer for more stable rendering (avoid WebGL glitches)
-    rendererType: 'canvas',
     // When external input is active, suppress xterm keyboard capture
     disableStdin: props.externalInput
   })
@@ -457,8 +443,29 @@ const createTerminal = () => {
   
   // Add event listeners
   terminalRef.value.addEventListener('contextmenu', handleContextMenu)
-  terminalRef.value.addEventListener('keydown', handleKeyDown)
-  
+
+  // Intercept keys BEFORE xterm processes them (fixes Ctrl+C/V race)
+  terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+    if (event.type !== 'keydown') return true
+
+    // Ctrl+C: copy if selection exists, else let terminal handle (SIGINT)
+    if (event.ctrlKey && event.key === 'c') {
+      if (terminal?.hasSelection()) {
+        copySelection()
+        return false
+      }
+      return true
+    }
+
+    // Ctrl+V: always paste from clipboard
+    if (event.ctrlKey && event.key === 'v') {
+      pasteFromClipboard()
+      return false
+    }
+
+    return true
+  })
+
   // Handle bell
   terminal.onBell(() => {
     emit('bell')
@@ -920,15 +927,18 @@ let cleanupViewport: (() => void) | undefined
 onMounted(async () => {
   await nextTick()
   createTerminal()
-  
+
   // Request notification permission
   if (Notification.permission === 'default') {
     Notification.requestPermission()
   }
-  
+
+  // Protect against accidental Ctrl+W tab close
+  window.addEventListener('beforeunload', handleBeforeUnload)
+
   // Setup mobile viewport handling
   cleanupViewport = handleViewportChange()
-  
+
   // Auto-connect after terminal is created
   setTimeout(() => {
     connect()
@@ -939,7 +949,10 @@ onMounted(async () => {
 onUnmounted(() => {
   // Cleanup viewport handler
   cleanupViewport?.()
-  
+
+  // Remove beforeunload protection
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+
   disconnect()
 
   if (resizeTimeout) {
@@ -1560,7 +1573,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #b3b1ad;
+  color: var(--muted);
   font-family: 'Monaspace Neon', var(--font-mono);
   z-index: 20;
 }
@@ -1717,14 +1730,34 @@ defineExpose({
   }
 }
 
-/* =============================================================================
-   LIGHT MODE OVERRIDES — only for things that can't use CSS vars
-   ============================================================================= */
-:global([data-theme="light"]) .scanlines {
+
+</style>
+
+<!-- Unscoped light-mode overrides — MUST NOT use :global() in scoped blocks,
+     Vite/Vue drops the descendant selector in production builds, causing
+     bare [data-theme=light]{display:none} on <html> -->
+<style>
+[data-theme="light"] .scanlines {
   display: none;
 }
 
-:global([data-theme="light"]) .terminal :deep(.xterm-rows) {
+[data-theme="light"] .terminal .xterm-rows {
   text-shadow: none;
+}
+
+[data-theme="light"] .terminal-wrapper {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .terminal .xterm-viewport {
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+
+[data-theme="light"] .terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.08));
+}
+
+[data-theme="light"] .terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.15));
 }
 </style>
