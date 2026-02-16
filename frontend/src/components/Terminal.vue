@@ -451,6 +451,7 @@ const createTerminal = () => {
     // Ctrl+C: copy if selection exists, else let terminal handle (SIGINT)
     if (event.ctrlKey && event.key === 'c') {
       if (terminal?.hasSelection()) {
+        event.preventDefault()
         copySelection()
         return false
       }
@@ -458,7 +459,9 @@ const createTerminal = () => {
     }
 
     // Ctrl+V: always paste from clipboard
+    // preventDefault stops the browser's native paste into xterm's textarea
     if (event.ctrlKey && event.key === 'v') {
+      event.preventDefault()
       pasteFromClipboard()
       return false
     }
