@@ -67,13 +67,24 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Directory not found")
             if not target.is_dir():
                 raise HTTPException(status_code=400, detail="Path is not a directory")
-            for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
-                stats = child.stat()
+            children = []
+            for child in target.iterdir():
+                try:
+                    is_dir = child.is_dir()
+                    children.append((child, is_dir))
+                except OSError:
+                    continue  # broken symlink or deleted between iterdir and stat
+            children.sort(key=lambda item: (not item[1], item[0].name.lower()))
+            for child, is_dir in children:
+                try:
+                    stats = child.stat()
+                except OSError:
+                    continue
                 entries.append(
                     APIDirectoryEntry(
                         name=child.name,
                         path=str(child),
-                        is_directory=child.is_dir(),
+                        is_directory=is_dir,
                         size=stats.st_size if child.is_file() else None,
                         modified=stats.st_mtime,
                     )
