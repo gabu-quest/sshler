@@ -442,29 +442,24 @@ const tmuxPaneRight = () => {
   }
 }
 
-// Kill pane (called after NPopconfirm) — uses command mode to avoid race condition
-const tmuxKillPaneConfirmed = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + ':kill-pane\n'))
+// Send a tmux command via command mode with delay for prefix processing
+const sendTmuxCommand = (cmd: string) => {
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) return
+  websocket.send(textEncoder.encode(TMUX_PREFIX + ':'))
+  setTimeout(() => {
+    websocket?.send(textEncoder.encode(cmd + '\n'))
     terminal?.focus()
-  }
+  }, 100)
 }
 
-// Kill window (called after NPopconfirm) — uses command mode to avoid race condition
-const tmuxKillWindowConfirmed = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + ':kill-window\n'))
-    terminal?.focus()
-  }
-}
+// Kill pane (called after NPopconfirm)
+const tmuxKillPaneConfirmed = () => sendTmuxCommand('kill-pane')
+
+// Kill window (called after NPopconfirm)
+const tmuxKillWindowConfirmed = () => sendTmuxCommand('kill-window')
 
 // Kill session (called after NPopconfirm)
-const tmuxKillSession = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + ':kill-session\n'))
-    terminal?.focus()
-  }
-}
+const tmuxKillSession = () => sendTmuxCommand('kill-session')
 
 // Mouse mode toggle (tmux mouse on/off)
 const mouseMode = ref(true)
