@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
+import { keymap } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { javascript } from '@codemirror/lang-javascript'
@@ -24,6 +25,7 @@ interface Props {
 interface Emits {
   (e: 'update:modelValue', value: string): void
   (e: 'change', value: string): void
+  (e: 'save'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -77,6 +79,10 @@ const createEditor = () => {
   const extensions = [
     basicSetup,
     getLanguageExtension(props.language),
+    keymap.of([{
+      key: 'Mod-s',
+      run: () => { emit('save'); return true }
+    }]),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         const value = update.state.doc.toString()

@@ -4,7 +4,27 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
-import { useMessage, NTooltip } from 'naive-ui'
+import { ClipboardAddon } from '@xterm/addon-clipboard'
+import { useMessage, NTooltip, NPopconfirm } from 'naive-ui'
+import {
+  PhCaretLeft,
+  PhCaretRight,
+  PhPlus,
+  PhArrowLineLeft,
+  PhArrowLineRight,
+  PhSplitVertical,
+  PhSplitHorizontal,
+  PhX,
+  PhXCircle,
+  PhPower,
+  PhMouse,
+  PhCopy,
+  PhClipboard,
+  PhBroom,
+  PhCornersOut,
+  PhCornersIn,
+  PhQuestion,
+} from '@phosphor-icons/vue'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
@@ -374,6 +394,78 @@ const tmuxNewWindow = () => {
   }
 }
 
+// Previous tmux window
+const tmuxPrevWindow = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + 'p'))
+    terminal?.focus()
+  }
+}
+
+// Next tmux window
+const tmuxNextWindow = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + 'n'))
+    terminal?.focus()
+  }
+}
+
+// Split pane vertically (tmux %)
+const tmuxSplitVertical = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + '%'))
+    terminal?.focus()
+  }
+}
+
+// Split pane horizontally (tmux ")
+const tmuxSplitHorizontal = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + '"'))
+    terminal?.focus()
+  }
+}
+
+// Navigate to pane left
+const tmuxPaneLeft = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + '\x1b[D'))
+    terminal?.focus()
+  }
+}
+
+// Navigate to pane right
+const tmuxPaneRight = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + '\x1b[C'))
+    terminal?.focus()
+  }
+}
+
+// Kill pane (called after NPopconfirm) — uses command mode to avoid race condition
+const tmuxKillPaneConfirmed = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + ':kill-pane\n'))
+    terminal?.focus()
+  }
+}
+
+// Kill window (called after NPopconfirm) — uses command mode to avoid race condition
+const tmuxKillWindowConfirmed = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + ':kill-window\n'))
+    terminal?.focus()
+  }
+}
+
+// Kill session (called after NPopconfirm)
+const tmuxKillSession = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(textEncoder.encode(TMUX_PREFIX + ':kill-session\n'))
+    terminal?.focus()
+  }
+}
+
 // Mouse mode toggle (tmux mouse on/off)
 const mouseMode = ref(true)
 
@@ -391,6 +483,13 @@ const setTmuxMouse = (on: boolean) => {
 const syncMouseMode = () => {
   // Always ensure tmux matches our ref on connect
   setTmuxMouse(mouseMode.value)
+}
+
+const enterCopyMode = () => {
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) return
+  // Send Ctrl+B then [ to enter tmux copy mode
+  websocket.send(textEncoder.encode('\x02['))
+  message.info(t('terminal.copy_mode_hint'), { duration: 4000 })
 }
 
 const toggleMouseMode = () => {
@@ -438,6 +537,7 @@ const createTerminal = () => {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.loadAddon(searchAddon)
+  terminal.loadAddon(new ClipboardAddon())
 
   terminal.open(terminalRef.value)
   
@@ -455,6 +555,12 @@ const createTerminal = () => {
         copySelection()
         return false
       }
+      return true
+    }
+
+    // Ctrl+B: prevent browser from capturing (tmux prefix)
+    if (event.ctrlKey && event.key === 'b') {
+      event.preventDefault()
       return true
     }
 
@@ -1044,6 +1150,16 @@ defineExpose({
   toggleMouseMode,
   tmuxNewWindow,
   tmuxKillWindow,
+  tmuxPrevWindow,
+  tmuxNextWindow,
+  tmuxSplitVertical,
+  tmuxSplitHorizontal,
+  tmuxPaneLeft,
+  tmuxPaneRight,
+  tmuxKillPaneConfirmed,
+  tmuxKillWindowConfirmed,
+  tmuxKillSession,
+  enterCopyMode,
   copySelection,
   pasteFromClipboard,
   terminal: () => terminal,
@@ -1056,28 +1172,104 @@ defineExpose({
 
 <template>
   <div class="terminal-wrapper" :class="{ 'has-activity': hasActivity, 'is-fullscreen': isFullscreen }">
-    <!-- macOS-style Title Bar -->
+    <!-- Title Bar with Tmux Toolbar -->
     <div v-if="showTitleBar && !titleBarCollapsed" class="terminal-titlebar">
       <div class="titlebar-left">
-        <div class="traffic-lights">
+        <!-- Yellow group: Windows -->
+        <div class="toolbar-group toolbar-yellow">
           <NTooltip :delay="400">
             <template #trigger>
-              <span class="dot dot-close" @click="tmuxKillWindow" />
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxPrevWindow"><PhCaretLeft :size="14" weight="bold" /></button>
             </template>
-            {{ t('terminal.kill_window') }}
+            {{ t('terminal.prev_window') }}
           </NTooltip>
           <NTooltip :delay="400">
             <template #trigger>
-              <span class="dot dot-new" @click="tmuxNewWindow" />
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxNewWindow"><PhPlus :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.new_window') }}
           </NTooltip>
           <NTooltip :delay="400">
             <template #trigger>
-              <span class="dot dot-maximize" :class="{ active: isFullscreen }" @click="toggleFullscreen" />
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxNextWindow"><PhCaretRight :size="14" weight="bold" /></button>
             </template>
-            {{ isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen') }}
+            {{ t('terminal.next_window') }}
           </NTooltip>
+        </div>
+        <!-- Purple group: Panes -->
+        <div class="toolbar-group toolbar-purple">
+          <NTooltip :delay="400">
+            <template #trigger>
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxPaneLeft"><PhArrowLineLeft :size="14" weight="bold" /></button>
+            </template>
+            {{ t('terminal.pane_left') }}
+          </NTooltip>
+          <NTooltip :delay="400">
+            <template #trigger>
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxSplitVertical"><PhSplitVertical :size="14" weight="bold" /></button>
+            </template>
+            {{ t('terminal.split_vertical') }}
+          </NTooltip>
+          <NTooltip :delay="400">
+            <template #trigger>
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxSplitHorizontal"><PhSplitHorizontal :size="14" weight="bold" /></button>
+            </template>
+            {{ t('terminal.split_horizontal') }}
+          </NTooltip>
+          <NTooltip :delay="400">
+            <template #trigger>
+              <button class="toolbar-btn" :disabled="!connected" @click="tmuxPaneRight"><PhArrowLineRight :size="14" weight="bold" /></button>
+            </template>
+            {{ t('terminal.pane_right') }}
+          </NTooltip>
+          <NPopconfirm
+            :positive-text="t('terminal.kill_pane')"
+            :negative-text="t('common.cancel')"
+            @positive-click="tmuxKillPaneConfirmed"
+          >
+            <template #trigger>
+              <NTooltip :delay="400">
+                <template #trigger>
+                  <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhX :size="14" weight="bold" /></button>
+                </template>
+                {{ t('terminal.kill_pane') }}
+              </NTooltip>
+            </template>
+            {{ t('terminal.kill_pane_confirm') }}
+          </NPopconfirm>
+        </div>
+        <!-- Red group: Destructive -->
+        <div class="toolbar-group toolbar-red">
+          <NPopconfirm
+            :positive-text="t('terminal.kill_window')"
+            :negative-text="t('common.cancel')"
+            @positive-click="tmuxKillWindowConfirmed"
+          >
+            <template #trigger>
+              <NTooltip :delay="400">
+                <template #trigger>
+                  <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhXCircle :size="14" weight="bold" /></button>
+                </template>
+                {{ t('terminal.kill_window') }}
+              </NTooltip>
+            </template>
+            {{ t('terminal.kill_window_confirm') }}
+          </NPopconfirm>
+          <NPopconfirm
+            :positive-text="t('terminal.kill_session')"
+            :negative-text="t('common.cancel')"
+            @positive-click="tmuxKillSession"
+          >
+            <template #trigger>
+              <NTooltip :delay="400">
+                <template #trigger>
+                  <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhPower :size="14" weight="bold" /></button>
+                </template>
+                {{ t('terminal.kill_session') }}
+              </NTooltip>
+            </template>
+            {{ t('terminal.kill_session_confirm') }}
+          </NPopconfirm>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />
       </div>
@@ -1090,14 +1282,10 @@ defineExpose({
             <button
               class="titlebar-btn mouse-btn"
               :class="{ 'mouse-on': mouseMode, 'mouse-off': !mouseMode }"
+              :disabled="!connected"
               @click="toggleMouseMode"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2a6 6 0 0 0-6 6v4a6 6 0 0 0 12 0V8a6 6 0 0 0-6-6z"/>
-                <line x1="12" y1="6" x2="12" y2="10"/>
-                <path d="M12 18v4"/>
-                <path d="M8 22h8"/>
-              </svg>
+              <PhMouse :size="14" weight="duotone" />
               <span class="mouse-status-dot" />
             </button>
           </template>
@@ -1105,36 +1293,53 @@ defineExpose({
         </NTooltip>
         <NTooltip :delay="400">
           <template #trigger>
-            <button class="titlebar-btn" @click="copySelection">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-              </svg>
+            <button class="titlebar-btn" :disabled="!connected" @click="enterCopyMode">
+              <PhCopy :size="14" weight="duotone" />
             </button>
           </template>
-          {{ t('terminal.copy_selection') }}
+          {{ t('terminal.copy_mode') }}
         </NTooltip>
         <NTooltip :delay="400">
           <template #trigger>
-            <button class="titlebar-btn" @click="pasteFromClipboard">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-              </svg>
+            <button class="titlebar-btn" :disabled="!connected" @click="pasteFromClipboard">
+              <PhClipboard :size="14" weight="duotone" />
             </button>
           </template>
           {{ t('terminal.paste') }}
         </NTooltip>
         <NTooltip :delay="400">
           <template #trigger>
-            <button class="titlebar-btn" @click="clear">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-              </svg>
+            <button class="titlebar-btn" :disabled="!connected" @click="clear">
+              <PhBroom :size="14" weight="duotone" />
             </button>
           </template>
           {{ t('terminal.clear') }}
+        </NTooltip>
+        <NTooltip :delay="400">
+          <template #trigger>
+            <button class="titlebar-btn" @click="toggleFullscreen">
+              <component :is="isFullscreen ? PhCornersIn : PhCornersOut" :size="14" weight="duotone" />
+            </button>
+          </template>
+          {{ isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen') }}
+        </NTooltip>
+        <NTooltip :delay="200" :style="{ maxWidth: '320px' }">
+          <template #trigger>
+            <button class="titlebar-btn help-btn">
+              <PhQuestion :size="14" weight="duotone" />
+            </button>
+          </template>
+          <div style="font-size: 12px; line-height: 1.5">
+            <div style="font-weight: 600; margin-bottom: 4px">{{ t('terminal.help_title') }}</div>
+            <div><b>Ctrl+C</b> — {{ t('terminal.help_copy') }}</div>
+            <div><b>Ctrl+V</b> — {{ t('terminal.help_paste') }}</div>
+            <div><b>Shift+drag</b> — {{ t('terminal.help_select') }}</div>
+            <div style="margin-top: 6px; font-weight: 600">{{ t('terminal.help_copy_long_title') }}</div>
+            <div>1. {{ t('terminal.help_click_copy_btn') }}</div>
+            <div>2. {{ t('terminal.help_scroll_select') }}</div>
+            <div>3. <b>Enter</b> — {{ t('terminal.help_copy_confirm') }}</div>
+            <div>4. <b>q</b> — {{ t('terminal.help_exit_copy') }}</div>
+          </div>
         </NTooltip>
       </div>
     </div>
@@ -1233,7 +1438,7 @@ defineExpose({
 .titlebar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 80px;
 }
 
@@ -1256,38 +1461,82 @@ defineExpose({
   letter-spacing: 0.02em;
 }
 
-/* Traffic light dots - functional */
-.traffic-lights {
+/* Toolbar groups — color-coded tmux action pills */
+.toolbar-group {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 1px;
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 2px;
 }
 
-.dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--stroke);
-  transition: all 0.15s ease;
+.toolbar-yellow {
+  background: rgba(250, 200, 80, 0.1);
+}
+
+.toolbar-purple {
+  background: rgba(180, 130, 250, 0.1);
+}
+
+.toolbar-red {
+  background: rgba(250, 100, 100, 0.1);
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   cursor: pointer;
+  transition: all 0.12s ease;
+  color: inherit;
 }
 
-/* Close dot (red) - kill tmux window */
-.dot-close:hover {
-  background: #ff5f56;
-  box-shadow: 0 0 6px rgba(255, 95, 86, 0.4);
+.toolbar-yellow .toolbar-btn {
+  color: rgba(250, 200, 80, 0.7);
 }
 
-/* New window dot (yellow) */
-.dot-new:hover {
-  background: #ffbd2e;
-  box-shadow: 0 0 6px rgba(255, 189, 46, 0.4);
+.toolbar-yellow .toolbar-btn:hover {
+  background: rgba(250, 200, 80, 0.2);
+  color: #fac850;
 }
 
-/* Maximize dot (green) - fullscreen */
-.dot-maximize:hover,
-.dot-maximize.active {
-  background: #27c93f;
-  box-shadow: 0 0 6px rgba(39, 201, 63, 0.4);
+.toolbar-purple .toolbar-btn {
+  color: rgba(180, 130, 250, 0.7);
+}
+
+.toolbar-purple .toolbar-btn:hover {
+  background: rgba(180, 130, 250, 0.2);
+  color: #b482fa;
+}
+
+.toolbar-red .toolbar-btn {
+  color: rgba(250, 100, 100, 0.7);
+}
+
+.toolbar-red .toolbar-btn:hover {
+  background: rgba(250, 100, 100, 0.2);
+  color: #fa6464;
+}
+
+.toolbar-btn-danger {
+  /* Slightly bolder default to hint at destructiveness */
+  opacity: 0.85;
+}
+
+.toolbar-btn-danger:hover {
+  opacity: 1;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* Connection indicator - small dot next to traffic lights */
@@ -1389,6 +1638,24 @@ defineExpose({
 .titlebar-btn:hover {
   background: var(--hover-overlay);
   color: var(--text);
+}
+
+.titlebar-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+
+.help-btn {
+  opacity: 0.5;
+  margin-left: 2px;
+  border-left: 1px solid var(--hover-overlay);
+  padding-left: 4px;
+  border-radius: 0 6px 6px 0;
+}
+
+.help-btn:hover {
+  opacity: 1;
 }
 
 /* Mouse mode button - green when ON, red when OFF */
@@ -1665,7 +1932,7 @@ defineExpose({
     font-size: 10px;
   }
 
-  .traffic-lights {
+  .toolbar-group {
     display: none;
   }
 
@@ -1726,11 +1993,11 @@ defineExpose({
     animation: none;
   }
 
-  .connection-dot.connected {
+  .connection-indicator.connected {
     animation: none;
   }
 
-  .connection-dot.connecting {
+  .connection-indicator.connecting {
     animation: none;
   }
 

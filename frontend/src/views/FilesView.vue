@@ -564,6 +564,10 @@ async function saveEdit() {
     await writeFile(selectedBox.value, editPath.value, editContent.value, tokenValue.value || null);
     message.success(t('files.saved'));
     editing.value = false;
+    // Update preview content so returning to preview shows the saved edits
+    if (previewing.value && previewPath.value === editPath.value) {
+      previewContent.value = editContent.value;
+    }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
   } catch (err) {
     message.error(err instanceof Error ? err.message : String(err));
@@ -977,7 +981,7 @@ const columns = computed(() => {
       
       <div class="editor-container">
         <NSpin v-if="editLoading" size="large"><span class="text-muted">{{ t('files.loading_file') }}</span></NSpin>
-        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 80vh" :placeholder="t('files.file_placeholder')" />
+        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 80vh" :placeholder="t('files.file_placeholder')" @save="saveEdit" />
       </div>
       
       <template #footer>

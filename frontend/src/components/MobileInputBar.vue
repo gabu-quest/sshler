@@ -20,6 +20,11 @@ import {
   PhCaretLeft,
   PhCaretRight,
   PhQuestion,
+  PhPlus,
+  PhSplitVertical,
+  PhSplitHorizontal,
+  PhArrowLineLeft,
+  PhArrowLineRight,
 } from '@phosphor-icons/vue'
 import { useI18n } from '@/i18n'
 
@@ -58,6 +63,7 @@ interface QuickKey {
   title: string
   isCommand?: boolean
   color?: 'blue' | 'purple' | 'yellow' | 'red' | 'orange' | 'teal'
+  divider?: boolean
 }
 
 const quickKeys: QuickKey[] = [
@@ -80,6 +86,13 @@ const quickKeys: QuickKey[] = [
   { icon: PhArrowFatLinesDown, raw: '\x1b[6~', title: 'Page Down', color: 'orange' },
   // Exit (teal - graceful exit, sends EOF)
   { icon: PhSignOut, raw: '\x04', title: 'Exit (Ctrl+D)', color: 'teal' },
+  // Tmux keys (after divider, scrolled right)
+  { divider: true, title: 'tmux', raw: '' },
+  { icon: PhArrowLineLeft, raw: '\x02p', title: 'Prev window', color: 'yellow' },
+  { icon: PhPlus, raw: '\x02c', title: 'New window', color: 'yellow' },
+  { icon: PhArrowLineRight, raw: '\x02n', title: 'Next window', color: 'yellow' },
+  { icon: PhSplitVertical, raw: '\x02%', title: 'Split vertical', color: 'purple' },
+  { icon: PhSplitHorizontal, raw: '\x02"', title: 'Split horizontal', color: 'purple' },
 ]
 
 const handleSubmit = () => {
@@ -186,18 +199,22 @@ watch(() => props.rawMode, (raw) => {
   <div class="mobile-input-bar" :class="{ 'raw-mode': rawMode }">
     <!-- Quick keys row -->
     <div v-if="!rawMode" class="quick-keys">
-      <button
-        v-for="(key, index) in quickKeys"
-        :key="index"
-        class="quick-key"
-        :class="key.color"
-        @click="handleQuickKey(key)"
-        :disabled="!connected"
-        :title="key.title"
-      >
-        <component v-if="key.icon" :is="key.icon" :size="18" weight="bold" />
-        <span v-else>{{ key.label }}</span>
-      </button>
+      <template v-for="(key, index) in quickKeys" :key="index">
+        <span v-if="key.divider" class="quick-key-divider">
+          <span class="divider-label">{{ key.title }}</span>
+        </span>
+        <button
+          v-else
+          class="quick-key"
+          :class="key.color"
+          @click="handleQuickKey(key)"
+          :disabled="!connected"
+          :title="key.title"
+        >
+          <component v-if="key.icon" :is="key.icon" :size="18" weight="bold" />
+          <span v-else>{{ key.label }}</span>
+        </button>
+      </template>
       <!-- Help button -->
       <button
         class="quick-key help-btn"
@@ -217,12 +234,14 @@ watch(() => props.rawMode, (raw) => {
             <button class="legend-close" @click="showLegend = false">✕</button>
           </div>
           <div class="legend-grid">
-            <div class="legend-item" v-for="(key, index) in quickKeys" :key="index">
-              <span class="legend-icon" :class="key.color">
-                <component v-if="key.icon" :is="key.icon" :size="20" weight="bold" />
-              </span>
-              <span class="legend-label">{{ key.title }}</span>
-            </div>
+            <template v-for="(key, index) in quickKeys" :key="index">
+              <div v-if="!key.divider" class="legend-item">
+                <span class="legend-icon" :class="key.color">
+                  <component v-if="key.icon" :is="key.icon" :size="20" weight="bold" />
+                </span>
+                <span class="legend-label">{{ key.title }}</span>
+              </div>
+            </template>
           </div>
           <div class="legend-footer">
             {{ t('mobile.close_hint') }}
@@ -383,6 +402,26 @@ watch(() => props.rawMode, (raw) => {
 .quick-key.arrow-key {
   min-width: 28px;
   padding: 0 4px;
+}
+
+/* Thin vertical divider between key groups */
+.quick-key-divider {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 0 4px;
+  align-self: center;
+}
+
+.divider-label {
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.25);
+  line-height: 1;
 }
 
 /* Input row */
