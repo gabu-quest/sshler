@@ -508,6 +508,7 @@ async function handlePreview(row: any) {
     const payload = await fetchFilePreview(selectedBox.value, row.path, tokenValue.value || null);
     previewMeta.value = payload;
     previewContent.value = payload.content || "";
+    markdownRenderMode.value = !!payload.is_markdown;
   } catch (err) {
     message.error(err instanceof Error ? err.message : String(err));
     previewing.value = false;
