@@ -686,12 +686,35 @@ const columns = computed(() => {
     ];
   }
 
+  const pinParent = (a: any, b: any) => {
+    if (a._isParent) return -1;
+    if (b._isParent) return 1;
+    return null;
+  };
+
   return [
     { type: "selection" as const },
-    nameCol,
-    { title: "type", key: "is_directory", render(row: any) { return row.is_directory ? "directory" : getFileType(row.name); } },
-    { title: "size", key: "size", render(row: any) { return row.size ? formatFileSize(row.size) : "-"; } },
-    { title: "modified", key: "modified", render(row: any) { return row.modified ? new Date(row.modified).toLocaleDateString() : "-"; } },
+    { ...nameCol, defaultSortOrder: 'ascend' as const, sorter: (a: any, b: any) => pinParent(a, b) ?? a.name.localeCompare(b.name) },
+    {
+      title: "type", key: "is_directory",
+      render(row: any) { return row.is_directory ? "directory" : getFileType(row.name); },
+      sorter: (a: any, b: any) => {
+        const p = pinParent(a, b); if (p !== null) return p;
+        const aType = a.is_directory ? "directory" : getFileType(a.name);
+        const bType = b.is_directory ? "directory" : getFileType(b.name);
+        return aType.localeCompare(bType);
+      },
+    },
+    {
+      title: "size", key: "size",
+      render(row: any) { return row.size ? formatFileSize(row.size) : "-"; },
+      sorter: (a: any, b: any) => pinParent(a, b) ?? (a.size || 0) - (b.size || 0),
+    },
+    {
+      title: "modified", key: "modified",
+      render(row: any) { return row.modified ? new Date(row.modified * 1000).toLocaleDateString() : "-"; },
+      sorter: (a: any, b: any) => pinParent(a, b) ?? (a.modified || 0) - (b.modified || 0),
+    },
     {
       title: "actions", key: "actions",
       render(row: any) {
