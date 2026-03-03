@@ -65,6 +65,7 @@ const isDragOver = ref(false);
 const expandedDirs = ref<Set<string>>(new Set());
 const childrenCache = ref<Map<string, any[]>>(new Map());
 const expandingDir = ref<string | null>(null);
+const sortState = ref<{ columnKey: string; order: 'ascend' | 'descend' }>({ columnKey: 'name', order: 'ascend' });
 const markdownRenderMode = ref(false);
 
 // Computed
@@ -100,9 +101,34 @@ const filteredRows = computed(() => {
     });
   }
 
-  // Insert entries with expanded children inline (recursive)
+  // Sort comparator for current sort state — directories always first
+  const { columnKey, order } = sortState.value;
+  const dir = order === 'descend' ? -1 : 1;
+  const compare = (a: any, b: any): number => {
+    // Directories always before files
+    if (a.is_directory && !b.is_directory) return -1;
+    if (!a.is_directory && b.is_directory) return 1;
+    // Then by selected column
+    let cmp = 0;
+    switch (columnKey) {
+      case 'name': cmp = a.name.localeCompare(b.name); break;
+      case 'is_directory': {
+        const aType = a.is_directory ? 'directory' : getFileType(a.name);
+        const bType = b.is_directory ? 'directory' : getFileType(b.name);
+        cmp = aType.localeCompare(bType);
+        break;
+      }
+      case 'size': cmp = (a.size || 0) - (b.size || 0); break;
+      case 'modified': cmp = (a.modified || 0) - (b.modified || 0); break;
+      default: cmp = a.name.localeCompare(b.name);
+    }
+    return cmp * dir;
+  };
+
+  // Sort and insert entries with expanded children inline (recursive)
   const insertWithChildren = (entries: any[], indent: number) => {
-    for (const entry of entries) {
+    const sorted = [...entries].sort(compare);
+    for (const entry of sorted) {
       result.push(indent > 0 ? { ...entry, _indent: indent } : entry);
       if (entry.is_directory && expandedDirs.value.has(entry.path)) {
         const children = childrenCache.value.get(entry.path);
@@ -308,6 +334,14 @@ const handleRowClick = (row: any, e: MouseEvent) => {
 };
 
 // Row props factory for NDataTable (stable reference to avoid recreating on every render)
+const handleSortChange = (opts: { columnKey: string; order: 'ascend' | 'descend' | false }) => {
+  if (!opts.order) {
+    sortState.value = { columnKey: 'name', order: 'ascend' };
+  } else {
+    sortState.value = { columnKey: opts.columnKey, order: opts.order };
+  }
+};
+
 const getRowProps = (row: any) => ({
   style: `cursor: pointer;${row._indent ? 'opacity:0.85;' : ''}${row._isParent ? 'background:var(--surface-variant);' : ''}`,
   onClick: (e: MouseEvent) => {
@@ -686,34 +720,22 @@ const columns = computed(() => {
     ];
   }
 
-  const pinParent = (a: any, b: any) => {
-    if (a._isParent) return -1;
-    if (b._isParent) return 1;
-    return null;
-  };
+  const sortOrder = (key: string) => sortState.value.columnKey === key ? sortState.value.order : false as const;
 
   return [
     { type: "selection" as const },
-    { ...nameCol, defaultSortOrder: 'ascend' as const, sorter: (a: any, b: any) => pinParent(a, b) ?? a.name.localeCompare(b.name) },
+    { ...nameCol, sorter: true, sortOrder: sortOrder('name') },
     {
-      title: "type", key: "is_directory",
+      title: "type", key: "is_directory", sorter: true, sortOrder: sortOrder('is_directory'),
       render(row: any) { return row.is_directory ? "directory" : getFileType(row.name); },
-      sorter: (a: any, b: any) => {
-        const p = pinParent(a, b); if (p !== null) return p;
-        const aType = a.is_directory ? "directory" : getFileType(a.name);
-        const bType = b.is_directory ? "directory" : getFileType(b.name);
-        return aType.localeCompare(bType);
-      },
     },
     {
-      title: "size", key: "size",
+      title: "size", key: "size", sorter: true, sortOrder: sortOrder('size'),
       render(row: any) { return row.size ? formatFileSize(row.size) : "-"; },
-      sorter: (a: any, b: any) => pinParent(a, b) ?? (a.size || 0) - (b.size || 0),
     },
     {
-      title: "modified", key: "modified",
+      title: "modified", key: "modified", sorter: true, sortOrder: sortOrder('modified'),
       render(row: any) { return row.modified ? new Date(row.modified * 1000).toLocaleDateString() : "-"; },
-      sorter: (a: any, b: any) => pinParent(a, b) ?? (a.modified || 0) - (b.modified || 0),
     },
     {
       title: "actions", key: "actions",
@@ -884,7 +906,7 @@ const columns = computed(() => {
             </div>
           </div>
           
-          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" />
+          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" />
         </div>
 
         <!-- Error Display -->
