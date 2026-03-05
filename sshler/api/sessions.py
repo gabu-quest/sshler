@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import platform
+import re
+import shlex
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -131,7 +134,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
             if not new_name or len(new_name) > 64:
                 raise HTTPException(status_code=400, detail="Invalid session name")
             # Only allow safe characters
-            import re
             if not re.match(r'^[a-zA-Z0-9_.-]+$', new_name):
                 raise HTTPException(status_code=400, detail="Session name may only contain alphanumeric, underscore, dot, and dash")
             try:
@@ -144,18 +146,18 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     )
                     _, stderr = await process.communicate()
                     if process.returncode != 0:
-                        raise HTTPException(status_code=400, detail=f"tmux rename failed: {stderr.decode().strip()}")
+                        logger.warning(f"tmux rename failed: {stderr.decode().strip()}")
+                        raise HTTPException(status_code=400, detail="tmux rename failed")
                 else:
                     connection = await deps.connect_for_box(box, application_config)
                     try:
                         result = await connection.run(
-                            f"tmux rename-session -t {record.session_name} {new_name}",
+                            f"tmux rename-session -t {shlex.quote(record.session_name)} {shlex.quote(new_name)}",
                             check=False,
                         )
                         if result.returncode != 0:
-                            raise HTTPException(status_code=400, detail=f"tmux rename failed: {result.stderr.strip()}")
+                            raise HTTPException(status_code=400, detail="tmux rename failed")
                     finally:
-                        import contextlib
                         with contextlib.suppress(Exception):
                             connection.close()
             except HTTPException:
@@ -214,11 +216,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     connection = await deps.connect_for_box(box, application_config)
                     try:
                         await connection.run(
-                            f"tmux kill-session -t {record.session_name}",
+                            f"tmux kill-session -t {shlex.quote(record.session_name)}",
                             check=False,
                         )
                     finally:
-                        import contextlib
                         with contextlib.suppress(Exception):
                             connection.close()
             except Exception as exc:

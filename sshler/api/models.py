@@ -131,7 +131,7 @@ class APISessionUpdate(BaseModel):
     active: bool | None = None
     window_count: int | None = None
     metadata: dict | None = None
-    session_name: str | None = None
+    session_name: str | None = Field(None, min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9_.-]+$')
 
 
 class APIBootstrap(BaseModel):
