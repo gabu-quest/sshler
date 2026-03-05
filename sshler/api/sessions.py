@@ -151,12 +151,38 @@ def get_router(deps: APIDependencies) -> APIRouter:
     async def api_delete_session(
         name: str,
         session_id: str,
+        kill_tmux: bool = Query(False),
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
-        deps.get_box_or_404(application_config, name)
+        box = deps.get_box_or_404(application_config, name)
         record = await state.get_session_by_id_async(session_id)
         if record is None or record.box != name:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        if kill_tmux and record.session_name:
+            try:
+                if box.transport == "local":
+                    cmd = _local_tmux_command() + ["kill-session", "-t", record.session_name]
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await process.communicate()
+                else:
+                    connection = await deps.connect_for_box(box, application_config)
+                    try:
+                        await connection.run(
+                            f"tmux kill-session -t {record.session_name}",
+                            check=False,
+                        )
+                    finally:
+                        import contextlib
+                        with contextlib.suppress(Exception):
+                            connection.close()
+            except Exception as exc:
+                logger.warning(f"Failed to kill tmux session {record.session_name}: {exc}")
+
         deleted = await state.delete_session_async(session_id)
         if not deleted:
             raise HTTPException(status_code=500, detail="Failed to delete session")

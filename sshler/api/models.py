@@ -16,6 +16,7 @@ class APIBox(BaseModel):
     pinned: bool = False
     default_dir: str | None = None
     favorites: list[str] = []
+    terminal_theme: str | None = None
 
 
 class APIDirectoryEntry(BaseModel):
@@ -24,6 +25,7 @@ class APIDirectoryEntry(BaseModel):
     is_directory: bool
     size: int | None = None
     modified: float | None = None
+    mode: int | None = None
 
 
 class APIDirectoryListing(BaseModel):
@@ -61,6 +63,11 @@ class APICopyRequest(BaseModel):
     source: str
     destination: str
     new_name: str | None = None
+
+
+class APIChmodRequest(BaseModel):
+    path: str
+    mode: str  # octal string like "755"
 
 
 class APIFilePreview(BaseModel):

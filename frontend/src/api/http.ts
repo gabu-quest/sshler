@@ -494,6 +494,77 @@ export async function gitInfo(name: string, directory: string, token: string | n
   return handle<GitInfo>(res);
 }
 
+export async function chmodFile(
+  name: string,
+  path: string,
+  mode: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/chmod`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ path, mode }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function setBoxTerminalTheme(
+  name: string,
+  theme: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/theme`, {
+    method: "PUT",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ terminal_theme: theme }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function fetchBoxSessions(
+  name: string,
+  token: string | null,
+  activeOnly = false,
+): Promise<import("./types").ApiSession[]> {
+  const params = new URLSearchParams();
+  if (activeOnly) params.set("active_only", "true");
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/sessions${qs}`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<import("./types").ApiSession[]>(res);
+}
+
+export async function syncBoxSessions(
+  name: string,
+  token: string | null,
+): Promise<import("./types").ApiSession[]> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/sessions/sync`, {
+    method: "POST",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<import("./types").ApiSession[]>(res);
+}
+
+export async function deleteSession(
+  boxName: string,
+  sessionId: string,
+  token: string | null,
+  killTmux = false,
+): Promise<SimpleMessage> {
+  const qs = killTmux ? "?kill_tmux=true" : "";
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(boxName)}/sessions/${encodeURIComponent(sessionId)}${qs}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
 export async function downloadFile(
   name: string,
   path: string,

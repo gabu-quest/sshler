@@ -17,6 +17,7 @@ export interface ApiBox {
   pinned: boolean;
   default_dir?: string | null;
   favorites: string[];
+  terminal_theme?: string | null;
 }
 
 export interface DirectoryEntry {
@@ -25,6 +26,7 @@ export interface DirectoryEntry {
   is_directory: boolean;
   size?: number | null;
   modified?: number | null;
+  mode?: number | null;
 }
 
 export interface DirectoryListing {

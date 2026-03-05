@@ -6,10 +6,10 @@ import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
 import {
-  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArrowClockwise,
+  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArrowClockwise, PhGitBranch,
 } from "@phosphor-icons/vue";
 
-import type { ApiBox, FilePreview } from "@/api/types";
+import type { ApiBox, FilePreview, GitInfo } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
@@ -20,7 +20,7 @@ import FavoritesPanel from "@/components/FavoritesPanel.vue";
 import CodeEditor from "@/components/CodeEditor.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile } from "@/api/http";
+import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile, gitInfo, chmodFile } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 import { marked } from "marked";
@@ -70,6 +70,20 @@ const expandingDir = ref<string | null>(null);
 const refreshing = ref(false);
 const sortState = ref<{ columnKey: string; order: 'ascend' | 'descend' }>({ columnKey: 'name', order: 'ascend' });
 const markdownRenderMode = ref(false);
+const currentGitInfo = ref<GitInfo | null>(null);
+const chmodModalVisible = ref(false);
+const chmodTarget = ref<{ path: string; currentMode: number | null }>({ path: '', currentMode: null });
+const chmodValue = ref("");
+
+const formatMode = (mode: number | null | undefined): string => {
+  if (mode == null) return "-";
+  const bits = "rwxrwxrwx";
+  let result = "";
+  for (let i = 8; i >= 0; i--) {
+    result += (mode & (1 << i)) ? bits[8 - i] : "-";
+  }
+  return result;
+};
 
 // Computed
 const filterQuery = computed({
@@ -280,7 +294,7 @@ const getContextMenuItems = () => {
   } else {
     items.push({ id: 'preview', label: 'Preview', icon: PhEye }, { id: 'edit', label: 'Edit', icon: PhPencil }, { id: 'download', label: 'Download', icon: PhDownloadSimple });
   }
-  items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: 'Rename', icon: PhTextAa }, { id: 'copy', label: 'Copy', icon: PhCopy }, { id: 'copy-path', label: 'Copy Path', icon: PhClipboard }, { id: 'favorite', label: file.is_directory ? 'Add to Favorites' : 'Favorite Directory', icon: PhStar }, { separator: true, id: 'sep2', label: '' }, { id: 'delete', label: 'Delete', icon: PhTrash, danger: true });
+  items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: 'Rename', icon: PhTextAa }, { id: 'chmod', label: 'Chmod', icon: PhGear }, { id: 'copy', label: 'Copy', icon: PhCopy }, { id: 'copy-path', label: 'Copy Path', icon: PhClipboard }, { id: 'favorite', label: file.is_directory ? 'Add to Favorites' : 'Favorite Directory', icon: PhStar }, { separator: true, id: 'sep2', label: '' }, { id: 'delete', label: 'Delete', icon: PhTrash, danger: true });
   return items;
 };
 
@@ -293,6 +307,7 @@ const handleContextMenuSelect = async (itemId: string) => {
     case 'edit': await handleEdit(file); break;
     case 'download': await handleDownload(file); break;
     case 'rename': handleRenamePrompt(file); break;
+    case 'chmod': handleChmodPrompt(file); break;
     case 'copy': renameTarget.value = file.path; copyDestination.value = currentDir.value; copyNewName.value = `${file.name}_copy`; break;
     case 'copy-path': await navigator.clipboard.writeText(file.path); message.success(t('files.path_copied')); break;
     case 'favorite': if (file.is_directory) await toggleFavoriteDir(file.path); else await toggleFavoriteCurrentDir(); break;
@@ -403,12 +418,25 @@ onMounted(async () => {
   }
 });
 
+async function loadGitInfo() {
+  if (!selectedBox.value || !currentDir.value) {
+    currentGitInfo.value = null;
+    return;
+  }
+  try {
+    currentGitInfo.value = await gitInfo(selectedBox.value, currentDir.value, tokenValue.value || null);
+  } catch {
+    currentGitInfo.value = null;
+  }
+}
+
 async function reloadDir() {
   if (!selectedBox.value) return;
   refreshing.value = true;
   try {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    loadGitInfo();
     // Re-fetch children for all currently expanded directories
     const expandedPaths = [...expandedDirs.value];
     if (expandedPaths.length > 0) {
@@ -459,6 +487,7 @@ async function onBoxChange(val: string) {
   await filesStore.load(val, currentDir.value, tokenValue.value || null);
   const stat = await boxStatus(val, tokenValue.value || null);
   status.value = stat.status;
+  loadGitInfo();
 }
 
 async function createEmptyFile() {
@@ -495,6 +524,27 @@ function handleRenamePrompt(row: any) {
   renameTarget.value = row.path;
   renameValue.value = row.name;
   // Auto-trigger rename dialog or inline editing
+}
+
+function handleChmodPrompt(row: any) {
+  chmodTarget.value = { path: row.path, currentMode: row.mode ?? null };
+  chmodValue.value = row.mode != null ? row.mode.toString(8).padStart(3, '0') : "644";
+  chmodModalVisible.value = true;
+}
+
+async function applyChmod() {
+  if (!selectedBox.value || !chmodTarget.value.path || !chmodValue.value.trim()) return;
+  actionBusy.value = true;
+  try {
+    await chmodFile(selectedBox.value, chmodTarget.value.path, chmodValue.value.trim(), tokenValue.value || null);
+    chmodModalVisible.value = false;
+    message.success(`Permissions changed to ${chmodValue.value}`);
+    await reloadDir();
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err));
+  } finally {
+    actionBusy.value = false;
+  }
 }
 
 async function doRename() {
@@ -761,6 +811,17 @@ const columns = computed(() => {
       render(row: any) { return row.modified ? new Date(row.modified * 1000).toLocaleDateString() : "-"; },
     },
     {
+      title: "perms", key: "mode", width: 100,
+      render(row: any) {
+        if (row._isParent || row.mode == null) return "-";
+        return h("span", {
+          style: "font-family:var(--font-mono);font-size:12px;cursor:pointer;",
+          title: `${row.mode.toString(8).padStart(3, '0')} — click to chmod`,
+          onClick: () => handleChmodPrompt(row),
+        }, formatMode(row.mode));
+      },
+    },
+    {
       title: "actions", key: "actions",
       render(row: any) {
         const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
@@ -819,6 +880,11 @@ const columns = computed(() => {
           <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
         </NButton>
         <span class="breadcrumb-path">{{ currentDir }}</span>
+        <span v-if="currentGitInfo?.is_repo" class="git-badge" :class="{ dirty: currentGitInfo.dirty }">
+          <NIcon size="12"><PhGitBranch weight="duotone" /></NIcon>
+          {{ currentGitInfo.branch }}
+          <span v-if="currentGitInfo.dirty" class="dirty-indicator">*</span>
+        </span>
       </NSpace>
       <NSpace size="small">
         <NButton size="small" @click="reloadDir" :disabled="!selectedBox || refreshing" :loading="refreshing" :title="t('common.refresh')">
@@ -1064,6 +1130,16 @@ const columns = computed(() => {
       </template>
     </NModal>
 
+    <!-- Chmod Modal -->
+    <NModal v-model:show="chmodModalVisible" preset="dialog" title="Change Permissions" positive-text="Apply" negative-text="Cancel" @positive-click="applyChmod" @negative-click="chmodModalVisible = false" style="max-width: 360px">
+      <NSpace vertical size="small">
+        <p class="text-muted" style="font-size:13px;">{{ chmodTarget.path.split('/').pop() }}</p>
+        <p v-if="chmodTarget.currentMode != null" style="font-size:12px;font-family:var(--font-mono);">Current: {{ formatMode(chmodTarget.currentMode) }} ({{ chmodTarget.currentMode.toString(8).padStart(3, '0') }})</p>
+        <NInput v-model:value="chmodValue" placeholder="e.g. 755" size="small" style="font-family:var(--font-mono);" @keyup.enter="applyChmod" />
+        <p v-if="chmodValue" style="font-size:12px;font-family:var(--font-mono);color:var(--muted);">Preview: {{ formatMode(parseInt(chmodValue, 8) || 0) }}</p>
+      </NSpace>
+    </NModal>
+
     <!-- Context Menu -->
     <ContextMenu :visible="contextMenu.visible" :x="contextMenu.x" :y="contextMenu.y" :items="getContextMenuItems()" @select="handleContextMenuSelect" @close="contextMenu.visible = false" />
   </div>
@@ -1090,6 +1166,30 @@ const columns = computed(() => {
 .breadcrumb-path {
   color: var(--text);
   font-weight: 500;
+}
+
+.git-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  background: rgba(136, 58, 234, 0.15);
+  border: 1px solid rgba(136, 58, 234, 0.3);
+  border-radius: 12px;
+  color: #a78bfa;
+  font-family: var(--font-mono);
+}
+
+.git-badge.dirty {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.3);
+  color: #fbbf24;
+}
+
+.dirty-indicator {
+  color: #fbbf24;
+  font-weight: bold;
 }
 
 .page-header {

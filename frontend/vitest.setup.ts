@@ -1,11 +1,13 @@
 import "@testing-library/jest-dom";
 import { vi } from "vitest";
-import { ref, computed } from "vue";
-import { en } from "@/locales/en";
 
 // Mock i18n globally so all components can call useI18n() without provider setup.
-// Returns a real translation function backed by the English locale.
-vi.mock("@/i18n", () => {
+// Uses async factory with dynamic imports to avoid vi.mock hoisting issues
+// (vi.mock is hoisted above imports, so static refs to `ref`/`computed`/`en` would be undefined).
+vi.mock("@/i18n", async () => {
+  const { ref, computed } = await import("vue");
+  const { en } = await import("@/locales/en");
+
   const locale = ref("en");
   const t = (key: string, params?: Record<string, string | number>): string => {
     let result = en[key] ?? key;

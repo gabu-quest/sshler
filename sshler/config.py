@@ -40,6 +40,7 @@ class StoredBox:
     ssh_alias: str | None = None
     pinned: bool = False
     last_accessed: float | None = None
+    terminal_theme: str | None = None
 
 
 @dataclass
@@ -72,6 +73,7 @@ class Box:
     transport: str = "ssh"
     pinned: bool = False
     last_accessed: float | None = None
+    terminal_theme: str | None = None
 
 
 @dataclass
@@ -213,6 +215,8 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
             local_box.ssh_alias = local_override.ssh_alias
         local_box.agent = bool(local_override.agent)
         local_box.pinned = bool(local_override.pinned)
+        if local_override.terminal_theme:
+            local_box.terminal_theme = local_override.terminal_theme
         if local_override.favorites:
             local_box.favorites = list(local_override.favorites)
         local_box.last_accessed = local_override.last_accessed
@@ -311,6 +315,7 @@ def _stored_box_from_dict(data: dict[str, Any]) -> StoredBox:
         ssh_alias=data.get("ssh_alias"),
         pinned=bool(data.get("pinned", False)),
         last_accessed=float(data["last_accessed"]) if "last_accessed" in data and data["last_accessed"] is not None else None,
+        terminal_theme=data.get("terminal_theme"),
     )
 
 
@@ -336,6 +341,8 @@ def _stored_box_to_dict(stored: StoredBox) -> dict[str, Any]:
         result["pinned"] = stored.pinned
     if stored.last_accessed is not None:
         result["last_accessed"] = stored.last_accessed
+    if stored.terminal_theme:
+        result["terminal_theme"] = stored.terminal_theme
     return result
 
 
@@ -419,6 +426,7 @@ def _merge_host(
     source = "ssh_config" if host_config else "custom"
     pinned = stored_override.pinned if stored_override else False
     last_accessed = stored_override.last_accessed if stored_override else None
+    terminal_theme = stored_override.terminal_theme if stored_override else None
 
     return Box(
         name=name,
@@ -437,6 +445,7 @@ def _merge_host(
         transport="ssh",
         pinned=pinned,
         last_accessed=last_accessed,
+        terminal_theme=terminal_theme,
     )
 
 

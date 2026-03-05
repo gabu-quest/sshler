@@ -189,6 +189,7 @@ async def sftp_list_directory(
                     "name": filename,
                     "is_directory": (permissions & 0o40000) == 0o40000,
                     "size": stats.size,
+                    "mode": permissions & 0o7777,
                 }
                 modified = getattr(stats, "mtime", None)
                 if modified is not None:
@@ -227,6 +228,18 @@ async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str)
         stats = await sftp_client.stat(path)
         permissions = stats.permissions or 0
         return (permissions & 0o40000) == 0o40000
+    finally:
+        try:
+            await sftp_client.exit()  # type: ignore[func-returns-value]
+        except Exception:
+            pass
+
+
+async def sftp_chmod(connection: asyncssh.SSHClientConnection, path: str, mode: int) -> None:
+    """Change file permissions via SFTP."""
+    sftp_client = await connection.start_sftp_client()
+    try:
+        await sftp_client.chmod(path, mode)
     finally:
         try:
             await sftp_client.exit()  # type: ignore[func-returns-value]

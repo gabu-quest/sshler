@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NSelect, NButton, NIcon, NInput } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch, PhCaretDown } from '@phosphor-icons/vue'
+import { NSelect, NButton, NIcon, NInput, NPopover } from 'naive-ui'
+import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch, PhCaretDown, PhList } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
@@ -11,9 +11,10 @@ import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
+import SessionSwitcher from '@/components/SessionSwitcher.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
-import { gitInfo } from '@/api/http'
+import { gitInfo, setBoxTerminalTheme } from '@/api/http'
 import type { GitInfo } from '@/api/types'
 
 const route = useRoute()
@@ -35,6 +36,7 @@ const { isMobile } = useResponsive()
 const mobileControlsExpanded = ref(false)
 const rawMode = ref(false)
 const terminalConnected = ref(false)
+const showSessionPanel = ref(false)
 
 // Periodic git info refresh
 let gitPollTimer: ReturnType<typeof setInterval> | null = null
@@ -103,6 +105,12 @@ const loadGitInfo = async () => {
   }
 }
 
+const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
+  sessionName.value = session.session_name
+  initialDirectory.value = session.working_directory || '~'
+  showSessionPanel.value = false
+}
+
 const filesUrl = computed(() => {
   if (!selectedBox.value) return '#'
   const path = initialDirectory.value || '~'
@@ -127,9 +135,34 @@ const tokenValue = computed(() =>
   bootstrapStore.token || bootstrapStore.payload?.token || null
 )
 
-const isCurrentDirFavorite = computed(() => 
+const isCurrentDirFavorite = computed(() =>
   selectedBox.value ? favoritesStore.isFavorite(selectedBox.value, initialDirectory.value) : false
 )
+
+const VALID_THEMES = ['cyberpunk', 'default', 'solarized', 'dracula', 'nord', 'monokai', 'light'] as const
+type TerminalTheme = typeof VALID_THEMES[number]
+
+const currentBoxTheme = computed<TerminalTheme>(() => {
+  if (!selectedBox.value) return 'cyberpunk'
+  const box = boxesStore.items.find(b => b.name === selectedBox.value)
+  const theme = box?.terminal_theme
+  if (theme && VALID_THEMES.includes(theme as TerminalTheme)) return theme as TerminalTheme
+  return 'cyberpunk'
+})
+
+const themeOptions = VALID_THEMES.map(t => ({ label: t.charAt(0).toUpperCase() + t.slice(1), value: t }))
+
+const handleThemeChange = async (theme: string) => {
+  if (!selectedBox.value) return
+  try {
+    await setBoxTerminalTheme(selectedBox.value, theme, tokenValue.value)
+    // Update local box data
+    const box = boxesStore.items.find(b => b.name === selectedBox.value)
+    if (box) box.terminal_theme = theme
+  } catch {
+    // ignore
+  }
+}
 
 const toggleCurrentDirFavorite = async () => {
   if (selectedBox.value) {
@@ -339,6 +372,29 @@ watch(() => boxesStore.items, () => {
             </NIcon>
           </NButton>
 
+          <NSelect
+            v-if="selectedBox"
+            :value="currentBoxTheme"
+            :options="themeOptions"
+            @update:value="handleThemeChange"
+            size="small"
+            style="min-width: 110px"
+          />
+
+          <NPopover v-if="selectedBox" trigger="click" placement="bottom-end" v-model:show="showSessionPanel">
+            <template #trigger>
+              <NButton size="small" quaternary :title="t('terminal.sessions') || 'Sessions'">
+                <NIcon size="14"><PhList weight="duotone" /></NIcon>
+              </NButton>
+            </template>
+            <SessionSwitcher
+              :box-name="selectedBox"
+              :token="tokenValue"
+              :current-session="sessionName"
+              @select="handleSessionSelect"
+            />
+          </NPopover>
+
           <a
             v-if="selectedBox"
             :href="filesUrl"
@@ -426,6 +482,7 @@ watch(() => boxesStore.items, () => {
         :box-name="selectedBox"
         :session-name="sessionName"
         :directory="initialDirectory"
+        :theme="currentBoxTheme"
         :show-title-bar="!isMobile"
         :external-input="isMobile && !rawMode"
         @connected="onTerminalConnected"
