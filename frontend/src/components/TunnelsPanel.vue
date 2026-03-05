@@ -8,6 +8,7 @@ import {
 import { PhTrash, PhPlus } from '@phosphor-icons/vue'
 import { useTunnelsStore } from '@/stores/tunnels'
 import { useBootstrapStore } from '@/stores/bootstrap'
+import { useI18n } from '@/i18n'
 
 interface Props {
   show: boolean
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 const message = useMessage()
 const tunnelsStore = useTunnelsStore()
 const bootstrapStore = useBootstrapStore()
+const { t } = useI18n()
 
 const token = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 
@@ -92,19 +94,19 @@ const handleAdd = async () => {
   )
   creating.value = false
   if (result) {
-    message.success('Tunnel created')
+    message.success(t('tunnels.created'))
     resetAddForm()
   } else {
-    message.error(tunnelsStore.error || 'Failed to create tunnel')
+    message.error(tunnelsStore.error || t('tunnels.create_failed'))
   }
 }
 
 const handleDelete = async (tunnelId: string) => {
   const ok = await tunnelsStore.remove(props.boxName, tunnelId, token.value)
   if (ok) {
-    message.success('Tunnel closed')
+    message.success(t('tunnels.closed'))
   } else {
-    message.error(tunnelsStore.error || 'Failed to close tunnel')
+    message.error(tunnelsStore.error || t('tunnels.close_failed'))
   }
 }
 
@@ -114,9 +116,9 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
 
 <template>
   <NDrawer :show="props.show" width="min(400px, calc(100vw - 16px))" placement="right" @update:show="emit('update:show', $event)">
-    <NDrawerContent title="Port Forwarding" closable>
+    <NDrawerContent :title="t('tunnels.title')" closable>
       <template #header-extra>
-        <NButton size="small" type="primary" aria-label="Add tunnel" @click="showAddForm = !showAddForm">
+        <NButton size="small" type="primary" :aria-label="t('tunnels.add')" @click="showAddForm = !showAddForm">
           <NIcon size="14"><PhPlus weight="bold" /></NIcon>
         </NButton>
       </template>
@@ -124,21 +126,21 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
       <!-- Add form -->
       <div v-if="showAddForm" class="tunnel-form" @keydown.esc.stop="resetAddForm">
         <NRadioGroup v-model:value="newType" size="small">
-          <NRadio value="local">Local (-L) &mdash; access remote port locally</NRadio>
-          <NRadio value="remote">Remote (-R) &mdash; expose local port remotely</NRadio>
+          <NRadio value="local">{{ t('tunnels.local_label') }}</NRadio>
+          <NRadio value="remote">{{ t('tunnels.remote_label') }}</NRadio>
         </NRadioGroup>
 
         <div class="tunnel-ports-row">
           <div class="tunnel-port-group">
-            <label class="tunnel-port-label">Local</label>
-            <NInput v-model:value="newLocalHost" size="small" placeholder="127.0.0.1" />
-            <NInputNumber v-model:value="newLocalPort" size="small" placeholder="Port" :min="1" :max="65535" :show-button="false" />
+            <label class="tunnel-port-label">{{ t('tunnels.local_port_label') }}</label>
+            <NInput v-model:value="newLocalHost" size="small" :placeholder="t('tunnels.host_placeholder')" />
+            <NInputNumber v-model:value="newLocalPort" size="small" :placeholder="t('tunnels.port_placeholder')" :min="1" :max="65535" :show-button="false" />
           </div>
           <span class="tunnel-arrow">&#8596;</span>
           <div class="tunnel-port-group">
-            <label class="tunnel-port-label">Remote</label>
-            <NInput v-model:value="newRemoteHost" size="small" placeholder="127.0.0.1" />
-            <NInputNumber v-model:value="newRemotePort" size="small" placeholder="Port" :min="1" :max="65535" :show-button="false" />
+            <label class="tunnel-port-label">{{ t('tunnels.remote_port_label') }}</label>
+            <NInput v-model:value="newRemoteHost" size="small" :placeholder="t('tunnels.host_placeholder')" />
+            <NInputNumber v-model:value="newRemotePort" size="small" :placeholder="t('tunnels.port_placeholder')" :min="1" :max="65535" :show-button="false" />
           </div>
         </div>
 
@@ -150,9 +152,9 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
             :disabled="!newLocalPort || !newRemotePort"
             :loading="creating"
           >
-            Create
+            {{ t('tunnels.create_btn') }}
           </NButton>
-          <NButton size="small" @click="resetAddForm">Cancel</NButton>
+          <NButton size="small" @click="resetAddForm">{{ t('common.cancel') }}</NButton>
         </NSpace>
       </div>
 
@@ -165,14 +167,14 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
       <div v-else-if="tunnelsStore.error && tunnelsStore.items.length === 0" class="tunnel-empty">
         <NEmpty :description="tunnelsStore.error">
           <template #extra>
-            <NButton size="small" @click="tunnelsStore.load(props.boxName, token)">Retry</NButton>
+            <NButton size="small" @click="tunnelsStore.load(props.boxName, token)">{{ t('common.retry') }}</NButton>
           </template>
         </NEmpty>
       </div>
 
       <!-- Empty state -->
       <div v-else-if="tunnelsStore.items.length === 0" class="tunnel-empty">
-        <NEmpty description="No active tunnels" />
+        <NEmpty :description="t('tunnels.empty')" />
       </div>
 
       <!-- Tunnel list -->
@@ -195,11 +197,11 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
         </div>
         <NPopconfirm @positive-click="handleDelete(tunnel.id)">
           <template #trigger>
-            <NButton size="tiny" quaternary aria-label="Close tunnel">
+            <NButton size="tiny" quaternary :aria-label="t('tunnels.close_tunnel')">
               <NIcon size="14"><PhTrash weight="duotone" /></NIcon>
             </NButton>
           </template>
-          Close this tunnel?
+          {{ t('tunnels.close_confirm') }}
         </NPopconfirm>
       </div>
     </NDrawerContent>

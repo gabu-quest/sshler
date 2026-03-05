@@ -10,6 +10,7 @@ import {
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
+import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
@@ -28,6 +29,7 @@ const router = useRouter()
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
 const favoritesStore = useFavoritesStore()
+const appStore = useAppStore()
 const { t } = useI18n()
 
 const selectedBox = ref<string | null>(null)
@@ -408,11 +410,11 @@ watch(() => boxesStore.items, () => {
             />
           </NPopover>
 
-          <NButton v-if="selectedBox" size="small" quaternary title="Snippets" @click="showSnippetsPanel = true">
+          <NButton v-if="selectedBox" size="small" quaternary :title="t('snippets.title')" @click="showSnippetsPanel = true">
             <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
           </NButton>
 
-          <NButton v-if="selectedBox" size="small" quaternary title="Port Forwarding" @click="showTunnelsPanel = true">
+          <NButton v-if="selectedBox" size="small" quaternary :title="t('tunnels.title')" @click="showTunnelsPanel = true">
             <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
           </NButton>
 
@@ -510,6 +512,8 @@ watch(() => boxesStore.items, () => {
         :session-name="sessionName"
         :directory="initialDirectory"
         :theme="currentBoxTheme"
+        :font-size="appStore.terminalFontSize"
+        :font-family="appStore.terminalFontFamily"
         :show-title-bar="!isMobile"
         :external-input="isMobile && !rawMode"
         @connected="onTerminalConnected"

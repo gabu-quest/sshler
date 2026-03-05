@@ -589,17 +589,36 @@ async function handleUpload(files: FileList | null) {
   if (!file) return;
   uploadTarget.value = file;
   actionBusy.value = true;
-  try {
-    await filesStore.doUpload(selectedBox.value, currentDir.value, file, tokenValue.value || null);
-    message.success(t('files.uploaded'));
-    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-  } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
-  } finally {
-    actionBusy.value = false;
-    uploadTarget.value = null;
+
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await filesStore.doUpload(selectedBox.value, currentDir.value, file, tokenValue.value || null);
+      message.success(t('files.uploaded'));
+      await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+      await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+      actionBusy.value = false;
+      uploadTarget.value = null;
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        message.warning(t('files.upload_failed_retry'));
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+      }
+    }
   }
+
+  const errorMsg = lastError instanceof Error ? lastError.message : String(lastError);
+  message.error(errorMsg, {
+    closable: true,
+    duration: 0,
+    content: t('files.upload_failed_final', { n: String(maxAttempts) }),
+  });
+  actionBusy.value = false;
+  uploadTarget.value = null;
 }
 
 function handlePreview(row: any) {
@@ -1014,7 +1033,9 @@ const columns = computed(() => {
 
         <!-- File Table -->
         <FileUploadZone v-else :current-dir="currentDir" @upload="handleUpload">
-          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
+          <div aria-live="polite" :aria-label="t('a11y.file_list')">
+            <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
+          </div>
         </FileUploadZone>
 
         <!-- Error Display -->
@@ -1043,6 +1064,7 @@ const columns = computed(() => {
           :token="tokenValue || null"
           :directory="currentDir"
           @navigate="(dir: string) => navigateToDirectory(dir)"
+          @select-file="(path: string) => { previewPath = path; previewing = true }"
         />
 
         <!-- File Upload -->

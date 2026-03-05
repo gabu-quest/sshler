@@ -131,6 +131,7 @@ class APISessionUpdate(BaseModel):
     active: bool | None = None
     window_count: int | None = None
     metadata: dict | None = None
+    session_name: str | None = None
 
 
 class APIBootstrap(BaseModel):

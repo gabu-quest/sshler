@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty } from 'naive-ui'
-import { PhArrowsClockwise, PhTerminalWindow, PhTrash, PhCircle } from '@phosphor-icons/vue'
+import { PhArrowsClockwise, PhTerminalWindow, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX } from '@phosphor-icons/vue'
 import type { ApiSession } from '@/api/types'
-import { fetchBoxSessions, syncBoxSessions, deleteSession } from '@/api/http'
+import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession } from '@/api/http'
+import { useI18n } from '@/i18n'
 
 interface Props {
   boxName: string
@@ -17,10 +18,13 @@ interface Emits {
 
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
+const { t } = useI18n()
 
 const sessions = ref<ApiSession[]>([])
 const loading = ref(false)
 const syncing = ref(false)
+const editingId = ref<string | null>(null)
+const editName = ref('')
 
 const sortedSessions = computed(() =>
   [...sessions.value].sort((a, b) => b.last_accessed_at - a.last_accessed_at)
@@ -57,6 +61,32 @@ async function kill(session: ApiSession) {
   }
 }
 
+function startRename(session: ApiSession) {
+  editingId.value = session.id
+  editName.value = session.session_name
+}
+
+function cancelRename() {
+  editingId.value = null
+  editName.value = ''
+}
+
+async function confirmRename(session: ApiSession) {
+  const newName = editName.value.trim()
+  if (!newName || newName === session.session_name) {
+    cancelRename()
+    return
+  }
+  try {
+    const updated = await renameSession(props.boxName, session.id, newName, props.token)
+    const idx = sessions.value.findIndex(s => s.id === session.id)
+    if (idx !== -1) sessions.value[idx] = updated
+    editingId.value = null
+  } catch {
+    // keep editing state on error
+  }
+}
+
 function formatTime(ts: number): string {
   const now = Date.now() / 1000
   const diff = now - ts
@@ -73,20 +103,20 @@ watch(() => props.boxName, load)
 <template>
   <div class="session-switcher">
     <div class="session-header">
-      <span class="session-title">Sessions</span>
+      <span class="session-title">{{ t('sessions.title') }}</span>
       <NTooltip trigger="hover">
         <template #trigger>
           <NButton size="tiny" quaternary :loading="syncing" @click="sync">
             <NIcon size="14"><PhArrowsClockwise weight="duotone" /></NIcon>
           </NButton>
         </template>
-        Sync with tmux
+        {{ t('sessions.sync_tooltip') }}
       </NTooltip>
     </div>
 
     <NSpin v-if="loading" size="small" />
 
-    <NEmpty v-else-if="sortedSessions.length === 0" description="No sessions" size="small" />
+    <NEmpty v-else-if="sortedSessions.length === 0" :description="t('sessions.empty')" size="small" />
 
     <div v-else class="session-list">
       <div
@@ -101,21 +131,45 @@ watch(() => props.boxName, load)
             <NIcon size="10" :color="session.active ? '#52c41a' : '#666'">
               <PhCircle weight="fill" />
             </NIcon>
-            <span>{{ session.session_name }}</span>
+            <template v-if="editingId === session.id">
+              <input
+                v-model="editName"
+                class="rename-input"
+                @click.stop
+                @keyup.enter.stop="confirmRename(session)"
+                @keyup.escape.stop="cancelRename"
+              />
+            </template>
+            <span v-else>{{ session.session_name }}</span>
           </div>
           <div class="session-meta">
             {{ session.working_directory.split('/').pop() || '~' }}
             <span class="session-time">{{ formatTime(session.last_accessed_at) }}</span>
           </div>
         </div>
-        <NPopconfirm @positive-click.stop="kill(session)">
-          <template #trigger>
-            <NButton size="tiny" quaternary type="error" @click.stop>
-              <NIcon size="12"><PhTrash weight="duotone" /></NIcon>
+        <div class="session-actions" @click.stop>
+          <template v-if="editingId === session.id">
+            <NButton size="tiny" quaternary type="primary" @click.stop="confirmRename(session)">
+              <NIcon size="12"><PhCheck weight="bold" /></NIcon>
+            </NButton>
+            <NButton size="tiny" quaternary @click.stop="cancelRename">
+              <NIcon size="12"><PhX weight="bold" /></NIcon>
             </NButton>
           </template>
-          Kill tmux session "{{ session.session_name }}"?
-        </NPopconfirm>
+          <template v-else>
+            <NButton size="tiny" quaternary @click.stop="startRename(session)" :title="t('sessions.rename')">
+              <NIcon size="12"><PhPencilSimple weight="duotone" /></NIcon>
+            </NButton>
+            <NPopconfirm @positive-click.stop="kill(session)">
+              <template #trigger>
+                <NButton size="tiny" quaternary type="error" @click.stop>
+                  <NIcon size="12"><PhTrash weight="duotone" /></NIcon>
+                </NButton>
+              </template>
+              {{ t('sessions.kill_confirm', { name: session.session_name }) }}
+            </NPopconfirm>
+          </template>
+        </div>
       </div>
     </div>
   </div>
@@ -207,5 +261,24 @@ watch(() => props.boxName, load)
 .session-time {
   margin-left: 8px;
   opacity: 0.7;
+}
+
+.session-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--surface-variant);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  outline: none;
 }
 </style>

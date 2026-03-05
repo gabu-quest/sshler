@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { NCard, NButton, NSpace, NAlert, NCode, NInputNumber, NSwitch, useMessage } from 'naive-ui'
+import { NCard, NButton, NSpace, NAlert, NCode, NInputNumber, NSwitch, NSelect, useMessage } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { http, buildHeaders } from '@/api/http'
@@ -113,6 +113,15 @@ const formatDuration = (minutes: number | null): string => {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
+const fontFamilyOptions = [
+  { label: 'Monaspace Neon (default)', value: '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace' },
+  { label: 'JetBrains Mono', value: '"JetBrains Mono", "JetBrains Mono Nerd Font", monospace' },
+  { label: 'Fira Code', value: '"Fira Code", "FiraCode Nerd Font", monospace' },
+  { label: 'Cascadia Code', value: '"Cascadia Code", "CaskaydiaCove Nerd Font", monospace' },
+  { label: 'Source Code Pro', value: '"Source Code Pro", monospace' },
+  { label: 'System Monospace', value: 'monospace' },
+]
+
 onMounted(async () => {
   // Reset to default favicon on settings page
   document.title = 'Settings'
@@ -184,6 +193,56 @@ onMounted(async () => {
         <NButton @click="setTheme('system')">
           {{ t('settings.theme_system') }}
         </NButton>
+      </NSpace>
+    </NCard>
+
+    <!-- Terminal Settings -->
+    <NCard :title="t('settings.terminal')" size="medium">
+      <NSpace vertical size="large">
+        <div class="pool-setting">
+          <label><strong>{{ t('settings.terminal_font_size') }}</strong></label>
+          <p class="setting-description">{{ t('settings.terminal_font_size_help') }}</p>
+          <NInputNumber
+            :value="appStore.terminalFontSize"
+            @update:value="(v: number | null) => v != null && appStore.setTerminalFontSize(v)"
+            :min="8"
+            :max="24"
+            :step="1"
+            style="width: 200px"
+          >
+            <template #suffix>px</template>
+          </NInputNumber>
+        </div>
+
+        <div class="pool-setting">
+          <label><strong>{{ t('settings.terminal_font_family') }}</strong></label>
+          <p class="setting-description">{{ t('settings.terminal_font_family_help') }}</p>
+          <NSelect
+            :value="appStore.terminalFontFamily"
+            :options="fontFamilyOptions"
+            @update:value="(v: string) => appStore.setTerminalFontFamily(v)"
+            style="max-width: 400px"
+          />
+        </div>
+
+        <div class="pool-setting">
+          <label><strong>{{ t('settings.terminal_scrollback') }}</strong></label>
+          <p class="setting-description">{{ t('settings.terminal_scrollback_help') }}</p>
+          <NInputNumber
+            :value="appStore.terminalScrollback"
+            @update:value="(v: number | null) => v != null && appStore.setTerminalScrollback(v)"
+            :min="500"
+            :max="50000"
+            :step="1000"
+            style="width: 200px"
+          >
+            <template #suffix>{{ t('settings.terminal_lines') }}</template>
+          </NInputNumber>
+        </div>
+
+        <NAlert type="info" :bordered="false">
+          {{ t('settings.terminal_restart_note') }}
+        </NAlert>
       </NSpace>
     </NCard>
 

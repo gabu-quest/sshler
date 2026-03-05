@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import {
@@ -57,6 +57,8 @@ const totalFavorites = computed(() =>
 // System stats per box
 const statsMap = ref<Map<string, BoxStats>>(new Map());
 const statsLoading = ref<Set<string>>(new Set());
+const lastUpdated = ref<Date | null>(null);
+let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 async function loadBoxStats(boxName: string) {
   if (statsLoading.value.has(boxName)) return;
@@ -194,6 +196,26 @@ onMounted(async () => {
     );
     // Load stats for all boxes in parallel
     boxesStore.items.forEach(box => loadBoxStats(box.name));
+    lastUpdated.value = new Date();
+  }
+
+  // Auto-refresh every 30 seconds
+  refreshInterval = setInterval(async () => {
+    if (boxesStore.items.length > 0) {
+      boxesStore.items.forEach(box => loadBoxStats(box.name));
+      await sessionsStore.syncAllBoxSessions(
+        boxesStore.items.map(b => b.name),
+        tokenValue.value || null
+      );
+      lastUpdated.value = new Date();
+    }
+  }, 30_000);
+});
+
+onUnmounted(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval);
+    refreshInterval = null;
   }
 });
 
@@ -263,13 +285,17 @@ const handleBrowseServerFiles = (serverName: string) => {
 <template>
   <div class="dashboard">
     <!-- Compact Stats Pill -->
-    <div class="stats-pill">
+    <div class="stats-pill" role="status" :aria-label="t('a11y.server_stats')">
       <NIcon size="14"><PhChartBar weight="duotone" /></NIcon>
       <span>{{ quickStats.servers }} {{ quickStats.servers === 1 ? t('overview.server') : t('overview.servers') }}</span>
       <span class="stats-separator">•</span>
       <span>{{ quickStats.pinnedBoxes }} {{ t('overview.pinned') }}</span>
       <span class="stats-separator">•</span>
       <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
+      <template v-if="lastUpdated">
+        <span class="stats-separator">•</span>
+        <span class="stats-updated">{{ lastUpdated.toLocaleTimeString() }}</span>
+      </template>
     </div>
 
     <!-- Favorites Grid (grouped by box) -->
@@ -512,6 +538,11 @@ const handleBrowseServerFiles = (serverName: string) => {
 
 .stats-separator {
   opacity: 0.4;
+}
+
+.stats-updated {
+  font-size: 11px;
+  opacity: 0.6;
 }
 
 /* Sections */

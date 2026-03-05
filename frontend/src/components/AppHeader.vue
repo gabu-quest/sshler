@@ -15,6 +15,7 @@ import {
   PhLockKey,
   PhCpu,
   PhMemory,
+  PhWifiSlash,
 } from "@phosphor-icons/vue";
 
 import { useAppStore } from "@/stores/app";
@@ -341,6 +342,12 @@ onUnmounted(() => {
       </NDrawerContent>
     </NDrawer>
   </header>
+
+  <!-- Offline Banner -->
+  <div v-if="!appStore.isOnline" class="offline-banner" role="alert" aria-live="assertive">
+    <NIcon size="16"><PhWifiSlash weight="duotone" /></NIcon>
+    <span>{{ t('a11y.offline_banner') }}</span>
+  </div>
 </template>
 
 <style scoped>
@@ -629,12 +636,35 @@ onUnmounted(() => {
   }
 }
 
+/* Offline Banner */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(245, 158, 11, 0.15);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+  font-size: 13px;
+  font-weight: 500;
+  animation: slide-down 0.3s ease;
+}
+
+@keyframes slide-down {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 /* Reduced Motion Support */
 @media (prefers-reduced-motion: reduce) {
   .nav-link,
   .mobile-nav-link,
   .brand {
     transition: none;
+  }
+  .offline-banner {
+    animation: none;
   }
 }
 

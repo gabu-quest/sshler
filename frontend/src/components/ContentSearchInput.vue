@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFile } from "@phosphor-icons/vue";
 import { grepContent } from "@/api/http";
+import { useI18n } from "@/i18n";
 import type { GrepMatch } from "@/api/types";
 
 const props = defineProps<{
@@ -13,7 +14,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "navigate", directory: string): void;
+  (e: "select-file", filePath: string): void;
 }>();
+
+const { t } = useI18n();
 
 const query = ref("");
 const results = ref<GrepMatch[]>([]);
@@ -73,11 +77,12 @@ async function performSearch(pattern: string) {
 }
 
 function navigateToFile(filePath: string) {
-  // Navigate to the file's parent directory
+  // Navigate to the file's parent directory and emit file selection
   const parts = filePath.split("/");
   parts.pop();
   const dir = parts.join("/") || "/";
   emit("navigate", dir);
+  emit("select-file", filePath);
   query.value = "";
   showDropdown.value = false;
   results.value = [];
@@ -127,7 +132,7 @@ function escapeHtml(str: string): string {
   <div class="content-search">
     <NInput
       v-model:value="query"
-      placeholder="Search file contents (grep)..."
+      :placeholder="t('grep.placeholder')"
       size="small"
       clearable
       @focus="handleFocus"
@@ -146,7 +151,7 @@ function escapeHtml(str: string): string {
     <div v-if="showDropdown" class="grep-dropdown">
       <div v-if="loading && !hasResults" class="grep-loading">
         <NSpin size="small" />
-        <span>Searching...</span>
+        <span>{{ t('grep.searching') }}</span>
       </div>
 
       <div v-else-if="hasResults" class="grep-results">
@@ -169,14 +174,14 @@ function escapeHtml(str: string): string {
           </div>
         </template>
         <div v-if="truncated" class="grep-truncated">
-          Results truncated
+          {{ t('grep.truncated') }}
         </div>
       </div>
 
       <NEmpty
         v-else
         size="small"
-        description="No matches found"
+        :description="t('grep.no_matches')"
         class="grep-empty"
       />
     </div>

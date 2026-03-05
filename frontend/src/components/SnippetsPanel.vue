@@ -7,6 +7,7 @@ import {
 import { PhTrash, PhPencilSimple, PhPlay, PhCopy, PhPlus } from '@phosphor-icons/vue'
 import { useSnippetsStore } from '@/stores/snippets'
 import { useBootstrapStore } from '@/stores/bootstrap'
+import { useI18n } from '@/i18n'
 import type { ApiSnippet } from '@/api/types'
 
 interface Props {
@@ -23,6 +24,7 @@ const emit = defineEmits<{
 const message = useMessage()
 const snippetsStore = useSnippetsStore()
 const bootstrapStore = useBootstrapStore()
+const { t } = useI18n()
 
 const token = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 
@@ -90,10 +92,10 @@ const handleAdd = async () => {
     token.value,
   )
   if (result) {
-    message.success('Snippet created')
+    message.success(t('snippets.created'))
     resetAddForm()
   } else {
-    message.error(snippetsStore.error || 'Failed to create snippet')
+    message.error(snippetsStore.error || t('snippets.create_failed'))
   }
 }
 
@@ -120,56 +122,56 @@ const handleSaveEdit = async () => {
   )
   editSaving.value = false
   if (result) {
-    message.success('Snippet updated')
+    message.success(t('snippets.updated'))
     editingId.value = null
   } else {
-    message.error(snippetsStore.error || 'Failed to update snippet')
+    message.error(snippetsStore.error || t('snippets.update_failed'))
   }
 }
 
 const handleDelete = async (id: string) => {
   const ok = await snippetsStore.remove(id, token.value)
   if (ok) {
-    message.success('Snippet deleted')
+    message.success(t('snippets.deleted'))
     if (editingId.value === id) editingId.value = null
   } else {
-    message.error(snippetsStore.error || 'Failed to delete snippet')
+    message.error(snippetsStore.error || t('snippets.delete_failed'))
   }
 }
 </script>
 
 <template>
   <NDrawer :show="props.show" width="min(380px, calc(100vw - 16px))" placement="right" @update:show="emit('update:show', $event)">
-    <NDrawerContent title="Snippets" closable>
+    <NDrawerContent :title="t('snippets.title')" closable>
       <template #header-extra>
-        <NButton size="small" type="primary" aria-label="Add snippet" @click="showAddForm = !showAddForm">
+        <NButton size="small" type="primary" :aria-label="t('snippets.add')" @click="showAddForm = !showAddForm">
           <NIcon size="14"><PhPlus weight="bold" /></NIcon>
         </NButton>
       </template>
 
       <!-- Add form -->
       <div v-if="showAddForm" class="snippet-form" @keydown.esc.stop="resetAddForm">
-        <NInput v-model:value="newLabel" placeholder="Label" size="small" />
+        <NInput v-model:value="newLabel" :placeholder="t('snippets.label_placeholder')" size="small" />
         <NInput
           v-model:value="newCommand"
           type="textarea"
-          placeholder="Command"
+          :placeholder="t('snippets.command_placeholder')"
           size="small"
           :autosize="{ minRows: 2, maxRows: 5 }"
         />
-        <NInput v-model:value="newCategory" placeholder="Category (optional)" size="small" />
+        <NInput v-model:value="newCategory" :placeholder="t('snippets.category_placeholder')" size="small" />
         <NSpace size="small">
           <NButton size="small" type="primary" @click="handleAdd" :disabled="!newLabel.trim() || !newCommand.trim()">
-            Add
+            {{ t('snippets.add_btn') }}
           </NButton>
-          <NButton size="small" @click="resetAddForm">Cancel</NButton>
+          <NButton size="small" @click="resetAddForm">{{ t('common.cancel') }}</NButton>
         </NSpace>
       </div>
 
       <!-- Search -->
       <NInput
         v-model:value="filterText"
-        placeholder="Filter snippets..."
+        :placeholder="t('snippets.filter_placeholder')"
         size="small"
         clearable
         class="snippet-filter"
@@ -184,14 +186,14 @@ const handleDelete = async (id: string) => {
       <div v-else-if="snippetsStore.error && snippetsStore.items.length === 0" class="snippet-empty">
         <NEmpty :description="snippetsStore.error">
           <template #extra>
-            <NButton size="small" @click="snippetsStore.load(props.boxName, token)">Retry</NButton>
+            <NButton size="small" @click="snippetsStore.load(props.boxName, token)">{{ t('common.retry') }}</NButton>
           </template>
         </NEmpty>
       </div>
 
       <!-- Empty state -->
       <div v-else-if="filteredSnippets.length === 0" class="snippet-empty">
-        <NEmpty :description="snippetsStore.items.length === 0 ? 'No snippets yet' : 'No matches'" />
+        <NEmpty :description="snippetsStore.items.length === 0 ? t('snippets.empty') : t('snippets.no_matches')" />
       </div>
 
       <!-- Snippets list -->
@@ -204,18 +206,18 @@ const handleDelete = async (id: string) => {
         >
           <!-- Edit mode -->
           <div v-if="editingId === snippet.id" class="snippet-form" @keydown.esc.stop="cancelEdit">
-            <NInput v-model:value="editLabel" placeholder="Label" size="small" />
+            <NInput v-model:value="editLabel" :placeholder="t('snippets.label_placeholder')" size="small" />
             <NInput
               v-model:value="editCommand"
               type="textarea"
-              placeholder="Command"
+              :placeholder="t('snippets.command_placeholder')"
               size="small"
               :autosize="{ minRows: 2, maxRows: 5 }"
             />
-            <NInput v-model:value="editCategory" placeholder="Category (optional)" size="small" />
+            <NInput v-model:value="editCategory" :placeholder="t('snippets.category_placeholder')" size="small" />
             <NSpace size="small">
-              <NButton size="small" type="primary" @click="handleSaveEdit" :loading="editSaving" :disabled="editSaving">Save</NButton>
-              <NButton size="small" @click="cancelEdit" :disabled="editSaving">Cancel</NButton>
+              <NButton size="small" type="primary" @click="handleSaveEdit" :loading="editSaving" :disabled="editSaving">{{ t('snippets.save_btn') }}</NButton>
+              <NButton size="small" @click="cancelEdit" :disabled="editSaving">{{ t('common.cancel') }}</NButton>
             </NSpace>
           </div>
 
@@ -223,26 +225,26 @@ const handleDelete = async (id: string) => {
           <template v-else>
             <div class="snippet-header">
               <span class="snippet-label">{{ snippet.label }}</span>
-              <NTag v-if="snippet.box === '__global__'" size="tiny" type="info">global</NTag>
+              <NTag v-if="snippet.box === '__global__'" size="tiny" type="info">{{ t('snippets.global_tag') }}</NTag>
             </div>
             <pre class="snippet-command">{{ snippet.command }}</pre>
             <div class="snippet-actions">
-              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, true)" aria-label="Execute snippet">
+              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, true)" :aria-label="t('snippets.execute')">
                 <NIcon size="14"><PhPlay weight="duotone" /></NIcon>
               </NButton>
-              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, false)" aria-label="Insert without executing">
+              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, false)" :aria-label="t('snippets.insert')">
                 <NIcon size="14"><PhCopy weight="duotone" /></NIcon>
               </NButton>
-              <NButton size="tiny" quaternary @click="startEdit(snippet)" aria-label="Edit snippet">
+              <NButton size="tiny" quaternary @click="startEdit(snippet)" :aria-label="t('snippets.edit')">
                 <NIcon size="14"><PhPencilSimple weight="duotone" /></NIcon>
               </NButton>
               <NPopconfirm @positive-click="handleDelete(snippet.id)">
                 <template #trigger>
-                  <NButton size="tiny" quaternary aria-label="Delete snippet">
+                  <NButton size="tiny" quaternary :aria-label="t('common.delete')">
                     <NIcon size="14"><PhTrash weight="duotone" /></NIcon>
                   </NButton>
                 </template>
-                Delete this snippet?
+                {{ t('snippets.delete_confirm') }}
               </NPopconfirm>
             </div>
           </template>

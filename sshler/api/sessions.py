@@ -120,10 +120,51 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APISessionUpdate,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISession:
-        deps.get_box_or_404(application_config, name)
+        box = deps.get_box_or_404(application_config, name)
         record = await state.get_session_by_id_async(session_id)
         if record is None or record.box != name:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Handle session rename via tmux
+        if payload.session_name is not None and payload.session_name != record.session_name:
+            new_name = payload.session_name.strip()
+            if not new_name or len(new_name) > 64:
+                raise HTTPException(status_code=400, detail="Invalid session name")
+            # Only allow safe characters
+            import re
+            if not re.match(r'^[a-zA-Z0-9_.-]+$', new_name):
+                raise HTTPException(status_code=400, detail="Session name may only contain alphanumeric, underscore, dot, and dash")
+            try:
+                if box.transport == "local":
+                    cmd = _local_tmux_command() + ["rename-session", "-t", record.session_name, new_name]
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _, stderr = await process.communicate()
+                    if process.returncode != 0:
+                        raise HTTPException(status_code=400, detail=f"tmux rename failed: {stderr.decode().strip()}")
+                else:
+                    connection = await deps.connect_for_box(box, application_config)
+                    try:
+                        result = await connection.run(
+                            f"tmux rename-session -t {record.session_name} {new_name}",
+                            check=False,
+                        )
+                        if result.returncode != 0:
+                            raise HTTPException(status_code=400, detail=f"tmux rename failed: {result.stderr.strip()}")
+                    finally:
+                        import contextlib
+                        with contextlib.suppress(Exception):
+                            connection.close()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.warning(f"Failed to rename tmux session: {exc}")
+                raise HTTPException(status_code=500, detail="Failed to rename session")
+            await state.rename_session_async(record.id, new_name)
+
         if payload.metadata is not None or payload.window_count is not None:
             await state.update_session_metadata_async(
                 session_id=record.id,

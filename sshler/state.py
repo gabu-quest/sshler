@@ -585,6 +585,23 @@ async def update_session_metadata_async(
     return await asyncio.to_thread(update_session_metadata, session_id, metadata, window_count)
 
 
+def rename_session(session_id: str, new_name: str) -> bool:
+    """Rename a session in the database."""
+    _require_db()
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+        session.session_name = new_name
+        session.last_accessed_at = time.time()
+        session.save()
+        return True
+
+
+async def rename_session_async(session_id: str, new_name: str) -> bool:
+    return await asyncio.to_thread(rename_session, session_id, new_name)
+
+
 def cleanup_old_sessions(max_age_days: int = 30) -> int:
     """Delete sessions older than max_age_days that are inactive."""
     _require_db()

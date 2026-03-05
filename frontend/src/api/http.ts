@@ -569,6 +569,23 @@ export async function deleteSession(
   return handle<SimpleMessage>(res);
 }
 
+export async function renameSession(
+  boxName: string,
+  sessionId: string,
+  newName: string,
+  token: string | null,
+): Promise<import("./types").ApiSession> {
+  const url = `${API_BASE}/boxes/${encodeURIComponent(boxName)}/sessions/${encodeURIComponent(sessionId)}`;
+  const options: RequestInit = {
+    method: "PATCH",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ session_name: newName }),
+    credentials: 'include'
+  };
+  const res = await fetch(url, options);
+  return handle<import("./types").ApiSession>(res, { url, options });
+}
+
 export async function downloadFile(
   name: string,
   path: string,
