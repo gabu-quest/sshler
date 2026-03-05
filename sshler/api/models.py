@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .helpers import MAX_IMAGE_PREVIEW_BYTES
 
@@ -202,10 +202,10 @@ class APISnippet(BaseModel):
 class APISnippetCreate(BaseModel):
     """Request body for creating a snippet."""
 
-    box: str
-    label: str
-    command: str
-    category: str = ""
+    box: str = Field(..., max_length=128)
+    label: str = Field(..., max_length=256)
+    command: str = Field(..., max_length=65536)
+    category: str = Field("", max_length=128)
 
 
 class APISnippetUpdate(BaseModel):
@@ -221,10 +221,17 @@ class APITunnelCreate(BaseModel):
     """Request body for creating an SSH tunnel."""
 
     tunnel_type: str  # "local" or "remote"
-    local_host: str = "127.0.0.1"
+    local_host: str = Field("127.0.0.1", max_length=253)
     local_port: int
-    remote_host: str = "127.0.0.1"
+    remote_host: str = Field("127.0.0.1", max_length=253)
     remote_port: int
+
+    @field_validator("local_host")
+    @classmethod
+    def local_host_must_be_loopback(cls, v: str) -> str:
+        if v not in ("127.0.0.1", "::1", "localhost"):
+            raise ValueError("local_host must be a loopback address")
+        return v
 
 
 class APITunnel(BaseModel):

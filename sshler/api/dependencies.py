@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 
@@ -24,7 +25,7 @@ class APIDependencies:
         supplied = request.headers.get("x-sshler-token")
         expected = self.settings.csrf_token
 
-        if supplied != expected:
+        if not hmac.compare_digest(supplied or "", expected):
             logger.warning(
                 f"Token mismatch on {request.url.path}: "
                 f"supplied={supplied[:8] + '...' if supplied else 'None'}, "

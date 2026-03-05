@@ -92,8 +92,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     dest_port=payload.local_port,
                 )
         except Exception as exc:
-            logger.warning(f"Failed to create tunnel for {name}: {exc}")
-            raise HTTPException(status_code=500, detail=f"Tunnel creation failed: {exc}") from exc
+            logger.warning(f"Failed to create tunnel for {name}: {exc}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Tunnel creation failed") from exc
 
         info = TunnelInfo(
             id=tunnel_id,
