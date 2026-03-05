@@ -133,12 +133,13 @@ export const useSessionsStore = defineStore('sessions', () => {
   function formatRelativeTime(timestamp: number): string {
     const now = Date.now() / 1000
     const diff = now - timestamp
-    
-    if (diff < 60) return 'just now'
-    if (diff < 3600) return `${Math.floor(diff / 60)}min ago`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}hr ago`
-    if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
-    return `${Math.floor(diff / 604800)}w ago`
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'narrow' })
+
+    if (diff < 60) return rtf.format(0, 'second')
+    if (diff < 3600) return rtf.format(-Math.floor(diff / 60), 'minute')
+    if (diff < 86400) return rtf.format(-Math.floor(diff / 3600), 'hour')
+    if (diff < 604800) return rtf.format(-Math.floor(diff / 86400), 'day')
+    return rtf.format(-Math.floor(diff / 604800), 'week')
   }
 
   function $reset() {

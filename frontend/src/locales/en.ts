@@ -111,6 +111,10 @@ export const en: Record<string, string> = {
   "settings.clear_cache": "Clear Cache",
   "settings.token_refreshed": "Token refreshed successfully",
   "settings.token_refresh_failed": "Failed to refresh token:",
+  "settings.token_status_loading": "Loading...",
+  "settings.token_status_error": "Error: ",
+  "settings.token_status_ok": "Token loaded",
+  "settings.token_status_none": "No token",
   "settings.cache_cleared": "Cache cleared - please refresh the page",
   "settings.theme_unavailable": "Theme switching not available",
 
@@ -154,6 +158,7 @@ export const en: Record<string, string> = {
   "settings.pool_current_idle": "Idle Timeout:",
   "settings.pool_current_lifetime": "Max Lifetime:",
   "settings.pool_current_max": "Max Connections:",
+  "settings.pool_per_box": "per box",
 
   "settings.debug": "Debug Information",
   "settings.debug_url": "Current URL:",
@@ -244,6 +249,7 @@ export const en: Record<string, string> = {
   "terminal.search_placeholder": "Search terminal...",
   "terminal.search_next": "Next match",
   "terminal.search_prev": "Previous match",
+  "terminal.search_no_results": "No results",
 
   // Files
   "files.title": "Files",
@@ -443,6 +449,10 @@ export const en: Record<string, string> = {
   "sessions.rename": "Rename session",
   "sessions.rename_placeholder": "New name",
   "sessions.kill_confirm": "Kill tmux session \"{name}\"?",
+  "sessions.just_now": "just now",
+  "sessions.minutes_ago": "{n}m ago",
+  "sessions.hours_ago": "{n}h ago",
+  "sessions.days_ago": "{n}d ago",
 
   // Snippets
   "snippets.title": "Snippets",
@@ -466,6 +476,7 @@ export const en: Record<string, string> = {
   "snippets.insert": "Insert without executing",
   "snippets.edit": "Edit snippet",
   "snippets.global_tag": "global",
+  "snippets.uncategorized": "Uncategorized",
 
   // Tunnels
   "tunnels.title": "Port Forwarding",

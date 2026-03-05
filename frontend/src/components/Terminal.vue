@@ -995,8 +995,11 @@ const clear = () => {
   terminal?.clear()
 }
 
+const searchNoMatch = ref(false)
+
 const search = (term: string) => {
-  searchAddon?.findNext(term)
+  const found = searchAddon?.findNext(term)
+  searchNoMatch.value = !!term && !found
 }
 
 const toggleSearch = () => {
@@ -1004,26 +1007,39 @@ const toggleSearch = () => {
   if (showSearch.value) {
     nextTick(() => searchInputRef.value?.focus())
   } else {
+    searchNoMatch.value = false
     terminal?.focus()
   }
 }
 
 const searchNext = () => {
-  if (searchTerm.value) searchAddon?.findNext(searchTerm.value)
+  if (searchTerm.value) {
+    const found = searchAddon?.findNext(searchTerm.value)
+    searchNoMatch.value = !found
+  }
 }
 
 const searchPrevious = () => {
-  if (searchTerm.value) searchAddon?.findPrevious(searchTerm.value)
+  if (searchTerm.value) {
+    const found = searchAddon?.findPrevious(searchTerm.value)
+    searchNoMatch.value = !found
+  }
 }
 
 const closeSearch = () => {
   showSearch.value = false
   searchTerm.value = ''
+  searchNoMatch.value = false
   terminal?.focus()
 }
 
 const handleSearchInput = () => {
-  if (searchTerm.value) searchAddon?.findNext(searchTerm.value)
+  if (searchTerm.value) {
+    const found = searchAddon?.findNext(searchTerm.value)
+    searchNoMatch.value = !found
+  } else {
+    searchNoMatch.value = false
+  }
 }
 
 const handleSearchKeydown = (e: KeyboardEvent) => {
@@ -1409,29 +1425,31 @@ defineExpose({
       <span class="expand-hint">{{ t('terminal.click_expand') }}</span>
     </div>
 
-    <!-- Search Bar -->
-    <div v-if="showSearch" class="terminal-search-bar">
-      <input
-        ref="searchInputRef"
-        v-model="searchTerm"
-        :placeholder="t('terminal.search_placeholder')"
-        class="search-input"
-        @input="handleSearchInput"
-        @keydown="handleSearchKeydown"
-      />
-      <button class="search-btn" @click="searchPrevious" :title="t('terminal.search_prev')">
-        <PhCaretUp :size="14" weight="bold" />
-      </button>
-      <button class="search-btn" @click="searchNext" :title="t('terminal.search_next')">
-        <PhCaretDown :size="14" weight="bold" />
-      </button>
-      <button class="search-btn" @click="closeSearch" :title="t('common.close')">
-        <PhX :size="14" weight="bold" />
-      </button>
-    </div>
-
     <!-- Terminal Container with Effects -->
     <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar || titleBarCollapsed }">
+      <!-- Search Bar (floating overlay) -->
+      <div v-if="showSearch" class="terminal-search-bar">
+        <input
+          ref="searchInputRef"
+          v-model="searchTerm"
+          :placeholder="t('terminal.search_placeholder')"
+          class="search-input"
+          :class="{ 'no-match': searchNoMatch }"
+          @input="handleSearchInput"
+          @keydown="handleSearchKeydown"
+        />
+        <span v-if="searchNoMatch && searchTerm" class="search-no-match">{{ t('terminal.search_no_results') }}</span>
+        <button class="search-btn" @click="searchPrevious" :title="t('terminal.search_prev')">
+          <PhCaretUp :size="14" weight="bold" />
+        </button>
+        <button class="search-btn" @click="searchNext" :title="t('terminal.search_next')">
+          <PhCaretDown :size="14" weight="bold" />
+        </button>
+        <button class="search-btn" @click="closeSearch" :title="t('common.close')">
+          <PhX :size="14" weight="bold" />
+        </button>
+      </div>
+
       <!-- CRT Scanlines Overlay -->
       <div class="scanlines" />
 
@@ -2093,15 +2111,21 @@ defineExpose({
   }
 }
 
-/* Search Bar */
+/* Search Bar (floating overlay) */
 .terminal-search-bar {
+  position: absolute;
+  top: 0;
+  right: 8px;
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
   background: var(--surface, #1e1e2e);
-  border-bottom: 1px solid var(--stroke, rgba(255, 255, 255, 0.1));
-  z-index: 10;
+  border: 1px solid var(--stroke, rgba(255, 255, 255, 0.1));
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  z-index: 20;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .search-input {
@@ -2118,6 +2142,17 @@ defineExpose({
 
 .search-input:focus {
   border-color: var(--accent, #7c5dff);
+}
+
+.search-input.no-match {
+  border-color: #e88080;
+  background: rgba(232, 128, 128, 0.1);
+}
+
+.search-no-match {
+  font-size: 11px;
+  color: #e88080;
+  white-space: nowrap;
 }
 
 .search-btn {

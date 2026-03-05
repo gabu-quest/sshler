@@ -111,6 +111,10 @@ export const ja: Record<string, string> = {
   "settings.clear_cache": "キャッシュクリア",
   "settings.token_refreshed": "トークンを更新しました",
   "settings.token_refresh_failed": "トークンの更新に失敗:",
+  "settings.token_status_loading": "読み込み中...",
+  "settings.token_status_error": "エラー: ",
+  "settings.token_status_ok": "トークン読み込み済み",
+  "settings.token_status_none": "トークンなし",
   "settings.cache_cleared": "キャッシュをクリアしました - ページを更新してください",
   "settings.theme_unavailable": "テーマ切替は利用できません",
 
@@ -154,6 +158,7 @@ export const ja: Record<string, string> = {
   "settings.pool_current_idle": "アイドルタイムアウト:",
   "settings.pool_current_lifetime": "最大接続時間:",
   "settings.pool_current_max": "最大接続数:",
+  "settings.pool_per_box": "ボックスごと",
 
   "settings.debug": "デバッグ情報",
   "settings.debug_url": "現在のURL:",
@@ -244,6 +249,7 @@ export const ja: Record<string, string> = {
   "terminal.search_placeholder": "ターミナルを検索...",
   "terminal.search_next": "次の一致",
   "terminal.search_prev": "前の一致",
+  "terminal.search_no_results": "結果なし",
 
   // Files
   "files.title": "ファイル",
@@ -443,6 +449,10 @@ export const ja: Record<string, string> = {
   "sessions.rename": "セッション名を変更",
   "sessions.rename_placeholder": "新しい名前",
   "sessions.kill_confirm": "tmuxセッション「{name}」を終了しますか？",
+  "sessions.just_now": "たった今",
+  "sessions.minutes_ago": "{n}分前",
+  "sessions.hours_ago": "{n}時間前",
+  "sessions.days_ago": "{n}日前",
 
   // Snippets
   "snippets.title": "スニペット",
@@ -466,6 +476,7 @@ export const ja: Record<string, string> = {
   "snippets.insert": "実行せずに挿入",
   "snippets.edit": "スニペットを編集",
   "snippets.global_tag": "グローバル",
+  "snippets.uncategorized": "未分類",
 
   // Tunnels
   "tunnels.title": "ポートフォワーディング",

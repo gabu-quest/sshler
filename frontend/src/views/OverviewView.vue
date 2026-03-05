@@ -239,16 +239,16 @@ const handleJumpToSession = (boxName: string, sessionName: string) => {
 };
 
 const getServerStatus = (box: any) => {
-  if (box.name.includes('offline')) return 'offline';
-  if (box.name.includes('prod')) return 'busy';
-  return 'online';
+  const stats = getBoxStats(box.name);
+  if (stats && stats.cpu_percent !== null) return 'online';
+  if (statsLoading.value.has(box.name)) return 'online';
+  return 'unknown';
 };
 
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'online': return '#52c41a';
-    case 'busy': return '#faad14';
-    case 'offline': return '#8c8c8c';
+    case 'unknown': return '#8c8c8c';
     default: return '#8c8c8c';
   }
 };
@@ -294,7 +294,7 @@ const handleBrowseServerFiles = (serverName: string) => {
       <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
       <template v-if="lastUpdated">
         <span class="stats-separator">•</span>
-        <span class="stats-updated">{{ lastUpdated.toLocaleTimeString() }}</span>
+        <span class="stats-updated">{{ t('overview.last_updated', { time: lastUpdated.toLocaleTimeString() }) }}</span>
       </template>
     </div>
 
@@ -465,14 +465,12 @@ const handleBrowseServerFiles = (serverName: string) => {
                 type="primary"
                 size="small"
                 @click="handleConnectToServer(box.name)"
-                :disabled="getServerStatus(box) === 'offline'"
               >
                 {{ t('overview.connect') }}
               </NButton>
               <NButton
                 size="small"
                 @click="handleBrowseServerFiles(box.name)"
-                :disabled="getServerStatus(box) === 'offline'"
               >
                 {{ t('overview.files') }}
               </NButton>

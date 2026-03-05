@@ -32,10 +32,10 @@ const useForeverIdle = ref(false)
 const useForeverLifetime = ref(false)
 
 const tokenStatus = computed(() => {
-  if (bootstrapStore.loading) return 'Loading...'
-  if (bootstrapStore.error) return 'Error: ' + bootstrapStore.error
-  if (bootstrapStore.token) return 'Token loaded'
-  return 'No token'
+  if (bootstrapStore.loading) return t('settings.token_status_loading')
+  if (bootstrapStore.error) return t('settings.token_status_error') + bootstrapStore.error
+  if (bootstrapStore.token) return t('settings.token_status_ok')
+  return t('settings.token_status_none')
 })
 
 const refreshToken = async () => {
@@ -54,11 +54,7 @@ const clearCache = () => {
 }
 
 const setTheme = (theme: string) => {
-  if (appStore.setTheme) {
-    appStore.setTheme(theme as any)
-  } else {
-    message.warning(t('settings.theme_unavailable'))
-  }
+  appStore.setColorMode(theme as any)
 }
 
 const loadPoolConfig = async () => {
@@ -106,7 +102,7 @@ const savePoolConfig = async () => {
 }
 
 const formatDuration = (minutes: number | null): string => {
-  if (minutes === null) return 'Forever'
+  if (minutes === null) return t('settings.pool_forever')
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
   const mins = minutes % 60
@@ -345,7 +341,7 @@ onMounted(async () => {
           <ul>
             <li>{{ t('settings.pool_current_idle') }}: {{ useForeverIdle ? t('settings.pool_forever') : formatDuration(poolConfig.idle_timeout) }}</li>
             <li>{{ t('settings.pool_current_lifetime') }}: {{ useForeverLifetime ? t('settings.pool_forever') : formatDuration(poolConfig.max_lifetime) }}</li>
-            <li>{{ t('settings.pool_current_max') }}: {{ poolConfig.max_connections_per_box }} per box</li>
+            <li>{{ t('settings.pool_current_max') }}: {{ poolConfig.max_connections_per_box }} {{ t('settings.pool_per_box') }}</li>
           </ul>
         </NAlert>
       </NSpace>

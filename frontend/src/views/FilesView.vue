@@ -605,7 +605,7 @@ async function handleUpload(files: FileList | null) {
     } catch (err) {
       lastError = err;
       if (attempt < maxAttempts) {
-        message.warning(t('files.upload_failed_retry'));
+        message.warning(t('files.upload_failed_retry') + ' ' + t('files.upload_attempt', { n: String(attempt + 1), max: String(maxAttempts) }));
         await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
       }
     }

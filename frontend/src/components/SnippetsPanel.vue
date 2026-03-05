@@ -61,7 +61,7 @@ const filteredSnippets = computed(() => {
 const groupedSnippets = computed(() => {
   const groups: Record<string, ApiSnippet[]> = {}
   for (const s of filteredSnippets.value) {
-    const cat = s.category || 'Uncategorized'
+    const cat = s.category || t('snippets.uncategorized')
     if (!groups[cat]) groups[cat] = []
     groups[cat].push(s)
   }

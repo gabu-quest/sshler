@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty } from 'naive-ui'
 import { PhArrowsClockwise, PhTerminalWindow, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX } from '@phosphor-icons/vue'
 import type { ApiSession } from '@/api/types'
@@ -64,6 +64,11 @@ async function kill(session: ApiSession) {
 function startRename(session: ApiSession) {
   editingId.value = session.id
   editName.value = session.session_name
+  nextTick(() => {
+    const input = document.querySelector('.rename-input') as HTMLInputElement
+    input?.focus()
+    input?.select()
+  })
 }
 
 function cancelRename() {
@@ -90,10 +95,10 @@ async function confirmRename(session: ApiSession) {
 function formatTime(ts: number): string {
   const now = Date.now() / 1000
   const diff = now - ts
-  if (diff < 60) return 'just now'
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
+  if (diff < 60) return t('sessions.just_now')
+  if (diff < 3600) return t('sessions.minutes_ago', { n: String(Math.floor(diff / 60)) })
+  if (diff < 86400) return t('sessions.hours_ago', { n: String(Math.floor(diff / 3600)) })
+  return t('sessions.days_ago', { n: String(Math.floor(diff / 86400)) })
 }
 
 onMounted(load)
