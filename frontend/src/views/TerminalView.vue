@@ -450,6 +450,12 @@ watch(() => boxesStore.items, () => {
             <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
           </NIcon>
         </button>
+        <button v-if="selectedBox" class="mobile-action-btn" @click="showSnippetsPanel = true" aria-label="Snippets">
+          <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
+        </button>
+        <button v-if="selectedBox" class="mobile-action-btn" @click="showTunnelsPanel = true" aria-label="Port Forwarding">
+          <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
+        </button>
         <a
           v-if="selectedBox"
           :href="filesUrl"

@@ -2,7 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import {
   NDrawer, NDrawerContent, NButton, NIcon, NInput, NInputNumber,
-  NEmpty, NSpace, NTag, NPopconfirm, NRadioGroup, NRadio,
+  NEmpty, NSpace, NTag, NPopconfirm, NRadioGroup, NRadio, NSpin,
   useMessage,
 } from 'naive-ui'
 import { PhTrash, PhPlus } from '@phosphor-icons/vue'
@@ -103,6 +103,8 @@ const handleDelete = async (tunnelId: string) => {
   const ok = await tunnelsStore.remove(props.boxName, tunnelId, token.value)
   if (ok) {
     message.success('Tunnel closed')
+  } else {
+    message.error(tunnelsStore.error || 'Failed to close tunnel')
   }
 }
 
@@ -111,19 +113,19 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
 </script>
 
 <template>
-  <NDrawer :show="props.show" :width="400" placement="right" @update:show="emit('update:show', $event)">
+  <NDrawer :show="props.show" width="min(400px, calc(100vw - 16px))" placement="right" @update:show="emit('update:show', $event)">
     <NDrawerContent title="Port Forwarding" closable>
       <template #header-extra>
-        <NButton size="small" type="primary" @click="showAddForm = !showAddForm">
+        <NButton size="small" type="primary" aria-label="Add tunnel" @click="showAddForm = !showAddForm">
           <NIcon size="14"><PhPlus weight="bold" /></NIcon>
         </NButton>
       </template>
 
       <!-- Add form -->
-      <div v-if="showAddForm" class="tunnel-form">
+      <div v-if="showAddForm" class="tunnel-form" @keydown.esc.stop="resetAddForm">
         <NRadioGroup v-model:value="newType" size="small">
-          <NRadio value="local">Local (-L)</NRadio>
-          <NRadio value="remote">Remote (-R)</NRadio>
+          <NRadio value="local">Local (-L) &mdash; access remote port locally</NRadio>
+          <NRadio value="remote">Remote (-R) &mdash; expose local port remotely</NRadio>
         </NRadioGroup>
 
         <div class="tunnel-ports-row">
@@ -154,11 +156,26 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
         </NSpace>
       </div>
 
-      <!-- Tunnel list -->
-      <div v-if="tunnelsStore.items.length === 0" class="tunnel-empty">
+      <!-- Loading state -->
+      <div v-if="tunnelsStore.loading && tunnelsStore.items.length === 0" class="tunnel-loading">
+        <NSpin size="small" />
+      </div>
+
+      <!-- Error state -->
+      <div v-else-if="tunnelsStore.error && tunnelsStore.items.length === 0" class="tunnel-empty">
+        <NEmpty :description="tunnelsStore.error">
+          <template #extra>
+            <NButton size="small" @click="tunnelsStore.load(props.boxName, token)">Retry</NButton>
+          </template>
+        </NEmpty>
+      </div>
+
+      <!-- Empty state -->
+      <div v-else-if="tunnelsStore.items.length === 0" class="tunnel-empty">
         <NEmpty description="No active tunnels" />
       </div>
 
+      <!-- Tunnel list -->
       <div
         v-for="tunnel in tunnelsStore.items"
         :key="tunnel.id"
@@ -178,7 +195,7 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
         </div>
         <NPopconfirm @positive-click="handleDelete(tunnel.id)">
           <template #trigger>
-            <NButton size="tiny" quaternary title="Close tunnel">
+            <NButton size="tiny" quaternary aria-label="Close tunnel">
               <NIcon size="14"><PhTrash weight="duotone" /></NIcon>
             </NButton>
           </template>
@@ -223,6 +240,12 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
   font-size: 18px;
   color: var(--muted);
   margin-top: 16px;
+}
+
+.tunnel-loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
 }
 
 .tunnel-empty {

@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import {
   NDrawer, NDrawerContent, NButton, NIcon, NInput, NEmpty,
-  NSpace, NTag, NPopconfirm, useMessage,
+  NSpace, NTag, NPopconfirm, NSpin, useMessage,
 } from 'naive-ui'
 import { PhTrash, PhPencilSimple, PhPlay, PhCopy, PhPlus } from '@phosphor-icons/vue'
 import { useSnippetsStore } from '@/stores/snippets'
@@ -108,13 +108,17 @@ const cancelEdit = () => {
   editingId.value = null
 }
 
+const editSaving = ref(false)
+
 const handleSaveEdit = async () => {
   if (!editingId.value) return
+  editSaving.value = true
   const result = await snippetsStore.update(
     editingId.value,
     { label: editLabel.value, command: editCommand.value, category: editCategory.value },
     token.value,
   )
+  editSaving.value = false
   if (result) {
     message.success('Snippet updated')
     editingId.value = null
@@ -128,21 +132,23 @@ const handleDelete = async (id: string) => {
   if (ok) {
     message.success('Snippet deleted')
     if (editingId.value === id) editingId.value = null
+  } else {
+    message.error(snippetsStore.error || 'Failed to delete snippet')
   }
 }
 </script>
 
 <template>
-  <NDrawer :show="props.show" :width="380" placement="right" @update:show="emit('update:show', $event)">
+  <NDrawer :show="props.show" width="min(380px, calc(100vw - 16px))" placement="right" @update:show="emit('update:show', $event)">
     <NDrawerContent title="Snippets" closable>
       <template #header-extra>
-        <NButton size="small" type="primary" @click="showAddForm = !showAddForm">
+        <NButton size="small" type="primary" aria-label="Add snippet" @click="showAddForm = !showAddForm">
           <NIcon size="14"><PhPlus weight="bold" /></NIcon>
         </NButton>
       </template>
 
       <!-- Add form -->
-      <div v-if="showAddForm" class="snippet-form">
+      <div v-if="showAddForm" class="snippet-form" @keydown.esc.stop="resetAddForm">
         <NInput v-model:value="newLabel" placeholder="Label" size="small" />
         <NInput
           v-model:value="newCommand"
@@ -169,11 +175,26 @@ const handleDelete = async (id: string) => {
         class="snippet-filter"
       />
 
-      <!-- Snippets list -->
-      <div v-if="filteredSnippets.length === 0" class="snippet-empty">
+      <!-- Loading state -->
+      <div v-if="snippetsStore.loading" class="snippet-loading">
+        <NSpin size="small" />
+      </div>
+
+      <!-- Error state -->
+      <div v-else-if="snippetsStore.error && snippetsStore.items.length === 0" class="snippet-empty">
+        <NEmpty :description="snippetsStore.error">
+          <template #extra>
+            <NButton size="small" @click="snippetsStore.load(props.boxName, token)">Retry</NButton>
+          </template>
+        </NEmpty>
+      </div>
+
+      <!-- Empty state -->
+      <div v-else-if="filteredSnippets.length === 0" class="snippet-empty">
         <NEmpty :description="snippetsStore.items.length === 0 ? 'No snippets yet' : 'No matches'" />
       </div>
 
+      <!-- Snippets list -->
       <div v-for="(snippets, category) in groupedSnippets" :key="category" class="snippet-group">
         <div class="snippet-category">{{ category }}</div>
         <div
@@ -182,7 +203,7 @@ const handleDelete = async (id: string) => {
           class="snippet-item"
         >
           <!-- Edit mode -->
-          <div v-if="editingId === snippet.id" class="snippet-form">
+          <div v-if="editingId === snippet.id" class="snippet-form" @keydown.esc.stop="cancelEdit">
             <NInput v-model:value="editLabel" placeholder="Label" size="small" />
             <NInput
               v-model:value="editCommand"
@@ -191,10 +212,10 @@ const handleDelete = async (id: string) => {
               size="small"
               :autosize="{ minRows: 2, maxRows: 5 }"
             />
-            <NInput v-model:value="editCategory" placeholder="Category" size="small" />
+            <NInput v-model:value="editCategory" placeholder="Category (optional)" size="small" />
             <NSpace size="small">
-              <NButton size="small" type="primary" @click="handleSaveEdit">Save</NButton>
-              <NButton size="small" @click="cancelEdit">Cancel</NButton>
+              <NButton size="small" type="primary" @click="handleSaveEdit" :loading="editSaving" :disabled="editSaving">Save</NButton>
+              <NButton size="small" @click="cancelEdit" :disabled="editSaving">Cancel</NButton>
             </NSpace>
           </div>
 
@@ -206,18 +227,18 @@ const handleDelete = async (id: string) => {
             </div>
             <pre class="snippet-command">{{ snippet.command }}</pre>
             <div class="snippet-actions">
-              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, true)" title="Execute">
+              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, true)" aria-label="Execute snippet">
                 <NIcon size="14"><PhPlay weight="duotone" /></NIcon>
               </NButton>
-              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, false)" title="Insert without executing">
+              <NButton size="tiny" quaternary @click="handleInsert(snippet.command, false)" aria-label="Insert without executing">
                 <NIcon size="14"><PhCopy weight="duotone" /></NIcon>
               </NButton>
-              <NButton size="tiny" quaternary @click="startEdit(snippet)" title="Edit">
+              <NButton size="tiny" quaternary @click="startEdit(snippet)" aria-label="Edit snippet">
                 <NIcon size="14"><PhPencilSimple weight="duotone" /></NIcon>
               </NButton>
               <NPopconfirm @positive-click="handleDelete(snippet.id)">
                 <template #trigger>
-                  <NButton size="tiny" quaternary title="Delete">
+                  <NButton size="tiny" quaternary aria-label="Delete snippet">
                     <NIcon size="14"><PhTrash weight="duotone" /></NIcon>
                   </NButton>
                 </template>
@@ -244,6 +265,12 @@ const handleDelete = async (id: string) => {
 
 .snippet-filter {
   margin-bottom: 12px;
+}
+
+.snippet-loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
 }
 
 .snippet-empty {
