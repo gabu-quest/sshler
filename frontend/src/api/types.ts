@@ -125,3 +125,23 @@ export interface SearchResponse {
   query: string;
   results: SearchResult[];
 }
+
+export interface BatchResult {
+  status: "ok" | "partial";
+  succeeded: string[];
+  failed: { path: string; error: string }[];
+}
+
+export interface GrepMatch {
+  file: string;
+  line_number: number;
+  line: string;
+}
+
+export interface GrepResponse {
+  box: string;
+  pattern: string;
+  directory: string;
+  matches: GrepMatch[];
+  truncated: boolean;
+}

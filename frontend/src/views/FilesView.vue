@@ -6,10 +6,10 @@ import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
 import {
-  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArrowClockwise, PhGitBranch,
+  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArrowClockwise, PhGitBranch, PhArchive,
 } from "@phosphor-icons/vue";
 
-import type { ApiBox, FilePreview, GitInfo } from "@/api/types";
+import type { ApiBox, BatchResult, FilePreview, GitInfo } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
@@ -18,9 +18,11 @@ import { useFavoritesStore } from "@/stores/favorites";
 import { useAppStore } from "@/stores/app";
 import FavoritesPanel from "@/components/FavoritesPanel.vue";
 import CodeEditor from "@/components/CodeEditor.vue";
+import BatchMoveModal from "@/components/BatchMoveModal.vue";
+import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile, gitInfo, chmodFile } from "@/api/http";
+import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 import { marked } from "marked";
@@ -70,6 +72,7 @@ const expandingDir = ref<string | null>(null);
 const refreshing = ref(false);
 const sortState = ref<{ columnKey: string; order: 'ascend' | 'descend' }>({ columnKey: 'name', order: 'ascend' });
 const markdownRenderMode = ref(false);
+const batchModal = ref<{ visible: boolean; mode: "move" | "copy" }>({ visible: false, mode: "move" });
 const currentGitInfo = ref<GitInfo | null>(null);
 const chmodModalVisible = ref(false);
 const chmodTarget = ref<{ path: string; currentMode: number | null }>({ path: '', currentMode: null });
@@ -294,7 +297,17 @@ const getContextMenuItems = () => {
   } else {
     items.push({ id: 'preview', label: 'Preview', icon: PhEye }, { id: 'edit', label: 'Edit', icon: PhPencil }, { id: 'download', label: 'Download', icon: PhDownloadSimple });
   }
-  items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: 'Rename', icon: PhTextAa }, { id: 'chmod', label: 'Chmod', icon: PhGear }, { id: 'copy', label: 'Copy', icon: PhCopy }, { id: 'copy-path', label: 'Copy Path', icon: PhClipboard }, { id: 'favorite', label: file.is_directory ? 'Add to Favorites' : 'Favorite Directory', icon: PhStar }, { separator: true, id: 'sep2', label: '' }, { id: 'delete', label: 'Delete', icon: PhTrash, danger: true });
+  // Check if file is an extractable archive
+  const archiveExts = ['.tar.gz', '.tgz', '.zip'];
+  const isArchive = !file.is_directory && archiveExts.some((ext: string) => file.name.toLowerCase().endsWith(ext));
+
+  items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: 'Rename', icon: PhTextAa }, { id: 'chmod', label: 'Chmod', icon: PhGear }, { id: 'copy', label: 'Copy', icon: PhCopy }, { id: 'copy-path', label: 'Copy Path', icon: PhClipboard }, { id: 'favorite', label: file.is_directory ? 'Add to Favorites' : 'Favorite Directory', icon: PhStar });
+  items.push({ separator: true, id: 'sep-archive', label: '' });
+  if (isArchive) {
+    items.push({ id: 'extract', label: 'Extract Here', icon: PhArchive });
+  }
+  items.push({ id: 'compress-tgz', label: 'Compress as .tar.gz', icon: PhArchive }, { id: 'compress-zip', label: 'Compress as .zip', icon: PhArchive });
+  items.push({ separator: true, id: 'sep2', label: '' }, { id: 'delete', label: 'Delete', icon: PhTrash, danger: true });
   return items;
 };
 
@@ -311,6 +324,9 @@ const handleContextMenuSelect = async (itemId: string) => {
     case 'copy': renameTarget.value = file.path; copyDestination.value = currentDir.value; copyNewName.value = `${file.name}_copy`; break;
     case 'copy-path': await navigator.clipboard.writeText(file.path); message.success(t('files.path_copied')); break;
     case 'favorite': if (file.is_directory) await toggleFavoriteDir(file.path); else await toggleFavoriteCurrentDir(); break;
+    case 'extract': await handleArchiveExtract(file.path); break;
+    case 'compress-tgz': await handleArchiveCreate('tar.gz', [file.path]); break;
+    case 'compress-zip': await handleArchiveCreate('zip', [file.path]); break;
     case 'delete': await removePath(file.path); break;
   }
   contextMenu.value.visible = false;
@@ -688,12 +704,76 @@ async function bulkDelete() {
   if (!selectedBox.value || !selectedPaths.value.length) return;
   actionBusy.value = true;
   try {
-    for (const path of selectedPaths.value) {
-      await filesStore.doDelete(selectedBox.value, path, tokenValue.value || null);
-    }
+    const result = await filesStore.doBatchDelete(selectedBox.value, selectedPaths.value, tokenValue.value || null);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     filesStore.setSelectedFiles([]);
-    message.success(t('files.deleted_selection'));
+    if (result.status === "partial") {
+      message.warning(`Deleted ${result.succeeded.length}, failed ${result.failed.length}`);
+    } else {
+      message.success(t('files.deleted_selection'));
+    }
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err));
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+function openBatchModal(mode: "move" | "copy") {
+  batchModal.value = { visible: true, mode };
+}
+
+async function handleBatchConfirm(destination: string) {
+  if (!selectedBox.value || !selectedPaths.value.length) return;
+  batchModal.value.visible = false;
+  actionBusy.value = true;
+  try {
+    const result = batchModal.value.mode === "move"
+      ? await filesStore.doBatchMove(selectedBox.value, selectedPaths.value, destination, tokenValue.value || null)
+      : await filesStore.doBatchCopy(selectedBox.value, selectedPaths.value, destination, tokenValue.value || null);
+    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    filesStore.setSelectedFiles([]);
+    const verb = batchModal.value.mode === "move" ? "Moved" : "Copied";
+    if (result.status === "partial") {
+      message.warning(`${verb} ${result.succeeded.length}, failed ${result.failed.length}`);
+    } else {
+      message.success(`${verb} ${result.succeeded.length} item(s)`);
+    }
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err));
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+async function handleArchiveCreate(format: string, paths?: string[]) {
+  if (!selectedBox.value) return;
+  const archivePaths = paths || selectedPaths.value;
+  if (!archivePaths.length) return;
+  actionBusy.value = true;
+  const ext = format === "zip" ? ".zip" : ".tar.gz";
+  const archiveName = archivePaths.length === 1
+    ? archivePaths[0].split('/').pop() + ext
+    : `archive${ext}`;
+  try {
+    await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null);
+    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    filesStore.setSelectedFiles([]);
+    message.success(`Created ${archiveName}`);
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err));
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+async function handleArchiveExtract(archivePath: string) {
+  if (!selectedBox.value) return;
+  actionBusy.value = true;
+  try {
+    await extractArchive(selectedBox.value, archivePath, currentDir.value, tokenValue.value || null);
+    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    message.success("Extracted archive");
   } catch (err) {
     message.error(err instanceof Error ? err.message : String(err));
   } finally {
@@ -968,6 +1048,18 @@ const columns = computed(() => {
             <NButton size="small" @click="bulkDownload" :disabled="selectedCount > 10">
               <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>{{ t('files.download_selected') }}
             </NButton>
+            <NButton size="small" @click="openBatchModal('move')">
+              <NIcon size="14"><PhArrowBendUpLeft weight="duotone" /></NIcon>Move To...
+            </NButton>
+            <NButton size="small" @click="openBatchModal('copy')">
+              <NIcon size="14"><PhCopy weight="duotone" /></NIcon>Copy To...
+            </NButton>
+            <NButton size="small" @click="handleArchiveCreate('tar.gz')">
+              <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.tar.gz
+            </NButton>
+            <NButton size="small" @click="handleArchiveCreate('zip')">
+              <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.zip
+            </NButton>
             <NButton size="small" @click="filesStore.setSelectedFiles([])">{{ t('files.clear_selection') }}</NButton>
           </NSpace>
         </div>
@@ -1017,6 +1109,14 @@ const columns = computed(() => {
             <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('files.create_file') }}
           </NButton>
         </NSpace>
+
+        <!-- Content Search (grep) -->
+        <ContentSearchInput
+          :box="selectedBox || null"
+          :token="tokenValue || null"
+          :directory="currentDir"
+          @navigate="(dir: string) => navigateToDirectory(dir)"
+        />
 
         <!-- File Upload -->
         <NSpace size="small" align="center">
@@ -1142,6 +1242,17 @@ const columns = computed(() => {
 
     <!-- Context Menu -->
     <ContextMenu :visible="contextMenu.visible" :x="contextMenu.x" :y="contextMenu.y" :items="getContextMenuItems()" @select="handleContextMenuSelect" @close="contextMenu.visible = false" />
+
+    <!-- Batch Move/Copy Modal -->
+    <BatchMoveModal
+      :visible="batchModal.visible"
+      :mode="batchModal.mode"
+      :box="selectedBox || null"
+      :token="tokenValue || null"
+      :count="selectedCount"
+      @confirm="handleBatchConfirm"
+      @close="batchModal.visible = false"
+    />
   </div>
 </template>
 <style scoped>

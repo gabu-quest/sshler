@@ -1,5 +1,6 @@
 import type {
   ApiBox,
+  BatchResult,
   BoxStats,
   BoxStatus,
   BootstrapPayload,
@@ -7,6 +8,7 @@ import type {
   FavoriteToggle,
   FilePreview,
   GitInfo,
+  GrepResponse,
   PinToggle,
   SearchResponse,
   SessionInfo,
@@ -580,6 +582,102 @@ export async function downloadFile(
     throw new Error(`download failed ${res.status}`);
   }
   return res.blob();
+}
+
+export async function batchDelete(
+  name: string,
+  paths: string[],
+  token: string | null,
+): Promise<BatchResult> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/delete`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+    credentials: 'include'
+  });
+  return handle<BatchResult>(res);
+}
+
+export async function batchMove(
+  name: string,
+  paths: string[],
+  destination: string,
+  token: string | null,
+): Promise<BatchResult> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/move`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, destination }),
+    credentials: 'include'
+  });
+  return handle<BatchResult>(res);
+}
+
+export async function batchCopy(
+  name: string,
+  paths: string[],
+  destination: string,
+  token: string | null,
+): Promise<BatchResult> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/copy`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, destination }),
+    credentials: 'include'
+  });
+  return handle<BatchResult>(res);
+}
+
+export async function grepContent(
+  name: string,
+  pattern: string,
+  directory: string,
+  token: string | null,
+  caseSensitive: boolean = false,
+  limit: number = 100,
+): Promise<GrepResponse> {
+  const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/grep`, window.location.origin);
+  url.searchParams.set("pattern", pattern);
+  url.searchParams.set("directory", directory);
+  url.searchParams.set("case_sensitive", String(caseSensitive));
+  url.searchParams.set("limit", String(limit));
+  const res = await fetch(url.toString().replace(window.location.origin, ""), {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<GrepResponse>(res);
+}
+
+export async function createArchive(
+  name: string,
+  paths: string[],
+  destination: string,
+  archiveName: string,
+  format: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/create`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, destination, archive_name: archiveName, format }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function extractArchive(
+  name: string,
+  archivePath: string,
+  destination: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/extract`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ archive_path: archivePath, destination }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
 }
 
 export async function searchDirectories(
