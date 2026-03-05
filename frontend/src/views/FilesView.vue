@@ -6,7 +6,7 @@ import {
   NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
 } from "naive-ui";
 import {
-  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple,
+  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArrowClockwise,
 } from "@phosphor-icons/vue";
 
 import type { ApiBox, FilePreview } from "@/api/types";
@@ -15,6 +15,7 @@ import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
 import { useFilesStore } from "@/stores/files";
 import { useFavoritesStore } from "@/stores/favorites";
+import { useAppStore } from "@/stores/app";
 import FavoritesPanel from "@/components/FavoritesPanel.vue";
 import CodeEditor from "@/components/CodeEditor.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
@@ -30,6 +31,7 @@ const boxesStore = useBoxesStore();
 const directoryStore = useDirectoryStore();
 const favoritesStore = useFavoritesStore();
 const filesStore = useFilesStore();
+const appStore = useAppStore();
 const message = useMessage();
 const { isMobile } = useResponsive();
 const { t } = useI18n();
@@ -58,13 +60,14 @@ const editContent = ref("");
 const editLoading = ref(false);
 const showLineNumbers = ref(true);
 const wordWrap = ref(true);
-const editorTheme = ref<'light' | 'dark'>('dark');
+const editorTheme = computed(() => appStore.isDark ? 'dark' : 'light');
 const contextMenu = ref({ visible: false, x: 0, y: 0, targetFile: null as any });
 const dragCounter = ref(0);
 const isDragOver = ref(false);
 const expandedDirs = ref<Set<string>>(new Set());
 const childrenCache = ref<Map<string, any[]>>(new Map());
 const expandingDir = ref<string | null>(null);
+const refreshing = ref(false);
 const sortState = ref<{ columnKey: string; order: 'ascend' | 'descend' }>({ columnKey: 'name', order: 'ascend' });
 const markdownRenderMode = ref(false);
 
@@ -402,8 +405,28 @@ onMounted(async () => {
 
 async function reloadDir() {
   if (!selectedBox.value) return;
-  await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-  await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+  refreshing.value = true;
+  try {
+    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    // Re-fetch children for all currently expanded directories
+    const expandedPaths = [...expandedDirs.value];
+    if (expandedPaths.length > 0) {
+      await Promise.all(expandedPaths.map(async (path) => {
+        const listing = await directoryStore.fetchChildren(selectedBox.value!, path, tokenValue.value || null);
+        if (listing?.entries) {
+          childrenCache.value.set(path, listing.entries);
+        } else {
+          childrenCache.value.delete(path);
+          expandedDirs.value.delete(path);
+        }
+      }));
+      childrenCache.value = new Map(childrenCache.value);
+      expandedDirs.value = new Set(expandedDirs.value);
+    }
+  } finally {
+    refreshing.value = false;
+  }
 }
 
 async function handlePinToggle() {
@@ -798,8 +821,8 @@ const columns = computed(() => {
         <span class="breadcrumb-path">{{ currentDir }}</span>
       </NSpace>
       <NSpace size="small">
-        <NButton size="small" @click="reloadDir" :disabled="!selectedBox" :title="t('common.refresh')">
-          <NIcon size="16"><PhUploadSimple weight="duotone" /></NIcon>
+        <NButton size="small" @click="reloadDir" :disabled="!selectedBox || refreshing" :loading="refreshing" :title="t('common.refresh')">
+          <NIcon size="16"><PhArrowClockwise weight="duotone" /></NIcon>
         </NButton>
         <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)" :disabled="!selectedBox" :title="t('terminal.open_terminal')">
           <NIcon size="16"><PhTerminalWindow weight="duotone" /></NIcon>
@@ -962,8 +985,11 @@ const columns = computed(() => {
               <NIcon size="14"><PhEye v-if="!markdownRenderMode" weight="duotone" /><PhFile v-else weight="duotone" /></NIcon>
               {{ markdownRenderMode ? 'Source' : 'Render' }}
             </NButton>
-            <NButton size="small" @click="handleEdit({ path: previewPath, name: previewPath.split('/').pop() })">
+            <NButton size="small" :title="t('common.edit')" @click="handleEdit({ path: previewPath, name: previewPath.split('/').pop() })">
               <NIcon size="14"><PhPencil weight="duotone" /></NIcon>Edit
+            </NButton>
+            <NButton size="small" :title="t('common.download')" @click="handleDownload({ path: previewPath, name: previewPath.split('/').pop(), is_directory: false })">
+              <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>Download
             </NButton>
           </div>
         </div>
@@ -986,20 +1012,19 @@ const columns = computed(() => {
       </div>
       
       <template #footer>
-        <NSpace justify="space-between">
-          <NSpace size="small">
+        <div class="modal-footer">
+          <NSpace size="small" :wrap="false">
             <NSwitch v-model:value="showLineNumbers" size="small">
-              <template #checked>{{ t('files.line_numbers') }}</template>
-              <template #unchecked>{{ t('files.no_lines') }}</template>
+              <template #checked>{{ t('files.lines') }}</template>
+              <template #unchecked>No Lines</template>
             </NSwitch>
             <NSwitch v-model:value="wordWrap" size="small">
-              <template #checked>{{ t('files.word_wrap') }}</template>
-              <template #unchecked>{{ t('files.no_wrap') }}</template>
+              <template #checked>{{ t('files.wrap') }}</template>
+              <template #unchecked>No Wrap</template>
             </NSwitch>
-            <NSelect v-model:value="editorTheme" :options="[{ label: t('files.dark'), value: 'dark' }, { label: t('files.light'), value: 'light' }]" size="small" style="width: 100px" />
           </NSpace>
           <NButton @click="closePreview">{{ t('common.close') }}</NButton>
-        </NSpace>
+        </div>
       </template>
     </NModal>
 
@@ -1009,37 +1034,33 @@ const columns = computed(() => {
         <div class="modal-header">
           <NIcon size="16"><PhPencil weight="duotone" /></NIcon>
           <span>{{ t('common.edit') }}: {{ editPath.split('/').pop() }}</span>
-          <div class="modal-actions">
-            <NSpace size="small">
-              <NSwitch v-model:value="showLineNumbers" size="small">
-                <template #checked>{{ t('files.lines') }}</template>
-                <template #unchecked>No Lines</template>
-              </NSwitch>
-              <NSwitch v-model:value="wordWrap" size="small">
-                <template #checked>{{ t('files.wrap') }}</template>
-                <template #unchecked>No Wrap</template>
-              </NSwitch>
-              <NSelect v-model:value="editorTheme" :options="[{ label: t('files.dark'), value: 'dark' }, { label: t('files.light'), value: 'light' }]" size="small" style="width: 80px" />
-            </NSpace>
-          </div>
         </div>
       </template>
-      
+
       <div class="editor-container">
         <NSpin v-if="editLoading" size="large"><span class="text-muted">{{ t('files.loading_file') }}</span></NSpin>
         <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 80vh" :placeholder="t('files.file_placeholder')" @save="saveEdit" />
       </div>
-      
+
       <template #footer>
-        <NSpace justify="space-between">
-          <div class="file-info"><span class="text-muted small">{{ editPath }}</span></div>
-          <NSpace>
+        <div class="modal-footer">
+          <NSpace size="small" :wrap="false">
+            <NSwitch v-model:value="showLineNumbers" size="small">
+              <template #checked>{{ t('files.lines') }}</template>
+              <template #unchecked>No Lines</template>
+            </NSwitch>
+            <NSwitch v-model:value="wordWrap" size="small">
+              <template #checked>{{ t('files.wrap') }}</template>
+              <template #unchecked>No Wrap</template>
+            </NSwitch>
+          </NSpace>
+          <NSpace size="small" :wrap="false">
             <NButton @click="editing = false">{{ t('common.cancel') }}</NButton>
             <NButton type="primary" :loading="editLoading" @click="saveEdit">
               <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('common.save') }}
             </NButton>
           </NSpace>
-        </NSpace>
+        </div>
       </template>
     </NModal>
 
@@ -1334,6 +1355,14 @@ h1 {
   border: none;
   border-top: 1px solid var(--stroke);
   margin: 1.5em 0;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .file-info {
