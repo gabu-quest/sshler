@@ -3,13 +3,13 @@ import { computed, h, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useResponsive } from "@/composables/useResponsive";
 import {
-  NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NModal, NSelect, NSpace, NSpin, NTag, NSwitch, NTooltip, useMessage,
+  NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NSelect, NSpace, NSpin, NTag, NTooltip, useMessage,
 } from "naive-ui";
 import {
-  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhArrowLeft, PhHouse, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArrowClockwise, PhGitBranch, PhArchive,
+  PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArchive,
 } from "@phosphor-icons/vue";
 
-import type { ApiBox, BatchResult, FilePreview, GitInfo } from "@/api/types";
+import type { ApiBox, GitInfo } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
@@ -17,15 +17,18 @@ import { useFilesStore } from "@/stores/files";
 import { useFavoritesStore } from "@/stores/favorites";
 import { useAppStore } from "@/stores/app";
 import FavoritesPanel from "@/components/FavoritesPanel.vue";
-import CodeEditor from "@/components/CodeEditor.vue";
+import FileBreadcrumb from "@/components/FileBreadcrumb.vue";
+import FileUploadZone from "@/components/FileUploadZone.vue";
+import FilePreviewModal from "@/components/FilePreviewModal.vue";
+import FileEditorModal from "@/components/FileEditorModal.vue";
+import FileDiffModal from "@/components/FileDiffModal.vue";
 import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { touchFile, boxStatus, fetchFilePreview, downloadFile, writeFile, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { touchFile, boxStatus, downloadFile, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
-import { marked } from "marked";
 
 const route = useRoute();
 const bootstrapStore = useBootstrapStore();
@@ -53,30 +56,24 @@ const status = ref<string>("unknown");
 const viewFilter = ref<"all" | "files" | "dirs">("all");
 const previewing = ref(false);
 const previewPath = ref("");
-const previewContent = ref("");
-const previewMeta = ref<FilePreview | null>(null);
-const previewLoading = ref(false);
 const editing = ref(false);
 const editPath = ref("");
-const editContent = ref("");
-const editLoading = ref(false);
-const showLineNumbers = ref(true);
-const wordWrap = ref(true);
 const editorTheme = computed(() => appStore.isDark ? 'dark' : 'light');
 const contextMenu = ref({ visible: false, x: 0, y: 0, targetFile: null as any });
-const dragCounter = ref(0);
-const isDragOver = ref(false);
+const previewModalRef = ref<InstanceType<typeof FilePreviewModal>>();
 const expandedDirs = ref<Set<string>>(new Set());
 const childrenCache = ref<Map<string, any[]>>(new Map());
 const expandingDir = ref<string | null>(null);
 const refreshing = ref(false);
 const sortState = ref<{ columnKey: string; order: 'ascend' | 'descend' }>({ columnKey: 'name', order: 'ascend' });
-const markdownRenderMode = ref(false);
 const batchModal = ref<{ visible: boolean; mode: "move" | "copy" }>({ visible: false, mode: "move" });
 const currentGitInfo = ref<GitInfo | null>(null);
 const chmodModalVisible = ref(false);
 const chmodTarget = ref<{ path: string; currentMode: number | null }>({ path: '', currentMode: null });
 const chmodValue = ref("");
+const diffModalVisible = ref(false);
+const diffInitialFileA = ref("");
+const diffInitialFileB = ref("");
 
 const formatMode = (mode: number | null | undefined): string => {
   if (mode == null) return "-";
@@ -162,15 +159,6 @@ const filteredRows = computed(() => {
 
   return result;
 });
-const previewIsImage = computed(() => !!(previewMeta.value?.image_data && previewMeta.value?.image_mime && !previewMeta.value?.image_too_large));
-const isMarkdownFile = computed(() => {
-  const name = previewMeta.value?.name?.toLowerCase() || previewPath.value.split('/').pop()?.toLowerCase() || '';
-  return name.endsWith('.md') || name.endsWith('.markdown') || name.endsWith('.mdx');
-});
-const renderedMarkdown = computed(() => {
-  if (!markdownRenderMode.value || !previewContent.value) return '';
-  return marked.parse(previewContent.value) as string;
-});
 const selectedPaths = computed({
   get: () => filesStore.selectedFiles,
   set: (val: string[]) => filesStore.setSelectedFiles(val),
@@ -214,14 +202,6 @@ const formatFileSize = (bytes: number) => {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-};
-
-const getLanguageFromFilename = (filename: string) => {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  const langMap: Record<string, string> = {
-    'js': 'javascript', 'jsx': 'javascript', 'ts': 'javascript', 'tsx': 'javascript', 'py': 'python', 'html': 'html', 'htm': 'html', 'css': 'css', 'scss': 'css', 'sass': 'css', 'json': 'json', 'md': 'markdown', 'xml': 'xml', 'svg': 'xml'
-  };
-  return langMap[ext || ''] || 'text';
 };
 
 const toggleExpandDir = async (path: string) => {
@@ -302,6 +282,9 @@ const getContextMenuItems = () => {
   const isArchive = !file.is_directory && archiveExts.some((ext: string) => file.name.toLowerCase().endsWith(ext));
 
   items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: 'Rename', icon: PhTextAa }, { id: 'chmod', label: 'Chmod', icon: PhGear }, { id: 'copy', label: 'Copy', icon: PhCopy }, { id: 'copy-path', label: 'Copy Path', icon: PhClipboard }, { id: 'favorite', label: file.is_directory ? 'Add to Favorites' : 'Favorite Directory', icon: PhStar });
+  if (!file.is_directory) {
+    items.push({ id: 'compare', label: 'Compare with...', icon: PhEye });
+  }
   items.push({ separator: true, id: 'sep-archive', label: '' });
   if (isArchive) {
     items.push({ id: 'extract', label: 'Extract Here', icon: PhArchive });
@@ -324,6 +307,7 @@ const handleContextMenuSelect = async (itemId: string) => {
     case 'copy': renameTarget.value = file.path; copyDestination.value = currentDir.value; copyNewName.value = `${file.name}_copy`; break;
     case 'copy-path': await navigator.clipboard.writeText(file.path); message.success(t('files.path_copied')); break;
     case 'favorite': if (file.is_directory) await toggleFavoriteDir(file.path); else await toggleFavoriteCurrentDir(); break;
+    case 'compare': openDiffModal(file.path); break;
     case 'extract': await handleArchiveExtract(file.path); break;
     case 'compress-tgz': await handleArchiveCreate('tar.gz', [file.path]); break;
     case 'compress-zip': await handleArchiveCreate('zip', [file.path]); break;
@@ -340,12 +324,6 @@ const toggleFavoriteDir = async (path: string) => {
   applyBoxPatch(selectedBox.value, { favorites: Array.from(favoritesForSelection.value.values()) });
   message.success(nowFavorite ? t('files.favorite') + ' ' + path : t('files.unfavorite') + ' ' + path);
 };
-
-// Drag and drop functions
-const handleDragEnter = (e: DragEvent) => { e.preventDefault(); dragCounter.value++; if (dragCounter.value === 1) isDragOver.value = true; };
-const handleDragLeave = (e: DragEvent) => { e.preventDefault(); dragCounter.value--; if (dragCounter.value === 0) isDragOver.value = false; };
-const handleDragOver = (e: DragEvent) => { e.preventDefault(); };
-const handleDrop = async (e: DragEvent) => { e.preventDefault(); dragCounter.value = 0; isDragOver.value = false; const files = e.dataTransfer?.files; if (files && files.length > 0) await handleUpload(files); };
 
 // Row click handler for file selection (extracted to prevent recreating closures on every render)
 const handleRowClick = (row: any, e: MouseEvent) => {
@@ -620,33 +598,10 @@ async function handleUpload(files: FileList | null) {
   }
 }
 
-async function handlePreview(row: any) {
+function handlePreview(row: any) {
   if (!selectedBox.value || row.is_directory) return;
-  previewContent.value = "";
-  previewMeta.value = null;
-  try {
-    previewing.value = true;
-    previewLoading.value = true;
-    previewPath.value = row.path;
-    const payload = await fetchFilePreview(selectedBox.value, row.path, tokenValue.value || null);
-    previewMeta.value = payload;
-    previewContent.value = payload.content || "";
-    markdownRenderMode.value = !!payload.is_markdown;
-  } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
-    previewing.value = false;
-  } finally {
-    previewLoading.value = false;
-  }
-}
-
-function closePreview() {
-  previewing.value = false;
-  previewPath.value = "";
-  previewContent.value = "";
-  previewMeta.value = null;
-  previewLoading.value = false;
-  markdownRenderMode.value = false;
+  previewPath.value = row.path;
+  previewing.value = true;
 }
 
 async function handleDownload(row: any) {
@@ -664,39 +619,19 @@ async function handleDownload(row: any) {
   }
 }
 
-async function handleEdit(row: any) {
+function handleEdit(row: any) {
   if (!selectedBox.value || row.is_directory) return;
-  editing.value = true;
   editPath.value = row.path;
-  editContent.value = "";
-  editLoading.value = true;
-  try {
-    const payload = await fetchFilePreview(selectedBox.value, row.path, tokenValue.value || null);
-    editContent.value = payload.content || "";
-  } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
-    editing.value = false;
-  } finally {
-    editLoading.value = false;
-  }
+  editing.value = true;
 }
 
-async function saveEdit() {
-  if (!selectedBox.value || !editPath.value) return;
-  editLoading.value = true;
-  try {
-    await writeFile(selectedBox.value, editPath.value, editContent.value, tokenValue.value || null);
-    message.success(t('files.saved'));
-    editing.value = false;
-    // Update preview content so returning to preview shows the saved edits
-    if (previewing.value && previewPath.value === editPath.value) {
-      previewContent.value = editContent.value;
-    }
+async function handleEditorSaved(path: string, content: string) {
+  // Update preview content so returning to preview shows the saved edits
+  if (previewing.value && previewPath.value === path) {
+    previewModalRef.value?.updateContent(content);
+  }
+  if (selectedBox.value) {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-  } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
-  } finally {
-    editLoading.value = false;
   }
 }
 
@@ -779,6 +714,12 @@ async function handleArchiveExtract(archivePath: string) {
   } finally {
     actionBusy.value = false;
   }
+}
+
+function openDiffModal(fileA?: string, fileB?: string) {
+  diffInitialFileA.value = fileA || "";
+  diffInitialFileB.value = fileB || "";
+  diffModalVisible.value = true;
 }
 
 async function bulkDownload() {
@@ -951,30 +892,16 @@ const columns = computed(() => {
 <template>
   <div class="page">
     <!-- Breadcrumb Navigation -->
-    <div class="breadcrumb-nav">
-      <NSpace size="small" align="center">
-        <NButton size="small" quaternary @click="navigateHome" :title="t('common.home')">
-          <NIcon size="16"><PhHouse weight="duotone" /></NIcon>
-        </NButton>
-        <NButton size="small" quaternary @click="navigateUp" :disabled="currentDir === '/'" :title="t('common.up')">
-          <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
-        </NButton>
-        <span class="breadcrumb-path">{{ currentDir }}</span>
-        <span v-if="currentGitInfo?.is_repo" class="git-badge" :class="{ dirty: currentGitInfo.dirty }">
-          <NIcon size="12"><PhGitBranch weight="duotone" /></NIcon>
-          {{ currentGitInfo.branch }}
-          <span v-if="currentGitInfo.dirty" class="dirty-indicator">*</span>
-        </span>
-      </NSpace>
-      <NSpace size="small">
-        <NButton size="small" @click="reloadDir" :disabled="!selectedBox || refreshing" :loading="refreshing" :title="t('common.refresh')">
-          <NIcon size="16"><PhArrowClockwise weight="duotone" /></NIcon>
-        </NButton>
-        <NButton size="small" @click="() => $router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)" :disabled="!selectedBox" :title="t('terminal.open_terminal')">
-          <NIcon size="16"><PhTerminalWindow weight="duotone" /></NIcon>
-        </NButton>
-      </NSpace>
-    </div>
+    <FileBreadcrumb
+      :current-dir="currentDir"
+      :git-info="currentGitInfo"
+      :selected-box="selectedBox"
+      :refreshing="refreshing"
+      @navigate-home="navigateHome"
+      @navigate-up="navigateUp"
+      @reload="reloadDir"
+      @open-terminal="$router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)"
+    />
 
     <header class="page-header">
       <div>
@@ -1060,6 +987,9 @@ const columns = computed(() => {
             <NButton size="small" @click="handleArchiveCreate('zip')">
               <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.zip
             </NButton>
+            <NButton v-if="selectedCount === 2" size="small" @click="openDiffModal(selectedPaths[0], selectedPaths[1])">
+              <NIcon size="14"><PhEye weight="duotone" /></NIcon>Compare
+            </NButton>
             <NButton size="small" @click="filesStore.setSelectedFiles([])">{{ t('files.clear_selection') }}</NButton>
           </NSpace>
         </div>
@@ -1079,16 +1009,9 @@ const columns = computed(() => {
         </NSpin>
 
         <!-- File Table -->
-        <div v-else class="file-browser" :class="{ 'drag-over': isDragOver }" @dragenter="handleDragEnter" @dragleave="handleDragLeave" @dragover="handleDragOver" @drop="handleDrop">
-          <div v-if="isDragOver" class="drop-overlay">
-            <div class="drop-message">
-              <NIcon size="32"><PhUploadSimple weight="duotone" /></NIcon>
-              <span>{{ t('files.drop_upload') }} {{ currentDir }}</span>
-            </div>
-          </div>
-          
-          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" />
-        </div>
+        <FileUploadZone v-else :current-dir="currentDir" @upload="handleUpload">
+          <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
+        </FileUploadZone>
 
         <!-- Error Display -->
         <NAlert v-if="directoryStore.error || boxesStore.error" type="error" closable>{{ directoryStore.error || boxesStore.error }}</NAlert>
@@ -1141,94 +1064,39 @@ const columns = computed(() => {
     <FavoritesPanel :box="selectedBox" @openPath="navigateToDirectory" @togglePin="handlePinToggle" />
 
     <!-- File Preview Modal -->
-    <NModal v-model:show="previewing" preset="card" style="max-width: 90vw; max-height: 90vh">
-      <template #header>
-        <div class="modal-header">
-          <NIcon size="16"><PhEye weight="duotone" /></NIcon>
-          <span>Preview: {{ previewPath.split('/').pop() }}</span>
-          <div class="modal-actions">
-            <NButton v-if="isMarkdownFile" size="small" @click="markdownRenderMode = !markdownRenderMode">
-              <NIcon size="14"><PhEye v-if="!markdownRenderMode" weight="duotone" /><PhFile v-else weight="duotone" /></NIcon>
-              {{ markdownRenderMode ? 'Source' : 'Render' }}
-            </NButton>
-            <NButton size="small" :title="t('common.edit')" @click="handleEdit({ path: previewPath, name: previewPath.split('/').pop() })">
-              <NIcon size="14"><PhPencil weight="duotone" /></NIcon>Edit
-            </NButton>
-            <NButton size="small" :title="t('common.download')" @click="handleDownload({ path: previewPath, name: previewPath.split('/').pop(), is_directory: false })">
-              <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>Download
-            </NButton>
-          </div>
-        </div>
-      </template>
-      
-      <div class="preview-container">
-        <NSpin v-if="previewLoading" size="large"><span class="text-muted">{{ t('files.loading_preview') }}</span></NSpin>
-        <template v-else>
-          <!-- Image Preview -->
-          <div v-if="previewIsImage" class="preview-image-container">
-            <img class="preview-image" :src="`data:${previewMeta?.image_mime};base64,${previewMeta?.image_data}`" :alt="previewPath" />
-            <p v-if="previewMeta?.image_too_large" class="text-muted small">Image truncated at {{ previewMeta?.image_limit_kb }}KB</p>
-          </div>
-          <!-- Text Preview -->
-          <div v-else class="preview-text-container">
-            <div v-if="markdownRenderMode && isMarkdownFile" class="markdown-rendered" v-html="renderedMarkdown" />
-            <CodeEditor v-else :model-value="previewContent" :language="getLanguageFromFilename(previewPath)" :theme="editorTheme" :readonly="true" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 75vh" />
-          </div>
-        </template>
-      </div>
-      
-      <template #footer>
-        <div class="modal-footer">
-          <NSpace size="small" :wrap="false">
-            <NSwitch v-model:value="showLineNumbers" size="small">
-              <template #checked>{{ t('files.lines') }}</template>
-              <template #unchecked>No Lines</template>
-            </NSwitch>
-            <NSwitch v-model:value="wordWrap" size="small">
-              <template #checked>{{ t('files.wrap') }}</template>
-              <template #unchecked>No Wrap</template>
-            </NSwitch>
-          </NSpace>
-          <NButton @click="closePreview">{{ t('common.close') }}</NButton>
-        </div>
-      </template>
-    </NModal>
+    <FilePreviewModal
+      ref="previewModalRef"
+      :show="previewing"
+      :path="previewPath"
+      :box="selectedBox"
+      :token="tokenValue"
+      :theme="editorTheme"
+      @update:show="previewing = $event"
+      @edit="(path: string) => handleEdit({ path, is_directory: false })"
+      @compare="(path: string) => openDiffModal(path)"
+    />
 
     <!-- File Editor Modal -->
-    <NModal v-model:show="editing" preset="card" style="max-width: 95vw; max-height: 95vh">
-      <template #header>
-        <div class="modal-header">
-          <NIcon size="16"><PhPencil weight="duotone" /></NIcon>
-          <span>{{ t('common.edit') }}: {{ editPath.split('/').pop() }}</span>
-        </div>
-      </template>
+    <FileEditorModal
+      :show="editing"
+      :path="editPath"
+      :box="selectedBox"
+      :token="tokenValue"
+      :theme="editorTheme"
+      @update:show="editing = $event"
+      @saved="handleEditorSaved"
+    />
 
-      <div class="editor-container">
-        <NSpin v-if="editLoading" size="large"><span class="text-muted">{{ t('files.loading_file') }}</span></NSpin>
-        <CodeEditor v-else v-model:model-value="editContent" :language="getLanguageFromFilename(editPath)" :theme="editorTheme" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 80vh" :placeholder="t('files.file_placeholder')" @save="saveEdit" />
-      </div>
-
-      <template #footer>
-        <div class="modal-footer">
-          <NSpace size="small" :wrap="false">
-            <NSwitch v-model:value="showLineNumbers" size="small">
-              <template #checked>{{ t('files.lines') }}</template>
-              <template #unchecked>No Lines</template>
-            </NSwitch>
-            <NSwitch v-model:value="wordWrap" size="small">
-              <template #checked>{{ t('files.wrap') }}</template>
-              <template #unchecked>No Wrap</template>
-            </NSwitch>
-          </NSpace>
-          <NSpace size="small" :wrap="false">
-            <NButton @click="editing = false">{{ t('common.cancel') }}</NButton>
-            <NButton type="primary" :loading="editLoading" @click="saveEdit">
-              <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('common.save') }}
-            </NButton>
-          </NSpace>
-        </div>
-      </template>
-    </NModal>
+    <!-- File Diff Modal -->
+    <FileDiffModal
+      :show="diffModalVisible"
+      :box="selectedBox"
+      :token="tokenValue"
+      :theme="editorTheme"
+      :initial-file-a="diffInitialFileA"
+      :initial-file-b="diffInitialFileB"
+      @update:show="diffModalVisible = $event"
+    />
 
     <!-- Chmod Modal -->
     <NModal v-model:show="chmodModalVisible" preset="dialog" title="Change Permissions" positive-text="Apply" negative-text="Cancel" @positive-click="applyChmod" @negative-click="chmodModalVisible = false" style="max-width: 360px">
@@ -1260,47 +1128,6 @@ const columns = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-.breadcrumb-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: var(--surface);
-  border: 1px solid var(--stroke);
-  border-radius: 8px;
-  font-family: var(--font-mono);
-  font-size: 14px;
-}
-
-.breadcrumb-path {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.git-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  padding: 2px 8px;
-  background: rgba(136, 58, 234, 0.15);
-  border: 1px solid rgba(136, 58, 234, 0.3);
-  border-radius: 12px;
-  color: #a78bfa;
-  font-family: var(--font-mono);
-}
-
-.git-badge.dirty {
-  background: rgba(234, 179, 8, 0.15);
-  border-color: rgba(234, 179, 8, 0.3);
-  color: #fbbf24;
-}
-
-.dirty-indicator {
-  color: #fbbf24;
-  font-weight: bold;
 }
 
 .page-header {
@@ -1375,42 +1202,6 @@ h1 {
   border-radius: 6px;
 }
 
-.file-browser {
-  position: relative;
-  border-radius: 8px;
-  overflow: hidden;
-  transition: all 0.2s ease;
-}
-
-.file-browser.drag-over {
-  border: 2px dashed var(--accent);
-  background: var(--accent-bg);
-}
-
-.drop-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(var(--accent-rgb), 0.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-  backdrop-filter: blur(4px);
-}
-
-.drop-message {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: var(--accent);
-  font-weight: 600;
-  font-size: 16px;
-}
-
 .upload-progress {
   padding: 12px;
   background: var(--surface-variant);
@@ -1424,156 +1215,6 @@ h1 {
   border-top: 2px solid var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-}
-
-.modal-header > span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-}
-
-.modal-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.preview-container,
-.editor-container {
-  min-height: 400px;
-}
-
-.preview-image-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.preview-image {
-  max-width: 100%;
-  max-height: 70vh;
-  border-radius: 8px;
-  border: 1px solid var(--stroke);
-  background: var(--surface);
-}
-
-.preview-text-container {
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.markdown-rendered {
-  height: 75vh;
-  overflow-y: auto;
-  padding: 24px 32px;
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--stroke);
-  border-radius: 8px;
-}
-
-.markdown-rendered h1,
-.markdown-rendered h2,
-.markdown-rendered h3,
-.markdown-rendered h4 {
-  margin: 1.5em 0 0.5em;
-  color: var(--text);
-}
-
-.markdown-rendered h1 { font-size: 1.8em; border-bottom: 1px solid var(--stroke); padding-bottom: 0.3em; }
-.markdown-rendered h2 { font-size: 1.4em; border-bottom: 1px solid var(--stroke); padding-bottom: 0.2em; }
-.markdown-rendered h3 { font-size: 1.2em; }
-
-.markdown-rendered p { margin: 0.8em 0; }
-
-.markdown-rendered ul,
-.markdown-rendered ol {
-  margin: 0.5em 0;
-  padding-left: 2em;
-}
-
-.markdown-rendered li { margin: 0.3em 0; }
-
-.markdown-rendered code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  padding: 0.2em 0.4em;
-  background: var(--surface-variant);
-  border-radius: 4px;
-}
-
-.markdown-rendered pre {
-  margin: 1em 0;
-  padding: 16px;
-  background: var(--surface-variant);
-  border-radius: 8px;
-  overflow-x: auto;
-}
-
-.markdown-rendered pre code {
-  padding: 0;
-  background: transparent;
-}
-
-.markdown-rendered blockquote {
-  margin: 1em 0;
-  padding: 0.5em 1em;
-  border-left: 4px solid var(--accent);
-  background: var(--surface-variant);
-  border-radius: 0 4px 4px 0;
-}
-
-.markdown-rendered table {
-  border-collapse: collapse;
-  margin: 1em 0;
-  width: 100%;
-}
-
-.markdown-rendered th,
-.markdown-rendered td {
-  border: 1px solid var(--stroke);
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.markdown-rendered th {
-  background: var(--surface-variant);
-  font-weight: 600;
-}
-
-.markdown-rendered a {
-  color: var(--accent);
-}
-
-.markdown-rendered img {
-  max-width: 100%;
-  border-radius: 8px;
-}
-
-.markdown-rendered hr {
-  border: none;
-  border-top: 1px solid var(--stroke);
-  margin: 1.5em 0;
-}
-
-.modal-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .file-info {
@@ -1610,18 +1251,6 @@ h1 {
     font-size: 20px;
   }
 
-  .breadcrumb-nav {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .breadcrumb-path {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 200px;
-  }
-
   .card-title {
     flex-direction: column;
     align-items: flex-start;
@@ -1644,12 +1273,6 @@ h1 {
   input[type="file"] {
     max-width: 100% !important;
     width: 100%;
-  }
-}
-
-@media (max-width: 480px) {
-  .breadcrumb-path {
-    max-width: 140px;
   }
 }
 
@@ -1678,7 +1301,6 @@ h1 {
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .file-browser,
   .connection-indicator,
   .spinner {
     transition: none;
