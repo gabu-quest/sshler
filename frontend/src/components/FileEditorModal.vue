@@ -87,11 +87,11 @@ async function saveEdit() {
         <NSpace size="small" :wrap="false">
           <NSwitch v-model:value="showLineNumbers" size="small">
             <template #checked>{{ t('files.lines') }}</template>
-            <template #unchecked>No Lines</template>
+            <template #unchecked>{{ t('files.no_lines') }}</template>
           </NSwitch>
           <NSwitch v-model:value="wordWrap" size="small">
             <template #checked>{{ t('files.wrap') }}</template>
-            <template #unchecked>No Wrap</template>
+            <template #unchecked>{{ t('files.no_wrap') }}</template>
           </NSwitch>
         </NSpace>
         <NSpace size="small" :wrap="false">

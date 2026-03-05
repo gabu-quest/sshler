@@ -291,6 +291,13 @@ export const ja: Record<string, string> = {
   "files.col_modified": "更新日時",
   "files.col_actions": "操作",
   "files.type_directory": "ディレクトリ",
+  "files.diff_title": "ファイル比較",
+  "files.diff_file_a": "ファイルAのパス",
+  "files.diff_file_b": "ファイルBのパス",
+  "files.diff_compare": "比較",
+  "files.diff_loading": "ファイルを読み込み中...",
+  "files.diff_identical": "ファイルは同一です",
+  "files.diff_enter_paths": "有効なファイルパスを入力してください",
 
   // Multi-Terminal
   "multi.title": "マルチターミナルグリッド",

@@ -27,7 +27,7 @@ const { t } = useI18n();
       <NButton size="small" quaternary @click="emit('navigate-home')" :title="t('common.home')">
         <NIcon size="16"><PhHouse weight="duotone" /></NIcon>
       </NButton>
-      <NButton size="small" quaternary @click="emit('navigate-up')" :disabled="currentDir === '/'" :title="t('common.up')">
+      <NButton size="small" quaternary @click="emit('navigate-up')" :disabled="currentDir === '/' || currentDir === '~'" :title="t('common.up')">
         <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
       </NButton>
       <span class="breadcrumb-path">{{ currentDir }}</span>

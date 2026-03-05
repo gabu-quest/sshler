@@ -3,7 +3,7 @@ import { computed, h, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useResponsive } from "@/composables/useResponsive";
 import {
-  NAlert, NButton, NCard, NDataTable, NIcon, NInput, NProgress, NSelect, NSpace, NSpin, NTag, NTooltip, useMessage,
+  NAlert, NButton, NCard, NDataTable, NIcon, NInput, NModal, NProgress, NSelect, NSpace, NSpin, NTag, NTooltip, useMessage,
 } from "naive-ui";
 import {
   PhClockCounterClockwise, PhFile, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArchive,
@@ -514,10 +514,14 @@ async function removePath(path: string) {
   }
 }
 
+const renameModalVisible = computed({
+  get: () => renameTarget.value !== null,
+  set: (val: boolean) => { if (!val) { renameTarget.value = null; renameValue.value = ""; } },
+});
+
 function handleRenamePrompt(row: any) {
   renameTarget.value = row.path;
   renameValue.value = row.name;
-  // Auto-trigger rename dialog or inline editing
 }
 
 function handleChmodPrompt(row: any) {
@@ -1097,6 +1101,14 @@ const columns = computed(() => {
       :initial-file-b="diffInitialFileB"
       @update:show="diffModalVisible = $event"
     />
+
+    <!-- Rename Modal -->
+    <NModal v-model:show="renameModalVisible" preset="dialog" :title="t('common.rename')" positive-text="Rename" negative-text="Cancel" @positive-click="doRename" @negative-click="renameModalVisible = false" style="max-width: 400px">
+      <NSpace vertical size="small">
+        <p class="text-muted" style="font-size:13px;">{{ renameTarget?.split('/').pop() }}</p>
+        <NInput v-model:value="renameValue" placeholder="New name" size="small" @keyup.enter="doRename" />
+      </NSpace>
+    </NModal>
 
     <!-- Chmod Modal -->
     <NModal v-model:show="chmodModalVisible" preset="dialog" title="Change Permissions" positive-text="Apply" negative-text="Cancel" @positive-click="applyChmod" @negative-click="chmodModalVisible = false" style="max-width: 360px">

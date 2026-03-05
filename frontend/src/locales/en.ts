@@ -291,6 +291,13 @@ export const en: Record<string, string> = {
   "files.col_modified": "modified",
   "files.col_actions": "actions",
   "files.type_directory": "directory",
+  "files.diff_title": "Compare Files",
+  "files.diff_file_a": "File A path",
+  "files.diff_file_b": "File B path",
+  "files.diff_compare": "Compare",
+  "files.diff_loading": "Loading files...",
+  "files.diff_identical": "Files are identical",
+  "files.diff_enter_paths": "Please enter valid file paths",
 
   // Multi-Terminal
   "multi.title": "Multi-Terminal Grid",
