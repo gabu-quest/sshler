@@ -268,6 +268,32 @@ class TestArchiveExtract:
         finally:
             client.close()
 
+    def test_extract_zip_backslash_traversal_prevention(self, tmp_path):
+        """Verify that backslash-based path traversal is also blocked."""
+        config_dir = setup_config(tmp_path)
+        archive_path = tmp_path / "evil_backslash.zip"
+
+        with zipfile.ZipFile(str(archive_path), "w") as zf:
+            zf.writestr("..\\..\\..\\etc\\evil.txt", "pwned")
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        client = build_client(config_dir)
+        try:
+            resp = client.post(
+                "/api/v1/boxes/local/archive/extract",
+                json={
+                    "archive_path": str(archive_path),
+                    "destination": str(dest),
+                },
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 400
+            assert "unsafe" in resp.json()["detail"].lower()
+        finally:
+            client.close()
+
     def test_extract_not_found(self, tmp_path):
         config_dir = setup_config(tmp_path)
         dest = tmp_path / "dest"

@@ -6,6 +6,7 @@ import contextlib
 import logging
 import shlex
 import shutil
+import stat as stat_mod
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -105,7 +106,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 try:
                                     try:
                                         attrs = await sftp_client.stat(vpath)
-                                        import stat as stat_mod
                                         if stat_mod.S_ISDIR(attrs.permissions or 0):
                                             await connection.run(
                                                 f"rm -rf {shlex.quote(vpath)}",

@@ -122,13 +122,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-        case_flag = "" if case_sensitive else "-i "
-        cmd = (
-            f"grep -rn {case_flag}"
-            f"-m {limit} "
-            f"-- {shlex.quote(pattern)} {shlex.quote(validated_dir)} "
-            f"2>/dev/null"
-        )
+        # Build command as list, then join with shlex.quote for safety
+        cmd_parts = ["grep", "-rn"]
+        if not case_sensitive:
+            cmd_parts.append("-i")
+        cmd_parts.extend([f"-m", str(limit), "--", pattern, validated_dir])
+        cmd = " ".join(shlex.quote(p) for p in cmd_parts) + " 2>/dev/null"
 
         ssh_pool = get_pool()
         try:

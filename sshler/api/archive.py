@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shlex
 import tarfile
 import zipfile
@@ -54,15 +55,27 @@ def _validate_archive_name(name: str, fmt: str) -> str:
     return validated
 
 
-def _check_zip_traversal(zf: zipfile.ZipFile) -> None:
-    """Check for path traversal in zip entries."""
+def _safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
+    """Extract zip safely, preventing path traversal (zip-slip).
+
+    Validates every entry's resolved path stays within dest_dir before extracting.
+    Handles backslash paths, encoded sequences, and parent references.
+    """
+    dest_resolved = dest_dir.resolve()
     for info in zf.infolist():
-        # Reject absolute paths and parent references
-        if info.filename.startswith("/") or ".." in info.filename.split("/"):
+        # Normalize: replace backslashes, strip leading slashes
+        safe_name = info.filename.replace("\\", "/").lstrip("/")
+        # Check for parent traversal after normalization
+        target = (dest_resolved / safe_name).resolve()
+        # Target must be inside dest_dir
+        if not (target == dest_resolved or str(target).startswith(str(dest_resolved) + os.sep)):
             raise HTTPException(
                 status_code=400,
                 detail=f"Archive contains unsafe path: {info.filename}",
             )
+        # Rewrite the filename to the safe version before extracting
+        info.filename = safe_name
+        zf.extract(info, dest_dir)
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -183,8 +196,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         tf.extractall(path=str(dest_dir), filter="data")
                 elif name_lower.endswith(".zip"):
                     with zipfile.ZipFile(str(archive), "r") as zf:
-                        _check_zip_traversal(zf)
-                        zf.extractall(path=str(dest_dir))
+                        _safe_extract_zip(zf, dest_dir)
                 else:
                     raise ValueError("Unsupported archive format")
 
