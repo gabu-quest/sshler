@@ -145,3 +145,24 @@ export interface GrepResponse {
   matches: GrepMatch[];
   truncated: boolean;
 }
+
+export interface ApiSnippet {
+  id: string;
+  box: string;
+  label: string;
+  command: string;
+  category: string;
+  sort_order: number;
+  created_at: number;
+}
+
+export interface ApiTunnel {
+  id: string;
+  box: string;
+  tunnel_type: "local" | "remote";
+  local_host: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+  created_at: number;
+}

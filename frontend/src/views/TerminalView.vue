@@ -2,7 +2,10 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput, NPopover } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch, PhCaretDown, PhList } from '@phosphor-icons/vue'
+import {
+  PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch,
+  PhCaretDown, PhList, PhBookmarkSimple, PhArrowsLeftRight,
+} from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
@@ -13,6 +16,8 @@ import Terminal from '@/components/Terminal.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
+import SnippetsPanel from '@/components/SnippetsPanel.vue'
+import TunnelsPanel from '@/components/TunnelsPanel.vue'
 import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
 import { gitInfo, setBoxTerminalTheme } from '@/api/http'
 import type { GitInfo } from '@/api/types'
@@ -37,6 +42,8 @@ const mobileControlsExpanded = ref(false)
 const rawMode = ref(false)
 const terminalConnected = ref(false)
 const showSessionPanel = ref(false)
+const showSnippetsPanel = ref(false)
+const showTunnelsPanel = ref(false)
 
 // Periodic git info refresh
 let gitPollTimer: ReturnType<typeof setInterval> | null = null
@@ -109,6 +116,12 @@ const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
   sessionName.value = session.session_name
   initialDirectory.value = session.working_directory || '~'
   showSessionPanel.value = false
+}
+
+const handleSnippetInsert = (command: string, execute: boolean) => {
+  if (terminalRef.value) {
+    terminalRef.value.send(execute ? command + '\n' : command)
+  }
 }
 
 const filesUrl = computed(() => {
@@ -395,6 +408,14 @@ watch(() => boxesStore.items, () => {
             />
           </NPopover>
 
+          <NButton v-if="selectedBox" size="small" quaternary title="Snippets" @click="showSnippetsPanel = true">
+            <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
+          </NButton>
+
+          <NButton v-if="selectedBox" size="small" quaternary title="Port Forwarding" @click="showTunnelsPanel = true">
+            <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
+          </NButton>
+
           <a
             v-if="selectedBox"
             :href="filesUrl"
@@ -523,6 +544,21 @@ watch(() => boxesStore.items, () => {
       :initial-path="initialDirectory"
       :token="tokenValue"
       @select="handleDirPickerSelect"
+    />
+
+    <!-- Snippets Panel -->
+    <SnippetsPanel
+      v-if="selectedBox"
+      v-model:show="showSnippetsPanel"
+      :box-name="selectedBox"
+      @insert="handleSnippetInsert"
+    />
+
+    <!-- Tunnels Panel -->
+    <TunnelsPanel
+      v-if="selectedBox"
+      v-model:show="showTunnelsPanel"
+      :box-name="selectedBox"
     />
   </div>
 </template>

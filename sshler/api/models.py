@@ -185,3 +185,56 @@ class APIGitInfo(BaseModel):
     is_repo: bool = False
     dirty: bool = False
     error: str | None = None
+
+
+class APISnippet(BaseModel):
+    """A saved command snippet."""
+
+    id: str
+    box: str
+    label: str
+    command: str
+    category: str = ""
+    sort_order: int = 0
+    created_at: float = 0
+
+
+class APISnippetCreate(BaseModel):
+    """Request body for creating a snippet."""
+
+    box: str
+    label: str
+    command: str
+    category: str = ""
+
+
+class APISnippetUpdate(BaseModel):
+    """Request body for updating a snippet."""
+
+    label: str | None = None
+    command: str | None = None
+    category: str | None = None
+    sort_order: int | None = None
+
+
+class APITunnelCreate(BaseModel):
+    """Request body for creating an SSH tunnel."""
+
+    tunnel_type: str  # "local" or "remote"
+    local_host: str = "127.0.0.1"
+    local_port: int
+    remote_host: str = "127.0.0.1"
+    remote_port: int
+
+
+class APITunnel(BaseModel):
+    """An active SSH tunnel."""
+
+    id: str
+    box: str
+    tunnel_type: str
+    local_host: str
+    local_port: int
+    remote_host: str
+    remote_port: int
+    created_at: float

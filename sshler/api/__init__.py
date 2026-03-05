@@ -11,7 +11,9 @@ from .files import get_router as files_router
 from .grep import get_router as grep_router
 from .search import get_router as search_router
 from .sessions import get_router as sessions_router
+from .snippets import get_router as snippets_router
 from .terminal import get_router as terminal_router
+from .tunnels import get_router as tunnels_router
 
 
 def create_api_router(deps: APIDependencies) -> APIRouter:
@@ -24,7 +26,9 @@ def create_api_router(deps: APIDependencies) -> APIRouter:
     api_router.include_router(grep_router(deps))
     api_router.include_router(search_router(deps))
     api_router.include_router(sessions_router(deps))
+    api_router.include_router(snippets_router(deps))
     api_router.include_router(terminal_router(deps))
+    api_router.include_router(tunnels_router(deps))
     return api_router
 
 

@@ -141,6 +141,20 @@ class Session(SQLerModel):
         self.metadata_json = json.dumps(value)
 
 
+class Snippet(SQLerModel):
+    """Saved command snippets per box or global."""
+
+    __tablename__ = "snippets"
+
+    id: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
+    box: str  # box name or "__global__" for all boxes
+    label: str
+    command: str
+    category: str = ""
+    sort_order: int = 0
+    created_at: float = Field(default_factory=time.time)
+
+
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from .config import StoredBox
 
@@ -185,6 +199,11 @@ def initialize(config_dir: Path) -> None:
         DirectoryVisit.ensure_index("box")
         DirectoryVisit.ensure_index("path")
         DirectoryVisit.ensure_index("last_visited")
+
+        # Initialize Snippet model
+        Snippet.set_db(db)
+        Snippet.ensure_index("box")
+        Snippet.ensure_index("sort_order")
 
         # Create composite indexes for performance optimization
         # Note: sqler only supports single-column indexes via ensure_index(),
@@ -672,3 +691,115 @@ async def search_directories_async(
     limit: int = 20,
 ) -> list[tuple[str, float]]:
     return await asyncio.to_thread(search_directories, box_name, query, limit)
+
+
+# Snippet CRUD Functions
+
+
+def list_snippets(box_name: str) -> list[Snippet]:
+    """Return snippets for a box plus global snippets, ordered by sort_order."""
+    _require_db()
+    with _DB_LOCK:
+        rows = (
+            Snippet.query()
+            .filter((F("box") == box_name) | (F("box") == "__global__"))
+            .order_by("sort_order")
+            .all()
+        )
+        return list(rows)
+
+
+async def list_snippets_async(box_name: str) -> list[Snippet]:
+    return await asyncio.to_thread(list_snippets, box_name)
+
+
+def create_snippet(
+    box: str,
+    label: str,
+    command: str,
+    category: str = "",
+) -> Snippet:
+    """Create a new snippet."""
+    _require_db()
+    with _DB_LOCK:
+        # Determine next sort_order
+        existing = (
+            Snippet.query()
+            .filter(F("box") == box)
+            .order_by("sort_order", desc=True)
+            .first()
+        )
+        next_order = (existing.sort_order + 1) if existing else 0
+
+        snippet = Snippet(
+            box=box,
+            label=label,
+            command=command,
+            category=category,
+            sort_order=next_order,
+        )
+        snippet.save()
+        return snippet
+
+
+async def create_snippet_async(
+    box: str, label: str, command: str, category: str = ""
+) -> Snippet:
+    return await asyncio.to_thread(create_snippet, box, label, command, category)
+
+
+def get_snippet_by_id(snippet_id: str) -> Snippet | None:
+    """Get a snippet by ID."""
+    _require_db()
+    with _DB_LOCK:
+        return Snippet.query().filter(F("id") == snippet_id).first()
+
+
+def update_snippet(
+    snippet_id: str,
+    label: str | None = None,
+    command: str | None = None,
+    category: str | None = None,
+    sort_order: int | None = None,
+) -> Snippet | None:
+    """Update a snippet. Returns updated snippet or None if not found."""
+    _require_db()
+    with _DB_LOCK:
+        snippet = Snippet.query().filter(F("id") == snippet_id).first()
+        if not snippet:
+            return None
+        if label is not None:
+            snippet.label = label
+        if command is not None:
+            snippet.command = command
+        if category is not None:
+            snippet.category = category
+        if sort_order is not None:
+            snippet.sort_order = sort_order
+        snippet.save()
+        return snippet
+
+
+async def update_snippet_async(
+    snippet_id: str,
+    label: str | None = None,
+    command: str | None = None,
+    category: str | None = None,
+    sort_order: int | None = None,
+) -> Snippet | None:
+    return await asyncio.to_thread(update_snippet, snippet_id, label, command, category, sort_order)
+
+
+def delete_snippet(snippet_id: str) -> bool:
+    """Delete a snippet. Returns True if deleted."""
+    _require_db()
+    with _DB_LOCK:
+        snippet = Snippet.query().filter(F("id") == snippet_id).first()
+        if not snippet:
+            return False
+        snippet.delete()
+        return True
+
+
+async def delete_snippet_async(snippet_id: str) -> bool:
+    return await asyncio.to_thread(delete_snippet, snippet_id)

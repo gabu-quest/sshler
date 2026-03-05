@@ -1,5 +1,7 @@
 import type {
   ApiBox,
+  ApiSnippet,
+  ApiTunnel,
   BatchResult,
   BoxStats,
   BoxStatus,
@@ -694,4 +696,100 @@ export async function searchDirectories(
     credentials: 'include'
   });
   return handle<SearchResponse>(res);
+}
+
+// Snippets
+
+export async function fetchSnippets(
+  box: string,
+  token: string | null,
+): Promise<ApiSnippet[]> {
+  const url = `${API_BASE}/snippets?box=${encodeURIComponent(box)}`;
+  const res = await fetch(url, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<ApiSnippet[]>(res);
+}
+
+export async function createSnippet(
+  box: string,
+  label: string,
+  command: string,
+  category: string,
+  token: string | null,
+): Promise<ApiSnippet> {
+  const res = await fetch(`${API_BASE}/snippets`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ box, label, command, category }),
+    credentials: 'include'
+  });
+  return handle<ApiSnippet>(res);
+}
+
+export async function updateSnippet(
+  snippetId: string,
+  data: { label?: string; command?: string; category?: string; sort_order?: number },
+  token: string | null,
+): Promise<ApiSnippet> {
+  const res = await fetch(`${API_BASE}/snippets/${encodeURIComponent(snippetId)}`, {
+    method: "PUT",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    credentials: 'include'
+  });
+  return handle<ApiSnippet>(res);
+}
+
+export async function deleteSnippet(
+  snippetId: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/snippets/${encodeURIComponent(snippetId)}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+// Tunnels
+
+export async function fetchTunnels(
+  box: string,
+  token: string | null,
+): Promise<ApiTunnel[]> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<ApiTunnel[]>(res);
+}
+
+export async function createTunnel(
+  box: string,
+  data: { tunnel_type: string; local_host: string; local_port: number; remote_host: string; remote_port: number },
+  token: string | null,
+): Promise<ApiTunnel> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    credentials: 'include'
+  });
+  return handle<ApiTunnel>(res);
+}
+
+export async function deleteTunnel(
+  box: string,
+  tunnelId: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels/${encodeURIComponent(tunnelId)}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
 }
