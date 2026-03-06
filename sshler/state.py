@@ -214,6 +214,38 @@ def initialize(config_dir: Path) -> None:
         _DB_PATH = target_path
         _INITIALISED = True
 
+    seed_default_snippets()
+
+
+def seed_default_snippets() -> None:
+    """Seed starter snippets for new installations.
+
+    Only inserts when zero __global__ snippets exist, so users who
+    deleted the defaults won't see them reappear on restart.
+    """
+    _require_db()
+    with _DB_LOCK:
+        existing = Snippet.query().filter(F("box") == "__global__").first()
+        if existing:
+            return
+
+        defaults = [
+            ("System Info", "uname -a", "System"),
+            ("Who Am I", "whoami && hostname", "System"),
+            ("Disk Usage", "df -h", "System"),
+            ("Top Processes", "ps aux --sort=-%mem | head -20", "System"),
+        ]
+        for order, (label, command, category) in enumerate(defaults):
+            Snippet(
+                box="__global__",
+                label=label,
+                command=command,
+                category=category,
+                sort_order=order,
+            ).save()
+
+    logger.info("Seeded %d default global snippets", len(defaults))
+
 
 def reset_state() -> None:
     """Reset the in-memory cache (used by tests)."""

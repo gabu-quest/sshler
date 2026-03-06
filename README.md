@@ -62,6 +62,9 @@ The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`
 - **Session Persistence** - Restore your terminal layout on reload
 - **Terminal Notifications** - Desktop notifications for long-running commands
 - **Connection Status** - Real-time connection health indicators
+- **Command Snippets** - Save and quick-insert frequently used commands per box or globally
+- **Port Forwarding** - Visual SSH tunnel management (local/remote) per box
+- **Per-Box Terminal Themes** - Color-code terminals by environment (prod=red, staging=green, etc.)
 
 **📱 Mobile & Touch Support**
 - **Touch-Optimized** - 44px minimum touch targets for easy tapping
