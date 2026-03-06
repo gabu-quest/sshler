@@ -870,6 +870,17 @@ const columns = computed(() => {
       render(row: any) {
         const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
         return h("div", { style: "display:flex;gap:4px;align-items:center;" }, [
+          h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, {
+              size: "tiny", quaternary: true,
+              onClick: async (e: MouseEvent) => {
+                e.stopPropagation()
+                await navigator.clipboard.writeText(row.path)
+                message.success(t('files.path_copied'))
+              }
+            }, { icon: () => h(NIcon, { size: 14 }, () => h(PhClipboard, { weight: 'duotone' })) }),
+            default: () => t('files.copy_path')
+          }),
           row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, {
               size: "tiny",
