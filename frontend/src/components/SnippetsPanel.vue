@@ -193,7 +193,14 @@ const handleDelete = async (id: string) => {
 
       <!-- Empty state -->
       <div v-else-if="filteredSnippets.length === 0" class="snippet-empty">
-        <NEmpty :description="snippetsStore.items.length === 0 ? t('snippets.empty') : t('snippets.no_matches')" />
+        <NEmpty :description="snippetsStore.items.length === 0 ? t('snippets.empty') : t('snippets.no_matches')">
+          <template v-if="snippetsStore.items.length === 0" #extra>
+            <NButton size="small" type="primary" @click="showAddForm = true">
+              <template #icon><NIcon size="14"><PhPlus weight="bold" /></NIcon></template>
+              {{ t('snippets.add') }}
+            </NButton>
+          </template>
+        </NEmpty>
       </div>
 
       <!-- Snippets list -->

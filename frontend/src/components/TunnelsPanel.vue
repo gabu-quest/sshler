@@ -174,7 +174,14 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
 
       <!-- Empty state -->
       <div v-else-if="tunnelsStore.items.length === 0" class="tunnel-empty">
-        <NEmpty :description="t('tunnels.empty')" />
+        <NEmpty :description="t('tunnels.empty')">
+          <template #extra>
+            <NButton size="small" type="primary" @click="showAddForm = true">
+              <template #icon><NIcon size="14"><PhPlus weight="bold" /></NIcon></template>
+              {{ t('tunnels.add') }}
+            </NButton>
+          </template>
+        </NEmpty>
       </div>
 
       <!-- Tunnel list -->
