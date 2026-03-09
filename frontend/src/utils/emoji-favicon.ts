@@ -5,7 +5,7 @@
  * Uses a hash of the string to pick from a curated list of visually distinct emojis.
  */
 
-// Curated list of ~150 visually distinct emojis that look good as favicons
+// Curated list of visually distinct emojis that look good as favicons
 const EMOJIS = [
   // Animals (30)
   '🦊', '🐼', '🦁', '🐸', '🦉', '🦋', '🐙', '🦈', '🐢', '🦄',
@@ -23,11 +23,13 @@ const EMOJIS = [
   '💎', '🎯', '🎨', '🎭', '🎪', '🎸', '🎺', '🎲', '🧩', '🔮',
   '💡', '🔧', '⚙️', '🧲', '🧪', '🔬', '📡', '🛸', '🚀', '⚓',
   '🎹', '🎻', '🎤', '📷', '💾', '📱', '⌚', '🔑', '🧭', '⏰',
-  // Symbols & Shapes (35)
+  // Symbols & Accents (23)
   '💜', '💙', '💚', '💛', '🧡', '❤️', '🖤', '💗', '💝', '💫',
-  '✨', '🌟', '💥', '🎆', '🎇', '🔶', '🔷', '🔴', '🟢', '🟣',
-  '🟡', '🟠', '🔵', '⬛', '⬜', '🟥', '🟦', '🟩', '🟪', '🟧',
-  '♠️', '♥️', '♦️', '♣️', '🃏',
+  '✨', '🌟', '💥', '🎆', '🎇', '🔶', '🔵', '🟥', '🟩',
+  '♠️', '♥️', '♦️', '♣️',
+  // Distinctive extras (12)
+  '🏰', '🗼', '🧊', '🪐', '🛡️', '🎩',
+  '🪁', '🦞', '🦑', '🐊', '🦦', '🪺',
 ];
 
 /**
