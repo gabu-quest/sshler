@@ -111,6 +111,10 @@ export const en: Record<string, string> = {
   "settings.clear_cache": "Clear Cache",
   "settings.token_refreshed": "Token refreshed successfully",
   "settings.token_refresh_failed": "Failed to refresh token:",
+  "settings.token_status_loading": "Loading...",
+  "settings.token_status_error": "Error: ",
+  "settings.token_status_ok": "Token loaded",
+  "settings.token_status_none": "No token",
   "settings.cache_cleared": "Cache cleared - please refresh the page",
   "settings.theme_unavailable": "Theme switching not available",
 
@@ -118,6 +122,16 @@ export const en: Record<string, string> = {
   "settings.theme_light": "Light Theme",
   "settings.theme_dark": "Dark Theme",
   "settings.theme_system": "System Theme",
+
+  "settings.terminal": "Terminal",
+  "settings.terminal_font_size": "Font Size",
+  "settings.terminal_font_size_help": "Terminal text size (8-24px). Takes effect on next terminal connection.",
+  "settings.terminal_font_family": "Font Family",
+  "settings.terminal_font_family_help": "Choose a monospace font for the terminal. Requires the font to be installed on your system.",
+  "settings.terminal_scrollback": "Scrollback Buffer",
+  "settings.terminal_scrollback_help": "Number of lines to keep in the scrollback buffer (500-50000).",
+  "settings.terminal_lines": "lines",
+  "settings.terminal_restart_note": "Terminal settings take effect when opening a new terminal connection.",
 
   "settings.pool": "Connection Pool",
   "settings.pool_description": "Configure how long SSH connections are kept alive. Higher values reduce connection overhead but use more resources.",
@@ -144,6 +158,7 @@ export const en: Record<string, string> = {
   "settings.pool_current_idle": "Idle Timeout:",
   "settings.pool_current_lifetime": "Max Lifetime:",
   "settings.pool_current_max": "Max Connections:",
+  "settings.pool_per_box": "per box",
 
   "settings.debug": "Debug Information",
   "settings.debug_url": "Current URL:",
@@ -230,6 +245,11 @@ export const en: Record<string, string> = {
   "terminal.pane_right": "Focus pane right",
   "terminal.toggle_mouse": "Toggle mouse mode",
   "terminal.copy_mode": "Copy mode",
+  "terminal.search": "Search (Ctrl+F)",
+  "terminal.search_placeholder": "Search terminal...",
+  "terminal.search_next": "Next match",
+  "terminal.search_prev": "Previous match",
+  "terminal.search_no_results": "No results",
 
   // Files
   "files.title": "Files",
@@ -291,6 +311,13 @@ export const en: Record<string, string> = {
   "files.col_modified": "modified",
   "files.col_actions": "actions",
   "files.type_directory": "directory",
+  "files.diff_title": "Compare Files",
+  "files.diff_file_a": "File A path",
+  "files.diff_file_b": "File B path",
+  "files.diff_compare": "Compare",
+  "files.diff_loading": "Loading files...",
+  "files.diff_identical": "Files are identical",
+  "files.diff_enter_paths": "Please enter valid file paths",
 
   // Multi-Terminal
   "multi.title": "Multi-Terminal Grid",
@@ -414,4 +441,79 @@ export const en: Record<string, string> = {
   "header.auth_required": "Authentication required",
   "header.theme_switch": "Switch to {mode} theme",
   "header.toggle_theme": "Toggle theme",
+
+  // Sessions
+  "sessions.title": "Sessions",
+  "sessions.sync_tooltip": "Sync with tmux",
+  "sessions.empty": "No sessions",
+  "sessions.rename": "Rename session",
+  "sessions.rename_placeholder": "New name",
+  "sessions.kill_confirm": "Kill tmux session \"{name}\"?",
+  "sessions.just_now": "just now",
+  "sessions.minutes_ago": "{n}m ago",
+  "sessions.hours_ago": "{n}h ago",
+  "sessions.days_ago": "{n}d ago",
+
+  // Snippets
+  "snippets.title": "Snippets",
+  "snippets.add": "Add snippet",
+  "snippets.label_placeholder": "Label",
+  "snippets.command_placeholder": "Command",
+  "snippets.category_placeholder": "Category (optional)",
+  "snippets.add_btn": "Add",
+  "snippets.save_btn": "Save",
+  "snippets.filter_placeholder": "Filter snippets...",
+  "snippets.created": "Snippet created",
+  "snippets.updated": "Snippet updated",
+  "snippets.deleted": "Snippet deleted",
+  "snippets.create_failed": "Failed to create snippet",
+  "snippets.update_failed": "Failed to update snippet",
+  "snippets.delete_failed": "Failed to delete snippet",
+  "snippets.empty": "No snippets yet",
+  "snippets.no_matches": "No matches",
+  "snippets.delete_confirm": "Delete this snippet?",
+  "snippets.execute": "Execute snippet",
+  "snippets.insert": "Insert without executing",
+  "snippets.edit": "Edit snippet",
+  "snippets.global_tag": "global",
+  "snippets.uncategorized": "Uncategorized",
+
+  // Tunnels
+  "tunnels.title": "Port Forwarding",
+  "tunnels.add": "Add tunnel",
+  "tunnels.local_label": "Local (-L) — access remote port locally",
+  "tunnels.remote_label": "Remote (-R) — expose local port remotely",
+  "tunnels.local_port_label": "Local",
+  "tunnels.remote_port_label": "Remote",
+  "tunnels.port_placeholder": "Port",
+  "tunnels.host_placeholder": "127.0.0.1",
+  "tunnels.create_btn": "Create",
+  "tunnels.created": "Tunnel created",
+  "tunnels.create_failed": "Failed to create tunnel",
+  "tunnels.closed": "Tunnel closed",
+  "tunnels.close_failed": "Failed to close tunnel",
+  "tunnels.empty": "No active tunnels",
+  "tunnels.close_confirm": "Close this tunnel?",
+  "tunnels.close_tunnel": "Close tunnel",
+
+  // Content Search (grep)
+  "grep.placeholder": "Search file contents (grep)...",
+  "grep.searching": "Searching...",
+  "grep.no_matches": "No matches found",
+  "grep.truncated": "Results truncated",
+
+  // Dashboard
+  "overview.last_updated": "Updated {time}",
+
+  // Accessibility
+  "a11y.offline_banner": "You are offline. Some features may be unavailable.",
+  "a11y.file_list": "File listing",
+  "a11y.terminal": "Terminal session",
+  "a11y.server_stats": "Server statistics",
+
+  // Upload
+  "files.upload_retry": "Retry",
+  "files.upload_attempt": "Attempt {n} of {max}",
+  "files.upload_failed_retry": "Upload failed, retrying...",
+  "files.upload_failed_final": "Upload failed after {n} attempts",
 };

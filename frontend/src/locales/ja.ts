@@ -111,6 +111,10 @@ export const ja: Record<string, string> = {
   "settings.clear_cache": "キャッシュクリア",
   "settings.token_refreshed": "トークンを更新しました",
   "settings.token_refresh_failed": "トークンの更新に失敗:",
+  "settings.token_status_loading": "読み込み中...",
+  "settings.token_status_error": "エラー: ",
+  "settings.token_status_ok": "トークン読み込み済み",
+  "settings.token_status_none": "トークンなし",
   "settings.cache_cleared": "キャッシュをクリアしました - ページを更新してください",
   "settings.theme_unavailable": "テーマ切替は利用できません",
 
@@ -118,6 +122,16 @@ export const ja: Record<string, string> = {
   "settings.theme_light": "ライトテーマ",
   "settings.theme_dark": "ダークテーマ",
   "settings.theme_system": "システムテーマ",
+
+  "settings.terminal": "ターミナル",
+  "settings.terminal_font_size": "フォントサイズ",
+  "settings.terminal_font_size_help": "ターミナルの文字サイズ（8-24px）。次のターミナル接続時に反映されます。",
+  "settings.terminal_font_family": "フォントファミリー",
+  "settings.terminal_font_family_help": "ターミナル用の等幅フォントを選択します。システムにフォントがインストールされている必要があります。",
+  "settings.terminal_scrollback": "スクロールバックバッファ",
+  "settings.terminal_scrollback_help": "スクロールバックバッファに保持する行数（500-50000）。",
+  "settings.terminal_lines": "行",
+  "settings.terminal_restart_note": "ターミナル設定は新しいターミナル接続を開いたときに反映されます。",
 
   "settings.pool": "接続プール",
   "settings.pool_description": "SSH接続の保持時間を設定します。値が大きいほど接続のオーバーヘッドが減りますが、リソース使用量が増えます。",
@@ -144,6 +158,7 @@ export const ja: Record<string, string> = {
   "settings.pool_current_idle": "アイドルタイムアウト:",
   "settings.pool_current_lifetime": "最大接続時間:",
   "settings.pool_current_max": "最大接続数:",
+  "settings.pool_per_box": "ボックスごと",
 
   "settings.debug": "デバッグ情報",
   "settings.debug_url": "現在のURL:",
@@ -230,6 +245,11 @@ export const ja: Record<string, string> = {
   "terminal.pane_right": "右のペインにフォーカス",
   "terminal.toggle_mouse": "マウスモード切替",
   "terminal.copy_mode": "コピーモード",
+  "terminal.search": "検索 (Ctrl+F)",
+  "terminal.search_placeholder": "ターミナルを検索...",
+  "terminal.search_next": "次の一致",
+  "terminal.search_prev": "前の一致",
+  "terminal.search_no_results": "結果なし",
 
   // Files
   "files.title": "ファイル",
@@ -291,6 +311,13 @@ export const ja: Record<string, string> = {
   "files.col_modified": "更新日時",
   "files.col_actions": "操作",
   "files.type_directory": "ディレクトリ",
+  "files.diff_title": "ファイル比較",
+  "files.diff_file_a": "ファイルAのパス",
+  "files.diff_file_b": "ファイルBのパス",
+  "files.diff_compare": "比較",
+  "files.diff_loading": "ファイルを読み込み中...",
+  "files.diff_identical": "ファイルは同一です",
+  "files.diff_enter_paths": "有効なファイルパスを入力してください",
 
   // Multi-Terminal
   "multi.title": "マルチターミナルグリッド",
@@ -414,4 +441,79 @@ export const ja: Record<string, string> = {
   "header.auth_required": "認証が必要です",
   "header.theme_switch": "{mode}テーマに切替",
   "header.toggle_theme": "テーマ切替",
+
+  // Sessions
+  "sessions.title": "セッション",
+  "sessions.sync_tooltip": "tmuxと同期",
+  "sessions.empty": "セッションなし",
+  "sessions.rename": "セッション名を変更",
+  "sessions.rename_placeholder": "新しい名前",
+  "sessions.kill_confirm": "tmuxセッション「{name}」を終了しますか？",
+  "sessions.just_now": "たった今",
+  "sessions.minutes_ago": "{n}分前",
+  "sessions.hours_ago": "{n}時間前",
+  "sessions.days_ago": "{n}日前",
+
+  // Snippets
+  "snippets.title": "スニペット",
+  "snippets.add": "スニペット追加",
+  "snippets.label_placeholder": "ラベル",
+  "snippets.command_placeholder": "コマンド",
+  "snippets.category_placeholder": "カテゴリ（任意）",
+  "snippets.add_btn": "追加",
+  "snippets.save_btn": "保存",
+  "snippets.filter_placeholder": "スニペットを検索...",
+  "snippets.created": "スニペットを作成しました",
+  "snippets.updated": "スニペットを更新しました",
+  "snippets.deleted": "スニペットを削除しました",
+  "snippets.create_failed": "スニペットの作成に失敗しました",
+  "snippets.update_failed": "スニペットの更新に失敗しました",
+  "snippets.delete_failed": "スニペットの削除に失敗しました",
+  "snippets.empty": "スニペットはまだありません",
+  "snippets.no_matches": "一致するものがありません",
+  "snippets.delete_confirm": "このスニペットを削除しますか？",
+  "snippets.execute": "スニペットを実行",
+  "snippets.insert": "実行せずに挿入",
+  "snippets.edit": "スニペットを編集",
+  "snippets.global_tag": "グローバル",
+  "snippets.uncategorized": "未分類",
+
+  // Tunnels
+  "tunnels.title": "ポートフォワーディング",
+  "tunnels.add": "トンネル追加",
+  "tunnels.local_label": "ローカル (-L) — リモートポートにローカルからアクセス",
+  "tunnels.remote_label": "リモート (-R) — ローカルポートをリモートに公開",
+  "tunnels.local_port_label": "ローカル",
+  "tunnels.remote_port_label": "リモート",
+  "tunnels.port_placeholder": "ポート",
+  "tunnels.host_placeholder": "127.0.0.1",
+  "tunnels.create_btn": "作成",
+  "tunnels.created": "トンネルを作成しました",
+  "tunnels.create_failed": "トンネルの作成に失敗しました",
+  "tunnels.closed": "トンネルを閉じました",
+  "tunnels.close_failed": "トンネルを閉じるのに失敗しました",
+  "tunnels.empty": "アクティブなトンネルはありません",
+  "tunnels.close_confirm": "このトンネルを閉じますか？",
+  "tunnels.close_tunnel": "トンネルを閉じる",
+
+  // Content Search (grep)
+  "grep.placeholder": "ファイル内容を検索 (grep)...",
+  "grep.searching": "検索中...",
+  "grep.no_matches": "一致するものが見つかりません",
+  "grep.truncated": "結果が切り詰められました",
+
+  // Dashboard
+  "overview.last_updated": "更新: {time}",
+
+  // Accessibility
+  "a11y.offline_banner": "オフラインです。一部の機能が利用できない場合があります。",
+  "a11y.file_list": "ファイル一覧",
+  "a11y.terminal": "ターミナルセッション",
+  "a11y.server_stats": "サーバー統計",
+
+  // Upload
+  "files.upload_retry": "再試行",
+  "files.upload_attempt": "試行 {n} / {max}",
+  "files.upload_failed_retry": "アップロード失敗、再試行中...",
+  "files.upload_failed_final": "{n}回の試行後にアップロードに失敗しました",
 };

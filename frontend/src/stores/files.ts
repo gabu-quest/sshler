@@ -3,6 +3,9 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 
 import {
+  batchCopy,
+  batchDelete,
+  batchMove,
   copyFile,
   deleteFile,
   fetchDirectory,
@@ -11,7 +14,7 @@ import {
   touchFile,
   uploadFile,
 } from "@/api/http";
-import type { DirectoryListing } from "@/api/types";
+import type { BatchResult, DirectoryListing } from "@/api/types";
 
 export const useFilesStore = defineStore("files", () => {
   const listing = ref<DirectoryListing | null>(null);
@@ -64,6 +67,18 @@ export const useFilesStore = defineStore("files", () => {
     await copyFile(box, source, destination, newName, token);
   }
 
+  async function doBatchDelete(box: string, paths: string[], token: string | null): Promise<BatchResult> {
+    return await batchDelete(box, paths, token);
+  }
+
+  async function doBatchMove(box: string, paths: string[], destination: string, token: string | null): Promise<BatchResult> {
+    return await batchMove(box, paths, destination, token);
+  }
+
+  async function doBatchCopy(box: string, paths: string[], destination: string, token: string | null): Promise<BatchResult> {
+    return await batchCopy(box, paths, destination, token);
+  }
+
   async function doUpload(box: string, directory: string, file: File, token: string | null) {
     uploadProgress.value = 0;
     uploadFileName.value = file.name;
@@ -96,6 +111,9 @@ export const useFilesStore = defineStore("files", () => {
     doRename,
     doMove,
     doCopy,
+    doBatchDelete,
+    doBatchMove,
+    doBatchCopy,
     doUpload,
   };
 });

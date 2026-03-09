@@ -17,6 +17,7 @@ export interface ApiBox {
   pinned: boolean;
   default_dir?: string | null;
   favorites: string[];
+  terminal_theme?: string | null;
 }
 
 export interface DirectoryEntry {
@@ -25,6 +26,7 @@ export interface DirectoryEntry {
   is_directory: boolean;
   size?: number | null;
   modified?: number | null;
+  mode?: number | null;
 }
 
 export interface DirectoryListing {
@@ -122,4 +124,45 @@ export interface SearchResponse {
   box: string;
   query: string;
   results: SearchResult[];
+}
+
+export interface BatchResult {
+  status: "ok" | "partial";
+  succeeded: string[];
+  failed: { path: string; error: string }[];
+}
+
+export interface GrepMatch {
+  file: string;
+  line_number: number;
+  line: string;
+}
+
+export interface GrepResponse {
+  box: string;
+  pattern: string;
+  directory: string;
+  matches: GrepMatch[];
+  truncated: boolean;
+}
+
+export interface ApiSnippet {
+  id: string;
+  box: string;
+  label: string;
+  command: string;
+  category: string;
+  sort_order: number;
+  created_at: number;
+}
+
+export interface ApiTunnel {
+  id: string;
+  box: string;
+  tunnel_type: "local" | "remote";
+  local_host: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+  created_at: number;
 }

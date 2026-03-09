@@ -24,6 +24,9 @@ import {
   PhCornersOut,
   PhCornersIn,
   PhQuestion,
+  PhMagnifyingGlass,
+  PhCaretUp,
+  PhCaretDown,
 } from '@phosphor-icons/vue'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
@@ -80,6 +83,9 @@ const maxReconnectAttempts = ref(10)
 const hasActivity = ref(false) // for glow effect
 const isFullscreen = ref(false) // fullscreen mode
 const titleBarCollapsed = ref(false) // minimize title bar
+const showSearch = ref(false) // terminal search bar
+const searchTerm = ref('') // search query
+const searchInputRef = ref<HTMLInputElement | null>(null)
 let activityTimeout: number | null = null
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
@@ -515,7 +521,7 @@ const createTerminal = () => {
     cursorStyle: isCyberpunk ? 'bar' : 'block',
     cursorInactiveStyle: 'outline',
     allowTransparency: false,
-    scrollback: 10000,
+    scrollback: appStore.terminalScrollback,
     smoothScrollDuration: isCyberpunk ? 150 : 100,
     rightClickSelectsWord: false,
     macOptionIsMeta: true,
@@ -559,11 +565,25 @@ const createTerminal = () => {
       return true
     }
 
+    // Ctrl+F: toggle search bar
+    if (event.ctrlKey && event.key === 'f') {
+      event.preventDefault()
+      toggleSearch()
+      return false
+    }
+
     // Ctrl+V: always paste from clipboard
     // preventDefault stops the browser's native paste into xterm's textarea
     if (event.ctrlKey && event.key === 'v') {
       event.preventDefault()
       pasteFromClipboard()
+      return false
+    }
+
+    // Escape: close search if open
+    if (event.key === 'Escape' && showSearch.value) {
+      showSearch.value = false
+      terminal?.focus()
       return false
     }
 
@@ -975,8 +995,59 @@ const clear = () => {
   terminal?.clear()
 }
 
+const searchNoMatch = ref(false)
+
 const search = (term: string) => {
-  searchAddon?.findNext(term)
+  const found = searchAddon?.findNext(term)
+  searchNoMatch.value = !!term && !found
+}
+
+const toggleSearch = () => {
+  showSearch.value = !showSearch.value
+  if (showSearch.value) {
+    nextTick(() => searchInputRef.value?.focus())
+  } else {
+    searchNoMatch.value = false
+    terminal?.focus()
+  }
+}
+
+const searchNext = () => {
+  if (searchTerm.value) {
+    const found = searchAddon?.findNext(searchTerm.value)
+    searchNoMatch.value = !found
+  }
+}
+
+const searchPrevious = () => {
+  if (searchTerm.value) {
+    const found = searchAddon?.findPrevious(searchTerm.value)
+    searchNoMatch.value = !found
+  }
+}
+
+const closeSearch = () => {
+  showSearch.value = false
+  searchTerm.value = ''
+  searchNoMatch.value = false
+  terminal?.focus()
+}
+
+const handleSearchInput = () => {
+  if (searchTerm.value) {
+    const found = searchAddon?.findNext(searchTerm.value)
+    searchNoMatch.value = !found
+  } else {
+    searchNoMatch.value = false
+  }
+}
+
+const handleSearchKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Enter') {
+    e.shiftKey ? searchPrevious() : searchNext()
+  } else if (e.key === 'Escape') {
+    closeSearch()
+  }
 }
 
 // Handle mobile viewport changes (keyboard show/hide)
@@ -1312,6 +1383,14 @@ defineExpose({
         </NTooltip>
         <NTooltip :delay="400">
           <template #trigger>
+            <button class="titlebar-btn" :class="{ 'active': showSearch }" @click="toggleSearch">
+              <PhMagnifyingGlass :size="14" weight="duotone" />
+            </button>
+          </template>
+          {{ t('terminal.search') }}
+        </NTooltip>
+        <NTooltip :delay="400">
+          <template #trigger>
             <button class="titlebar-btn" @click="toggleFullscreen">
               <component :is="isFullscreen ? PhCornersIn : PhCornersOut" :size="14" weight="duotone" />
             </button>
@@ -1348,12 +1427,37 @@ defineExpose({
 
     <!-- Terminal Container with Effects -->
     <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar || titleBarCollapsed }">
+      <!-- Search Bar (floating overlay) -->
+      <div v-if="showSearch" class="terminal-search-bar">
+        <input
+          ref="searchInputRef"
+          v-model="searchTerm"
+          :placeholder="t('terminal.search_placeholder')"
+          class="search-input"
+          :class="{ 'no-match': searchNoMatch }"
+          @input="handleSearchInput"
+          @keydown="handleSearchKeydown"
+        />
+        <span v-if="searchNoMatch && searchTerm" class="search-no-match">{{ t('terminal.search_no_results') }}</span>
+        <button class="search-btn" @click="searchPrevious" :title="t('terminal.search_prev')">
+          <PhCaretUp :size="14" weight="bold" />
+        </button>
+        <button class="search-btn" @click="searchNext" :title="t('terminal.search_next')">
+          <PhCaretDown :size="14" weight="bold" />
+        </button>
+        <button class="search-btn" @click="closeSearch" :title="t('common.close')">
+          <PhX :size="14" weight="bold" />
+        </button>
+      </div>
+
       <!-- CRT Scanlines Overlay -->
       <div class="scanlines" />
 
       <div
         ref="terminalRef"
         class="terminal"
+        role="application"
+        :aria-label="t('a11y.terminal')"
         @click="handleTerminalClick"
         @contextmenu="handleContextMenu"
       />
@@ -2005,6 +2109,73 @@ defineExpose({
   .terminal-wrapper.has-activity {
     transition: none;
   }
+}
+
+/* Search Bar (floating overlay) */
+.terminal-search-bar {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--surface, #1e1e2e);
+  border: 1px solid var(--stroke, rgba(255, 255, 255, 0.1));
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  z-index: 20;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.search-input {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  background: var(--surface-variant, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--stroke, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+  color: var(--text, #cdd6f4);
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--accent, #7c5dff);
+}
+
+.search-input.no-match {
+  border-color: #e88080;
+  background: rgba(232, 128, 128, 0.1);
+}
+
+.search-no-match {
+  font-size: 11px;
+  color: #e88080;
+  white-space: nowrap;
+}
+
+.search-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted, #888);
+  cursor: pointer;
+}
+
+.search-btn:hover {
+  background: var(--hover-overlay, rgba(255, 255, 255, 0.08));
+  color: var(--text, #cdd6f4);
+}
+
+.titlebar-btn.active {
+  color: var(--accent, #7c5dff);
+  background: var(--accent-bg, rgba(124, 93, 255, 0.15));
 }
 
 

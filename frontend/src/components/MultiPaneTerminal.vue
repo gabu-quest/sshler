@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { NButton, NIcon, NSpace, NTag, useMessage } from 'naive-ui'
 import { useResponsive } from '@/composables/useResponsive'
 import {
@@ -19,14 +19,31 @@ interface TerminalPane {
   connected: boolean
 }
 
+interface SavedLayout {
+  boxName: string
+  layout: 'single' | 'horizontal' | 'vertical' | 'grid'
+  panes: { sessionName: string; directory: string }[]
+  activeIndex: number
+  savedAt: number
+}
+
+const STORAGE_KEY = 'sshler:terminal:layout'
+const LAYOUT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
 interface Props {
   boxName: string
   initialDirectory?: string
+  persistLayout?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  initialDirectory: '~'
+  initialDirectory: '~',
+  persistLayout: true,
 })
+
+const emit = defineEmits<{
+  (e: 'restore-available', layout: SavedLayout): void
+}>()
 
 const message = useMessage()
 const { isMobile } = useResponsive()
@@ -73,13 +90,14 @@ const removePane = (paneId: string) => {
   }
   
   panes.value.splice(index, 1)
-  
+
   // Set new active pane
   if (activePane.value === paneId) {
     if (panes.value.length > 0) {
       setActivePane(panes.value[Math.max(0, index - 1)].id)
     } else {
       activePane.value = null
+      clearSavedLayout()
     }
   }
 }
@@ -190,6 +208,90 @@ const fitAll = () => {
   })
 }
 
+// Layout persistence
+const saveLayout = () => {
+  if (!props.persistLayout || panes.value.length === 0) return
+  const saved: SavedLayout = {
+    boxName: props.boxName,
+    layout: layout.value,
+    panes: panes.value.map(p => ({
+      sessionName: p.sessionName,
+      directory: p.directory,
+    })),
+    activeIndex: panes.value.findIndex(p => p.id === activePane.value),
+    savedAt: Date.now(),
+  }
+  try {
+    const all = loadAllLayouts()
+    all[props.boxName] = saved
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
+  } catch { /* quota exceeded etc */ }
+}
+
+const loadAllLayouts = (): Record<string, SavedLayout> => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+const getSavedLayout = (): SavedLayout | null => {
+  const all = loadAllLayouts()
+  const saved = all[props.boxName]
+  if (!saved) return null
+  if (Date.now() - saved.savedAt > LAYOUT_MAX_AGE_MS) {
+    clearSavedLayout()
+    return null
+  }
+  if (saved.panes.length <= 1) return null
+  return saved
+}
+
+const clearSavedLayout = () => {
+  try {
+    const all = loadAllLayouts()
+    delete all[props.boxName]
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
+  } catch { /* ignore */ }
+}
+
+const restoreLayout = (saved: SavedLayout) => {
+  // Remove all current panes
+  while (panes.value.length > 0) {
+    const pane = panes.value[0]
+    const terminalRef = terminalRefs.value[pane.id]
+    if (terminalRef) {
+      terminalRef.disconnect()
+      delete terminalRefs.value[pane.id]
+    }
+    panes.value.splice(0, 1)
+  }
+  activePane.value = null
+
+  // Recreate panes from saved state
+  layout.value = saved.layout
+  for (const p of saved.panes) {
+    createPane(p.sessionName, p.directory)
+  }
+
+  // Restore active pane
+  const idx = Math.max(0, Math.min(saved.activeIndex, panes.value.length - 1))
+  if (panes.value[idx]) {
+    setActivePane(panes.value[idx].id)
+  }
+
+  // Connect all panes
+  setTimeout(() => connectAll(), 100)
+}
+
+// Watch for layout changes to persist
+watch(
+  () => [panes.value.length, layout.value, activePane.value],
+  () => saveLayout(),
+)
+
 // Keyboard shortcuts
 const handleKeyDown = (event: KeyboardEvent) => {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -236,17 +338,23 @@ const handleResize = () => {
 }
 
 onMounted(() => {
+  // Check for saved layout
+  const saved = props.persistLayout ? getSavedLayout() : null
+  if (saved) {
+    emit('restore-available', saved)
+  }
+
   // Create initial pane
   createPane('main', props.initialDirectory)
-  
+
   // Connect to terminal
   setTimeout(() => {
     connectAll()
   }, 100)
-  
+
   // Add keyboard shortcuts
   document.addEventListener('keydown', handleKeyDown)
-  
+
   // Handle window resize
   window.addEventListener('resize', handleResize)
 })
@@ -266,8 +374,10 @@ defineExpose({
   connectAll,
   disconnectAll,
   fitAll,
+  restoreLayout,
+  clearSavedLayout,
   panes: () => panes.value,
-  activePane: () => activePane.value
+  activePane: () => activePane.value,
 })
 </script>
 

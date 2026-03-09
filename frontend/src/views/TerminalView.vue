@@ -1,19 +1,26 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NSelect, NButton, NIcon, NInput } from 'naive-ui'
-import { PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch, PhCaretDown } from '@phosphor-icons/vue'
+import { NSelect, NButton, NIcon, NInput, NPopover } from 'naive-ui'
+import {
+  PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen, PhGitBranch,
+  PhCaretDown, PhList, PhBookmarkSimple, PhArrowsLeftRight,
+} from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
+import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
+import SessionSwitcher from '@/components/SessionSwitcher.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
+import SnippetsPanel from '@/components/SnippetsPanel.vue'
+import TunnelsPanel from '@/components/TunnelsPanel.vue'
 import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
-import { gitInfo } from '@/api/http'
+import { gitInfo, setBoxTerminalTheme } from '@/api/http'
 import type { GitInfo } from '@/api/types'
 
 const route = useRoute()
@@ -22,6 +29,7 @@ const router = useRouter()
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
 const favoritesStore = useFavoritesStore()
+const appStore = useAppStore()
 const { t } = useI18n()
 
 const selectedBox = ref<string | null>(null)
@@ -35,6 +43,9 @@ const { isMobile } = useResponsive()
 const mobileControlsExpanded = ref(false)
 const rawMode = ref(false)
 const terminalConnected = ref(false)
+const showSessionPanel = ref(false)
+const showSnippetsPanel = ref(false)
+const showTunnelsPanel = ref(false)
 
 // Periodic git info refresh
 let gitPollTimer: ReturnType<typeof setInterval> | null = null
@@ -103,6 +114,18 @@ const loadGitInfo = async () => {
   }
 }
 
+const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
+  sessionName.value = session.session_name
+  initialDirectory.value = session.working_directory || '~'
+  showSessionPanel.value = false
+}
+
+const handleSnippetInsert = (command: string, execute: boolean) => {
+  if (terminalRef.value) {
+    terminalRef.value.send(execute ? command + '\n' : command)
+  }
+}
+
 const filesUrl = computed(() => {
   if (!selectedBox.value) return '#'
   const path = initialDirectory.value || '~'
@@ -127,9 +150,34 @@ const tokenValue = computed(() =>
   bootstrapStore.token || bootstrapStore.payload?.token || null
 )
 
-const isCurrentDirFavorite = computed(() => 
+const isCurrentDirFavorite = computed(() =>
   selectedBox.value ? favoritesStore.isFavorite(selectedBox.value, initialDirectory.value) : false
 )
+
+const VALID_THEMES = ['cyberpunk', 'default', 'solarized', 'dracula', 'nord', 'monokai', 'light'] as const
+type TerminalTheme = typeof VALID_THEMES[number]
+
+const currentBoxTheme = computed<TerminalTheme>(() => {
+  if (!selectedBox.value) return 'cyberpunk'
+  const box = boxesStore.items.find(b => b.name === selectedBox.value)
+  const theme = box?.terminal_theme
+  if (theme && VALID_THEMES.includes(theme as TerminalTheme)) return theme as TerminalTheme
+  return 'cyberpunk'
+})
+
+const themeOptions = VALID_THEMES.map(t => ({ label: t.charAt(0).toUpperCase() + t.slice(1), value: t }))
+
+const handleThemeChange = async (theme: string) => {
+  if (!selectedBox.value) return
+  try {
+    await setBoxTerminalTheme(selectedBox.value, theme, tokenValue.value)
+    // Update local box data
+    const box = boxesStore.items.find(b => b.name === selectedBox.value)
+    if (box) box.terminal_theme = theme
+  } catch {
+    // ignore
+  }
+}
 
 const toggleCurrentDirFavorite = async () => {
   if (selectedBox.value) {
@@ -339,6 +387,37 @@ watch(() => boxesStore.items, () => {
             </NIcon>
           </NButton>
 
+          <NSelect
+            v-if="selectedBox"
+            :value="currentBoxTheme"
+            :options="themeOptions"
+            @update:value="handleThemeChange"
+            size="small"
+            style="min-width: 110px"
+          />
+
+          <NPopover v-if="selectedBox" trigger="click" placement="bottom-end" v-model:show="showSessionPanel">
+            <template #trigger>
+              <NButton size="small" quaternary :title="t('terminal.sessions') || 'Sessions'">
+                <NIcon size="14"><PhList weight="duotone" /></NIcon>
+              </NButton>
+            </template>
+            <SessionSwitcher
+              :box-name="selectedBox"
+              :token="tokenValue"
+              :current-session="sessionName"
+              @select="handleSessionSelect"
+            />
+          </NPopover>
+
+          <NButton v-if="selectedBox" size="small" quaternary :title="t('snippets.title')" @click="showSnippetsPanel = true">
+            <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
+          </NButton>
+
+          <NButton v-if="selectedBox" size="small" quaternary :title="t('tunnels.title')" @click="showTunnelsPanel = true">
+            <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
+          </NButton>
+
           <a
             v-if="selectedBox"
             :href="filesUrl"
@@ -372,6 +451,12 @@ watch(() => boxesStore.items, () => {
           <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
             <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
           </NIcon>
+        </button>
+        <button v-if="selectedBox" class="mobile-action-btn" @click="showSnippetsPanel = true" aria-label="Snippets">
+          <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
+        </button>
+        <button v-if="selectedBox" class="mobile-action-btn" @click="showTunnelsPanel = true" aria-label="Port Forwarding">
+          <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
         </button>
         <a
           v-if="selectedBox"
@@ -426,6 +511,9 @@ watch(() => boxesStore.items, () => {
         :box-name="selectedBox"
         :session-name="sessionName"
         :directory="initialDirectory"
+        :theme="currentBoxTheme"
+        :font-size="appStore.terminalFontSize"
+        :font-family="appStore.terminalFontFamily"
         :show-title-bar="!isMobile"
         :external-input="isMobile && !rawMode"
         @connected="onTerminalConnected"
@@ -466,6 +554,21 @@ watch(() => boxesStore.items, () => {
       :initial-path="initialDirectory"
       :token="tokenValue"
       @select="handleDirPickerSelect"
+    />
+
+    <!-- Snippets Panel -->
+    <SnippetsPanel
+      v-if="selectedBox"
+      v-model:show="showSnippetsPanel"
+      :box-name="selectedBox"
+      @insert="handleSnippetInsert"
+    />
+
+    <!-- Tunnels Panel -->
+    <TunnelsPanel
+      v-if="selectedBox"
+      v-model:show="showTunnelsPanel"
+      :box-name="selectedBox"
     />
   </div>
 </template>

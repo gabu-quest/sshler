@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response
 
 from .. import state
 from ..config import AppConfig
-from ..ssh import SSHError, sftp_list_directory
+from ..ssh import SSHError, sftp_chmod, sftp_list_directory
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
@@ -34,6 +34,7 @@ from .helpers import (
     _syntax_from_filename,
 )
 from .models import (
+    APIChmodRequest,
     APICopyRequest,
     APIDeleteRequest,
     APIDirectoryEntry,
@@ -87,6 +88,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         is_directory=is_dir,
                         size=stats.st_size if child.is_file() else None,
                         modified=stats.st_mtime,
+                        mode=stats.st_mode & 0o7777,
                     )
                 )
             return APIDirectoryListing(box=box.name, directory=normalized, entries=entries)
@@ -112,6 +114,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     is_directory=bool(entry.get("is_directory")),
                     size=int(str(entry["size"])) if entry.get("size") is not None else None,
                     modified=float(str(entry["modified"])) if entry.get("modified") is not None else None,
+                    mode=int(str(entry["mode"])) if entry.get("mode") is not None else None,
                 )
             )
 
@@ -630,5 +633,48 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc))
 
         return APISimpleMessage(status="ok", message="uploaded", path=remote_path)
+
+    @router.post("/boxes/{name}/chmod", response_model=APISimpleMessage)
+    async def api_chmod(
+        name: str,
+        payload: APIChmodRequest,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> APISimpleMessage:
+        box = deps.get_box_or_404(application_config, name)
+
+        try:
+            mode = int(payload.mode, 8)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid octal mode")
+        if mode < 0 or mode > 0o7777:
+            raise HTTPException(status_code=400, detail="Mode out of range")
+
+        if box.transport == "local":
+            target = Path(_normalize_local_path(payload.path))
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="File not found")
+            try:
+                target.chmod(mode)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            return APISimpleMessage(status="ok", message="chmod applied", path=str(target))
+
+        try:
+            validated_path = PathValidator.validate_remote_path(payload.path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                await sftp_chmod(connection, validated_path, mode)
+        except SSHError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return APISimpleMessage(status="ok", message="chmod applied", path=validated_path)
 
     return router

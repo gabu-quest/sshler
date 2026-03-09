@@ -33,6 +33,7 @@ def _box_to_api(box: StoredBox | Box) -> APIBox:
             pinned=box.pinned,
             default_dir=box.default_dir,
             favorites=box.favorites,
+            terminal_theme=box.terminal_theme,
         )
 
     host = box.host or box.ssh_alias or box.name
@@ -45,6 +46,7 @@ def _box_to_api(box: StoredBox | Box) -> APIBox:
         pinned=box.pinned,
         default_dir=box.default_dir,
         favorites=box.favorites,
+        terminal_theme=box.terminal_theme,
     )
 
 
@@ -202,6 +204,26 @@ def get_router(deps: APIDependencies) -> APIRouter:
         except Exception as e:
             logger.warning(f"Failed to get git info for {name}:{directory}: {e}")
             return APIGitInfo(error=str(e))
+
+    @router.put("/boxes/{name}/theme")
+    async def api_set_theme(
+        name: str,
+        payload: dict,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> dict:
+        """Set terminal theme preference for a box."""
+        VALID_THEMES = {"cyberpunk", "default", "solarized", "dracula", "nord", "monokai", "light"}
+        theme = payload.get("terminal_theme", "")
+        if theme and theme not in VALID_THEMES:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"Invalid theme. Valid: {', '.join(sorted(VALID_THEMES))}")
+
+        deps.get_box_or_404(application_config, name)
+        stored = application_config.get_or_create_stored(name)
+        stored.terminal_theme = theme or None
+        save_config(application_config)
+        rebuild_boxes(application_config)
+        return {"status": "ok", "terminal_theme": theme or None}
 
     return router
 

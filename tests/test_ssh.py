@@ -33,7 +33,7 @@ async def test_sftp_list_directory_skips_entries_on_stat_failure():
     connection = FakeConnection()
     entries = await sftp_list_directory(connection, "/tmp")
 
-    assert entries == [{"name": "ok", "is_directory": True, "size": 123}]
+    assert entries == [{"name": "ok", "is_directory": True, "size": 123, "mode": 0}]
     assert connection.client.exit_called is True
 
 

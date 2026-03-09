@@ -141,6 +141,20 @@ class Session(SQLerModel):
         self.metadata_json = json.dumps(value)
 
 
+class Snippet(SQLerModel):
+    """Saved command snippets per box or global."""
+
+    __tablename__ = "snippets"
+
+    id: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
+    box: str  # box name or "__global__" for all boxes
+    label: str
+    command: str
+    category: str = ""
+    sort_order: int = 0
+    created_at: float = Field(default_factory=time.time)
+
+
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from .config import StoredBox
 
@@ -186,6 +200,11 @@ def initialize(config_dir: Path) -> None:
         DirectoryVisit.ensure_index("path")
         DirectoryVisit.ensure_index("last_visited")
 
+        # Initialize Snippet model
+        Snippet.set_db(db)
+        Snippet.ensure_index("box")
+        Snippet.ensure_index("sort_order")
+
         # Create composite indexes for performance optimization
         # Note: sqler only supports single-column indexes via ensure_index(),
         # so we create composite indexes using raw SQL for optimal query performance.
@@ -194,6 +213,38 @@ def initialize(config_dir: Path) -> None:
         _DB = db
         _DB_PATH = target_path
         _INITIALISED = True
+
+    seed_default_snippets()
+
+
+def seed_default_snippets() -> None:
+    """Seed starter snippets for new installations.
+
+    Only inserts when zero __global__ snippets exist, so users who
+    deleted the defaults won't see them reappear on restart.
+    """
+    _require_db()
+    with _DB_LOCK:
+        existing = Snippet.query().filter(F("box") == "__global__").first()
+        if existing:
+            return
+
+        defaults = [
+            ("System Info", "uname -a", "System"),
+            ("Who Am I", "whoami && hostname", "System"),
+            ("Disk Usage", "df -h", "System"),
+            ("Top Processes", "ps aux --sort=-%mem | head -20", "System"),
+        ]
+        for order, (label, command, category) in enumerate(defaults):
+            Snippet(
+                box="__global__",
+                label=label,
+                command=command,
+                category=category,
+                sort_order=order,
+            ).save()
+
+    logger.info("Seeded %d default global snippets", len(defaults))
 
 
 def reset_state() -> None:
@@ -566,6 +617,23 @@ async def update_session_metadata_async(
     return await asyncio.to_thread(update_session_metadata, session_id, metadata, window_count)
 
 
+def rename_session(session_id: str, new_name: str) -> bool:
+    """Rename a session in the database."""
+    _require_db()
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+        session.session_name = new_name
+        session.last_accessed_at = time.time()
+        session.save()
+        return True
+
+
+async def rename_session_async(session_id: str, new_name: str) -> bool:
+    return await asyncio.to_thread(rename_session, session_id, new_name)
+
+
 def cleanup_old_sessions(max_age_days: int = 30) -> int:
     """Delete sessions older than max_age_days that are inactive."""
     _require_db()
@@ -672,3 +740,115 @@ async def search_directories_async(
     limit: int = 20,
 ) -> list[tuple[str, float]]:
     return await asyncio.to_thread(search_directories, box_name, query, limit)
+
+
+# Snippet CRUD Functions
+
+
+def list_snippets(box_name: str) -> list[Snippet]:
+    """Return snippets for a box plus global snippets, ordered by sort_order."""
+    _require_db()
+    with _DB_LOCK:
+        rows = (
+            Snippet.query()
+            .filter((F("box") == box_name) | (F("box") == "__global__"))
+            .order_by("sort_order")
+            .all()
+        )
+        return list(rows)
+
+
+async def list_snippets_async(box_name: str) -> list[Snippet]:
+    return await asyncio.to_thread(list_snippets, box_name)
+
+
+def create_snippet(
+    box: str,
+    label: str,
+    command: str,
+    category: str = "",
+) -> Snippet:
+    """Create a new snippet."""
+    _require_db()
+    with _DB_LOCK:
+        # Determine next sort_order
+        existing = (
+            Snippet.query()
+            .filter(F("box") == box)
+            .order_by("sort_order", desc=True)
+            .first()
+        )
+        next_order = (existing.sort_order + 1) if existing else 0
+
+        snippet = Snippet(
+            box=box,
+            label=label,
+            command=command,
+            category=category,
+            sort_order=next_order,
+        )
+        snippet.save()
+        return snippet
+
+
+async def create_snippet_async(
+    box: str, label: str, command: str, category: str = ""
+) -> Snippet:
+    return await asyncio.to_thread(create_snippet, box, label, command, category)
+
+
+def get_snippet_by_id(snippet_id: str) -> Snippet | None:
+    """Get a snippet by ID."""
+    _require_db()
+    with _DB_LOCK:
+        return Snippet.query().filter(F("id") == snippet_id).first()
+
+
+def update_snippet(
+    snippet_id: str,
+    label: str | None = None,
+    command: str | None = None,
+    category: str | None = None,
+    sort_order: int | None = None,
+) -> Snippet | None:
+    """Update a snippet. Returns updated snippet or None if not found."""
+    _require_db()
+    with _DB_LOCK:
+        snippet = Snippet.query().filter(F("id") == snippet_id).first()
+        if not snippet:
+            return None
+        if label is not None:
+            snippet.label = label
+        if command is not None:
+            snippet.command = command
+        if category is not None:
+            snippet.category = category
+        if sort_order is not None:
+            snippet.sort_order = sort_order
+        snippet.save()
+        return snippet
+
+
+async def update_snippet_async(
+    snippet_id: str,
+    label: str | None = None,
+    command: str | None = None,
+    category: str | None = None,
+    sort_order: int | None = None,
+) -> Snippet | None:
+    return await asyncio.to_thread(update_snippet, snippet_id, label, command, category, sort_order)
+
+
+def delete_snippet(snippet_id: str) -> bool:
+    """Delete a snippet. Returns True if deleted."""
+    _require_db()
+    with _DB_LOCK:
+        snippet = Snippet.query().filter(F("id") == snippet_id).first()
+        if not snippet:
+            return False
+        snippet.delete()
+        return True
+
+
+async def delete_snippet_async(snippet_id: str) -> bool:
+    return await asyncio.to_thread(delete_snippet, snippet_id)

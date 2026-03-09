@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import platform
+import re
+import shlex
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -120,10 +123,50 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APISessionUpdate,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISession:
-        deps.get_box_or_404(application_config, name)
+        box = deps.get_box_or_404(application_config, name)
         record = await state.get_session_by_id_async(session_id)
         if record is None or record.box != name:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Handle session rename via tmux
+        if payload.session_name is not None and payload.session_name != record.session_name:
+            new_name = payload.session_name.strip()
+            if not new_name or len(new_name) > 64:
+                raise HTTPException(status_code=400, detail="Invalid session name")
+            # Only allow safe characters
+            if not re.match(r'^[a-zA-Z0-9_.-]+$', new_name):
+                raise HTTPException(status_code=400, detail="Session name may only contain alphanumeric, underscore, dot, and dash")
+            try:
+                if box.transport == "local":
+                    cmd = _local_tmux_command() + ["rename-session", "-t", record.session_name, new_name]
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _, stderr = await process.communicate()
+                    if process.returncode != 0:
+                        logger.warning(f"tmux rename failed: {stderr.decode().strip()}")
+                        raise HTTPException(status_code=400, detail="tmux rename failed")
+                else:
+                    connection = await deps.connect_for_box(box, application_config)
+                    try:
+                        result = await connection.run(
+                            f"tmux rename-session -t {shlex.quote(record.session_name)} {shlex.quote(new_name)}",
+                            check=False,
+                        )
+                        if result.returncode != 0:
+                            raise HTTPException(status_code=400, detail="tmux rename failed")
+                    finally:
+                        with contextlib.suppress(Exception):
+                            connection.close()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.warning(f"Failed to rename tmux session: {exc}")
+                raise HTTPException(status_code=500, detail="Failed to rename session")
+            await state.rename_session_async(record.id, new_name)
+
         if payload.metadata is not None or payload.window_count is not None:
             await state.update_session_metadata_async(
                 session_id=record.id,
@@ -151,12 +194,37 @@ def get_router(deps: APIDependencies) -> APIRouter:
     async def api_delete_session(
         name: str,
         session_id: str,
+        kill_tmux: bool = Query(False),
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
-        deps.get_box_or_404(application_config, name)
+        box = deps.get_box_or_404(application_config, name)
         record = await state.get_session_by_id_async(session_id)
         if record is None or record.box != name:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        if kill_tmux and record.session_name:
+            try:
+                if box.transport == "local":
+                    cmd = _local_tmux_command() + ["kill-session", "-t", record.session_name]
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await process.communicate()
+                else:
+                    connection = await deps.connect_for_box(box, application_config)
+                    try:
+                        await connection.run(
+                            f"tmux kill-session -t {shlex.quote(record.session_name)}",
+                            check=False,
+                        )
+                    finally:
+                        with contextlib.suppress(Exception):
+                            connection.close()
+            except Exception as exc:
+                logger.warning(f"Failed to kill tmux session {record.session_name}: {exc}")
+
         deleted = await state.delete_session_async(session_id)
         if not deleted:
             raise HTTPException(status_code=500, detail="Failed to delete session")

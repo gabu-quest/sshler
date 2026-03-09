@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .helpers import MAX_IMAGE_PREVIEW_BYTES
 
@@ -16,6 +16,7 @@ class APIBox(BaseModel):
     pinned: bool = False
     default_dir: str | None = None
     favorites: list[str] = []
+    terminal_theme: str | None = None
 
 
 class APIDirectoryEntry(BaseModel):
@@ -24,6 +25,7 @@ class APIDirectoryEntry(BaseModel):
     is_directory: bool
     size: int | None = None
     modified: float | None = None
+    mode: int | None = None
 
 
 class APIDirectoryListing(BaseModel):
@@ -61,6 +63,11 @@ class APICopyRequest(BaseModel):
     source: str
     destination: str
     new_name: str | None = None
+
+
+class APIChmodRequest(BaseModel):
+    path: str
+    mode: str  # octal string like "755"
 
 
 class APIFilePreview(BaseModel):
@@ -124,6 +131,7 @@ class APISessionUpdate(BaseModel):
     active: bool | None = None
     window_count: int | None = None
     metadata: dict | None = None
+    session_name: str | None = Field(None, min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9_.-]+$')
 
 
 class APIBootstrap(BaseModel):
@@ -178,3 +186,63 @@ class APIGitInfo(BaseModel):
     is_repo: bool = False
     dirty: bool = False
     error: str | None = None
+
+
+class APISnippet(BaseModel):
+    """A saved command snippet."""
+
+    id: str
+    box: str
+    label: str
+    command: str
+    category: str = ""
+    sort_order: int = 0
+    created_at: float = 0
+
+
+class APISnippetCreate(BaseModel):
+    """Request body for creating a snippet."""
+
+    box: str = Field(..., max_length=128)
+    label: str = Field(..., max_length=256)
+    command: str = Field(..., max_length=65536)
+    category: str = Field("", max_length=128)
+
+
+class APISnippetUpdate(BaseModel):
+    """Request body for updating a snippet."""
+
+    label: str | None = None
+    command: str | None = None
+    category: str | None = None
+    sort_order: int | None = None
+
+
+class APITunnelCreate(BaseModel):
+    """Request body for creating an SSH tunnel."""
+
+    tunnel_type: str  # "local" or "remote"
+    local_host: str = Field("127.0.0.1", max_length=253)
+    local_port: int
+    remote_host: str = Field("127.0.0.1", max_length=253)
+    remote_port: int
+
+    @field_validator("local_host")
+    @classmethod
+    def local_host_must_be_loopback(cls, v: str) -> str:
+        if v not in ("127.0.0.1", "::1", "localhost"):
+            raise ValueError("local_host must be a loopback address")
+        return v
+
+
+class APITunnel(BaseModel):
+    """An active SSH tunnel."""
+
+    id: str
+    box: str
+    tunnel_type: str
+    local_host: str
+    local_port: int
+    remote_host: str
+    remote_port: int
+    created_at: float

@@ -1,5 +1,8 @@
 import type {
   ApiBox,
+  ApiSnippet,
+  ApiTunnel,
+  BatchResult,
   BoxStats,
   BoxStatus,
   BootstrapPayload,
@@ -7,6 +10,7 @@ import type {
   FavoriteToggle,
   FilePreview,
   GitInfo,
+  GrepResponse,
   PinToggle,
   SearchResponse,
   SessionInfo,
@@ -494,6 +498,94 @@ export async function gitInfo(name: string, directory: string, token: string | n
   return handle<GitInfo>(res);
 }
 
+export async function chmodFile(
+  name: string,
+  path: string,
+  mode: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/chmod`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ path, mode }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function setBoxTerminalTheme(
+  name: string,
+  theme: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/theme`, {
+    method: "PUT",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ terminal_theme: theme }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function fetchBoxSessions(
+  name: string,
+  token: string | null,
+  activeOnly = false,
+): Promise<import("./types").ApiSession[]> {
+  const params = new URLSearchParams();
+  if (activeOnly) params.set("active_only", "true");
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/sessions${qs}`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<import("./types").ApiSession[]>(res);
+}
+
+export async function syncBoxSessions(
+  name: string,
+  token: string | null,
+): Promise<import("./types").ApiSession[]> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/sessions/sync`, {
+    method: "POST",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<import("./types").ApiSession[]>(res);
+}
+
+export async function deleteSession(
+  boxName: string,
+  sessionId: string,
+  token: string | null,
+  killTmux = false,
+): Promise<SimpleMessage> {
+  const qs = killTmux ? "?kill_tmux=true" : "";
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(boxName)}/sessions/${encodeURIComponent(sessionId)}${qs}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function renameSession(
+  boxName: string,
+  sessionId: string,
+  newName: string,
+  token: string | null,
+): Promise<import("./types").ApiSession> {
+  const url = `${API_BASE}/boxes/${encodeURIComponent(boxName)}/sessions/${encodeURIComponent(sessionId)}`;
+  const options: RequestInit = {
+    method: "PATCH",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ session_name: newName }),
+    credentials: 'include'
+  };
+  const res = await fetch(url, options);
+  return handle<import("./types").ApiSession>(res, { url, options });
+}
+
 export async function downloadFile(
   name: string,
   path: string,
@@ -511,6 +603,102 @@ export async function downloadFile(
   return res.blob();
 }
 
+export async function batchDelete(
+  name: string,
+  paths: string[],
+  token: string | null,
+): Promise<BatchResult> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/delete`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+    credentials: 'include'
+  });
+  return handle<BatchResult>(res);
+}
+
+export async function batchMove(
+  name: string,
+  paths: string[],
+  destination: string,
+  token: string | null,
+): Promise<BatchResult> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/move`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, destination }),
+    credentials: 'include'
+  });
+  return handle<BatchResult>(res);
+}
+
+export async function batchCopy(
+  name: string,
+  paths: string[],
+  destination: string,
+  token: string | null,
+): Promise<BatchResult> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/copy`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, destination }),
+    credentials: 'include'
+  });
+  return handle<BatchResult>(res);
+}
+
+export async function grepContent(
+  name: string,
+  pattern: string,
+  directory: string,
+  token: string | null,
+  caseSensitive: boolean = false,
+  limit: number = 100,
+): Promise<GrepResponse> {
+  const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/grep`, window.location.origin);
+  url.searchParams.set("pattern", pattern);
+  url.searchParams.set("directory", directory);
+  url.searchParams.set("case_sensitive", String(caseSensitive));
+  url.searchParams.set("limit", String(limit));
+  const res = await fetch(url.toString().replace(window.location.origin, ""), {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<GrepResponse>(res);
+}
+
+export async function createArchive(
+  name: string,
+  paths: string[],
+  destination: string,
+  archiveName: string,
+  format: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/create`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, destination, archive_name: archiveName, format }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function extractArchive(
+  name: string,
+  archivePath: string,
+  destination: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/extract`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ archive_path: archivePath, destination }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
 export async function searchDirectories(
   name: string,
   query: string,
@@ -525,4 +713,100 @@ export async function searchDirectories(
     credentials: 'include'
   });
   return handle<SearchResponse>(res);
+}
+
+// Snippets
+
+export async function fetchSnippets(
+  box: string,
+  token: string | null,
+): Promise<ApiSnippet[]> {
+  const url = `${API_BASE}/snippets?box=${encodeURIComponent(box)}`;
+  const res = await fetch(url, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<ApiSnippet[]>(res);
+}
+
+export async function createSnippet(
+  box: string,
+  label: string,
+  command: string,
+  category: string,
+  token: string | null,
+): Promise<ApiSnippet> {
+  const res = await fetch(`${API_BASE}/snippets`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ box, label, command, category }),
+    credentials: 'include'
+  });
+  return handle<ApiSnippet>(res);
+}
+
+export async function updateSnippet(
+  snippetId: string,
+  data: { label?: string; command?: string; category?: string; sort_order?: number },
+  token: string | null,
+): Promise<ApiSnippet> {
+  const res = await fetch(`${API_BASE}/snippets/${encodeURIComponent(snippetId)}`, {
+    method: "PUT",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    credentials: 'include'
+  });
+  return handle<ApiSnippet>(res);
+}
+
+export async function deleteSnippet(
+  snippetId: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/snippets/${encodeURIComponent(snippetId)}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+// Tunnels
+
+export async function fetchTunnels(
+  box: string,
+  token: string | null,
+): Promise<ApiTunnel[]> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<ApiTunnel[]>(res);
+}
+
+export async function createTunnel(
+  box: string,
+  data: { tunnel_type: string; local_host: string; local_port: number; remote_host: string; remote_port: number },
+  token: string | null,
+): Promise<ApiTunnel> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    credentials: 'include'
+  });
+  return handle<ApiTunnel>(res);
+}
+
+export async function deleteTunnel(
+  box: string,
+  tunnelId: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels/${encodeURIComponent(tunnelId)}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
 }

@@ -6,6 +6,9 @@ type ColorMode = "light" | "dark" | "system";
 
 const COLOR_KEY = "sshler:ui:color-mode";
 const REDUCED_MOTION_KEY = "sshler:ui:reduced-motion";
+const TERMINAL_FONT_SIZE_KEY = "sshler:terminal:font-size";
+const TERMINAL_FONT_FAMILY_KEY = "sshler:terminal:font-family";
+const TERMINAL_SCROLLBACK_KEY = "sshler:terminal:scrollback";
 
 const prefersDark = () => {
   if (typeof window === "undefined") {
@@ -43,11 +46,43 @@ const readReducedMotionPreference = (): boolean => {
   return prefersReducedMotion();
 };
 
+const DEFAULT_FONT_FAMILY = '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace';
+
+const readTerminalFontSize = (): number => {
+  if (typeof localStorage === "undefined") return 14;
+  const stored = localStorage.getItem(TERMINAL_FONT_SIZE_KEY);
+  if (stored) {
+    const n = parseInt(stored, 10);
+    if (n >= 8 && n <= 24) return n;
+  }
+  return 14;
+};
+
+const readTerminalFontFamily = (): string => {
+  if (typeof localStorage === "undefined") return DEFAULT_FONT_FAMILY;
+  return localStorage.getItem(TERMINAL_FONT_FAMILY_KEY) || DEFAULT_FONT_FAMILY;
+};
+
+const readTerminalScrollback = (): number => {
+  if (typeof localStorage === "undefined") return 10000;
+  const stored = localStorage.getItem(TERMINAL_SCROLLBACK_KEY);
+  if (stored) {
+    const n = parseInt(stored, 10);
+    if (n >= 500 && n <= 50000) return n;
+  }
+  return 10000;
+};
+
 export const useAppStore = defineStore("app", () => {
   const colorMode = ref<ColorMode>(readStoredMode());
   const systemDark = ref(prefersDark());
   const reducedMotion = ref(readReducedMotionPreference());
   const isOnline = ref(typeof navigator !== "undefined" ? navigator.onLine : true);
+
+  // Terminal settings
+  const terminalFontSize = ref(readTerminalFontSize());
+  const terminalFontFamily = ref(readTerminalFontFamily());
+  const terminalScrollback = ref(readTerminalScrollback());
 
   // Computed properties
   const isDark = computed(() => {
@@ -81,6 +116,30 @@ export const useAppStore = defineStore("app", () => {
     const currentIndex = modes.indexOf(colorMode.value);
     const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % modes.length;
     setColorMode(modes[nextIndex] as ColorMode);
+  };
+
+  // Terminal settings
+  const setTerminalFontSize = (size: number) => {
+    const clamped = Math.max(8, Math.min(24, size));
+    terminalFontSize.value = clamped;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(TERMINAL_FONT_SIZE_KEY, clamped.toString());
+    }
+  };
+
+  const setTerminalFontFamily = (family: string) => {
+    terminalFontFamily.value = family;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(TERMINAL_FONT_FAMILY_KEY, family);
+    }
+  };
+
+  const setTerminalScrollback = (lines: number) => {
+    const clamped = Math.max(500, Math.min(50000, lines));
+    terminalScrollback.value = clamped;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(TERMINAL_SCROLLBACK_KEY, clamped.toString());
+    }
   };
 
   // Accessibility preferences
@@ -176,6 +235,11 @@ export const useAppStore = defineStore("app", () => {
     reducedMotion,
     isOnline,
 
+    // Terminal settings
+    terminalFontSize,
+    terminalFontFamily,
+    terminalScrollback,
+
     // Computed
     isDark,
 
@@ -183,6 +247,11 @@ export const useAppStore = defineStore("app", () => {
     setColorMode,
     toggleTheme,
     cycleTheme,
+
+    // Terminal settings actions
+    setTerminalFontSize,
+    setTerminalFontFamily,
+    setTerminalScrollback,
 
     // Accessibility actions
     setReducedMotion,

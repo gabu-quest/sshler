@@ -199,4 +199,13 @@ defineExpose({
 .code-editor :deep(.cm-content) {
   min-height: 100%;
 }
+
+:global([data-theme="light"]) .code-editor :deep(.cm-editor) {
+  background-color: #ffffff;
+}
+
+:global([data-theme="light"]) .code-editor :deep(.cm-gutters) {
+  background-color: #f5f5f5;
+  border-right: 1px solid #e0e0e0;
+}
 </style>

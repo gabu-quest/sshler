@@ -119,3 +119,10 @@ rate_limit_file_ops = create_rate_limit_dependency(
     rate=20,
     per=60,
 )
+
+# Grep: 10 per minute (expensive operation)
+rate_limit_grep = create_rate_limit_dependency(
+    name="api_grep",
+    rate=10,
+    per=60,
+)

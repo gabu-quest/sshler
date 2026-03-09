@@ -994,8 +994,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 # Old script-based local process (deprecated)
                                 process.stdin.write(bytes_value)
                             else:
-                                # SSHClientProcess expects str
-                                process.stdin.write(bytes_value.decode('utf-8', errors='replace'))
+                                # SSHClientProcess with encoding=None (binary mode)
+                                process.stdin.write(bytes_value)
                 return True
 
             # Handle any immediate message now that the process exists.
