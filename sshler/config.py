@@ -421,6 +421,8 @@ def _merge_host(
         base_keyfile = host_config.identity_files[0]
 
     default_dir = stored_override.default_dir if stored_override else None
+    if not default_dir:
+        default_dir = f"/home/{base_user}"
     known_hosts = stored_override.known_hosts if stored_override else None
     agent = stored_override.agent if stored_override else False
     source = "ssh_config" if host_config else "custom"
