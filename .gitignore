@@ -19,8 +19,8 @@ sshler/static/dist
 # Test cache
 .hypothesis/
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code (dev tooling, not user-facing)
+.claude/
 CLAUDE.local.md
 
 # Sandbox

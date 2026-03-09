@@ -17,6 +17,11 @@ pip install sshler
 
 # 実行（ブラウザが自動で開きます）
 sshler serve
+
+# 開発環境でのセットアップ
+uv sync --group dev
+cd frontend && pnpm install && pnpm build && cd ..
+sshler serve
 ```
 
 アプリは `http://127.0.0.1:8822` で開き、Vue SPA の `/app/` にリダイレクトします。
@@ -123,13 +128,20 @@ uv run ruff check .
 uv run pytest
 ```
 
+E2E スモークテスト（Playwright）：
+
+```bash
+uv run playwright install chromium   # 初回のみブラウザをダウンロード
+uv run pytest tests/e2e
+```
+
 ## 実行
 
 ```bash
 sshler serve
 ```
 
-デフォルトブラウザで `http://127.0.0.1:8822` が開きます。
+デフォルトブラウザで `http://127.0.0.1:8822` が開き、`/app/` にリダイレクトします。
 
 ### フロントエンドのビルド
 
@@ -260,6 +272,257 @@ sshler serve \
 - JSON ペイロードもサポート: `printf '\033]777;notify={"title":"Codex","message":"All tasks finished"}\a'`。
 - 初回の通知はブラウザの許可を求めます。拒否した場合でも、タブに戻ったときにアプリ内トーストとタイトルバッジが表示されます。
 
+## TLS/HTTPS デプロイ
+
+### HTTPS が重要な理由
+
+sshler は認証にセキュアな **httpOnly セッション Cookie** を使用します。ブラウザは HTTPS 経由で配信する際に Cookie に `Secure` フラグが設定されていることを要求します。これにより、Cookie は暗号化された接続でのみ送信されます。
+
+**本番環境では HTTPS を強く推奨します。**
+
+### デプロイオプション
+
+#### 1. ローカル開発（HTTP）
+
+`localhost` または `127.0.0.1` でのローカル開発では、Secure Cookie フラグを無効化できます：
+
+```bash
+# .env
+SSHLER_HOST=127.0.0.1
+SSHLER_PORT=8822
+SSHLER_PUBLIC_URL=http://localhost:8822
+SSHLER_COOKIE_SECURE=false  # localhost 開発専用！
+```
+
+**本番環境やネットワークアクセス可能なインターフェースでは絶対に `COOKIE_SECURE=false` を使用しないでください。**
+
+#### 2. Caddy リバースプロキシによる本番運用（推奨）
+
+[Caddy](https://caddyserver.com/) は sshler に HTTPS を追加する最も簡単な方法です。Let's Encrypt 証明書を自動的に取得・更新します。
+
+**基本セットアップ：**
+
+1. Caddy をインストール：
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install caddy
+
+   # macOS
+   brew install caddy
+   ```
+
+2. Caddyfile を作成：
+   ```caddyfile
+   # /etc/caddy/Caddyfile または ~/Caddyfile
+
+   sshler.company.internal {
+       reverse_proxy localhost:8822
+   }
+   ```
+
+3. sshler を HTTPS 用に設定：
+   ```bash
+   # .env
+   SSHLER_HOST=127.0.0.1
+   SSHLER_PORT=8822
+   SSHLER_PUBLIC_URL=https://sshler.company.internal
+   SSHLER_COOKIE_SECURE=true  # HTTPS 必須
+   ```
+
+4. Caddy を起動：
+   ```bash
+   # システムサービス
+   sudo systemctl start caddy
+
+   # または直接実行
+   caddy run --config /etc/caddy/Caddyfile
+   ```
+
+5. `https://sshler.company.internal` で sshler にアクセス
+
+**LAN デプロイ（自己署名証明書）：**
+
+パブリックドメインのないローカルネットワークにデプロイする場合は、Caddy で自己署名証明書を使用：
+
+```caddyfile
+sshler.local {
+    tls internal  # Caddy の内部 CA を使用
+    reverse_proxy localhost:8822
+}
+```
+
+ブラウザで Caddy のローカル CA 証明書を信頼するように設定してください（通常 `~/.local/share/caddy/pki/authorities/local/root.crt` にあります）。
+
+**高度な Caddy 設定：**
+
+```caddyfile
+sshler.company.internal {
+    # Let's Encrypt による自動 HTTPS
+
+    # オプション: API エンドポイントのレート制限
+    @api {
+        path /api/v1/*
+    }
+    rate_limit @api 100r/m
+
+    # ログインエンドポイントのより厳格なレート制限（推奨）
+    @login {
+        path /api/v1/auth/login
+    }
+    rate_limit @login 5r/m
+
+    # sshler へのプロキシ
+    reverse_proxy localhost:8822 {
+        # クライアント IP を保持
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # オプション: セキュリティヘッダーを追加
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
+}
+```
+
+#### 3. Tailscale デプロイ
+
+[Tailscale](https://tailscale.com/) を使用している場合、Tailscale ネットワーク経由で sshler にアクセスできます。Tailscale は MagicDNS で自動的に HTTPS を提供します。
+
+1. Tailscale IP でリッスンするように sshler を設定：
+   ```bash
+   # .env
+   SSHLER_HOST=100.64.0.1  # あなたの Tailscale IP
+   SSHLER_PORT=8822
+   SSHLER_PUBLIC_URL=https://yourhost.tail-scale.ts.net
+   SSHLER_COOKIE_SECURE=true
+   ```
+
+2. Tailscale Serve を有効化（オプション、HTTPS 用）：
+   ```bash
+   tailscale serve https / http://localhost:8822
+   ```
+
+3. `https://yourhost.tail-scale.ts.net` で sshler にアクセス
+
+**注意:** Tailscale はネットワークレベルの暗号化を提供しますが、HTTPS を使用することでセキュア Cookie が正しく動作します。
+
+#### 4. その他のリバースプロキシ
+
+**Nginx:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name sshler.company.internal;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:8822;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+**Traefik:**
+
+```yaml
+http:
+  routers:
+    sshler:
+      rule: "Host(`sshler.company.internal`)"
+      service: sshler
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    sshler:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:8822"
+```
+
+### マルチインスタンスデプロイ
+
+**重要**: 現在のセッションストアは**インメモリ**であり、**マルチインスタンスデプロイには適していません**（例: ロードバランサー配下で複数の sshler プロセスを実行する場合）。
+
+**影響：**
+- セッションはプロセスメモリに保存されます
+- 各インスタンスは独立したセッションストアを持ちます
+- リクエストが異なるインスタンスにルーティングされるとセッションが失われます
+- ロードバランシング時にセッション Cookie が無効として扱われます
+
+**シングルインスタンスデプロイ**（最も一般的）：
+- リバースプロキシ（Caddy、Nginx）の背後で sshler プロセスを 1 つ実行
+- systemd サービスで 1 インスタンスを実行
+- Docker コンテナ（シングルインスタンス）
+
+マルチインスタンスサポートが必要な場合は、Issue を作成するか、共有セッションバックエンドを実装する PR を送信してください。
+
+### セキュリティチェックリスト
+
+sshler を本番環境にデプロイする際：
+
+- **HTTPS を使用** - 有効な証明書で（Let's Encrypt 推奨）
+- **`SSHLER_COOKIE_SECURE=true` を設定** - `.env` ファイルで
+- **`SSHLER_PUBLIC_URL` を設定** - 実際の HTTPS URL に
+- **強力なパスワードを使用** - `sshler hash-password` で生成
+- **`SSHLER_REQUIRE_AUTH=true` を維持** - 本番環境では認証を無効化しない
+- **localhost にバインド** - リバースプロキシの背後では `SSHLER_HOST=127.0.0.1`
+- **ファイアウォールルールを有効化** - 信頼できるネットワークにアクセスを制限
+- **sshler を最新に保つ** - セキュリティパッチを受け取るため
+
+### ネットワークセキュリティレイヤー
+
+sshler のセキュリティは多層構造です：
+
+1. **トランスポートセキュリティ（HTTPS）** - すべてのトラフィックを暗号化し、セッション Cookie を保護
+2. **アプリケーション認証（セッション Cookie）** - httpOnly Cookie でユーザー ID を検証
+3. **CSRF 保護** - 状態変更リクエストに対する Origin ヘッダー検証
+4. **ネットワーク分離**（オプション） - Tailscale、VPN、またはファイアウォールルール
+
+**推奨:** ほとんどのデプロイでは HTTPS + セッション認証を使用してください。インターネット経由でアクセスする場合は、ネットワーク分離（Tailscale/VPN）を追加してセキュリティを強化してください。
+
+### Cookie セッションを選んだ理由（JWT ではなく）
+
+**要約**: JWT は分散ステートレス認証の問題を解決します。sshler にはその問題がありません。Cookie セッションの方がシンプルで安全、かつ失効が可能です。
+
+**判断の根拠：**
+
+1. **即時失効**
+   - セッションはサーバー側で即座に無効化可能（ログアウト、セキュリティ侵害、管理者操作）
+   - JWT は複雑な拒否リストなしでは失効不可能（それでは「ステートレス」の意味がない）
+   - 緊急のアクセス制御が必要な管理ツールでは重要
+
+2. **シンプルなセキュリティモデル**
+   - 鍵ローテーションの複雑さなし
+   - JWT クレーム検証のエッジケースなし
+   - 「JWT をどこに保存するか」の議論なし（localStorage = XSS 脆弱、Cookie = それならセッションを使うべき）
+
+3. **適切なユースケース**
+   - **JWT が向いている場面**: サービス間認証、分散マイクロサービス、Cookie をサポートしないモバイルアプリ
+   - **セッションが向いている場面**: 単一バックエンドと通信するブラウザベースアプリ（sshler のアーキテクチャ）
+
+4. **セキュリティ上の利点**
+   - httpOnly Cookie は XSS によるトークン窃取を防止（JavaScript からアクセス不可）
+   - SameSite=Lax は CSRF 攻撃を防止
+   - 短い攻撃ウィンドウ（デフォルト 8 時間 TTL vs 一般的な JWT リフレッシュトークンパターン）
+
+**結論**: ブラウザ認証のための退屈だけど正しいソリューションを選びました。JWT が必要な場合は、まず異なるアーキテクチャが必要です（分散サービス、モバイルクライアントなど）。ブラウザベースの SSH マネージャーには、Cookie セッションが適切なツールです。
+
 ## 自動起動
 
 ### Windows（タスク スケジューラ）
@@ -289,6 +552,8 @@ KillMode=process
 WantedBy=default.target
 ```
 
+> **重要:** `KillMode=process` がないと、sshler を再起動したときにすべての tmux セッションが終了します。
+
 リロードして有効化:
 
 ```bash
@@ -296,13 +561,12 @@ systemctl --user daemon-reload
 systemctl --user enable --now sshler.service
 ```
 
-> **重要:** `KillMode=process` がないと、sshler を再起動したときにすべての tmux セッションが終了します。
-
 ## 依存関係とライセンス
 
-- FastAPI、uvicorn、asyncssh、platformdirs、yaml（PyPI パッケージ、寛容なライセンス）
-- HTMX（MIT）と xterm.js（MIT）は unpkg から読み込まれます
-- CodeMirror（MIT）がエディタを駆動
+- FastAPI、uvicorn、asyncssh、platformdirs、pyyaml、pydantic（PyPI パッケージ、寛容なライセンス）
+- Vue 3 + Pinia（MIT）がフロントエンド SPA を駆動
+- xterm.js（MIT）がブラウザターミナルを提供
+- CodeMirror（MIT）がファイルエディタを駆動
 
 すべてのアセットはそれぞれの MIT/BSD スタイルのライセンスの下で使用されています。sshler 自体は MIT ライセンスで配布されます。
 
