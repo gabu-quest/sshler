@@ -122,8 +122,8 @@ class TestSettings:
         reset_settings()
 
     def test_default_settings(self):
-        """Test default settings values."""
-        settings = SshlerSettings()
+        """Test default settings values (ignoring .env file)."""
+        settings = SshlerSettings(_env_file=None)
 
         assert settings.host == "127.0.0.1"
         assert settings.port == 8822
@@ -134,7 +134,7 @@ class TestSettings:
 
     def test_cors_disabled_by_default(self):
         """Test that CORS is disabled when no origins configured."""
-        settings = SshlerSettings()
+        settings = SshlerSettings(_env_file=None)
 
         assert settings.cors_enabled is False
         assert settings.allowed_origins_list == []

@@ -16,20 +16,6 @@ async_playwright = playwright_async.async_playwright
 
 
 @pytest.mark.asyncio
-async def test_legacy_boxes_page_renders(app_server):
-    """Legacy HTMX boxes page renders with heading."""
-    base_url, _token = app_server
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(f"{base_url}/boxes", wait_until="domcontentloaded")
-        heading = await page.locator("h1").first.inner_text()
-        assert "Boxes" in heading
-        await browser.close()
-
-
-@pytest.mark.asyncio
 async def test_vue_app_loads(app_server):
     """Vue SPA loads and shows the overview page."""
     base_url, token = app_server
