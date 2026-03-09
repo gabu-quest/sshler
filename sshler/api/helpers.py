@@ -25,7 +25,7 @@ LOCAL_IS_WINDOWS = platform.system().lower().startswith("windows")
 
 def _normalize_directory_path(directory: str | None) -> str:
     raw = (directory or "/").strip()
-    if not raw:
+    if not raw or raw == "~":
         raw = "/"
     if not raw.startswith("/"):
         raw = "/" + raw.lstrip("/")

@@ -128,7 +128,12 @@ const handleSnippetInsert = (command: string, execute: boolean) => {
 
 const filesUrl = computed(() => {
   if (!selectedBox.value) return '#'
-  const path = initialDirectory.value || '~'
+  let path = initialDirectory.value
+  // Resolve ~ to the box's default_dir — the backend can't expand tilde
+  if (!path || path === '~') {
+    const box = boxesStore.items.find(b => b.name === selectedBox.value)
+    path = box?.default_dir || `/home/${box?.user || 'root'}`
+  }
   return `/app/files?box=${encodeURIComponent(selectedBox.value)}&path=${encodeURIComponent(path)}`
 })
 
