@@ -96,17 +96,22 @@ async def connect(
         else:
             LOGGER.warning("Failed to resolve SSH alias %s; falling back to %s", ssh_alias, host)
 
+    connect_kwargs: dict = dict(
+        host=connect_host,
+        port=connect_port,
+        username=connect_user,
+        known_hosts=known_hosts_path,
+        config=[ssh_config_path] if ssh_config_path else None,
+        keepalive_interval=30,  # Send keepalive every 30 seconds
+        keepalive_count_max=3,  # Give up after 3 failed keepalives (90s total)
+    )
+    # Only pass client_keys when an explicit keyfile is provided.
+    # Omitting it lets asyncssh auto-discover ~/.ssh/id_* keys (like OpenSSH).
+    if connect_keyfile:
+        connect_kwargs["client_keys"] = [connect_keyfile]
+
     try:
-        connection = await asyncssh.connect(
-            host=connect_host,
-            port=connect_port,
-            username=connect_user,
-            client_keys=[connect_keyfile] if connect_keyfile else None,
-            known_hosts=known_hosts_path,
-            config=[ssh_config_path] if ssh_config_path else None,
-            keepalive_interval=30,  # Send keepalive every 30 seconds
-            keepalive_count_max=3,  # Give up after 3 failed keepalives (90s total)
-        )
+        connection = await asyncssh.connect(**connect_kwargs)
     except (OSError, asyncssh.Error) as exc:
         raise SSHError(str(exc)) from exc
     return connection
