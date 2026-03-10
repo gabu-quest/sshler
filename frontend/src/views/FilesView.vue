@@ -26,8 +26,8 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { touchFile, boxStatus, downloadFile, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
-import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
+import { touchFile, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 
 const route = useRoute();
@@ -92,7 +92,7 @@ const filterQuery = computed({
 });
 
 const boxOptions = computed(() =>
-  boxesStore.items.map((box) => ({ label: `${box.name} (${box.host})`, value: box.name })),
+  boxesStore.items.map((box) => ({ label: `${getEmojiForBox(box.name)} ${box.name} (${box.host})`, value: box.name })),
 );
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null);
@@ -178,6 +178,7 @@ const displayDirName = computed(() => {
 
 // Update browser tab title and favicon
 watch([selectedBox, currentDir], () => {
+  appStore.activeBox = selectedBox.value;
   if (selectedBox.value) {
     document.title = `${displayDirName.value} — ${selectedBox.value}`;
     setEmojiFavicon(`${selectedBox.value}:${currentDir.value}`);
@@ -273,7 +274,7 @@ const getContextMenuItems = () => {
   if (!file) return [];
   const items = [];
   if (file.is_directory) {
-    items.push({ id: 'open', label: 'Open', icon: PhFolder });
+    items.push({ id: 'open', label: 'Open', icon: PhFolder }, { id: 'download-dir', label: 'Download as .zip', icon: PhDownloadSimple });
   } else {
     items.push({ id: 'preview', label: 'Preview', icon: PhEye }, { id: 'edit', label: 'Edit', icon: PhPencil }, { id: 'download', label: 'Download', icon: PhDownloadSimple });
   }
@@ -299,6 +300,7 @@ const handleContextMenuSelect = async (itemId: string) => {
   if (!file) return;
   switch (itemId) {
     case 'open': if (file.is_directory) await navigateToDirectory(file.path); break;
+    case 'download-dir': await handleDownloadDirectory(file); break;
     case 'preview': await handlePreview(file); break;
     case 'edit': await handleEdit(file); break;
     case 'download': await handleDownload(file); break;
@@ -642,6 +644,55 @@ async function handleDownload(row: any) {
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+const SIZE_WARN_THRESHOLD = 100 * 1024 * 1024; // 100 MB
+const SIZE_HARD_LIMIT = 500 * 1024 * 1024; // 500 MB
+
+async function handleDownloadDirectory(row: any) {
+  if (!selectedBox.value || !row.is_directory) return;
+  let loadingMsg: { destroy: () => void } | null = null;
+  try {
+    loadingMsg = message.loading('Calculating directory size...', { duration: 0 });
+    const { size_bytes } = await directorySize(selectedBox.value, row.path, tokenValue.value || null);
+    loadingMsg.destroy();
+    loadingMsg = null;
+
+    if (size_bytes > SIZE_HARD_LIMIT) {
+      message.error(`Directory is ${formatBytes(size_bytes)} — too large to download (max ${formatBytes(SIZE_HARD_LIMIT)})`);
+      return;
+    }
+
+    if (size_bytes > SIZE_WARN_THRESHOLD) {
+      const proceed = window.confirm(
+        `This directory is ${formatBytes(size_bytes)}. Download as .zip?`
+      );
+      if (!proceed) return;
+    }
+
+    loadingMsg = message.loading('Creating zip...', { duration: 0 });
+    const blob = await downloadDirectory(selectedBox.value, row.path, tokenValue.value || null);
+    loadingMsg.destroy();
+    loadingMsg = null;
+
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${row.name || 'download'}.zip`;
+    anchor.click();
+    URL.revokeObjectURL(objectUrl);
+    message.success(`Downloaded ${row.name}.zip (${formatBytes(blob.size)})`);
+  } catch (err) {
+    loadingMsg?.destroy();
+    message.error(err instanceof Error ? err.message : String(err));
+  }
+}
+
 function handleEdit(row: any) {
   if (!selectedBox.value || row.is_directory) return;
   editPath.value = row.path;
@@ -896,6 +947,14 @@ const columns = computed(() => {
               onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
             }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow, { weight: 'duotone' })) }),
             default: () => "Open Terminal Here"
+          }),
+          row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
+            trigger: () => h(NButton, {
+              size: "tiny",
+              quaternary: true,
+              onClick: () => handleDownloadDirectory(row)
+            }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple, { weight: 'duotone' })) }),
+            default: () => "Download as .zip"
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye, { weight: 'duotone' })) }),

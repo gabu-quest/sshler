@@ -36,7 +36,7 @@ import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
 import { boxStats } from "@/api/http";
 import type { BoxStats } from "@/api/types";
-import { resetFavicon, getEmojiForString } from "@/utils/emoji-favicon";
+import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
 const router = useRouter();
 const message = useMessage();
@@ -378,7 +378,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                 >
                   <PhCircle weight="duotone" />
                 </NIcon>
-                <span class="server-name">{{ box.name }}</span>
+                <span class="server-name">{{ getEmojiForBox(box.name) }} {{ box.name }}</span>
               </div>
               <NTag
                 v-if="box.pinned"

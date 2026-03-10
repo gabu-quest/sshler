@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
+import logging
 import posixpath
+import shlex
+import tempfile
+import zipfile
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
+
+logger = logging.getLogger(__name__)
 
 from .. import state
 from ..config import AppConfig
@@ -45,6 +52,16 @@ from .models import (
     APISimpleMessage,
     APITouchRequest,
 )
+
+
+from starlette.background import BackgroundTask
+
+
+def _cleanup_temp(path: str) -> BackgroundTask:
+    """Return a background task that deletes a temp file after response is sent."""
+    def _remove():
+        Path(path).unlink(missing_ok=True)
+    return BackgroundTask(_remove)
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -560,6 +577,149 @@ def get_router(deps: APIDependencies) -> APIRouter:
             content=content,
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    MAX_DIR_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB hard limit
+
+    @router.get("/boxes/{name}/dir-size")
+    async def api_directory_size(
+        name: str,
+        path: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ):
+        """Get the total size of a directory in bytes."""
+        box = deps.get_box_or_404(application_config, name)
+
+        if box.transport == "local":
+            normalized = _normalize_local_path(path)
+
+            def _calc_size() -> int:
+                total = 0
+                base = Path(normalized)
+                if not base.is_dir():
+                    raise ValueError("Not a directory")
+                for child in base.rglob("*"):
+                    if child.is_file():
+                        try:
+                            total += child.stat().st_size
+                        except OSError:
+                            pass
+                return total
+
+            try:
+                size = await asyncio.to_thread(_calc_size)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            return {"size_bytes": size}
+
+        # Remote
+        try:
+            validated_path = PathValidator.validate_remote_path(path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                result = await asyncio.wait_for(
+                    connection.run(
+                        f"du -sb {shlex.quote(validated_path)} 2>/dev/null || echo '0\t'",
+                    ),
+                    timeout=30,
+                )
+                output = (result.stdout or "").strip()
+                size = int(output.split("\t")[0]) if output else 0
+        except Exception as exc:
+            logger.warning(f"Failed to get dir size: {exc}")
+            size = 0
+
+        return {"size_bytes": size}
+
+    @router.get("/boxes/{name}/download-dir")
+    async def api_download_directory(
+        name: str,
+        path: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ):
+        """Download a directory as a zip file."""
+        box = deps.get_box_or_404(application_config, name)
+
+        if box.transport == "local":
+            normalized = _normalize_local_path(path)
+            base = Path(normalized)
+            if not base.is_dir():
+                raise HTTPException(status_code=400, detail="Not a directory")
+
+            tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+
+            def _create_zip():
+                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for child in base.rglob("*"):
+                        if child.is_file():
+                            arcname = str(child.relative_to(base))
+                            zf.write(str(child), arcname)
+
+            try:
+                await asyncio.to_thread(_create_zip)
+            except Exception as exc:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail=str(exc))
+
+            dirname = base.name or "download"
+            return FileResponse(
+                tmp_path,
+                media_type="application/zip",
+                filename=f"{dirname}.zip",
+                background=_cleanup_temp(tmp_path),
+            )
+
+        # Remote — pipe zip through SSH
+        try:
+            validated_path = PathValidator.validate_remote_path(path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        dirname = PurePosixPath(validated_path).name or "download"
+        parent = PurePosixPath(validated_path).parent.as_posix()
+        cmd = f"cd {shlex.quote(parent)} && zip -r -q - {shlex.quote(dirname)}"
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                result = await asyncio.wait_for(
+                    connection.run(cmd, encoding=None),
+                    timeout=300,
+                )
+                if result.exit_status != 0:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"zip failed: {(result.stderr or b'').decode(errors='replace')}",
+                    )
+                content = result.stdout or b""
+        except HTTPException:
+            raise
+        except SSHError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Download timed out")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        if len(content) > MAX_DIR_DOWNLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Directory too large to download")
+
+        return Response(
+            content=content,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{dirname}.zip"'},
         )
 
     @router.post("/boxes/{name}/upload", response_model=APISimpleMessage)

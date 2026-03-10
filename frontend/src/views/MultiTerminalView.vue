@@ -7,9 +7,11 @@ import { PhPlus, PhTerminalWindow, PhArrowLeft } from '@phosphor-icons/vue'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
+import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
+import { getEmojiForBox } from '@/utils/emoji-favicon'
 
 interface TerminalInstance {
   id: string
@@ -23,6 +25,7 @@ const message = useMessage()
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()
 const favoritesStore = useFavoritesStore()
+const appStore = useAppStore()
 const { t } = useI18n()
 
 const terminals = ref<TerminalInstance[]>([])
@@ -35,9 +38,9 @@ const newTerminal = ref({
 })
 
 const boxOptions = computed(() =>
-  boxesStore.items.map((box) => ({ 
-    label: `${box.name} (${box.host})`, 
-    value: box.name 
+  boxesStore.items.map((box) => ({
+    label: `${getEmojiForBox(box.name)} ${box.name} (${box.host})`,
+    value: box.name
   }))
 )
 
@@ -197,11 +200,12 @@ const goBack = () => {
 
 onMounted(async () => {
   await ensureData()
-  
+
   // Initialize from route
   const boxFromRoute = route.query.box as string
   if (boxFromRoute && boxOptions.value.some(opt => opt.value === boxFromRoute)) {
     newTerminal.value.boxName = boxFromRoute
+    appStore.activeBox = boxFromRoute
   }
 })
 </script>
@@ -249,7 +253,7 @@ onMounted(async () => {
         >
           <div class="terminal-info">
             <NIcon size="14"><PhTerminalWindow weight="duotone" /></NIcon>
-            <span>{{ terminal.boxName }}</span>
+            <span>{{ getEmojiForBox(terminal.boxName) }} {{ terminal.boxName }}</span>
             <span class="session-name">{{ terminal.sessionName }}</span>
             <span class="directory-name">{{ terminal.directory }}</span>
           </div>

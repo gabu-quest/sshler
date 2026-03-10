@@ -88,6 +88,7 @@
 ### Frontend
 
 **Pinia stores** manage all state (`stores/`):
+- `app` — Theme, terminal settings, `activeBox` (tracks current box across views)
 - `bootstrap` — Initial config from `/api/v1/bootstrap`
 - `boxes` — Available SSH boxes
 - `files` — File browser state
@@ -96,6 +97,14 @@
 **API client** in `src/api/http.ts` handles auth headers automatically.
 
 **Terminal component** wraps xterm.js with WebSocket management.
+
+**Emoji favicon system** in `src/utils/emoji-favicon.ts`:
+- Two disjoint pools: `BOX_EMOJIS` (vehicles/buildings) and `DIR_EMOJIS` (animals/nature/food)
+- `getEmojiForBox()` — deterministic emoji per box name (never overlaps with directory emojis)
+- `getEmojiForString()` — deterministic emoji per `box:path` string
+- Uses FNV-1a hashing for uniform distribution
+
+**Active box tracking**: `app.activeBox` ref is set by FilesView/TerminalView/MultiTerminalView. AppHeader nav links carry `?box=` context so switching views preserves the current box.
 
 **Directory search** uses frecency-based ranking:
 - Local box: queries zoxide directly for instant results

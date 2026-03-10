@@ -33,6 +33,7 @@ export const ja: Record<string, string> = {
   "nav.multi_terminal": "マルチターミナル",
   "nav.settings": "設定",
   "nav.navigation": "ナビゲーション",
+  "nav.active_box": "アクティブボックス: {box}",
 
   // Auth / Login
   "login.auth_required": "認証が必要です",

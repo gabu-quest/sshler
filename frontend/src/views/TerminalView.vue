@@ -19,7 +19,7 @@ import SessionSwitcher from '@/components/SessionSwitcher.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import SnippetsPanel from '@/components/SnippetsPanel.vue'
 import TunnelsPanel from '@/components/TunnelsPanel.vue'
-import { setEmojiFavicon, resetFavicon } from '@/utils/emoji-favicon'
+import { setEmojiFavicon, resetFavicon, getEmojiForBox } from '@/utils/emoji-favicon'
 import { gitInfo, setBoxTerminalTheme } from '@/api/http'
 import type { GitInfo } from '@/api/types'
 
@@ -145,9 +145,9 @@ const goToFiles = () => {
 }
 
 const boxOptions = computed(() =>
-  boxesStore.items.map((box) => ({ 
-    label: `${box.name} (${box.host})`, 
-    value: box.name 
+  boxesStore.items.map((box) => ({
+    label: `${getEmojiForBox(box.name)} ${box.name} (${box.host})`,
+    value: box.name
   }))
 )
 
@@ -255,6 +255,7 @@ const displayDirName = computed(() => {
 
 // Update browser tab title, favicon, and git info
 watch([selectedBox, initialDirectory], () => {
+  appStore.activeBox = selectedBox.value
   if (selectedBox.value) {
     document.title = `${displayDirName.value} — ${selectedBox.value}`
     // Set deterministic emoji favicon based on box + directory
@@ -339,7 +340,7 @@ watch(() => boxesStore.items, () => {
             <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
           </NButton>
           <h1 class="dir-title">{{ displayDirName }}</h1>
-          <span class="box-badge">{{ selectedBox || t('terminal.no_box') }}</span>
+          <span class="box-badge">{{ selectedBox ? getEmojiForBox(selectedBox) + ' ' + selectedBox : t('terminal.no_box') }}</span>
           <span v-if="currentGitInfo?.is_repo" class="git-badge" :class="{ dirty: currentGitInfo.dirty }">
             <NIcon size="12"><PhGitBranch weight="duotone" /></NIcon>
             {{ currentGitInfo.branch }}
@@ -443,7 +444,7 @@ watch(() => boxesStore.items, () => {
       </button>
       <button class="mobile-title-btn" @click="toggleMobileControls">
         <span class="mobile-title-text">{{ displayDirName }}</span>
-        <span class="mobile-box-text">{{ selectedBox }}</span>
+        <span class="mobile-box-text">{{ selectedBox ? getEmojiForBox(selectedBox) + ' ' + selectedBox : '' }}</span>
         <NIcon size="10" class="mobile-caret" :class="{ expanded: mobileControlsExpanded }"><PhCaretDown weight="duotone" /></NIcon>
       </button>
       <div class="mobile-header-actions">

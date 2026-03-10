@@ -603,6 +603,36 @@ export async function downloadFile(
   return res.blob();
 }
 
+export async function directorySize(
+  name: string,
+  path: string,
+  token: string | null,
+): Promise<{ size_bytes: number }> {
+  const res = await fetch(
+    `${API_BASE}/boxes/${encodeURIComponent(name)}/dir-size?path=${encodeURIComponent(path)}`,
+    { headers: buildHeaders(token), credentials: 'include' },
+  );
+  return handle<{ size_bytes: number }>(res);
+}
+
+export async function downloadDirectory(
+  name: string,
+  path: string,
+  token: string | null,
+): Promise<Blob> {
+  const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/download-dir`, window.location.origin);
+  url.searchParams.set("path", path);
+  const res = await fetch(url.toString().replace(window.location.origin, ""), {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`download failed ${res.status}: ${detail}`);
+  }
+  return res.blob();
+}
+
 export async function batchDelete(
   name: string,
   paths: string[],
