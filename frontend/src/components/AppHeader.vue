@@ -166,19 +166,41 @@ const handleKeydown = (event: KeyboardEvent) => {
   }
 };
 
+// Only poll stats when the tab is visible (saves requests when 20+ tabs open)
+const startStatsPolling = () => {
+  if (statsInterval) return;
+  loadLocalStats();
+  statsInterval = window.setInterval(loadLocalStats, 10000);
+};
+
+const stopStatsPolling = () => {
+  if (statsInterval) {
+    clearInterval(statsInterval);
+    statsInterval = null;
+  }
+};
+
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    stopStatsPolling();
+  } else {
+    startStatsPolling();
+  }
+};
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
-  // Load stats initially and refresh every 5 seconds
-  loadLocalStats();
-  statsInterval = window.setInterval(loadLocalStats, 5000);
+  if (!document.hidden) {
+    startStatsPolling();
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
-  if (statsInterval) {
-    clearInterval(statsInterval);
-  }
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  stopStatsPolling();
 });
 </script>
 
