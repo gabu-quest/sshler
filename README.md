@@ -56,6 +56,7 @@ The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`
 - **Context Menus** - Right-click for quick actions
 - **Recent Files & Bookmarks** - Quick access to frequently used locations
 - **File Preview Enhancements** - Toggle line numbers and word wrap in file viewer
+- **Directory Download** - Download any directory as a .zip with size warnings for large dirs
 
 **🖥️ Terminal Features**
 - **Multi-pane Layouts** - Split terminal horizontally, vertically, or in a grid
@@ -65,6 +66,8 @@ The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`
 - **Command Snippets** - Save and quick-insert frequently used commands per box or globally
 - **Port Forwarding** - Visual SSH tunnel management (local/remote) per box
 - **Per-Box Terminal Themes** - Color-code terminals by environment (prod=red, staging=green, etc.)
+- **Per-Box Emoji Icons** - Deterministic emoji assigned per box for quick visual identification
+- **Active Box Context** - Navigation links remember your current box when switching between views
 
 **📱 Mobile & Touch Support**
 - **Touch-Optimized** - 44px minimum touch targets for easy tapping
