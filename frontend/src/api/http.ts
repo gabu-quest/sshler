@@ -608,7 +608,11 @@ export async function directorySize(
   path: string,
   token: string | null,
 ): Promise<{ size_bytes: number }> {
-  return apiGet(`/boxes/${encodeURIComponent(name)}/dir-size?path=${encodeURIComponent(path)}`, token);
+  const res = await fetch(
+    `${API_BASE}/boxes/${encodeURIComponent(name)}/dir-size?path=${encodeURIComponent(path)}`,
+    { headers: buildHeaders(token), credentials: 'include' },
+  );
+  return handle<{ size_bytes: number }>(res);
 }
 
 export async function downloadDirectory(
