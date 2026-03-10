@@ -1,12 +1,23 @@
 /**
  * Emoji Favicon Utility
  *
- * Generates a deterministic emoji favicon based on a string (like directory name).
- * Uses a hash of the string to pick from a curated list of visually distinct emojis.
+ * Two disjoint pools: BOX_EMOJIS for SSH boxes, DIR_EMOJIS for directories.
+ * Guarantees zero overlap — a box and a directory will never share an emoji.
  */
 
-// Curated list of visually distinct emojis that look good as favicons
-const EMOJIS = [
+// Box emojis: vehicles, buildings, landscapes — assigned per box name
+const BOX_EMOJIS = [
+  // Vehicles & Transport (15)
+  '🚂', '🚁', '🛩️', '🚀', '🛸', '🚢', '🏎️', '🚲', '⛵', '🚜',
+  '🏍️', '🛻', '🚌', '🛶', '🚃',
+  // Buildings & Landmarks (10)
+  '🏰', '🗼', '🏛️', '🏗️', '🏭', '🏠', '🏢', '⛩️', '🕌', '🗽',
+  // Scenic (5)
+  '🎡', '🎢', '🏟️', '🌉', '⛺',
+];
+
+// Directory emojis: animals, nature, food, objects — assigned per box:path
+const DIR_EMOJIS = [
   // Animals (30)
   '🦊', '🐼', '🦁', '🐸', '🦉', '🦋', '🐙', '🦈', '🐢', '🦄',
   '🐳', '🦩', '🦜', '🐝', '🦎', '🐲', '🦚', '🦀', '🐬', '🦅',
@@ -19,16 +30,16 @@ const EMOJIS = [
   '🍎', '🍊', '🍋', '🍇', '🍓', '🥑', '🌶️', '🍕', '🍔', '🧁',
   '🍩', '🍪', '🍦', '🧀', '🥐', '🍿', '🥝', '🍑', '🥭', '🫐',
   '🍒', '🍍', '🥥', '🌽', '🥕', '🧅', '🥨', '🥯', '🧇', '🥞',
-  // Objects & Tech (30)
+  // Objects & Tech (28 — 🚀🛸 moved to box pool)
   '💎', '🎯', '🎨', '🎭', '🎪', '🎸', '🎺', '🎲', '🧩', '🔮',
-  '💡', '🔧', '⚙️', '🧲', '🧪', '🔬', '📡', '🛸', '🚀', '⚓',
+  '💡', '🔧', '⚙️', '🧲', '🧪', '🔬', '📡', '⚓',
   '🎹', '🎻', '🎤', '📷', '💾', '📱', '⌚', '🔑', '🧭', '⏰',
   // Symbols & Accents (23)
   '💜', '💙', '💚', '💛', '🧡', '❤️', '🖤', '💗', '💝', '💫',
   '✨', '🌟', '💥', '🎆', '🎇', '🔶', '🔵', '🟥', '🟩',
   '♠️', '♥️', '♦️', '♣️',
-  // Distinctive extras (12)
-  '🏰', '🗼', '🧊', '🪐', '🛡️', '🎩',
+  // Distinctive extras (10 — 🏰🗼 moved to box pool)
+  '🧊', '🪐', '🛡️', '🎩',
   '🪁', '🦞', '🦑', '🐊', '🦦', '🪺',
 ];
 
@@ -46,12 +57,21 @@ function fnv1aHash(str: string): number {
 }
 
 /**
- * Get a deterministic emoji for a given string
+ * Get a deterministic emoji for a directory (box:path string)
  */
 export function getEmojiForString(str: string): string {
-  if (!str) return '📁'; // Default for empty string
+  if (!str) return '📁';
   const hash = fnv1aHash(str);
-  return EMOJIS[hash % EMOJIS.length];
+  return DIR_EMOJIS[hash % DIR_EMOJIS.length];
+}
+
+/**
+ * Get a deterministic emoji for a box name (disjoint from directory emojis)
+ */
+export function getEmojiForBox(boxName: string): string {
+  if (!boxName) return '🖥️';
+  const hash = fnv1aHash(boxName);
+  return BOX_EMOJIS[hash % BOX_EMOJIS.length];
 }
 
 /**

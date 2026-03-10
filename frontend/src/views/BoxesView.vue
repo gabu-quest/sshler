@@ -10,6 +10,7 @@ import type { ApiBox } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useFavoritesStore } from "@/stores/favorites";
+import { getEmojiForBox } from "@/utils/emoji-favicon";
 
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
@@ -93,7 +94,7 @@ onMounted(async () => {
             <NIcon size="16">
               <PhFolderSimple weight="duotone" />
             </NIcon>
-            <span>{{ box.name }}</span>
+            <span>{{ getEmojiForBox(box.name) }} {{ box.name }}</span>
           </div>
           <p class="text-muted small">{{ box.host }} • {{ box.transport }}</p>
           <NSpace size="small" style="margin-bottom: 8px;">

@@ -27,7 +27,7 @@ import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
 import { touchFile, boxStatus, downloadFile, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
-import { setEmojiFavicon, resetFavicon } from "@/utils/emoji-favicon";
+import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 
 const route = useRoute();
@@ -92,7 +92,7 @@ const filterQuery = computed({
 });
 
 const boxOptions = computed(() =>
-  boxesStore.items.map((box) => ({ label: `${box.name} (${box.host})`, value: box.name })),
+  boxesStore.items.map((box) => ({ label: `${getEmojiForBox(box.name)} ${box.name} (${box.host})`, value: box.name })),
 );
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null);
@@ -178,6 +178,7 @@ const displayDirName = computed(() => {
 
 // Update browser tab title and favicon
 watch([selectedBox, currentDir], () => {
+  appStore.activeBox = selectedBox.value;
   if (selectedBox.value) {
     document.title = `${displayDirName.value} — ${selectedBox.value}`;
     setEmojiFavicon(`${selectedBox.value}:${currentDir.value}`);

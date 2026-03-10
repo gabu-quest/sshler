@@ -84,6 +84,9 @@ export const useAppStore = defineStore("app", () => {
   const terminalFontFamily = ref(readTerminalFontFamily());
   const terminalScrollback = ref(readTerminalScrollback());
 
+  // Active box tracking (which box the user is currently viewing)
+  const activeBox = ref<string | null>(null);
+
   // Computed properties
   const isDark = computed(() => {
     if (colorMode.value === "system") {
@@ -234,6 +237,9 @@ export const useAppStore = defineStore("app", () => {
     systemDark,
     reducedMotion,
     isOnline,
+
+    // Active box
+    activeBox,
 
     // Terminal settings
     terminalFontSize,

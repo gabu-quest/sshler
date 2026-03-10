@@ -20,6 +20,7 @@ import {
 
 import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
+import { getEmojiForBox } from "@/utils/emoji-favicon";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useResponsive } from "@/composables/useResponsive";
@@ -92,14 +93,20 @@ const authTooltip = computed(() => {
 // Mobile navigation state
 const isMobileMenuOpen = ref(false);
 
-const links = computed(() => [
-  { to: "/", label: t("nav.overview"), icon: PhHouseLine, shortcut: "Alt+H" },
-  { to: "/boxes", label: t("nav.boxes"), icon: PhFolderSimple, shortcut: "Alt+B" },
-  { to: "/files", label: t("nav.files"), icon: PhFolderSimple, shortcut: "Alt+F" },
-  { to: "/terminal", label: t("nav.terminal"), icon: PhTerminal, shortcut: "Alt+T" },
-  { to: "/multi-terminal", label: t("nav.multi_terminal"), icon: PhTerminal, shortcut: "Alt+M" },
-  { to: "/settings", label: t("nav.settings"), icon: PhGearSix, shortcut: "Alt+S" },
-]);
+const links = computed(() => {
+  const box = appStore.activeBox;
+  const boxQuery = box ? `?box=${encodeURIComponent(box)}` : '';
+  return [
+    { to: "/", label: t("nav.overview"), icon: PhHouseLine, shortcut: "Alt+H" },
+    { to: "/boxes", label: t("nav.boxes"), icon: PhFolderSimple, shortcut: "Alt+B" },
+    { to: `/files${boxQuery}`, label: t("nav.files"), icon: PhFolderSimple, shortcut: "Alt+F" },
+    { to: `/terminal${boxQuery}`, label: t("nav.terminal"), icon: PhTerminal, shortcut: "Alt+T" },
+    { to: `/multi-terminal${boxQuery}`, label: t("nav.multi_terminal"), icon: PhTerminal, shortcut: "Alt+M" },
+    { to: "/settings", label: t("nav.settings"), icon: PhGearSix, shortcut: "Alt+S" },
+  ];
+});
+
+const activeBoxEmoji = computed(() => appStore.activeBox ? getEmojiForBox(appStore.activeBox) : null);
 
 const themeIcon = computed(() => (appStore.isDark ? PhMoon : PhSun));
 const themeLabel = computed(() => {
@@ -110,10 +117,11 @@ const themeLabel = computed(() => {
 });
 
 const isActive = (path: string) => {
-  if (path === "/") {
+  const basePath = path.split('?')[0];
+  if (basePath === "/") {
     return route.path === "/";
   }
-  return route.path.startsWith(path);
+  return route.path.startsWith(basePath);
 };
 
 const toggleTheme = () => {
@@ -136,19 +144,20 @@ watch(isMobile, (mobile) => {
 // Handle keyboard shortcuts
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.altKey) {
+    const box = appStore.activeBox;
+    const boxQuery = box ? `?box=${encodeURIComponent(box)}` : '';
     const shortcutMap: Record<string, string> = {
       'h': '/',
       'b': '/boxes',
-      'f': '/files',
-      't': '/terminal',
-      'm': '/multi-terminal',
+      'f': `/files${boxQuery}`,
+      't': `/terminal${boxQuery}`,
+      'm': `/multi-terminal${boxQuery}`,
       's': '/settings',
     };
-    
+
     const path = shortcutMap[event.key.toLowerCase()];
     if (path) {
       event.preventDefault();
-      // Use router push instead of direct navigation for better UX
       const router = useRoute().matched[0]?.instances?.default?.$router;
       if (router) {
         router.push(path);
@@ -201,6 +210,9 @@ onUnmounted(() => {
         </NIcon>
         <span>{{ link.label }}</span>
       </RouterLink>
+      <span v-if="appStore.activeBox" class="active-box-pill" :title="t('nav.active_box', { box: appStore.activeBox })">
+        {{ activeBoxEmoji }} {{ appStore.activeBox }}
+      </span>
     </nav>
 
     <!-- Header Actions (Desktop) -->
@@ -436,6 +448,22 @@ onUnmounted(() => {
   height: 2px;
   background: var(--accent);
   border-radius: 1px;
+}
+
+/* Active Box Pill */
+.active-box-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  white-space: nowrap;
+  margin-left: 4px;
 }
 
 /* Header Actions */

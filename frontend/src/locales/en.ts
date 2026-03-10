@@ -33,6 +33,7 @@ export const en: Record<string, string> = {
   "nav.multi_terminal": "Multi-Terminal",
   "nav.settings": "Settings",
   "nav.navigation": "Navigation",
+  "nav.active_box": "Active box: {box}",
 
   // Auth / Login
   "login.auth_required": "Authentication Required",
