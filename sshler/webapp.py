@@ -703,14 +703,16 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         # Different rate limits for different endpoint types
         if request.url.path.startswith("/ws/"):
-            # WebSocket connections: 5 per minute
-            limiter = get_rate_limiter("websocket", rate=5, per=60)
+            # WebSocket connections: 10 per minute
+            limiter = get_rate_limiter("websocket", rate=10, per=60)
         elif request.method == "POST":
-            # POST requests: 60 per minute
-            limiter = get_rate_limiter("post", rate=60, per=60)
+            # POST requests: 120 per minute
+            limiter = get_rate_limiter("post", rate=120, per=60)
         else:
-            # General requests: 100 per minute
-            limiter = get_rate_limiter("general", rate=100, per=60)
+            # General GET requests: 300 per minute
+            # Single-user localhost app — stats polling + navigation bursts
+            # need headroom; this still catches runaway loops
+            limiter = get_rate_limiter("general", rate=300, per=60)
 
         if not limiter.check(client_ip):
             return Response(
