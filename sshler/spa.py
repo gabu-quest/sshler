@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
+from starlette.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 
@@ -35,4 +36,8 @@ def mount_spa(app: FastAPI, serve_spa: bool) -> None:
         index_path = spa_dist / "index.html"
         if not index_path.exists():
             raise HTTPException(status_code=404)
-        return FileResponse(index_path)
+        response = FileResponse(index_path)
+        # Never cache index.html — hashed assets handle their own caching.
+        # Without this, browsers may serve stale HTML referencing old asset hashes.
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
