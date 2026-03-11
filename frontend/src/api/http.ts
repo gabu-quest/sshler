@@ -633,6 +633,19 @@ export async function downloadDirectory(
   return res.blob();
 }
 
+export async function statPath(
+  name: string,
+  path: string,
+  token: string | null,
+): Promise<{ exists: boolean; is_directory: boolean; is_file: boolean }> {
+  const url = `${API_BASE}/boxes/${encodeURIComponent(name)}/stat?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<{ exists: boolean; is_directory: boolean; is_file: boolean }>(res);
+}
+
 export async function batchDelete(
   name: string,
   paths: string[],

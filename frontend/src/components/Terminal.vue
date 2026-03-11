@@ -32,6 +32,7 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
+import { statPath } from '@/api/http'
 
 interface Props {
   boxName: string
@@ -264,6 +265,51 @@ const TERMINAL_THEMES = {
     brightMagenta: '#c678dd',
     brightCyan: '#56b6c2',
     brightWhite: '#c0c1c7',
+  }
+}
+
+/** Resolve a file path from terminal output and open it in Files view */
+const handleFilePathClick = async (rawPath: string) => {
+  const box = props.boxName
+  const token = useBootstrapStore().token
+  if (!box) return
+
+  // Resolve relative paths against the terminal's initial directory
+  let resolved = rawPath
+  if (!rawPath.startsWith('/')) {
+    const base = props.directory || '/'
+    // Normalize: join base + relative, then resolve . and ..
+    const parts = (base.endsWith('/') ? base : base + '/').split('/').filter(Boolean)
+    for (const seg of rawPath.split('/')) {
+      if (seg === '.' || seg === '') continue
+      if (seg === '..') { parts.pop(); continue }
+      parts.push(seg)
+    }
+    resolved = '/' + parts.join('/')
+  }
+
+  // Strip trailing slash for stat check
+  const cleanPath = resolved.replace(/\/+$/, '') || '/'
+
+  try {
+    const info = await statPath(box, cleanPath, token)
+    if (!info.exists) {
+      message.warning(
+        `Path not found: ${rawPath}. You may have cd'd since opening this terminal.`,
+        { duration: 5000 }
+      )
+      return
+    }
+
+    // Build Files view URL
+    const dir = info.is_directory ? cleanPath : cleanPath.split('/').slice(0, -1).join('/') || '/'
+    const params = new URLSearchParams({ box, path: dir })
+    if (info.is_file) {
+      params.set('preview', cleanPath.split('/').pop() || '')
+    }
+    window.open(`/app/files?${params.toString()}`, '_blank')
+  } catch (err) {
+    message.error(`Failed to check path: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -540,8 +586,49 @@ const createTerminal = () => {
   terminal.loadAddon(searchAddon)
   terminal.loadAddon(new ClipboardAddon())
 
+  // Register file path link provider — detects paths in terminal output
+  terminal.registerLinkProvider({
+    provideLinks(lineNumber: number, callback: (links: any[] | undefined) => void) {
+      if (!terminal) { callback(undefined); return }
+      const line = terminal.buffer.active.getLine(lineNumber - 1)
+      if (!line) { callback(undefined); return }
+      const text = line.translateToString()
+      if (!text.trim()) { callback(undefined); return }
+
+      // Match absolute paths (/...), explicit relative (./... ../...), and implicit relative (word/word.ext)
+      const PATH_RE = /(?:(?:\.\.?)?\/(?:[\w\-.~]+\/?)+|[\w\-][\w\-.]*\/(?:[\w\-.]+\/)*[\w\-.]+\.\w{1,10})/g
+      const links: any[] = []
+      let m: RegExpExecArray | null
+
+      while ((m = PATH_RE.exec(text)) !== null) {
+        const matchText = m[0]
+        const startCol = m.index
+
+        // Skip URLs (WebLinksAddon handles those)
+        const before = text.slice(Math.max(0, startCol - 8), startCol)
+        if (/https?:\/\/$/i.test(before) || /[a-z]+:\/\/$/i.test(before)) continue
+
+        // Skip obvious non-paths (flags like --foo/bar, or bare /dev/null, /dev/pts)
+        if (matchText.startsWith('/dev/') || matchText.startsWith('/proc/') || matchText.startsWith('/sys/')) continue
+
+        links.push({
+          range: {
+            start: { x: startCol + 1, y: lineNumber },
+            end: { x: startCol + matchText.length + 1, y: lineNumber },
+          },
+          text: matchText,
+          activate: (_event: MouseEvent, linkText: string) => {
+            handleFilePathClick(linkText)
+          },
+        })
+      }
+
+      callback(links.length > 0 ? links : undefined)
+    }
+  })
+
   terminal.open(terminalRef.value)
-  
+
   // Add event listeners
   terminalRef.value.addEventListener('contextmenu', handleContextMenu)
 

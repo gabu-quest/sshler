@@ -6,6 +6,7 @@ import contextlib
 import logging
 import posixpath
 import shlex
+import stat as stat_mod
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -721,6 +722,52 @@ def get_router(deps: APIDependencies) -> APIRouter:
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{dirname}.zip"'},
         )
+
+    @router.get("/boxes/{name}/stat")
+    async def api_stat_path(
+        name: str,
+        path: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ):
+        """Check if a path exists and whether it's a file or directory."""
+        box = deps.get_box_or_404(application_config, name)
+
+        if box.transport == "local":
+            normalized = _normalize_local_path(path)
+            p = Path(normalized)
+            if not p.exists():
+                return {"exists": False, "is_directory": False, "is_file": False}
+            return {
+                "exists": True,
+                "is_directory": p.is_dir(),
+                "is_file": p.is_file(),
+            }
+
+        try:
+            validated_path = PathValidator.validate_remote_path(path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                sftp_client = await connection.start_sftp_client()
+                try:
+                    attrs = await sftp_client.stat(validated_path)
+                    is_dir = stat_mod.S_ISDIR(attrs.permissions) if attrs.permissions else False
+                    is_file = stat_mod.S_ISREG(attrs.permissions) if attrs.permissions else False
+                    return {"exists": True, "is_directory": is_dir, "is_file": is_file}
+                except (FileNotFoundError, OSError):
+                    return {"exists": False, "is_directory": False, "is_file": False}
+                finally:
+                    with contextlib.suppress(Exception):
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
+        except SSHError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
     @router.post("/boxes/{name}/upload", response_model=APISimpleMessage)
     async def api_upload(

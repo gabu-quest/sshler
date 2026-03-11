@@ -404,6 +404,16 @@ async function ensureData() {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
   }
+
+  // Auto-open preview if ?preview=filename is set (from terminal/markdown links)
+  const previewFromUrl = route.query.preview as string | undefined;
+  if (previewFromUrl && selectedBox.value) {
+    const fullPath = currentDir.value.endsWith('/')
+      ? currentDir.value + previewFromUrl
+      : currentDir.value + '/' + previewFromUrl;
+    previewPath.value = fullPath;
+    previewing.value = true;
+  }
 }
 
 onMounted(async () => {

@@ -102,6 +102,51 @@ function updateContent(newContent: string) {
   content.value = newContent;
 }
 
+/** Intercept clicks on links in rendered markdown */
+function handleMarkdownClick(event: MouseEvent) {
+  const target = (event.target as HTMLElement)?.closest('a') as HTMLAnchorElement | null;
+  if (!target) return;
+
+  const href = target.getAttribute('href');
+  if (!href) return;
+
+  // Let external URLs open normally
+  if (/^https?:\/\//i.test(href) || href.startsWith('mailto:')) return;
+
+  // It's a relative or absolute file path — resolve it
+  event.preventDefault();
+  event.stopPropagation();
+
+  const parentDir = meta.value?.parent || props.path.split('/').slice(0, -1).join('/') || '/';
+
+  let resolved: string;
+  if (href.startsWith('/')) {
+    resolved = href;
+  } else {
+    // Resolve relative path against parent directory
+    const base = parentDir.endsWith('/') ? parentDir : parentDir + '/';
+    const parts = base.split('/').filter(Boolean);
+    for (const seg of href.split('/')) {
+      if (seg === '.' || seg === '') continue;
+      if (seg === '..') { parts.pop(); continue; }
+      parts.push(seg);
+    }
+    resolved = '/' + parts.join('/');
+  }
+
+  // Strip fragment/anchor from path
+  const cleanPath = resolved.split('#')[0];
+
+  if (!props.box) return;
+
+  // Open in Files view in a new tab
+  const dir = cleanPath.split('/').slice(0, -1).join('/') || '/';
+  const filename = cleanPath.split('/').pop() || '';
+  const params = new URLSearchParams({ box: props.box, path: dir });
+  if (filename) params.set('preview', filename);
+  window.open(`/app/files?${params.toString()}`, '_blank');
+}
+
 defineExpose({ updateContent });
 </script>
 
@@ -135,7 +180,7 @@ defineExpose({ updateContent });
           <p v-if="meta?.image_too_large" class="text-muted small">Image truncated at {{ meta?.image_limit_kb }}KB</p>
         </div>
         <div v-else class="preview-text-container">
-          <div v-if="markdownRenderMode && isMarkdownFile" class="markdown-rendered" v-html="renderedMarkdown" />
+          <div v-if="markdownRenderMode && isMarkdownFile" class="markdown-rendered" v-html="renderedMarkdown" @click="handleMarkdownClick" />
           <CodeEditor v-else :model-value="content" :language="getLanguageFromFilename(path)" :theme="theme" :readonly="true" :line-numbers="showLineNumbers" :word-wrap="wordWrap" style="height: 75vh" />
         </div>
       </template>
@@ -288,6 +333,8 @@ defineExpose({ updateContent });
 
 .markdown-rendered a {
   color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .markdown-rendered img {
