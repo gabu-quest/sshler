@@ -318,24 +318,10 @@ const handleTerminalClick = () => {
 }
 
 const handleContextMenu = (event: MouseEvent) => {
+  // Suppress all right-click behavior — no browser menu, no tmux menu, no copy/paste.
+  // Use Ctrl+C to copy, Ctrl+V to paste, or the titlebar buttons.
   event.preventDefault()
-
-  // Temporarily disable tmux mouse so right-click paste works cleanly
-  if (mouseMode.value) {
-    setTmuxMouse(false)
-    // Re-enable after a short delay
-    setTimeout(() => {
-      if (mouseMode.value) setTmuxMouse(true)
-    }, 1000)
-  }
-
-  const hasSelection = terminal?.hasSelection() || false
-
-  if (hasSelection) {
-    copySelection()
-  } else {
-    pasteFromClipboard()
-  }
+  event.stopPropagation()
 }
 
 // Fallback clipboard method for when navigator.clipboard fails
@@ -595,18 +581,52 @@ const createTerminal = () => {
       const text = line.translateToString()
       if (!text.trim()) { callback(undefined); return }
 
-      // Match absolute paths (/...), explicit relative (./... ../...), and implicit relative (word/word.ext)
-      const PATH_RE = /(?:(?:\.\.?)?\/(?:[\w\-.~]+\/?)+|[\w\-][\w\-.]*\/(?:[\w\-.]+\/)*[\w\-.]+\.\w{1,10})/g
       const links: any[] = []
       let m: RegExpExecArray | null
+
+      // Match file:// URLs (e.g. file://wsl.localhost/Ubuntu/home/user/file.html)
+      const FILE_URL_RE = /file:\/\/[^\s"'<>]+/g
+      while ((m = FILE_URL_RE.exec(text)) !== null) {
+        const matchText = m[0]
+        const startCol = m.index
+        links.push({
+          range: {
+            start: { x: startCol + 1, y: lineNumber },
+            end: { x: startCol + matchText.length + 1, y: lineNumber },
+          },
+          text: matchText,
+          activate: (_event: MouseEvent, linkText: string) => {
+            // Extract Linux path from file:// URL
+            // file://wsl.localhost/Ubuntu/home/... → /home/...
+            // file:///home/... → /home/...
+            let linuxPath = linkText.replace(/^file:\/\//, '')
+            // Strip WSL host prefix (e.g. wsl.localhost/Ubuntu)
+            linuxPath = linuxPath.replace(/^wsl\.localhost\/[^/]+/, '')
+            // Strip leading double-slash from file:///path
+            if (linuxPath.startsWith('//')) linuxPath = linuxPath.slice(1)
+            // Open via view endpoint so browser renders the file (e.g. HTML)
+            const viewUrl = `/api/v1/boxes/local/view?path=${encodeURIComponent(linuxPath)}`
+            window.open(viewUrl, '_blank')
+          },
+        })
+      }
+
+      // Match absolute paths (/...), explicit relative (./... ../...), and implicit relative (word/word.ext)
+      const PATH_RE = /(?:(?:\.\.?)?\/(?:[\w\-.~]+\/?)+|[\w\-][\w\-.]*\/(?:[\w\-.]+\/)*[\w\-.]+\.\w{1,10})/g
 
       while ((m = PATH_RE.exec(text)) !== null) {
         const matchText = m[0]
         const startCol = m.index
 
-        // Skip URLs (WebLinksAddon handles those)
+        // Skip URLs (WebLinksAddon handles those) and file:// URLs (handled above)
         const before = text.slice(Math.max(0, startCol - 8), startCol)
         if (/https?:\/\/$/i.test(before) || /[a-z]+:\/\/$/i.test(before)) continue
+
+        // Skip if this range overlaps with an already-added file:// link
+        const overlaps = links.some(l =>
+          startCol >= l.range.start.x - 1 && startCol < l.range.end.x - 1
+        )
+        if (overlaps) continue
 
         // Skip obvious non-paths (flags like --foo/bar, or bare /dev/null, /dev/pts)
         if (matchText.startsWith('/dev/') || matchText.startsWith('/proc/') || matchText.startsWith('/sys/')) continue

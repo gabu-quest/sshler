@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+import mimetypes
 import posixpath
 import shlex
 import stat as stat_mod
@@ -578,6 +579,54 @@ def get_router(deps: APIDependencies) -> APIRouter:
             content=content,
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @router.get("/boxes/{name}/view")
+    async def api_view_file(
+        name: str,
+        path: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ):
+        """Serve a file inline with its natural MIME type (for browser rendering)."""
+        box = deps.get_box_or_404(application_config, name)
+
+        if box.transport == "local":
+            normalized_path = _normalize_local_path(path)
+            file_path = Path(normalized_path)
+            if not file_path.exists() or not file_path.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            mime, _ = mimetypes.guess_type(normalized_path)
+            return FileResponse(
+                file_path,
+                media_type=mime or "application/octet-stream",
+                content_disposition_type="inline",
+            )
+
+        try:
+            validated_path = PathValidator.validate_remote_path(path)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                content, too_large = await _read_file_bytes(
+                    connection, validated_path, deps.settings.max_upload_bytes
+                )
+                if too_large:
+                    raise HTTPException(status_code=413, detail="File too large to view")
+        except SSHError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        mime, _ = mimetypes.guess_type(validated_path)
+        return Response(
+            content=content,
+            media_type=mime or "application/octet-stream",
+            headers={"Content-Disposition": "inline"},
         )
 
     MAX_DIR_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB hard limit
