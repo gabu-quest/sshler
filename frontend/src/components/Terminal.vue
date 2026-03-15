@@ -596,18 +596,9 @@ const createTerminal = () => {
           },
           text: matchText,
           activate: (_event: MouseEvent, linkText: string) => {
-            // Extract Linux path from file:// URL
-            // file://wsl.localhost/Ubuntu/home/... → /home/...
-            // file:///home/... → /home/...
-            let linuxPath = linkText.replace(/^file:\/\//, '')
-            // Strip WSL host prefix (e.g. wsl.localhost/Ubuntu)
-            linuxPath = linuxPath.replace(/^wsl\.localhost\/[^/]+/, '')
-            // Strip leading double-slash from file:///path
-            if (linuxPath.startsWith('//')) linuxPath = linuxPath.slice(1)
-            // Open via view endpoint so browser renders the file (e.g. HTML)
-            const token = tokenValue.value || ''
-            const viewUrl = `/api/v1/boxes/local/view?path=${encodeURIComponent(linuxPath)}&token=${encodeURIComponent(token)}`
-            window.open(viewUrl, '_blank')
+            // Open the raw file:// URL directly — let the browser handle it natively.
+            // Proxying through sshler's view endpoint hits CSP issues with inline scripts.
+            window.open(linkText, '_blank')
           },
         })
       }
