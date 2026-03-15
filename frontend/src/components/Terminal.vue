@@ -605,7 +605,8 @@ const createTerminal = () => {
             // Strip leading double-slash from file:///path
             if (linuxPath.startsWith('//')) linuxPath = linuxPath.slice(1)
             // Open via view endpoint so browser renders the file (e.g. HTML)
-            const viewUrl = `/api/v1/boxes/local/view?path=${encodeURIComponent(linuxPath)}`
+            const token = tokenValue.value || ''
+            const viewUrl = `/api/v1/boxes/local/view?path=${encodeURIComponent(linuxPath)}&token=${encodeURIComponent(token)}`
             window.open(viewUrl, '_blank')
           },
         })

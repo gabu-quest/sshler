@@ -22,7 +22,8 @@ class APIDependencies:
             return
         if request.url.path.endswith("/api/v1/bootstrap"):
             return
-        supplied = request.headers.get("x-sshler-token")
+        # Accept token via header (API calls) or query param (browser navigation, e.g. file view)
+        supplied = request.headers.get("x-sshler-token") or request.query_params.get("token")
         expected = self.settings.csrf_token
 
         if not hmac.compare_digest(supplied or "", expected):
