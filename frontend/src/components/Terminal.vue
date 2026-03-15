@@ -596,9 +596,13 @@ const createTerminal = () => {
           },
           text: matchText,
           activate: (_event: MouseEvent, linkText: string) => {
-            // Open the raw file:// URL directly — let the browser handle it natively.
-            // Proxying through sshler's view endpoint hits CSP issues with inline scripts.
-            window.open(linkText, '_blank')
+            // Browsers block window.open('file://...') from http:// pages.
+            // Copy the URL to clipboard so the user can paste it in a new tab.
+            navigator.clipboard.writeText(linkText).then(() => {
+              message.success('File URL copied — paste in a new tab to open')
+            }).catch(() => {
+              message.warning(linkText)
+            })
           },
         })
       }
