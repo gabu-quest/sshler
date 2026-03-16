@@ -58,12 +58,12 @@ const snapshotFreshness = computed(() => {
 });
 const snapshotDotColor = computed(() => {
   const f = snapshotFreshness.value;
-  if (f <= 0) return 'rgba(128, 128, 128, 0.3)';
-  // Interpolate from bright blue (f=1) to grey (f=0)
-  const r = Math.round(128 - 90 * f);
-  const g = Math.round(128 - 30 * f);
-  const b = Math.round(128 + 127 * f);
-  return `rgba(${r}, ${g}, ${b}, ${0.3 + 0.7 * f})`;
+  if (f <= 0) return 'rgba(100, 100, 110, 0.5)';
+  // Interpolate from bright blue (f=1) to muted grey (f=0)
+  const r = Math.round(100 - 62 * f);
+  const g = Math.round(100 + 30 * f);
+  const b = Math.round(110 + 145 * f);
+  return `rgb(${r}, ${g}, ${b})`;
 });
 const snapshotTooltip = computed(() => {
   if (!lastSnapshotAt.value) return 'No snapshots yet';
@@ -601,12 +601,13 @@ onUnmounted(() => {
 }
 
 .snapshot-dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   transition: background 1s ease;
   cursor: help;
   flex-shrink: 0;
+  box-shadow: 0 0 4px currentColor;
 }
 
 .auth-username {
