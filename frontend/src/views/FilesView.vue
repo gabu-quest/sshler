@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useResponsive } from "@/composables/useResponsive";
 import {
@@ -74,6 +74,22 @@ const chmodValue = ref("");
 const diffModalVisible = ref(false);
 const diffInitialFileA = ref("");
 const diffInitialFileB = ref("");
+
+// Scroll indicators for file table
+const fileTableWrapRef = ref<HTMLDivElement>();
+const canScrollUp = ref(false);
+const canScrollDown = ref(false);
+let scrollObserver: MutationObserver | null = null;
+
+function updateScrollIndicators() {
+  const wrap = fileTableWrapRef.value;
+  if (!wrap) return;
+  // NDataTable's scroll container is the .n-scrollbar-container inside it
+  const scrollEl = wrap.querySelector('.n-scrollbar-container') as HTMLElement | null;
+  if (!scrollEl) return;
+  canScrollUp.value = scrollEl.scrollTop > 8;
+  canScrollDown.value = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 8;
+}
 
 const formatMode = (mode: number | null | undefined): string => {
   if (mode == null) return "-";
@@ -357,7 +373,7 @@ const handleSortChange = (opts: { columnKey: string; order: 'ascend' | 'descend'
 };
 
 const getRowProps = (row: any) => ({
-  style: `cursor: pointer;${row._indent ? 'opacity:0.85;' : ''}${row._isParent ? 'background:var(--surface-variant);' : ''}`,
+  style: `cursor: pointer;${row._indent ? 'opacity:0.85;' : ''}${row._isParent ? 'background:var(--surface-variant);' : ''}${row.gitignored ? 'opacity:0.4;font-style:italic;' : ''}`,
   onClick: (e: MouseEvent) => {
     if (row._isParent) { navigateToDirectory(row.path); return; }
     handleRowClick(row, e);
@@ -422,6 +438,25 @@ onMounted(async () => {
     const stat = await boxStatus(selectedBox.value, tokenValue.value || null);
     status.value = stat.status;
   }
+
+  // Attach scroll indicator listener after DOM settles
+  nextTick(() => {
+    const wrap = fileTableWrapRef.value;
+    if (wrap) {
+      const scrollEl = wrap.querySelector('.n-scrollbar-container') as HTMLElement | null;
+      if (scrollEl) {
+        scrollEl.addEventListener('scroll', updateScrollIndicators, { passive: true });
+      }
+      // Observe DOM changes (data table re-renders) to re-check scroll state
+      scrollObserver = new MutationObserver(() => nextTick(updateScrollIndicators));
+      scrollObserver.observe(wrap, { childList: true, subtree: true });
+      updateScrollIndicators();
+    }
+  });
+});
+
+onUnmounted(() => {
+  scrollObserver?.disconnect();
 });
 
 async function loadGitInfo() {
@@ -1113,7 +1148,7 @@ const columns = computed(() => {
 
         <!-- File Table -->
         <FileUploadZone v-else :current-dir="currentDir" @upload="handleUpload">
-          <div aria-live="polite" :aria-label="t('a11y.file_list')">
+          <div aria-live="polite" :aria-label="t('a11y.file_list')" class="file-table-scroll-wrap" :class="{ 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }" ref="fileTableWrapRef">
             <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
           </div>
         </FileUploadZone>
@@ -1238,6 +1273,44 @@ const columns = computed(() => {
   </div>
 </template>
 <style scoped>
+/* Scroll indicators — gradient shadows showing more content above/below */
+.file-table-scroll-wrap {
+  position: relative;
+}
+
+.file-table-scroll-wrap::before,
+.file-table-scroll-wrap::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.file-table-scroll-wrap::before {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(56, 140, 255, 0.15), transparent);
+  border-top: 2px solid rgba(56, 140, 255, 0.3);
+}
+
+.file-table-scroll-wrap::after {
+  bottom: 0;
+  background: linear-gradient(to top, rgba(56, 140, 255, 0.15), transparent);
+  border-bottom: 2px solid rgba(56, 140, 255, 0.3);
+}
+
+.file-table-scroll-wrap.can-scroll-up::before {
+  opacity: 1;
+}
+
+.file-table-scroll-wrap.can-scroll-down::after {
+  opacity: 1;
+}
+
 .page {
   display: flex;
   flex-direction: column;

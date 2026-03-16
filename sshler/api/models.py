@@ -26,6 +26,7 @@ class APIDirectoryEntry(BaseModel):
     size: int | None = None
     modified: float | None = None
     mode: int | None = None
+    gitignored: bool = False
 
 
 class APIDirectoryListing(BaseModel):

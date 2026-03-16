@@ -66,6 +66,25 @@ def _cleanup_temp(path: str) -> BackgroundTask:
     return BackgroundTask(_remove)
 
 
+async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
+    """Check which filenames in a directory are gitignored. Returns set of ignored names."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "check-ignore", "--stdin",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=directory,
+        )
+        input_data = "\n".join(names).encode()
+        stdout, _ = await proc.communicate(input=input_data)
+        if proc.returncode not in (0, 1):  # 1 means none matched, 128 means not a git repo
+            return set()
+        return set(line.strip() for line in stdout.decode().splitlines() if line.strip())
+    except Exception:
+        return set()
+
+
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
@@ -95,6 +114,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 except OSError:
                     continue  # broken symlink or deleted between iterdir and stat
             children.sort(key=lambda item: (not item[1], item[0].name.lower()))
+
+            # Check gitignored status for all entries in one batch
+            ignored_names: set[str] = set()
+            if children:
+                ignored_names = await _get_gitignored_names(
+                    normalized, [c.name for c, _ in children]
+                )
+
             for child, is_dir in children:
                 try:
                     stats = child.stat()
@@ -108,6 +135,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         size=stats.st_size if child.is_file() else None,
                         modified=stats.st_mtime,
                         mode=stats.st_mode & 0o7777,
+                        gitignored=child.name in ignored_names,
                     )
                 )
             return APIDirectoryListing(box=box.name, directory=normalized, entries=entries)

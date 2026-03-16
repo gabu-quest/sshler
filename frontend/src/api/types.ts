@@ -27,6 +27,7 @@ export interface DirectoryEntry {
   size?: number | null;
   modified?: number | null;
   mode?: number | null;
+  gitignored?: boolean;
 }
 
 export interface DirectoryListing {
