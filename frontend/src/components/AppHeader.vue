@@ -51,19 +51,28 @@ const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload
 
 // Snapshot status for the indicator dot
 const lastSnapshotAt = ref<number | null>(null);
+const now = ref(Date.now());
+let snapshotTickInterval: number | null = null;
 const snapshotFreshness = computed(() => {
   if (!lastSnapshotAt.value) return 0;
-  const elapsed = Date.now() / 1000 - lastSnapshotAt.value;
+  const elapsed = now.value / 1000 - lastSnapshotAt.value;
   return Math.max(0, 1 - elapsed / 30);
 });
-const snapshotDotColor = computed(() => {
+const snapshotDotStyle = computed(() => {
   const f = snapshotFreshness.value;
-  if (f <= 0) return 'rgba(100, 100, 110, 0.5)';
-  // Interpolate from bright blue (f=1) to muted grey (f=0)
-  const r = Math.round(100 - 62 * f);
-  const g = Math.round(100 + 30 * f);
-  const b = Math.round(110 + 145 * f);
-  return `rgb(${r}, ${g}, ${b})`;
+  if (f <= 0) {
+    return {
+      background: 'rgba(100, 100, 110, 0.4)',
+      boxShadow: 'none',
+    };
+  }
+  // Bright blue at f=1, fading to grey at f=0
+  const color = `rgba(56, 140, 255, ${f})`;
+  const glowSize = Math.round(4 + 6 * f);
+  return {
+    background: color,
+    boxShadow: `0 0 ${glowSize}px rgba(56, 140, 255, ${f * 0.8})`,
+  };
 });
 const snapshotTooltip = computed(() => {
   if (!lastSnapshotAt.value) return 'No snapshots yet';
@@ -226,6 +235,7 @@ const handleVisibilityChange = () => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  snapshotTickInterval = window.setInterval(() => { now.value = Date.now(); }, 2000);
 
   if (!document.hidden) {
     startStatsPolling();
@@ -236,6 +246,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   stopStatsPolling();
+  if (snapshotTickInterval) clearInterval(snapshotTickInterval);
 });
 </script>
 
@@ -342,7 +353,7 @@ onUnmounted(() => {
           <template #trigger>
             <div
               class="snapshot-dot"
-              :style="{ background: snapshotDotColor }"
+              :style="snapshotDotStyle"
               :aria-label="snapshotTooltip"
             />
           </template>
@@ -604,10 +615,9 @@ onUnmounted(() => {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  transition: background 1s ease;
+  transition: background 1s ease, box-shadow 1s ease;
   cursor: help;
   flex-shrink: 0;
-  box-shadow: 0 0 4px currentColor;
 }
 
 .auth-username {
