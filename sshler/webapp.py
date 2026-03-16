@@ -545,11 +545,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage application lifecycle: startup and shutdown."""
+        from .snapshot import snapshot_loop
+
         # Startup: Initialize SSH connection pool
         await initialize_pool()
         app.state.ssh_pool = get_pool()
+        snapshot_task = asyncio.create_task(snapshot_loop())
         yield
-        # Shutdown: Cleanup SSH connection pool
+        # Shutdown: Cancel snapshot loop and cleanup SSH connection pool
+        snapshot_task.cancel()
         await shutdown_pool()
 
     # Disable automatic /docs and /redoc endpoints

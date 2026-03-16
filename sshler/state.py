@@ -658,6 +658,40 @@ async def cleanup_old_sessions_async(max_age_days: int = 30) -> int:
     return await asyncio.to_thread(cleanup_old_sessions, max_age_days)
 
 
+def list_all_active_sessions() -> list[Session]:
+    """List all active sessions across all boxes."""
+    _require_db()
+    with _DB_LOCK:
+        return list(
+            Session.query()
+            .filter(F("active") == True)  # noqa: E712
+            .all()
+        )
+
+
+async def list_all_active_sessions_async() -> list[Session]:
+    return await asyncio.to_thread(list_all_active_sessions)
+
+
+def update_session_snapshot(session_id: str, windows: list[dict]) -> bool:
+    """Atomically update session metadata with window snapshot."""
+    _require_db()
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+        meta = session.metadata
+        meta["windows"] = windows
+        meta["last_snapshot_at"] = time.time()
+        session.metadata = meta
+        session.save()
+        return True
+
+
+async def update_session_snapshot_async(session_id: str, windows: list[dict]) -> bool:
+    return await asyncio.to_thread(update_session_snapshot, session_id, windows)
+
+
 # Directory Visit Tracking (Frecency)
 
 import math
