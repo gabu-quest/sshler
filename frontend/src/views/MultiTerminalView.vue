@@ -163,7 +163,8 @@ const addTerminal = () => {
     sessionName: newTerminal.value.sessionName || dirBasedSession,
     directory: newTerminal.value.directory || '~'
   })
-  
+  saveLayout()
+
   showAddModal.value = false
   newTerminal.value = {
     boxName: newTerminal.value.boxName, // Keep same box selected
@@ -174,6 +175,7 @@ const addTerminal = () => {
 
 const removeTerminal = (id: string) => {
   terminals.value = terminals.value.filter(t => t.id !== id)
+  saveLayout()
 }
 
 const openAddModal = () => {
@@ -198,8 +200,44 @@ const goBack = () => {
   window.history.back()
 }
 
+// Layout persistence
+const LAYOUT_KEY = 'sshler:multi-terminal:layout'
+
+function saveLayout() {
+  if (terminals.value.length === 0) {
+    localStorage.removeItem(LAYOUT_KEY)
+    return
+  }
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify(terminals.value.map(t => ({
+    boxName: t.boxName,
+    sessionName: t.sessionName,
+    directory: t.directory,
+  }))))
+}
+
+function loadLayout(): TerminalInstance[] | null {
+  const raw = localStorage.getItem(LAYOUT_KEY)
+  if (!raw) return null
+  try {
+    const items = JSON.parse(raw)
+    if (!Array.isArray(items) || items.length === 0) return null
+    return items.map((item: any) => ({
+      id: `term-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      boxName: item.boxName,
+      sessionName: item.sessionName,
+      directory: item.directory,
+    }))
+  } catch { return null }
+}
+
 onMounted(async () => {
   await ensureData()
+
+  // Restore saved layout
+  const saved = loadLayout()
+  if (saved && saved.length > 0) {
+    terminals.value = saved
+  }
 
   // Initialize from route
   const boxFromRoute = route.query.box as string
