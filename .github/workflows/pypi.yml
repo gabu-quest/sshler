@@ -29,6 +29,19 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          pnpm build
+          ls -la ../sshler/static/dist/index.html
+
       - name: Build artifacts
         run: |
           uv build
