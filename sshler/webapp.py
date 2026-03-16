@@ -756,18 +756,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 parsed_origin = urlparse(origin)
                 origin_base = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
 
-                # Parse expected origin from public_url
-                parsed_public = urlparse(app_settings.public_url)
-                expected_origin = f"{parsed_public.scheme}://{parsed_public.netloc}"
-
                 # Check if origin matches public_url or is in allowed_origins
                 # Include both env-based origins (SshlerSettings) and CLI-based origins (ServerSettings)
                 cli_settings: ServerSettings = request.app.state.settings
-                allowed_origins = (
-                    [expected_origin]
-                    + app_settings.allowed_origins_list
-                    + cli_settings.allow_origins
-                )
+                allowed_origins = list(cli_settings.allow_origins) + app_settings.allowed_origins_list
+
+                # Add public_url-derived origin if set
+                if app_settings.public_url:
+                    parsed_public = urlparse(app_settings.public_url)
+                    expected_origin = f"{parsed_public.scheme}://{parsed_public.netloc}"
+                    if expected_origin not in allowed_origins:
+                        allowed_origins.append(expected_origin)
 
                 if origin_base not in allowed_origins:
                     logging.warning(
