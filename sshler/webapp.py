@@ -547,7 +547,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         """Manage application lifecycle: startup and shutdown."""
         from .snapshot import reconcile_on_startup, snapshot_loop
 
-        # Startup: Initialize SSH connection pool
+        # Startup: Initialize state DB and SSH connection pool
+        load_config()  # Ensures state DB is initialized
         await initialize_pool()
         app.state.ssh_pool = get_pool()
 
