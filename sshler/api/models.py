@@ -246,3 +246,23 @@ class APITunnel(BaseModel):
     remote_host: str
     remote_port: int
     created_at: float
+
+
+class APIRecoveryWindow(BaseModel):
+    """A window from a lost tmux session snapshot."""
+
+    index: int
+    name: str
+    command: str
+    path: str
+
+
+class APILostSession(BaseModel):
+    """A lost tmux session with its last-known window state."""
+
+    id: str
+    box: str
+    session_name: str
+    working_directory: str
+    last_snapshot_at: float
+    windows: list[APIRecoveryWindow]
