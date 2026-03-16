@@ -11,6 +11,7 @@ import type {
   FilePreview,
   GitInfo,
   GrepResponse,
+  LostSession,
   PinToggle,
   SearchResponse,
   SessionInfo,
@@ -848,6 +849,41 @@ export async function deleteTunnel(
 ): Promise<SimpleMessage> {
   const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(box)}/tunnels/${encodeURIComponent(tunnelId)}`, {
     method: "DELETE",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+// Recovery
+
+export async function fetchRecovery(
+  token: string | null,
+): Promise<LostSession[]> {
+  const res = await fetch(`${API_BASE}/recovery`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<LostSession[]>(res);
+}
+
+export async function recreateSession(
+  sessionId: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/recovery/${encodeURIComponent(sessionId)}/recreate`, {
+    method: "POST",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
+export async function dismissRecovery(
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/recovery/dismiss`, {
+    method: "POST",
     headers: buildHeaders(token),
     credentials: 'include'
   });

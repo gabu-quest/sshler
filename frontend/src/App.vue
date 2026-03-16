@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import {
@@ -14,16 +14,41 @@ import {
 } from "naive-ui";
 
 import AppHeader from "@/components/AppHeader.vue";
+import RecoveryModal from "@/components/RecoveryModal.vue";
 import { useAppStore } from "@/stores/app";
+import { useBootstrapStore } from "@/stores/bootstrap";
 import { lightThemeOverrides, darkThemeOverrides } from "@/config/naive-theme";
+import { fetchRecovery } from "@/api/http";
+import type { LostSession } from "@/api/types";
 
 const appStore = useAppStore();
+const bootstrapStore = useBootstrapStore();
 const route = useRoute();
 const theme = computed(() => (appStore.isDark ? darkTheme : lightTheme));
 const themeOverrides = computed(() =>
   appStore.isDark ? darkThemeOverrides : lightThemeOverrides
 );
 const isTerminalRoute = computed(() => route.path === '/terminal' || route.path === '/multi-terminal');
+
+const showRecovery = ref(false);
+const recoverySessions = ref<LostSession[]>([]);
+const recoveryToken = computed(() => bootstrapStore.token);
+
+onMounted(async () => {
+  // Wait for bootstrap to complete before checking recovery
+  if (!bootstrapStore.payload) {
+    await bootstrapStore.bootstrap();
+  }
+  try {
+    const sessions = await fetchRecovery(bootstrapStore.token);
+    if (sessions.length > 0) {
+      recoverySessions.value = sessions;
+      showRecovery.value = true;
+    }
+  } catch {
+    // Recovery check is best-effort, don't block app startup
+  }
+});
 </script>
 
 <template>
@@ -40,6 +65,13 @@ const isTerminalRoute = computed(() => route.path === '/terminal' || route.path 
           </div>
         </NLayoutContent>
       </NLayout>
+      <RecoveryModal
+        :show="showRecovery"
+        :sessions="recoverySessions"
+        :token="recoveryToken"
+        @update:show="showRecovery = $event"
+        @updated="recoverySessions = $event"
+      />
     </NMessageProvider>
   </NConfigProvider>
 </template>

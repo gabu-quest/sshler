@@ -517,4 +517,19 @@ export const ja: Record<string, string> = {
   "files.upload_attempt": "試行 {n} / {max}",
   "files.upload_failed_retry": "アップロード失敗、再試行中...",
   "files.upload_failed_final": "{n}回の試行後にアップロードに失敗しました",
+
+  // Recovery
+  "recovery.title": "セッション復旧",
+  "recovery.description": "クラッシュで失われたターミナルセッションがあります。前回のウィンドウレイアウトで再作成できます。",
+  "recovery.recreate": "再作成",
+  "recovery.recreate_all": "すべて再作成",
+  "recovery.dismiss_all": "すべて閉じる",
+  "recovery.skip": "スキップ",
+  "recovery.last_seen": "{time}前に最終確認",
+  "recovery.windows_count": "{count}個のウィンドウ",
+  "recovery.last_command": "最後の実行: {command}",
+  "recovery.recreated": "セッション「{name}」を再作成しました",
+  "recovery.all_recreated": "すべてのセッションを再作成しました",
+  "recovery.dismissed": "復旧を閉じました",
+  "recovery.recreating": "再作成中...",
 };

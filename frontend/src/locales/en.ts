@@ -517,4 +517,19 @@ export const en: Record<string, string> = {
   "files.upload_attempt": "Attempt {n} of {max}",
   "files.upload_failed_retry": "Upload failed, retrying...",
   "files.upload_failed_final": "Upload failed after {n} attempts",
+
+  // Recovery
+  "recovery.title": "Session Recovery",
+  "recovery.description": "These terminal sessions were lost in a crash. You can recreate them with their last-known window layout.",
+  "recovery.recreate": "Recreate",
+  "recovery.recreate_all": "Recreate All",
+  "recovery.dismiss_all": "Dismiss All",
+  "recovery.skip": "Skip",
+  "recovery.last_seen": "Last seen {time} ago",
+  "recovery.windows_count": "{count} window(s)",
+  "recovery.last_command": "Last running: {command}",
+  "recovery.recreated": "Session \"{name}\" recreated",
+  "recovery.all_recreated": "All sessions recreated",
+  "recovery.dismissed": "Recovery dismissed",
+  "recovery.recreating": "Recreating...",
 };

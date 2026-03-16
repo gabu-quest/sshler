@@ -166,3 +166,19 @@ export interface ApiTunnel {
   remote_port: number;
   created_at: number;
 }
+
+export interface RecoveryWindow {
+  index: number;
+  name: string;
+  command: string;
+  path: string;
+}
+
+export interface LostSession {
+  id: string;
+  box: string;
+  session_name: string;
+  working_directory: string;
+  last_snapshot_at: number;
+  windows: RecoveryWindow[];
+}
