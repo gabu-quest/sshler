@@ -348,18 +348,6 @@ onUnmounted(() => {
           {{ authTooltip }}
         </NTooltip>
 
-        <!-- Snapshot Indicator -->
-        <NTooltip :delay="300">
-          <template #trigger>
-            <div
-              class="snapshot-dot"
-              :style="snapshotDotStyle"
-              :aria-label="snapshotTooltip"
-            />
-          </template>
-          {{ snapshotTooltip }}
-        </NTooltip>
-
         <NSelect
           v-model:value="currentLocale"
           :options="localeOptions"

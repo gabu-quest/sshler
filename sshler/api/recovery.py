@@ -59,6 +59,13 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """Return the timestamp of the last successful snapshot."""
         return APISnapshotStatus(last_snapshot_at=get_last_snapshot_at())
 
+    @router.post("/recovery/{session_id}/dismiss", response_model=APISimpleMessage)
+    async def api_dismiss_single(session_id: str) -> APISimpleMessage:
+        """Dismiss a single recovery session."""
+        lost = get_recovery_sessions()
+        set_recovery_sessions([s for s in lost if s["id"] != session_id])
+        return APISimpleMessage(status="ok", message="Dismissed")
+
     @router.post("/recovery/dismiss", response_model=APISimpleMessage)
     async def api_dismiss_recovery() -> APISimpleMessage:
         """Dismiss all recovery notifications."""

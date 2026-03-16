@@ -32,7 +32,7 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { statPath } from '@/api/http'
+import { statPath, fetchSnapshotStatus } from '@/api/http'
 
 interface Props {
   boxName: string
@@ -91,6 +91,25 @@ let activityTimeout: number | null = null
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null)
 const textEncoder = new TextEncoder()
+
+// Snapshot freshness indicator
+const lastSnapshotAt = ref<number | null>(null)
+const snapshotNow = ref(Date.now())
+let snapshotPollInterval: number | null = null
+let snapshotTickInterval: number | null = null
+const snapshotFreshness = computed(() => {
+  if (!lastSnapshotAt.value) return 0
+  const elapsed = snapshotNow.value / 1000 - lastSnapshotAt.value
+  return Math.max(0, 1 - elapsed / 30)
+})
+const snapshotDotStyle = computed(() => {
+  const f = snapshotFreshness.value
+  if (f <= 0) return { background: 'rgba(100, 100, 110, 0.4)', boxShadow: 'none' }
+  return {
+    background: `rgba(56, 140, 255, ${f})`,
+    boxShadow: `0 0 ${Math.round(3 + 5 * f)}px rgba(56, 140, 255, ${f * 0.8})`,
+  }
+})
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
@@ -1230,10 +1249,25 @@ onMounted(async () => {
   setTimeout(() => {
     connect()
   }, 100)
+
+  // Snapshot freshness polling
+  const pollSnapshot = async () => {
+    try {
+      const s = await fetchSnapshotStatus(tokenValue.value)
+      lastSnapshotAt.value = s.last_snapshot_at
+    } catch { /* best effort */ }
+  }
+  pollSnapshot()
+  snapshotPollInterval = window.setInterval(pollSnapshot, 10000)
+  snapshotTickInterval = window.setInterval(() => { snapshotNow.value = Date.now() }, 2000)
 })
 
 
 onUnmounted(() => {
+  // Cleanup snapshot polling
+  if (snapshotPollInterval) clearInterval(snapshotPollInterval)
+  if (snapshotTickInterval) clearInterval(snapshotTickInterval)
+
   // Cleanup viewport handler
   cleanupViewport?.()
 
@@ -1441,6 +1475,7 @@ defineExpose({
           </NPopconfirm>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />
+        <span class="snapshot-indicator" :style="snapshotDotStyle" :title="`Snapshot: ${lastSnapshotAt ? Math.floor(snapshotNow / 1000 - lastSnapshotAt) + 's ago' : 'none'}`" />
       </div>
       <div class="titlebar-center">
         <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
@@ -1524,6 +1559,7 @@ defineExpose({
     <!-- Collapsed Title Bar -->
     <div v-if="showTitleBar && titleBarCollapsed" class="terminal-titlebar-collapsed" @click="toggleTitleBar">
       <span class="connection-indicator" :class="{ connected, connecting }" />
+      <span class="snapshot-indicator" :style="snapshotDotStyle" />
       <span class="collapsed-text">{{ boxName }}</span>
       <span class="expand-hint">{{ t('terminal.click_expand') }}</span>
     </div>
@@ -1759,6 +1795,15 @@ defineExpose({
 .connection-indicator.connecting {
   background: #ffbd2e;
   animation: pulse 1s ease-in-out infinite;
+}
+
+/* Snapshot indicator - blue dot next to connection dot */
+.snapshot-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: 4px;
+  transition: background 1s ease, box-shadow 1s ease;
 }
 
 /* Collapsed title bar */

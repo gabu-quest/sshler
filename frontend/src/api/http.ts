@@ -890,6 +890,18 @@ export async function recreateSession(
   return handle<SimpleMessage>(res);
 }
 
+export async function dismissRecoverySession(
+  sessionId: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/recovery/${encodeURIComponent(sessionId)}/dismiss`, {
+    method: "POST",
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
 export async function dismissRecovery(
   token: string | null,
 ): Promise<SimpleMessage> {

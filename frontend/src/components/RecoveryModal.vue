@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { NButton, NIcon, NModal, NSpace, NSpin, NTag, useMessage } from "naive-ui";
 import { PhTerminalWindow, PhArrowCounterClockwise, PhX, PhFolder, PhGear } from "@phosphor-icons/vue";
 import type { LostSession } from "@/api/types";
-import { recreateSession, dismissRecovery } from "@/api/http";
+import { recreateSession, dismissRecovery, dismissRecoverySession } from "@/api/http";
 import { useI18n } from "@/i18n";
 
 const router = useRouter();
@@ -77,11 +77,14 @@ async function handleRecreateAll() {
   }
 }
 
-function handleSkip(session: LostSession) {
+async function handleSkip(session: LostSession) {
+  try {
+    await dismissRecoverySession(session.id, props.token);
+  } catch { /* best effort */ }
   const remaining = props.sessions.filter(s => s.id !== session.id);
   emit("updated", remaining);
   if (remaining.length === 0) {
-    handleDismiss();
+    emit("update:show", false);
   }
 }
 
