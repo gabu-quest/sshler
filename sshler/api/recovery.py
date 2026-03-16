@@ -7,9 +7,9 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 from .. import state
-from ..snapshot import recreate_session
+from ..snapshot import get_last_snapshot_at, recreate_session
 from .dependencies import APIDependencies
-from .models import APILostSession, APIRecoveryWindow, APISimpleMessage
+from .models import APILostSession, APIRecoveryWindow, APISimpleMessage, APISnapshotStatus
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         logger.info("Recreated session: %s (%d windows)", target["session_name"], len(windows))
         return APISimpleMessage(status="ok", message=f"Recreated {target['session_name']}", path=session_id)
+
+    @router.get("/snapshot/status", response_model=APISnapshotStatus)
+    async def api_snapshot_status() -> APISnapshotStatus:
+        """Return the timestamp of the last successful snapshot."""
+        return APISnapshotStatus(last_snapshot_at=get_last_snapshot_at())
 
     @router.post("/recovery/dismiss", response_model=APISimpleMessage)
     async def api_dismiss_recovery(request: Request) -> APISimpleMessage:

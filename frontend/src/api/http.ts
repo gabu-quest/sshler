@@ -13,6 +13,7 @@ import type {
   GrepResponse,
   LostSession,
   PinToggle,
+  SnapshotStatus,
   SearchResponse,
   SessionInfo,
   TerminalHandshake,
@@ -856,6 +857,16 @@ export async function deleteTunnel(
 }
 
 // Recovery
+
+export async function fetchSnapshotStatus(
+  token: string | null,
+): Promise<SnapshotStatus> {
+  const res = await fetch(`${API_BASE}/snapshot/status`, {
+    headers: buildHeaders(token),
+    credentials: 'include'
+  });
+  return handle<SnapshotStatus>(res);
+}
 
 export async function fetchRecovery(
   token: string | null,

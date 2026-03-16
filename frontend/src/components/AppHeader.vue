@@ -26,7 +26,7 @@ import { useBoxesStore } from "@/stores/boxes";
 import { useResponsive } from "@/composables/useResponsive";
 import { useI18n, availableLocales } from "@/i18n";
 import type { Locale } from "@/i18n";
-import { boxStats } from "@/api/http";
+import { boxStats, fetchSnapshotStatus } from "@/api/http";
 import type { BoxStats } from "@/api/types";
 import CommandPalette from "@/components/CommandPalette.vue";
 import ShortcutsOverlay from "@/components/ShortcutsOverlay.vue";
@@ -48,6 +48,37 @@ const currentLocale = computed({
 // System stats for local box (shown in header)
 const localStats = ref<BoxStats | null>(null);
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token);
+
+// Snapshot status for the indicator dot
+const lastSnapshotAt = ref<number | null>(null);
+const snapshotFreshness = computed(() => {
+  if (!lastSnapshotAt.value) return 0;
+  const elapsed = Date.now() / 1000 - lastSnapshotAt.value;
+  return Math.max(0, 1 - elapsed / 30);
+});
+const snapshotDotColor = computed(() => {
+  const f = snapshotFreshness.value;
+  if (f <= 0) return 'rgba(128, 128, 128, 0.3)';
+  // Interpolate from bright blue (f=1) to grey (f=0)
+  const r = Math.round(128 - 90 * f);
+  const g = Math.round(128 - 30 * f);
+  const b = Math.round(128 + 127 * f);
+  return `rgba(${r}, ${g}, ${b}, ${0.3 + 0.7 * f})`;
+});
+const snapshotTooltip = computed(() => {
+  if (!lastSnapshotAt.value) return 'No snapshots yet';
+  const elapsed = Math.floor(Date.now() / 1000 - lastSnapshotAt.value);
+  return `Session snapshot: ${elapsed}s ago`;
+});
+
+async function loadSnapshotStatus() {
+  try {
+    const status = await fetchSnapshotStatus(tokenValue.value || null);
+    lastSnapshotAt.value = status.last_snapshot_at;
+  } catch {
+    // Best effort
+  }
+}
 
 async function loadLocalStats() {
   try {
@@ -170,7 +201,11 @@ const handleKeydown = (event: KeyboardEvent) => {
 const startStatsPolling = () => {
   if (statsInterval) return;
   loadLocalStats();
-  statsInterval = window.setInterval(loadLocalStats, 10000);
+  loadSnapshotStatus();
+  statsInterval = window.setInterval(() => {
+    loadLocalStats();
+    loadSnapshotStatus();
+  }, 10000);
 };
 
 const stopStatsPolling = () => {
@@ -300,6 +335,18 @@ onUnmounted(() => {
             </div>
           </template>
           {{ authTooltip }}
+        </NTooltip>
+
+        <!-- Snapshot Indicator -->
+        <NTooltip :delay="300">
+          <template #trigger>
+            <div
+              class="snapshot-dot"
+              :style="{ background: snapshotDotColor }"
+              :aria-label="snapshotTooltip"
+            />
+          </template>
+          {{ snapshotTooltip }}
         </NTooltip>
 
         <NSelect
@@ -551,6 +598,15 @@ onUnmounted(() => {
   border-radius: 8px;
   background: rgba(var(--success-color-rgb, 24, 160, 88), 0.1);
   border: 1px solid rgba(var(--success-color-rgb, 24, 160, 88), 0.2);
+}
+
+.snapshot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: background 1s ease;
+  cursor: help;
+  flex-shrink: 0;
 }
 
 .auth-username {

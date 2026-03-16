@@ -266,3 +266,9 @@ class APILostSession(BaseModel):
     working_directory: str
     last_snapshot_at: float
     windows: list[APIRecoveryWindow]
+
+
+class APISnapshotStatus(BaseModel):
+    """Current snapshot loop status."""
+
+    last_snapshot_at: float | None = None

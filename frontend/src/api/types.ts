@@ -182,3 +182,7 @@ export interface LostSession {
   last_snapshot_at: number;
   windows: RecoveryWindow[];
 }
+
+export interface SnapshotStatus {
+  last_snapshot_at: number | null;
+}

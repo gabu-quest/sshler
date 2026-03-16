@@ -13,6 +13,12 @@ from . import state
 logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = platform.system().lower().startswith("windows")
+_last_snapshot_at: float | None = None
+
+
+def get_last_snapshot_at() -> float | None:
+    """Return timestamp of the most recent successful snapshot."""
+    return _last_snapshot_at
 
 
 def _tmux_base_command() -> list[str]:
@@ -59,6 +65,7 @@ async def capture_local_windows(session_name: str) -> list[dict] | None:
 
 async def snapshot_all_sessions() -> int:
     """Capture window state for all active local sessions. Returns count."""
+    global _last_snapshot_at
     sessions = await state.list_all_active_sessions_async()
     count = 0
     for session in sessions:
@@ -71,6 +78,8 @@ async def snapshot_all_sessions() -> int:
         if windows is not None:
             await state.update_session_snapshot_async(session.id, windows)
             count += 1
+    if count > 0:
+        _last_snapshot_at = time.time()
     return count
 
 
