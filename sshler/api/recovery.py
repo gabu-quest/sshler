@@ -64,17 +64,19 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """Dismiss a single recovery session permanently."""
         lost = get_recovery_sessions()
         set_recovery_sessions([s for s in lost if s["id"] != session_id])
-        # Mark inactive in DB so the snapshot loop stops re-detecting it
+        # Mark inactive and clear snapshot so startup reconcile won't re-detect it
         await state.update_session_activity_async(session_id, active=False)
+        await state.clear_session_snapshot_async(session_id)
         return APISimpleMessage(status="ok", message="Dismissed")
 
     @router.post("/recovery/dismiss", response_model=APISimpleMessage)
     async def api_dismiss_recovery() -> APISimpleMessage:
         """Dismiss all recovery notifications permanently."""
         lost = get_recovery_sessions()
-        # Mark all as inactive so they don't get re-detected
+        # Mark all as inactive and clear snapshots so they don't get re-detected
         for s in lost:
             await state.update_session_activity_async(s["id"], active=False)
+            await state.clear_session_snapshot_async(s["id"])
         set_recovery_sessions([])
         logger.info("Dismissed %d recovery session(s)", len(lost))
         return APISimpleMessage(status="ok", message=f"Dismissed {len(lost)} session(s)")

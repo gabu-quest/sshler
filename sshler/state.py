@@ -708,6 +708,25 @@ async def update_session_snapshot_async(session_id: str, windows: list[dict]) ->
     return await asyncio.to_thread(update_session_snapshot, session_id, windows)
 
 
+def clear_session_snapshot(session_id: str) -> bool:
+    """Remove snapshot data from a session so it won't be re-detected as lost."""
+    _require_db()
+    with _DB_LOCK:
+        session = Session.query().filter(F("id") == session_id).first()
+        if not session:
+            return False
+        meta = session.metadata
+        meta.pop("last_snapshot_at", None)
+        meta.pop("windows", None)
+        session.metadata = meta
+        session.save()
+        return True
+
+
+async def clear_session_snapshot_async(session_id: str) -> bool:
+    return await asyncio.to_thread(clear_session_snapshot, session_id)
+
+
 # Directory Visit Tracking (Frecency)
 
 import math
