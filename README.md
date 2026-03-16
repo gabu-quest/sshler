@@ -61,6 +61,10 @@ The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`
 **🖥️ Terminal Features**
 - **Multi-pane Layouts** - Split terminal horizontally, vertically, or in a grid
 - **Session Persistence** - Restore your terminal layout on reload
+- **Crash Recovery** - Periodic snapshots of tmux window state (every 30s); if WSL/system crashes, a recovery modal offers to recreate your sessions with the same window layout and working directories
+- **Live Dead-Session Detection** - Detects OOM-killed or crashed tmux sessions without needing a restart; recovery modal appears automatically
+- **Snapshot Freshness Indicator** - Blue dot next to the connection indicator pulses when snapshots are active, fades to grey as they age
+- **Clickable File Paths** - File paths and `file://` URLs in terminal output are clickable links; file:// URLs copy to clipboard with a toast
 - **Terminal Notifications** - Desktop notifications for long-running commands
 - **Connection Status** - Real-time connection health indicators
 - **Command Snippets** - Save and quick-insert frequently used commands per box or globally

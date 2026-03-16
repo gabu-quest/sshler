@@ -1,6 +1,6 @@
 # Claude Context: sshler
 
-**Version:** 0.4.0 | **Type:** Full-Stack Web Application (FastAPI + Vue 3)
+**Version:** 0.7.0 | **Type:** Full-Stack Web Application (FastAPI + Vue 3)
 
 ---
 
