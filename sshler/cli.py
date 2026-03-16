@@ -358,8 +358,16 @@ def serve(
         指定したホストとポートでリクエスト受付を開始します。
     """
 
+    # Auto-add the actual listening address to allowed origins
+    # so origin checks pass regardless of custom port
+    auto_origins = list(allow_origins or [])
+    listen_origins = {f"http://{host}:{port}", f"http://localhost:{port}", f"http://127.0.0.1:{port}"}
+    for o in listen_origins:
+        if o not in auto_origins:
+            auto_origins.append(o)
+
     settings = ServerSettings(
-        allow_origins=allow_origins or [],
+        allow_origins=auto_origins,
         csrf_token=token or secrets.token_urlsafe(32),
         max_upload_bytes=max_upload_mb * 1024 * 1024,
         allow_ssh_alias=allow_ssh_alias,
