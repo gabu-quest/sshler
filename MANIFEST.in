@@ -1,2 +1,3 @@
 recursive-include sshler/templates *.html
 recursive-include sshler/static *
+recursive-include sshler/static/dist *
