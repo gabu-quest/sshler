@@ -14,11 +14,23 @@ logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = platform.system().lower().startswith("windows")
 _last_snapshot_at: float | None = None
+_recovery_sessions: list[dict] = []
 
 
 def get_last_snapshot_at() -> float | None:
     """Return timestamp of the most recent successful snapshot."""
     return _last_snapshot_at
+
+
+def get_recovery_sessions() -> list[dict]:
+    """Return the current list of lost sessions (startup + live-detected)."""
+    return _recovery_sessions
+
+
+def set_recovery_sessions(sessions: list[dict]) -> None:
+    """Replace the recovery session list."""
+    global _recovery_sessions
+    _recovery_sessions = sessions
 
 
 def _tmux_base_command() -> list[str]:
@@ -64,7 +76,11 @@ async def capture_local_windows(session_name: str) -> list[dict] | None:
 
 
 async def snapshot_all_sessions() -> int:
-    """Capture window state for all active local sessions. Returns count."""
+    """Capture window state for all active local sessions. Returns count.
+
+    Also detects dead sessions: if an active session's tmux is gone but we
+    have a previous snapshot, it's added to the recovery list.
+    """
     global _last_snapshot_at
     sessions = await state.list_all_active_sessions_async()
     count = 0
@@ -78,6 +94,20 @@ async def snapshot_all_sessions() -> int:
         if windows is not None:
             await state.update_session_snapshot_async(session.id, windows)
             count += 1
+        elif meta.get("last_snapshot_at") and meta.get("windows"):
+            # tmux is gone but we have a snapshot — session died mid-run
+            existing_ids = {s["id"] for s in _recovery_sessions}
+            if session.id not in existing_ids:
+                _recovery_sessions.append({
+                    "id": session.id,
+                    "box": session.box,
+                    "session_name": session.session_name,
+                    "working_directory": session.working_directory,
+                    "last_snapshot_at": meta["last_snapshot_at"],
+                    "windows": meta["windows"],
+                })
+                logger.warning("Detected dead session: %s", session.session_name)
+                await state.update_session_activity_async(session.id, active=False)
     if count > 0:
         _last_snapshot_at = time.time()
     return count

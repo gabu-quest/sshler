@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { useRouter } from "vue-router";
 import { NButton, NIcon, NModal, NSpace, NSpin, NTag, useMessage } from "naive-ui";
 import { PhTerminalWindow, PhArrowCounterClockwise, PhX, PhFolder, PhGear } from "@phosphor-icons/vue";
 import type { LostSession } from "@/api/types";
 import { recreateSession, dismissRecovery } from "@/api/http";
 import { useI18n } from "@/i18n";
+
+const router = useRouter();
 
 const props = defineProps<{
   show: boolean;
@@ -33,7 +36,7 @@ function timeAgo(timestamp: number): string {
   return `${days}d`;
 }
 
-async function handleRecreate(session: LostSession) {
+async function handleRecreate(session: LostSession, navigate = true) {
   recreating.value.add(session.id);
   try {
     await recreateSession(session.id, props.token);
@@ -42,6 +45,9 @@ async function handleRecreate(session: LostSession) {
     emit("updated", remaining);
     if (remaining.length === 0) {
       emit("update:show", false);
+    }
+    if (navigate) {
+      router.push(`/terminal?box=${encodeURIComponent(session.box)}&session=${encodeURIComponent(session.session_name)}&dir=${encodeURIComponent(session.working_directory)}`);
     }
   } catch (err) {
     message.error(err instanceof Error ? err.message : "Failed to recreate session");
@@ -59,6 +65,11 @@ async function handleRecreateAll() {
     message.success(t("recovery.all_recreated"));
     emit("updated", []);
     emit("update:show", false);
+    // Navigate to the first session's terminal
+    const first = props.sessions[0];
+    if (first) {
+      router.push(`/terminal?box=${encodeURIComponent(first.box)}&session=${encodeURIComponent(first.session_name)}&dir=${encodeURIComponent(first.working_directory)}`);
+    }
   } catch (err) {
     message.error(err instanceof Error ? err.message : "Failed to recreate sessions");
   } finally {

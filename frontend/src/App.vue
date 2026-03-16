@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import {
@@ -34,19 +34,33 @@ const showRecovery = ref(false);
 const recoverySessions = ref<LostSession[]>([]);
 const recoveryToken = computed(() => bootstrapStore.token);
 
+let recoveryPollInterval: number | null = null;
+
+async function checkRecovery() {
+  try {
+    const sessions = await fetchRecovery(bootstrapStore.token);
+    if (sessions.length > 0 && !showRecovery.value) {
+      recoverySessions.value = sessions;
+      showRecovery.value = true;
+    }
+  } catch {
+    // Best-effort
+  }
+}
+
 onMounted(async () => {
   // Wait for bootstrap to complete before checking recovery
   if (!bootstrapStore.payload) {
     await bootstrapStore.bootstrap();
   }
-  try {
-    const sessions = await fetchRecovery(bootstrapStore.token);
-    if (sessions.length > 0) {
-      recoverySessions.value = sessions;
-      showRecovery.value = true;
-    }
-  } catch {
-    // Recovery check is best-effort, don't block app startup
+  await checkRecovery();
+  // Poll every 15s to detect sessions that die mid-run
+  recoveryPollInterval = window.setInterval(checkRecovery, 15000);
+});
+
+onUnmounted(() => {
+  if (recoveryPollInterval) {
+    clearInterval(recoveryPollInterval);
   }
 });
 </script>
