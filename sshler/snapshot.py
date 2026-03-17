@@ -195,6 +195,8 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
         "new-session", "-d", "-s", session_name,
         "-c", first.get("path", "~"),
     ]
+    if first.get("name"):
+        cmd += ["-n", first["name"]]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -218,6 +220,8 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
             "new-window", "-t", session_name,
             "-c", win.get("path", "~"),
         ]
+        if win.get("name"):
+            new_win_cmd += ["-n", win["name"]]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *new_win_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
