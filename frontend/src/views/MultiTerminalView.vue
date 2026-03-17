@@ -12,6 +12,7 @@ import { useI18n } from '@/i18n'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { getEmojiForBox } from '@/utils/emoji-favicon'
+import { useResponsive } from '@/composables/useResponsive'
 
 interface TerminalInstance {
   id: string
@@ -27,6 +28,7 @@ const boxesStore = useBoxesStore()
 const favoritesStore = useFavoritesStore()
 const appStore = useAppStore()
 const { t } = useI18n()
+const { width: viewportWidth } = useResponsive()
 
 const terminals = ref<TerminalInstance[]>([])
 const showAddModal = ref(false)
@@ -50,26 +52,37 @@ const tokenValue = computed(() =>
 
 const gridCols = computed(() => {
   const count = terminals.value.length
-  if (count === 0) return 1
-  if (count === 1) return 1
-  if (count <= 4) return 2
-  if (count <= 9) return 3
-  return 4
+  const w = viewportWidth.value
+  if (count === 0 || count === 1) return 1
+  if (w <= 768) return 1
+  if (w <= 1024) return Math.min(count, 2)
+  if (w <= 1400) return Math.min(count, 3)
+  return Math.min(count, 4)
 })
 
 const terminalFontSize = computed(() => {
   const count = terminals.value.length
-  if (count <= 4) return 14
-  if (count <= 8) return 12
-  return 11
+  const w = viewportWidth.value
+  // Base size from terminal count
+  let size = count <= 4 ? 14 : count <= 8 ? 12 : 11
+  // Single column on narrow screens — can use full-size font
+  if (w <= 768) return Math.max(size, 13)
+  // Tablet: cap at 12 to avoid overflow
+  if (w <= 1024 && count > 1) size = Math.min(size, 12)
+  return size
 })
 
-// Fixed terminal height for consistent grid layout
+// Terminal height adapts to viewport and count
 const terminalMinHeight = computed(() => {
   const count = terminals.value.length
+  const w = viewportWidth.value
+  if (w <= 768) return '250px'
+  if (w <= 1024) {
+    return count <= 2 ? '350px' : '280px'
+  }
   if (count <= 1) return '400px'
   if (count <= 4) return '350px'
-  return '300px' // Many terminals: allow scrolling
+  return '300px'
 })
 
 const terminalColors = ['#6aa6ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2', '#eb2f96', '#f5222d']
@@ -508,25 +521,8 @@ onMounted(async () => {
   color: var(--muted);
 }
 
-/* Responsive grid */
-@media (max-width: 1200px) {
-  .terminal-grid {
-    grid-template-columns: repeat(3, 1fr) !important;
-  }
-}
-
-@media (max-width: 900px) {
-  .terminal-grid {
-    grid-template-columns: repeat(2, 1fr) !important;
-  }
-}
-
+/* Responsive — grid cols/font/heights driven by JS (useResponsive) */
 @media (max-width: 768px) {
-  .terminal-grid {
-    grid-template-columns: 1fr !important;
-    grid-auto-rows: minmax(250px, 1fr);
-  }
-
   .header {
     flex-direction: column;
     gap: 8px;
@@ -535,10 +531,6 @@ onMounted(async () => {
 
   .header-left {
     justify-content: center;
-  }
-
-  .terminal-container {
-    min-height: 250px;
   }
 
   .directory-name {
