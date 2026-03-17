@@ -176,6 +176,19 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
 
     base = _tmux_base_command()
 
+    # Check if session already exists (survived the crash)
+    check_cmd = base + ["has-session", "-t", session_name]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *check_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        if proc.returncode == 0:
+            logger.info("Session %s already exists — treating as recovered", session_name)
+            return True
+    except Exception:
+        pass
+
     # Create session with first window
     first = windows[0]
     cmd = base + [
