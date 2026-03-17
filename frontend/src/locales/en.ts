@@ -532,4 +532,7 @@ export const en: Record<string, string> = {
   "recovery.all_recreated": "All sessions recreated",
   "recovery.dismissed": "Recovery dismissed",
   "recovery.recreating": "Recreating...",
+  "recovery.recreate_selected": "Recreate Selected ({count})",
+  "recovery.selected_recreated": "{count} session(s) recreated",
+  "recovery.select_all": "Select all",
 };

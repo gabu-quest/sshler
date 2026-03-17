@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, NIcon, NModal, NSpace, NSpin, NTag, useMessage } from "naive-ui";
+import { NButton, NCheckbox, NIcon, NModal, NSpace, NSpin, NTag, useMessage } from "naive-ui";
 import { PhTerminalWindow, PhArrowCounterClockwise, PhX, PhFolder, PhGear } from "@phosphor-icons/vue";
 import type { LostSession } from "@/api/types";
 import { recreateSession, dismissRecovery, dismissRecoverySession } from "@/api/http";
@@ -24,6 +24,32 @@ const { t } = useI18n();
 const message = useMessage();
 const recreating = ref<Set<string>>(new Set());
 const recreatingAll = ref(false);
+const selected = ref<Set<string>>(new Set());
+
+const selectedCount = computed(() => selected.value.size);
+const allSelected = computed(() => selected.value.size === props.sessions.length && props.sessions.length > 0);
+
+function toggleSelected(id: string) {
+  const s = new Set(selected.value);
+  if (s.has(id)) s.delete(id);
+  else s.add(id);
+  selected.value = s;
+}
+
+function toggleAll() {
+  if (allSelected.value) {
+    selected.value = new Set();
+  } else {
+    selected.value = new Set(props.sessions.map(s => s.id));
+  }
+}
+
+// Prune stale IDs when sessions list changes
+watch(() => props.sessions, (sessions) => {
+  const ids = new Set(sessions.map(s => s.id));
+  const cleaned = new Set([...selected.value].filter(id => ids.has(id)));
+  if (cleaned.size !== selected.value.size) selected.value = cleaned;
+});
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000 - timestamp);
@@ -77,6 +103,31 @@ async function handleRecreateAll() {
   }
 }
 
+async function handleRecreateSelected() {
+  recreatingAll.value = true;
+  try {
+    const toRecreate = props.sessions.filter(s => selected.value.has(s.id));
+    for (const session of toRecreate) {
+      await recreateSession(session.id, props.token);
+    }
+    message.success(t("recovery.selected_recreated", { count: toRecreate.length }));
+    const remaining = props.sessions.filter(s => !selected.value.has(s.id));
+    emit("updated", remaining);
+    selected.value = new Set();
+    if (remaining.length === 0) {
+      emit("update:show", false);
+    }
+    const first = toRecreate[0];
+    if (first) {
+      router.push(`/terminal?box=${encodeURIComponent(first.box)}&session=${encodeURIComponent(first.session_name)}&dir=${encodeURIComponent(first.working_directory)}`);
+    }
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : "Failed to recreate sessions");
+  } finally {
+    recreatingAll.value = false;
+  }
+}
+
 async function handleSkip(session: LostSession) {
   try {
     await dismissRecoverySession(session.id, props.token);
@@ -107,10 +158,16 @@ async function handleDismiss() {
     :title="t('recovery.title')"
     :bordered="false"
     :closable="true"
+    :mask-closable="false"
     style="max-width: 640px; max-height: 80vh"
     @update:show="emit('update:show', $event)"
   >
     <p style="margin: 0 0 16px; opacity: 0.7">{{ t('recovery.description') }}</p>
+
+    <div v-if="sessions.length > 1" style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+      <NCheckbox :checked="allSelected" :indeterminate="selectedCount > 0 && !allSelected" @update:checked="toggleAll" />
+      <span style="font-size: 13px; opacity: 0.7">{{ t('recovery.select_all') }}</span>
+    </div>
 
     <div style="display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto">
       <div
@@ -120,6 +177,11 @@ async function handleDismiss() {
       >
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px">
           <div style="display: flex; align-items: center; gap: 8px">
+            <NCheckbox
+              :checked="selected.has(session.id)"
+              @update:checked="toggleSelected(session.id)"
+              @click.stop
+            />
             <NIcon :size="20"><PhTerminalWindow weight="duotone" /></NIcon>
             <strong>{{ session.session_name }}</strong>
             <NTag size="small" :bordered="false">
@@ -176,10 +238,12 @@ async function handleDismiss() {
         <NButton
           type="primary"
           :loading="recreatingAll"
-          @click="handleRecreateAll"
+          @click="selectedCount > 0 && !allSelected ? handleRecreateSelected() : handleRecreateAll()"
         >
           <template #icon><NIcon><PhArrowCounterClockwise weight="duotone" /></NIcon></template>
-          {{ t('recovery.recreate_all') }}
+          {{ selectedCount > 0 && !allSelected
+              ? t('recovery.recreate_selected', { count: selectedCount })
+              : t('recovery.recreate_all') }}
         </NButton>
       </NSpace>
     </template>

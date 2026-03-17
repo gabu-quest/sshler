@@ -532,4 +532,7 @@ export const ja: Record<string, string> = {
   "recovery.all_recreated": "すべてのセッションを再作成しました",
   "recovery.dismissed": "復旧を閉じました",
   "recovery.recreating": "再作成中...",
+  "recovery.recreate_selected": "選択を再作成 ({count})",
+  "recovery.selected_recreated": "{count}個のセッションを再作成しました",
+  "recovery.select_all": "すべて選択",
 };
