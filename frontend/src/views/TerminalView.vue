@@ -861,6 +861,32 @@ watch(() => boxesStore.items, () => {
   border-color: var(--accent);
 }
 
+/* Tablet breakpoint — keep the beauty, tighten the controls */
+@media (max-width: 1024px) and (min-width: 769px) {
+  .page {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .header-content {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-controls {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .dir-title {
+    font-size: 18px;
+  }
+
+  .terminal-container {
+    border-radius: 6px;
+  }
+}
+
 @media (prefers-contrast: high) {
   .no-box-selected {
     border: 2px solid var(--stroke);
