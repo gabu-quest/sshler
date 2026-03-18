@@ -338,6 +338,21 @@ export async function touchFile(
   return handle<SimpleMessage>(res);
 }
 
+export async function createFolder(
+  name: string,
+  directory: string,
+  foldername: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  const res = await fetch(`${API_BASE}/boxes/${encodeURIComponent(name)}/mkdir`, {
+    method: "POST",
+    headers: { ...buildHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ directory, filename: foldername }),
+    credentials: 'include'
+  });
+  return handle<SimpleMessage>(res);
+}
+
 export async function deleteFile(
   name: string,
   path: string,

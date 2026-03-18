@@ -26,7 +26,7 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { touchFile, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 
@@ -45,6 +45,7 @@ const { t } = useI18n();
 const selectedBox = ref<string | null>(null);
 const currentDir = ref("/");
 const newFileName = ref("");
+const newFolderName = ref("");
 const actionBusy = ref(false);
 const uploadTarget = ref<File | null>(null);
 const renameTarget = ref<string | null>(null);
@@ -540,6 +541,22 @@ async function createEmptyFile() {
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     newFileName.value = "";
     message.success(t('files.file_created'));
+  } catch (err) {
+    directoryStore.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    actionBusy.value = false;
+  }
+}
+
+async function createNewFolder() {
+  if (!selectedBox.value || !newFolderName.value.trim()) return;
+  actionBusy.value = true;
+  try {
+    await createFolder(selectedBox.value, currentDir.value, newFolderName.value.trim(), tokenValue.value || null);
+    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    newFolderName.value = "";
+    message.success(t('files.folder_created'));
   } catch (err) {
     directoryStore.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -1170,6 +1187,14 @@ const columns = computed(() => {
           <NInput v-model:value="newFileName" :placeholder="t('files.new_filename')" size="small" style="max-width: 220px" @keyup.enter="createEmptyFile" />
           <NButton :disabled="actionBusy || !selectedBox || !newFileName.trim()" size="small" type="primary" @click="createEmptyFile">
             <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('files.create_file') }}
+          </NButton>
+        </NSpace>
+
+        <!-- Create Folder -->
+        <NSpace size="small" align="center">
+          <NInput v-model:value="newFolderName" :placeholder="t('files.new_foldername')" size="small" style="max-width: 220px" @keyup.enter="createNewFolder" />
+          <NButton :disabled="actionBusy || !selectedBox || !newFolderName.trim()" size="small" type="primary" @click="createNewFolder">
+            <NIcon size="14"><PhFolderSimple weight="duotone" /></NIcon>{{ t('files.create_folder') }}
           </NButton>
         </NSpace>
 

@@ -269,6 +269,61 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         return APISimpleMessage(status="ok", message="created", path=remote_path)
 
+    @router.post("/boxes/{name}/mkdir", response_model=APISimpleMessage)
+    async def api_mkdir(
+        name: str,
+        payload: APITouchRequest,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> APISimpleMessage:
+        box = deps.get_box_or_404(application_config, name)
+
+        if box.transport == "local":
+            directory_path = _normalize_local_path(payload.directory)
+            target_path = _compose_local_child_path(directory_path, payload.filename)
+            path_obj = Path(target_path)
+            if path_obj.exists():
+                raise HTTPException(status_code=400, detail="Directory already exists")
+            try:
+                path_obj.mkdir(parents=False, exist_ok=False)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            return APISimpleMessage(status="ok", message="created", path=target_path)
+
+        directory_path = _normalize_directory_path(payload.directory)
+        try:
+            validated_name = PathValidator.validate_filename(payload.filename)
+            remote_path = _compose_remote_child_path(directory_path, validated_name)
+            PathValidator.validate_remote_path(remote_path)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                sftp_client = await connection.start_sftp_client()
+                try:
+                    try:
+                        await sftp_client.stat(remote_path)
+                        raise HTTPException(status_code=400, detail="Directory already exists")
+                    except HTTPException:
+                        raise
+                    except Exception:
+                        pass
+                    await sftp_client.mkdir(remote_path)
+                finally:
+                    with contextlib.suppress(Exception):
+                        await sftp_client.exit()  # type: ignore[func-returns-value]
+        except SSHError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return APISimpleMessage(status="ok", message="created", path=remote_path)
+
     @router.post("/boxes/{name}/delete", response_model=APISimpleMessage)
     async def api_delete_file(
         request: Request,
