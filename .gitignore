@@ -1,0 +1,34 @@
+debug.log
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+frontend/node_modules
+frontend/package-lock.json
+frontend/pnpm-workspace.yaml
+sshler/static/dist
+.pnpm-store
+*.swp
+
+# Environment variables (sensitive)
+.env
+.env.*
+.env.local
+.env.*.local
+.env.production
+
+# Test cache
+.hypothesis/
+
+# Claude Code (dev tooling, not user-facing)
+.claude/
+CLAUDE.local.md
+
+# Sandbox
+.sandbox/
+
+# Kiro specs (local planning)
+.kiro/
+.graphler.db

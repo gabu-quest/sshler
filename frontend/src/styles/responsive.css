@@ -1,0 +1,37 @@
+/* Responsive breakpoints and spacing */
+:root {
+  --bp-mobile: 480px;
+  --bp-tablet: 768px;
+  --bp-tablet-lg: 1024px;
+  --bp-desktop: 1400px;
+
+  /* Touch-friendly minimum target sizes */
+  --touch-target: 44px;
+  --touch-target-sm: 36px;
+}
+
+/* Dynamic viewport height — accounts for mobile browser chrome */
+@supports (height: 100dvh) {
+  :root {
+    --vh-full: 100dvh;
+  }
+}
+
+@supports not (height: 100dvh) {
+  :root {
+    --vh-full: 100vh;
+  }
+}
+
+/* Touch device overrides */
+@media (hover: none) and (pointer: coarse) {
+  /* Enlarge all interactive targets */
+  button,
+  [role="button"],
+  a,
+  input,
+  select,
+  textarea {
+    min-height: var(--touch-target-sm);
+  }
+}

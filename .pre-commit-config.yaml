@@ -1,0 +1,62 @@
+# Pre-commit hooks for sshler
+# Install: pre-commit install && pre-commit install --hook-type pre-push
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Python linting with ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # Frontend linting (ESLint + type check)
+  - repo: local
+    hooks:
+      - id: frontend-lint
+        name: Frontend lint (ESLint)
+        entry: pnpm --prefix frontend lint
+        language: system
+        files: ^frontend/.*\.(ts|vue)$
+        pass_filenames: false
+
+      - id: frontend-typecheck
+        name: Frontend typecheck
+        entry: pnpm --prefix frontend vue-tsc --noEmit
+        language: system
+        files: ^frontend/.*\.(ts|vue)$
+        pass_filenames: false
+
+  # Basic file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^frontend/pnpm-lock\.yaml$
+      - id: end-of-file-fixer
+        exclude: ^frontend/pnpm-lock\.yaml$
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+
+  # Pre-push: run tests before pushing
+  - repo: local
+    hooks:
+      - id: pytest-backend
+        name: Backend tests (pytest)
+        entry: bash -c 'uv run pytest tests/ -x --ignore=tests/e2e -q'
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+      - id: frontend-tests
+        name: Frontend tests (Vitest)
+        entry: bash -c 'pnpm --prefix frontend test -- --run'
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
