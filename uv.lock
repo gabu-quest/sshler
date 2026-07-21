@@ -1047,7 +1047,7 @@ wheels = [
 
 [[package]]
 name = "sshler"
-version = "0.16.0"
+version = "1.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },

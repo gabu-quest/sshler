@@ -14,11 +14,16 @@ import asyncio
 import queue
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import pytest_asyncio
 
-from sshler.win_terminal_registry import CLEAR_SEQ, WindowsTerminalRegistry
+from sshler.win_terminal_registry import (
+    CLEAR_SEQ,
+    TooManyTerminalsError,
+    WindowsTerminalRegistry,
+)
 
 # The blocking-fake ConPTY exercises real worker threads + ``asyncio.to_thread``;
 # the drain/attach ordering races differently under Linux CI's scheduler. The
@@ -146,6 +151,132 @@ async def test_get_or_create_spawns_once_and_reuses(make_registry):
     assert created2 is False
     assert calls == 1
     assert s1 is s2
+
+
+# --------------------------------------------------------------------------
+# session cap (DoS guard)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_enforces_session_cap(make_registry):
+    reg = make_registry(max_sessions=2)
+    p1, p2, p3 = FakeWinProc(), FakeWinProc(), FakeWinProc()
+
+    s1, created1 = await reg.get_or_create(("local", "a"), _const_spawn(p1), 80, 24)
+    s2, created2 = await reg.get_or_create(("local", "b"), _const_spawn(p2), 80, 24)
+    assert created1 is True
+    assert created2 is True
+    assert len(reg.live_keys()) == 2
+
+    # A third DISTINCT session exceeds the cap: rejected, never spawned/registered.
+    with pytest.raises(TooManyTerminalsError):
+        await reg.get_or_create(("local", "c"), _const_spawn(p3), 80, 24)
+    assert len(reg.live_keys()) == 2
+    assert p3.terminated is False  # gated before spawn, so p3 was never touched
+
+
+@pytest.mark.asyncio
+async def test_reattach_existing_session_allowed_at_cap(make_registry):
+    reg = make_registry(max_sessions=2)
+    p1, p2 = FakeWinProc(), FakeWinProc()
+
+    s1, _ = await reg.get_or_create(("local", "a"), _const_spawn(p1), 80, 24)
+    await reg.get_or_create(("local", "b"), _const_spawn(p2), 80, 24)
+
+    # Re-attaching to the SAME live key is fine even though we're at the cap.
+    s1b, created = await reg.get_or_create(("local", "a"), _const_spawn(p1), 80, 24)
+    assert created is False
+    assert s1b is s1
+    assert len(reg.live_keys()) == 2
+
+
+@pytest.mark.asyncio
+async def test_cap_frees_a_slot_after_kill(make_registry):
+    reg = make_registry(max_sessions=2)
+    p1, p2, p3 = FakeWinProc(), FakeWinProc(), FakeWinProc()
+
+    await reg.get_or_create(("local", "a"), _const_spawn(p1), 80, 24)
+    await reg.get_or_create(("local", "b"), _const_spawn(p2), 80, 24)
+
+    killed = await reg.kill(("local", "a"))
+    assert killed is True
+    await _await_until(lambda: len(reg.live_keys()) == 1)
+
+    # Slot freed: a new distinct session is now accepted.
+    s3, created = await reg.get_or_create(("local", "c"), _const_spawn(p3), 80, 24)
+    assert created is True
+    assert len(reg.live_keys()) == 2
+
+
+@pytest.mark.asyncio
+async def test_cap_disabled_when_zero(make_registry):
+    # max_sessions=0 is the documented kill-switch: no limit is enforced.
+    reg = make_registry(max_sessions=0)
+    procs = [FakeWinProc() for _ in range(5)]
+    for i, proc in enumerate(procs):
+        _s, created = await reg.get_or_create(("local", f"s{i}"), _const_spawn(proc), 80, 24)
+        assert created is True
+    assert len(reg.live_keys()) == 5
+
+
+# --------------------------------------------------------------------------
+# thread-pool isolation (the "all tabs froze" regression)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_blocked_drains_do_not_starve_default_thread_pool():
+    """Idle persisted shells must not exhaust asyncio's default to_thread pool.
+
+    Every persisted shell keeps a drain task blocked forever in ``stdout.read``
+    (an idle ConPTY produces no output). If those reads ran on asyncio's
+    *shared* default thread pool, enough persisted shells would occupy every
+    worker — and then ALL other ``asyncio.to_thread`` callers (every SQLite
+    write in ``state.py``, every keystroke ``stdin.write``, every file op) would
+    queue forever. That is the reported freeze: no tab accepts input and a page
+    refresh can't recover because session-tracking DB writes also hang. Worse,
+    even teardown deadlocks — ``_remove``'s ``to_thread(terminate)`` can't get a
+    worker either — which is why the user's kill/refresh did nothing. The drains
+    must therefore live on the registry's OWN executor.
+
+    RED (pre-fix, drains on the default pool): with the default pool shrunk to
+    2 workers and 6 idle shells, 2 blocked reads fill the pool and the rest
+    queue, so the canary ``to_thread`` below never runs -> TimeoutError.
+    GREEN (post-fix): drains use a dedicated executor, the default pool stays
+    free, and the canary returns promptly.
+
+    This test owns its registry (no auto-teardown fixture) and unblocks every
+    drain + restores a working default pool in ``finally`` so it fails cleanly
+    instead of deadlocking the suite under the buggy code.
+    """
+    loop = asyncio.get_running_loop()
+    tiny_default = ThreadPoolExecutor(max_workers=2)
+    recovery_pool = ThreadPoolExecutor(max_workers=8)
+    loop.set_default_executor(tiny_default)
+    # Uncapped so we can pile up more idle shells than the default pool holds.
+    reg = WindowsTerminalRegistry(max_sessions=0)
+    procs = [FakeWinProc() for _ in range(6)]  # 6 >> 2 default-pool threads
+    try:
+        for i, proc in enumerate(procs):
+            await reg.get_or_create(("local", f"idle{i}"), _const_spawn(proc), 80, 24)
+        await _await_until(lambda: len(reg.live_keys()) == 6)
+        # Let every drain task reach its blocking read submission.
+        await asyncio.sleep(0.05)
+
+        # Stand-in for a DB write / keystroke: must still complete promptly,
+        # proving the blocked drains are NOT on the default pool.
+        result = await asyncio.wait_for(asyncio.to_thread(lambda: "ok"), timeout=2.0)
+        assert result == "ok"
+    finally:
+        # Unblock every drain and hand subsequent to_thread calls a working pool
+        # so registry teardown can't deadlock on the sabotaged default pool.
+        for proc in procs:
+            proc.feed_eof()
+        loop.set_default_executor(recovery_pool)
+        await reg.shutdown()
+        tiny_default.shutdown(wait=False)
+        recovery_pool.shutdown(wait=False)
 
 
 # --------------------------------------------------------------------------

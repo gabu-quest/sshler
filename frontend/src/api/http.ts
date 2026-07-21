@@ -723,6 +723,24 @@ export async function deleteSession(
   );
 }
 
+/**
+ * Forcibly kill a native shell by session NAME (the "kill terminal" action).
+ *
+ * Closing a tab only detaches — the native ConPTY persists so the tab can
+ * re-attach. This terminates that live shell, so a tab reopened
+ * with the same name spawns a FRESH shell instead of re-attaching to the old one.
+ */
+export async function killTerminalSession(
+  boxName: string,
+  sessionName: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  return apiFetch<SimpleMessage>(
+    `${API_BASE}/boxes/${encodeURIComponent(boxName)}/terminal-sessions/${encodeURIComponent(sessionName)}`,
+    { method: "DELETE", headers: buildHeaders(token) },
+  );
+}
+
 export async function renameSession(
   boxName: string,
   sessionId: string,

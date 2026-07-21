@@ -64,7 +64,7 @@ from .tmux import (
     record_ts_history,
 )
 from .winpty_proc import WinPTYProcess, WinPTYUnavailableError
-from .win_terminal_registry import WindowsTerminalRegistry
+from .win_terminal_registry import TooManyTerminalsError, WindowsTerminalRegistry
 from .validation import PathValidator, ValidationError
 from .rate_limit import get_rate_limiter
 
@@ -1092,6 +1092,26 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             "[Connection] Windows shell %s",
                             "started" if _created else "re-attached",
                         )
+                    except TooManyTerminalsError as exc:
+                        logger.warning(
+                            "websocket rejected: terminal session cap reached",
+                            extra={
+                                "service": "terminal",
+                                "event": "session_cap",
+                                "host": host,
+                                "error": str(exc),
+                            },
+                        )
+                        try:
+                            await websocket.send_text(
+                                "Too many open terminals on this server. "
+                                "Close one before opening another.\r\n"
+                            )
+                        except Exception:
+                            pass
+                        # Distinct code so the SPA can toast rather than reconnect-loop.
+                        await websocket.close(code=4504, reason="Too many terminals")
+                        return
                     except WSLNotAvailableError as exc:
                         logger.info(f"[Connection] WSL unavailable: {exc}")
                         try:

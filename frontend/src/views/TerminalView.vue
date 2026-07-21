@@ -16,6 +16,7 @@ import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import { generateSessionName, getColorForSession, lastPathSegment } from '@/utils/sessionName'
 import Terminal from '@/components/Terminal.vue'
+import TerminalTabs from '@/components/TerminalTabs.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
@@ -42,6 +43,7 @@ const sessionName = ref<string>('main')
 const showManualDir = ref(false)
 const showDirPicker = ref(false)
 const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
+const tabsRef = ref<InstanceType<typeof TerminalTabs> | null>(null)
 const currentGitInfo = ref<GitInfo | null>(null)
 const { isMobile } = useResponsive()
 const mobileControlsExpanded = ref(false)
@@ -84,18 +86,18 @@ const onTerminalDisconnected = () => {
 
 // MobileInputBar handlers
 const handleSmartSend = (data: string) => {
-  terminalRef.value?.send(data)
+  activeTerminalApi()?.send(data)
 }
 
 const handleRawSend = (data: string) => {
-  terminalRef.value?.sendRaw(data)
+  activeTerminalApi()?.sendRaw(data)
 }
 
 const handleToggleRawMode = () => {
   rawMode.value = !rawMode.value
   if (rawMode.value) {
     // Switching to raw: re-enable xterm stdin and focus it
-    nextTick(() => terminalRef.value?.focus())
+    nextTick(() => activeTerminalApi()?.focus())
   }
 }
 
@@ -126,6 +128,12 @@ const loadGitInfo = async () => {
 
 const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
   const dir = session.working_directory || '~'
+  if (tabbedMode.value) {
+    // Open (or re-activate) the session as a tab; header syncs via child events.
+    tabsRef.value?.openSession(session)
+    showSessionPanel.value = false
+    return
+  }
   if (terminalRef.value) {
     // Reconnect in-place: keeps the DOM element alive so fullscreen is preserved
     terminalRef.value.switchSession(session.session_name, dir)
@@ -188,6 +196,27 @@ const isLocalBox = computed(() => {
 
 // Only Windows local boxes get the chooser (remote boxes use SSH+tmux).
 const showShellPicker = computed(() => bootstrapStore.isWindows && isLocalBox.value)
+
+// Tabs are a Windows-local-box feature. Remote/tmux boxes already multiplex via
+// tmux windows (Ctrl+B), but a native ConPTY shell has no multiplexer — so we
+// give those boxes browser-side tabs instead. Same gate as the shell picker.
+const tabbedMode = computed(() => bootstrapStore.isWindows && isLocalBox.value)
+
+// The currently-active terminal, whichever rendering path is live. Both the
+// single <Terminal> and the <TerminalTabs> host expose send/sendRaw/focus.
+type TerminalApi = { send: (d: string) => void; sendRaw: (d: string) => void; focus: () => void }
+const activeTerminalApi = (): TerminalApi | null =>
+  (tabbedMode.value ? tabsRef.value : terminalRef.value) as unknown as TerminalApi | null
+
+// Keep the header (title, git, favicon, favorites) in sync with the active tab.
+const onActiveTabDirectory = (dir: string) => { initialDirectory.value = dir }
+const onActiveTabSession = (s: string) => { sessionName.value = s }
+
+// Feedback for the "kill terminal for good" action (right-click a tab → Kill).
+const onTabKilled = (session: string) =>
+  message.success(t('terminal.tabs.killed', { session }))
+const onTabKillError = (session: string) =>
+  message.error(t('terminal.tabs.kill_failed', { session }))
 
 const shellOptions = computed(() =>
   bootstrapStore.windowsShells.map((shell) => ({
@@ -572,8 +601,31 @@ watch(() => boxesStore.items, () => {
 
     <!-- Terminal Container -->
     <div class="terminal-container" @focusin="onTerminalFocus">
+      <!-- Windows-local boxes: tabbed native shells (no tmux multiplexer) -->
+      <TerminalTabs
+        v-if="selectedBox && tabbedMode"
+        ref="tabsRef"
+        :key="selectedBox"
+        :box-name="selectedBox"
+        :theme="currentBoxTheme"
+        :font-size="appStore.terminalFontSize"
+        :font-family="appStore.terminalFontFamily"
+        :show-title-bar="!isMobile"
+        :external-input="isMobile && !rawMode"
+        :directory="initialDirectory"
+        :seed-shell="activeShell"
+        :token="tokenValue"
+        @connected="onTerminalConnected"
+        @disconnected="onTerminalDisconnected"
+        @update:active-directory="onActiveTabDirectory"
+        @update:active-session="onActiveTabSession"
+        @killed="onTabKilled"
+        @kill-error="onTabKillError"
+      />
+
+      <!-- Remote / local-tmux boxes: single terminal (tmux handles windows) -->
       <Terminal
-        v-if="selectedBox"
+        v-else-if="selectedBox"
         ref="terminalRef"
         :key="selectedBox + '-' + initialDirectory + '-' + activeShell"
         :box-name="selectedBox"

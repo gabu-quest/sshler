@@ -39,6 +39,7 @@ import logging
 import os
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,10 @@ logger = logging.getLogger(__name__)
 RING_BYTES = int(os.getenv("SSHLER_WIN_TERM_RING_BYTES", str(768 * 1024)))
 TTL_SECONDS = float(os.getenv("SSHLER_WIN_TERM_TTL", "0"))  # 0 = never idle-reap
 REAP_INTERVAL = float(os.getenv("SSHLER_WIN_TERM_REAP_INTERVAL", "60"))
+# Hard cap on concurrently-live native shells. A single user never needs dozens;
+# the cap stops a runaway client (or a buggy/abusive script opening tabs in a
+# loop) from spawning unbounded ConPTY children and exhausting the host. 0 = off.
+MAX_SESSIONS = int(os.getenv("SSHLER_WIN_TERM_MAX_SESSIONS", "50"))
 READ_SIZE = 32768  # matches the legacy reader loop
 # Clear screen + clear scrollback + cursor home, so a (re)attaching tab shows
 # exactly the replayed ring buffer with no duplicated output above it.
@@ -56,6 +61,10 @@ Key = tuple[str, str]
 Sink = Callable[[bytes], Awaitable[None]]
 SpawnFn = Callable[[], Awaitable[Any]]
 ReapedCallback = Callable[[Key, "str | None"], Awaitable[None]]
+
+
+class TooManyTerminalsError(RuntimeError):
+    """Raised when spawning a new shell would exceed the per-app session cap."""
 
 
 class TerminalSession:
@@ -101,14 +110,40 @@ class WindowsTerminalRegistry:
         ring_bytes: int = RING_BYTES,
         ttl_seconds: float = TTL_SECONDS,
         reap_interval: float = REAP_INTERVAL,
+        max_sessions: int = MAX_SESSIONS,
     ) -> None:
         self._sessions: dict[Key, TerminalSession] = {}
         self._lock = asyncio.Lock()
         self._ring_bytes = ring_bytes
         self._ttl = ttl_seconds
         self._reap_interval = reap_interval
+        self._max_sessions = max_sessions
         self._reaper_task: asyncio.Task[None] | None = None
         self._on_reaped: ReapedCallback | None = None
+        # Blocking pywinpty I/O must NOT share asyncio's default to_thread pool.
+        # Each live shell's drain task blocks one worker FOREVER in stdout.read
+        # (an idle ConPTY never returns), so enough persisted shells would
+        # saturate that shared pool and starve every other to_thread caller
+        # app-wide — every SQLite write in state.py, every keystroke stdin.write,
+        # every file op — freezing the whole server. Even teardown would deadlock,
+        # since terminate() also needs a worker; that is why the user's kill and
+        # page-refresh did nothing once the pool was full. Fix: reads get their
+        # OWN pool with one permanent slot per allowed shell; transient
+        # writes/terminates get a small SEPARATE pool, so a full read pool can
+        # never block a keystroke or a kill.
+        read_slots = (max_sessions + 4) if max_sessions > 0 else 256
+        self._read_executor = ThreadPoolExecutor(
+            max_workers=read_slots, thread_name_prefix="winpty-read"
+        )
+        self._io_executor = ThreadPoolExecutor(
+            max_workers=16, thread_name_prefix="winpty-io"
+        )
+        if max_sessions <= 0:
+            logger.warning(
+                "[WinRegistry] session cap disabled (max_sessions=%d); unbounded "
+                "ConPTY spawning permitted. Set SSHLER_WIN_TERM_MAX_SESSIONS > 0 to re-enable.",
+                max_sessions,
+            )
 
     # --- introspection -----------------------------------------------------
     def get(self, key: Key) -> TerminalSession | None:
@@ -116,6 +151,17 @@ class WindowsTerminalRegistry:
 
     def live_keys(self) -> list[Key]:
         return list(self._sessions.keys())
+
+    def _live_count(self, exclude: Key | None = None) -> int:
+        """Count non-exited sessions, optionally excluding one key.
+
+        Exited-but-not-yet-reaped shells don't count toward the cap, and a key
+        we're about to replace (its previous shell already exited) is excluded so
+        re-attaching never trips the limit. Caller must hold ``self._lock``.
+        """
+        return sum(
+            1 for k, s in self._sessions.items() if not s.exited and k != exclude
+        )
 
     # --- lifecycle ---------------------------------------------------------
     async def get_or_create(
@@ -126,28 +172,49 @@ class WindowsTerminalRegistry:
         Returns ``(session, created)``. *spawn* is an async factory returning a
         ``WinPTYProcess``; it runs OUTSIDE the registry lock (it blocks), and any
         exception it raises propagates without registering anything.
+
+        Raises :class:`TooManyTerminalsError` when creating a *new* shell would
+        push the live-session count past ``max_sessions``. Re-attaching to an
+        existing live shell is always allowed, even at the cap.
         """
         async with self._lock:
             existing = self._sessions.get(key)
             if existing is not None and not existing.exited:
                 return existing, False
+            # Reject before paying for a spawn we'd only have to tear down.
+            if self._max_sessions > 0 and self._live_count(exclude=key) >= self._max_sessions:
+                raise TooManyTerminalsError(
+                    f"terminal session limit reached ({self._max_sessions})"
+                )
 
         # Spawn outside the lock; this can block / raise (e.g. WSL missing).
         process = await spawn()
 
         async with self._lock:
             existing = self._sessions.get(key)
-            if existing is None or existing.exited:
+            over_cap = (
+                self._max_sessions > 0
+                and (existing is None or existing.exited)
+                and self._live_count(exclude=key) >= self._max_sessions
+            )
+            if not over_cap and (existing is None or existing.exited):
                 session = TerminalSession(key, process, cols, rows, self._ring_bytes)
                 session.drain_task = asyncio.create_task(self._drain(session))
                 self._sessions[key] = session
                 logger.info("[WinRegistry] spawned shell for %s", key)
                 return session, True
-            winner = existing  # lost a concurrent race — our spawn is redundant
+            # Either we lost a concurrent race (existing won), or the last free
+            # slot was taken while we were spawning. Tear down our redundant proc.
+            winner = None if over_cap else existing
 
-        # Outside the lock: tear down the duplicate process we just spawned.
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(self._terminate_proc, process)
+            await asyncio.get_running_loop().run_in_executor(
+                self._io_executor, self._terminate_proc, process
+            )
+        if winner is None:
+            raise TooManyTerminalsError(
+                f"terminal session limit reached ({self._max_sessions})"
+            )
         return winner, False
 
     async def attach(self, session: TerminalSession, sink: Sink, cols: int, rows: int) -> bytes:
@@ -177,7 +244,9 @@ class WindowsTerminalRegistry:
 
     async def write(self, session: TerminalSession, data: bytes) -> None:
         """Forward keystrokes to the shell's stdin (mirrored across all tabs)."""
-        await asyncio.to_thread(session.process.stdin.write, data)
+        await asyncio.get_running_loop().run_in_executor(
+            self._io_executor, session.process.stdin.write, data
+        )
 
     async def kill(self, key: Key) -> bool:
         """Forcibly terminate and remove the session for *key* (delete action)."""
@@ -219,14 +288,22 @@ class WindowsTerminalRegistry:
             items = list(self._sessions.items())
         for key, session in items:
             await self._remove(key, session)
+        # Every shell is now terminated and its drain has returned, so the pools
+        # hold only idle threads — safe to release. wait=False keeps app shutdown
+        # from blocking on the worker threads winding down.
+        self._read_executor.shutdown(wait=False)
+        self._io_executor.shutdown(wait=False)
 
     # --- internals ---------------------------------------------------------
     async def _drain(self, session: TerminalSession) -> None:
         """Continuously read the ConPTY into the ring buffer + attached sinks."""
         proc = session.process
         try:
+            loop = asyncio.get_running_loop()
             while True:
-                data = await asyncio.to_thread(proc.stdout.read, READ_SIZE)
+                data = await loop.run_in_executor(
+                    self._read_executor, proc.stdout.read, READ_SIZE
+                )
                 if not data:
                     break  # EOF: shell exited or was terminated
                 chunk = data.encode("utf-8") if isinstance(data, str) else data
@@ -252,7 +329,9 @@ class WindowsTerminalRegistry:
 
     async def _remove(self, key: Key, session: TerminalSession) -> None:
         """Terminate the process, await the drain, drop the entry, notify."""
-        await asyncio.to_thread(self._terminate_proc, session.process)
+        await asyncio.get_running_loop().run_in_executor(
+            self._io_executor, self._terminate_proc, session.process
+        )
         if session.drain_task is not None:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await session.drain_task

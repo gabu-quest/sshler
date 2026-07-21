@@ -50,6 +50,11 @@ interface Props {
   directory?: string
   /** Windows-only: which native shell to launch (pwsh/powershell/cmd/wsl) */
   shell?: string
+  /**
+   * Explicitly mark this terminal as a native (non-tmux) shell. When
+   * omitted, falls back to the legacy `!!shell` heuristic.
+   */
+  nativeShell?: boolean
   theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai' | 'light'
   fontSize?: number
   fontFamily?: string
@@ -92,7 +97,7 @@ const effectiveFontSize = computed(() => isMobile.value ? Math.min(props.fontSiz
 // `props.shell` is set ONLY for those shells, so it doubles as the "not tmux"
 // signal: every tmux control sequence (Ctrl-B prefix, `set -g`, kill-window, …)
 // must be suppressed, or it gets typed literally into the shell as garbage.
-const isNativeShell = computed(() => !!props.shell)
+const isNativeShell = computed(() => props.nativeShell ?? !!props.shell)
 
 const terminalRef = ref<HTMLDivElement>()
 const connected = ref(false)
@@ -1408,6 +1413,12 @@ const connect = async () => {
       } else if (event.code === 4503) {
         // pywinpty missing in the server environment — toast, don't reconnect.
         message.error(t('terminal.pywinpty_missing'), {
+          duration: 8000
+        })
+        reconnecting.value = false
+      } else if (event.code === 4504) {
+        // Server-side terminal cap hit — toast, don't reconnect-loop.
+        message.error(t('terminal.too_many_terminals'), {
           duration: 8000
         })
         reconnecting.value = false

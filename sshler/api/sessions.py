@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .. import state
 from ..config import AppConfig
 from ..tmux import discover_local_sessions, local_tmux_command
+from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
 from .models import (
     APILayout,
@@ -261,6 +262,54 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if not deleted:
             raise HTTPException(status_code=500, detail="Failed to delete session")
         return APISimpleMessage(status="ok", message="deleted", path=session_id)
+
+    @router.delete(
+        "/boxes/{name}/terminal-sessions/{session_name}",
+        response_model=APISimpleMessage,
+    )
+    async def api_kill_terminal_session(
+        request: Request,
+        name: str,
+        session_name: str,
+        application_config: AppConfig = Depends(deps.get_application_config),
+    ) -> APISimpleMessage:
+        """Forcibly kill a native shell by session NAME (the "kill terminal" action).
+
+        Closing a browser tab only *detaches* — the native ConPTY persists in the
+        registry so the tab can re-attach (that's the session-persistence feature).
+        This endpoint terminates that live shell, keyed by ``(box, session_name)``
+        exactly as the registry stores it, so a tab reopened with the same name
+        spawns a FRESH shell instead of re-attaching to the old (e.g. laggy) one.
+        It also drops any tracking row so the session doesn't linger as stale.
+
+        Keying by name — not the DB id like ``api_delete_session`` — lets a tab kill
+        its OWN shell without first resolving an id, and still works if the DB row
+        is missing or out of sync with the registry.
+        """
+        box = deps.get_box_or_404(application_config, name)
+        try:
+            safe_name = PathValidator.sanitize_session_name(session_name)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        # Terminate the live ConPTY (no-op returning False if it's already gone).
+        killed = False
+        registry = getattr(request.app.state, "win_terminal_registry", None)
+        if registry is not None:
+            with contextlib.suppress(Exception):
+                killed = await registry.kill((box.name, safe_name))
+
+        # Best-effort: drop the tracking row so the session list stays clean.
+        record = await state.get_session_by_name_async(box.name, safe_name)
+        if record is not None:
+            with contextlib.suppress(Exception):
+                await state.delete_session_async(record.id)
+
+        return APISimpleMessage(
+            status="ok",
+            message="killed" if killed else "not_found",
+            path=safe_name,
+        )
 
     @router.post("/boxes/{name}/sessions/sync", response_model=list[APISession])
     async def api_sync_sessions(

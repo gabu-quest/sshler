@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import platform
+import re
 import shutil
 from pathlib import Path
 
@@ -51,7 +52,10 @@ def ts_session_name(directory: str) -> str:
     Same-basename directories collide onto one session — this is ``ts``'s own
     behavior and is intentional for parity. Remote boxes do not use this.
     """
-    parts = [segment for segment in (directory or "").split("/") if segment]
+    # Split on POSIX (/) and Windows (\) separators — matches generateSessionName
+    # in frontend/src/utils/sessionName.ts, which does the same. Without this, a
+    # Windows path has no "/" so the whole path became the session name.
+    parts = [segment for segment in re.split(r"[/\\]", directory or "") if segment]
     base = parts[-1] if parts else "home"
     if base in (".", "..", "~"):
         base = "home"
