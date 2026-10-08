@@ -12,20 +12,17 @@ import pytest
 playwright_async = pytest.importorskip(
     "playwright.async_api", reason="Playwright is not installed; run `playwright install chromium`"
 )
-async_playwright = playwright_async.async_playwright
+expect = playwright_async.expect
 
 
 @pytest.mark.asyncio
-async def test_vue_app_loads(app_server):
-    """Vue SPA loads and shows the overview page."""
-    base_url, token = app_server
+async def test_vue_app_loads(open_page):
+    """Vue SPA loads and shows the overview page.
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.set_extra_http_headers({"X-SSHLER-TOKEN": token})
+    Mutation: the SPA fails to hydrate (empty shell) -> the heading never
+    appears and ``to_be_visible`` fails.
+    """
+    page = await open_page()
 
-        await page.goto(f"{base_url}/app/", wait_until="load")
-        # Wait for Vue app to hydrate and show content
-        await page.wait_for_selector("text=Your Servers", timeout=10000)
-        await browser.close()
+    await page.goto("/app/", wait_until="load")
+    await expect(page.get_by_role("heading", name="Your Servers")).to_be_visible()

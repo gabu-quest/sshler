@@ -1,7 +1,6 @@
 """Tests for frecency-based directory search functionality."""
 
 import math
-import os
 import time
 from pathlib import Path
 
@@ -12,12 +11,11 @@ from fastapi.testclient import TestClient
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
 
-
 TEST_TOKEN = "search-test-token"
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
@@ -195,10 +193,10 @@ class TestFrecencyScoring:
 class TestSearchAPIEndpoint:
     """Tests for the /api/v1/boxes/{name}/search endpoint."""
 
-    def test_search_requires_minimum_query_length(self, tmp_path):
+    def test_search_requires_minimum_query_length(self, tmp_path, monkeypatch):
         """Search endpoint rejects queries shorter than 2 characters."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             # Single character should fail
@@ -220,10 +218,10 @@ class TestSearchAPIEndpoint:
             client.close()
             state.reset_state()
 
-    def test_search_returns_valid_response_structure(self, tmp_path):
+    def test_search_returns_valid_response_structure(self, tmp_path, monkeypatch):
         """Search endpoint returns properly structured response."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             resp = client.get(
@@ -244,38 +242,53 @@ class TestSearchAPIEndpoint:
             client.close()
             state.reset_state()
 
-    def test_search_result_structure(self, tmp_path):
-        """Each search result has required fields."""
+    def test_search_result_structure(self, tmp_path, monkeypatch):
+        """Each source is labelled with the stage that produced it, with exact scores.
+
+        Mutations killed: the frecency stage labelled "discovery" (or vice versa),
+        a wrong score on either stage, a missing stage, a swapped rank order.
+        """
         config_dir = setup_config(tmp_path)
-        state.initialize(config_dir)
+        root = tmp_path / "tree"
+        (root / "testdisc").mkdir(parents=True)
 
-        # Create some visit data
-        state.record_directory_visit("local", "/test/projects")
+        async def fake_zoxide(pattern: str) -> list[tuple[str, float]]:
+            assert pattern == "test"
+            return [("/frecent/testthing", 5.0)]
 
-        client = build_client(config_dir)
+        monkeypatch.setattr("sshler.api.search._query_zoxide", fake_zoxide)
+
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/search",
-                params={"q": "test"},
+                params={"q": "test", "root": str(root)},
                 headers=auth_headers(),
             )
             assert resp.status_code == 200
 
-            data = resp.json()
-            # If we have results, verify structure
-            for result in data["results"]:
-                assert "path" in result
-                assert "score" in result
-                assert "source" in result
-                assert result["source"] in ("frecency", "discovery")
+            assert resp.json()["results"] == [
+                {
+                    "path": "/frecent/testthing",
+                    "score": 5.0,
+                    "source": "frecency",
+                    "is_directory": True,
+                },
+                {
+                    "path": str(root / "testdisc"),
+                    "score": 0.1,
+                    "source": "discovery",
+                    "is_directory": True,
+                },
+            ]
         finally:
             client.close()
             state.reset_state()
 
-    def test_search_requires_auth(self, tmp_path):
+    def test_search_requires_auth(self, tmp_path, monkeypatch):
         """Search endpoint requires authentication."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             resp = client.get(
@@ -288,10 +301,10 @@ class TestSearchAPIEndpoint:
             client.close()
             state.reset_state()
 
-    def test_search_box_not_found(self, tmp_path):
+    def test_search_box_not_found(self, tmp_path, monkeypatch):
         """Search for non-existent box returns 404."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             resp = client.get(
@@ -300,6 +313,189 @@ class TestSearchAPIEndpoint:
                 headers=auth_headers(),
             )
             assert resp.status_code == 404
+        finally:
+            client.close()
+            state.reset_state()
+
+
+def make_tree(tmp_path: Path) -> Path:
+    """Deterministic tree:
+
+    tree/
+      gadgets/captures/capture_x/exports/blue_vs_green_frame473.png
+      node_modules/junk/blue_thing.txt   (pruned — must never appear)
+      docs/blue-notes/                   (directory matching 'blue')
+    """
+    root = tmp_path / "tree"
+    exports = root / "gadgets" / "captures" / "capture_x" / "exports"
+    exports.mkdir(parents=True)
+    (exports / "blue_vs_green_frame473.png").write_bytes(b"png")
+    junk = root / "node_modules" / "junk"
+    junk.mkdir(parents=True)
+    (junk / "blue_thing.txt").write_text("x", encoding="utf-8")
+    (root / "docs" / "blue-notes").mkdir(parents=True)
+    return root
+
+
+class TestFindPattern:
+    def test_plain_query_becomes_substring(self):
+        from sshler.api.search import _find_pattern
+
+        assert _find_pattern("blue") == "*blue*"
+
+    def test_wildcard_query_passes_through(self):
+        from sshler.api.search import _find_pattern
+
+        assert _find_pattern("blue*png") == "blue*png"
+        assert _find_pattern("frame?73*") == "frame?73*"
+
+
+class TestLocalDiscovery:
+    """Tests for filesystem discovery on the local box (the find fallback)."""
+
+    def test_finds_nested_directories(self, tmp_path):
+        import asyncio
+
+        from sshler.api.search import _discover_local
+
+        root = make_tree(tmp_path)
+        results = asyncio.run(_discover_local(str(root), "*captur*"))
+
+        paths = sorted(path for path, _ in results)
+        assert paths == [
+            str(root / "gadgets" / "captures"),
+            str(root / "gadgets" / "captures" / "capture_x"),
+        ]
+        assert all(is_dir for _, is_dir in results)
+
+    def test_dirs_only_by_default(self, tmp_path):
+        import asyncio
+
+        from sshler.api.search import _discover_local
+
+        root = make_tree(tmp_path)
+        results = asyncio.run(_discover_local(str(root), "*blue_vs*"))
+        assert results == []
+
+    def test_finds_files_when_enabled_and_prunes_node_modules(self, tmp_path):
+        import asyncio
+
+        from sshler.api.search import _discover_local
+
+        root = make_tree(tmp_path)
+        results = asyncio.run(_discover_local(str(root), "*blue*", include_files=True))
+
+        expected_file = str(
+            root
+            / "gadgets"
+            / "captures"
+            / "capture_x"
+            / "exports"
+            / "blue_vs_green_frame473.png"
+        )
+        expected_dir = str(root / "docs" / "blue-notes")
+        assert sorted(results) == sorted(
+            [(expected_file, False), (expected_dir, True)]
+        )
+
+    def test_respects_limit(self, tmp_path):
+        import asyncio
+
+        from sshler.api.search import _discover_local
+
+        root = tmp_path / "many"
+        root.mkdir()
+        for i in range(10):
+            (root / f"bluedir_{i}").mkdir()
+        results = asyncio.run(_discover_local(str(root), "*blue*", limit=3))
+        assert len(results) == 3
+
+
+class TestSearchEndpointDiscovery:
+    """Endpoint-level tests for root-scoped discovery + file results."""
+
+    def test_local_search_finds_file_under_root(self, tmp_path, monkeypatch):
+        root = make_tree(tmp_path)
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue_vs_green", "files": "true", "root": str(root)},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 200
+
+            discovery = [
+                r for r in resp.json()["results"] if r["source"] == "discovery"
+            ]
+            assert len(discovery) == 1
+            assert discovery[0]["path"] == str(
+                root
+                / "gadgets"
+                / "captures"
+                / "capture_x"
+                / "exports"
+                / "blue_vs_green_frame473.png"
+            )
+            assert discovery[0]["is_directory"] is False
+        finally:
+            client.close()
+            state.reset_state()
+
+    def test_local_search_wildcard_query(self, tmp_path, monkeypatch):
+        root = make_tree(tmp_path)
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue*png", "files": "true", "root": str(root)},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 200
+            discovery = [
+                r for r in resp.json()["results"] if r["source"] == "discovery"
+            ]
+            assert len(discovery) == 1
+            assert discovery[0]["path"].endswith("blue_vs_green_frame473.png")
+        finally:
+            client.close()
+            state.reset_state()
+
+    def test_local_search_dirs_only_without_files_flag(self, tmp_path, monkeypatch):
+        root = make_tree(tmp_path)
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue_vs_green", "root": str(root)},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 200
+            discovery = [
+                r for r in resp.json()["results"] if r["source"] == "discovery"
+            ]
+            assert discovery == []
+        finally:
+            client.close()
+            state.reset_state()
+
+    def test_invalid_root_rejected(self, tmp_path, monkeypatch):
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue", "root": "bad\0path"},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 400
         finally:
             client.close()
             state.reset_state()
@@ -323,12 +519,12 @@ class TestVisitTrackingIntegration:
 
         state.reset_state()
 
-    def test_local_box_does_not_record_visits(self, tmp_path):
+    def test_local_box_does_not_record_visits(self, tmp_path, monkeypatch):
         """Local box uses zoxide, so we don't record visits in our DB."""
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             # List a local directory

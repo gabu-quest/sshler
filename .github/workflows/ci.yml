@@ -4,15 +4,67 @@ on:
   push:
     branches: [ "master", "main" ]
   pull_request:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Ruff
+        run: uv run ruff check sshler tests
+
+      - name: Mypy
+        run: uv run mypy sshler/
+
+      - name: Frontend install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend type check
+        working-directory: frontend
+        run: pnpm run type-check
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run backend tests (no E2E)
+        env:
+          SSHLER_CONFIG_DIR: ${{ runner.temp }}
+        run: uv run pytest -m "not e2e" --timeout 60
+
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     strategy:
       matrix:
         python-version: ["3.12"]

@@ -116,6 +116,13 @@ Implications:
 
 `sshler progress push/list/delete` in `sshler/cli.py`.
 
+**`name current total` are POSITIONAL — there are no `--current`/`--total` flags** (passing them exits 2 with "unrecognized arguments"). Canonical invocation:
+
+```bash
+sshler progress push my-bar 42 100 --label "building · 42/100" --color '#38bdf8' --status running
+sshler progress push my-bar 100 100 --status done --label "build · COMPLETE"
+```
+
 `push` metadata flags: `--meta KEY=VALUE` (repeatable, string values), `--meta-json '{...}'` (raw JSON object; a parse failure warns to stderr and pushes **without** metadata rather than blocking the bar), `--merge` (merge instead of replace), `--clear-meta` (send `metadata: {}`, wins over `--meta*`). Metadata is only added to the request body when one of these flags is supplied, so plain ticks don't wipe the bag.
 
 Token discovery chain:

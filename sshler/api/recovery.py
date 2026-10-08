@@ -7,7 +7,13 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from .. import state
-from ..snapshot import get_last_snapshot_at, get_recovery_sessions, recreate_session, remove_recovery_session, set_recovery_sessions
+from ..snapshot import (
+    get_last_snapshot_at,
+    get_recovery_sessions,
+    recreate_session,
+    remove_recovery_session,
+    set_recovery_sessions,
+)
 from .dependencies import APIDependencies
 from .models import (
     APILostSession,
@@ -61,18 +67,24 @@ def get_router(deps: APIDependencies) -> APIRouter:
         logger.info("Recreating %s with %d window(s)", target["session_name"], len(windows))
         try:
             success = await recreate_session(target["session_name"], windows)
-        except Exception:
+        except Exception as exc:
             logger.exception("Exception recreating %s", target["session_name"])
-            raise HTTPException(status_code=500, detail="Exception during recreate")
+            raise HTTPException(status_code=500, detail="Exception during recreate") from exc
         if not success:
-            logger.error("recreate_session returned False for %s (windows=%r)", target["session_name"], windows)
+            logger.error(
+                "recreate_session returned False for %s (windows=%r)",
+                target["session_name"],
+                windows,
+            )
             raise HTTPException(status_code=500, detail="Failed to recreate tmux session")
 
         await state.update_session_activity_async(session_id, active=True)
         await state.clear_session_snapshot_async(session_id)
         remove_recovery_session(session_id)
 
-        return APISimpleMessage(status="ok", message=f"Recreated {target['session_name']}", path=session_id)
+        return APISimpleMessage(
+            status="ok", message=f"Recreated {target['session_name']}", path=session_id
+        )
 
     @router.post("/recovery/recreate-batch")
     async def api_recreate_batch(body: dict) -> dict:

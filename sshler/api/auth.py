@@ -22,6 +22,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def get_client_ip(request: Request) -> str:
+    """Get the client address that rate limits, login failures and the lockout key on.
+
+    X-Real-IP is trusted only when ``SSHLER_TRUST_PROXY_HEADERS`` says a reverse proxy
+    (Caddy, nginx) on this host overwrites it, and only on connections from that proxy
+    (127.0.0.1). Otherwise any local process could send a new X-Real-IP per request to
+    get a fresh bucket, or name a victim's address to lock the victim out, so the
+    socket peer is used.
+    """
+    if (
+        get_settings().trust_proxy_headers
+        and request.client
+        and request.client.host == "127.0.0.1"
+    ):
+        forwarded_ip = request.headers.get("x-real-ip")
+        if forwarded_ip:
+            return forwarded_ip
+    return request.client.host if request.client else "unknown"
+
+
 class LoginRequest(BaseModel):
     """Login request payload."""
 
@@ -81,7 +101,8 @@ def create_auth_router(
 
         Rate limiting:
         - IP-based rate limiting: 5 requests per minute (prevents brute force)
-        - IP-based lockout: 5 failed attempts = 5 minute lockout (failure tracker)
+        - Failures are recorded in the shared failure tracker; the IP lockout itself
+          is enforced by ``_security_middleware`` in webapp.py before this route runs
         - Additional reverse proxy rate limiting recommended for production
         """
         # Check if auth is required
@@ -92,17 +113,7 @@ def create_auth_router(
             )
 
         # Get client IP for rate limiting
-        client_ip = request.client.host if request.client else "unknown"
-
-        # Check if IP is locked out
-        if failure_tracker.is_locked_out(client_ip):
-            remaining = failure_tracker.get_lockout_remaining(client_ip)
-            logger.warning(f"[Security] Login attempt from locked out IP: {client_ip}")
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many failed login attempts. Try again in {remaining} seconds.",
-                headers={"Retry-After": str(remaining)},
-            )
+        client_ip = get_client_ip(request)
 
         # Authenticate credentials
         if not auth_manager.authenticate(credentials.username, credentials.password):
@@ -225,8 +236,9 @@ async def get_current_session(request: Request) -> Session:
 
     # If auth is disabled, create a dummy session
     if not settings.require_auth:
-        from ..session import Session
         import time
+
+        from ..session import Session
 
         return Session(
             session_id="anonymous",

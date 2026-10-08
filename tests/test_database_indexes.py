@@ -8,14 +8,12 @@ from pathlib import Path
 import pytest
 
 from sshler.state import (
-    Session,
-    Favorite,
-    create_or_update_session,
     cleanup_old_sessions,
+    create_or_update_session,
     get_session_by_name,
     initialize,
-    toggle_favorite,
     reset_state,
+    toggle_favorite,
 )
 
 
@@ -40,6 +38,7 @@ class TestCompositeIndexes:
 
         # Query SQLite to verify indexes exist
         import sqlite3
+
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
@@ -51,8 +50,12 @@ class TestCompositeIndexes:
         index_names = [idx[0] for idx in indexes]
 
         # Verify composite indexes exist
-        assert "idx_sessions_box_name" in index_names, "Missing composite index for (box, session_name)"
-        assert "idx_sessions_active_accessed" in index_names, "Missing composite index for (active, last_accessed_at)"
+        assert "idx_sessions_box_name" in index_names, (
+            "Missing composite index for (box, session_name)"
+        )
+        assert "idx_sessions_active_accessed" in index_names, (
+            "Missing composite index for (active, last_accessed_at)"
+        )
         assert "idx_favorites_box_path" in index_names, "Missing composite index for (box, path)"
 
     def test_composite_index_structure(self, temp_state_db):
@@ -60,11 +63,14 @@ class TestCompositeIndexes:
         db_path = temp_state_db / "state.sqlite"
 
         import sqlite3
+
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
         # Get index details
-        cursor.execute("SELECT name, sql FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+        cursor.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
+        )
         indexes = {name: sql for name, sql in cursor.fetchall()}
         conn.close()
 
@@ -143,7 +149,9 @@ class TestCompositeIndexes:
         assert deleted == 1
 
         # Verify sessions
-        assert get_session_by_name("test-box", "active") is not None  # Active - kept
+        kept = get_session_by_name("test-box", "active")  # Active - kept
+        assert kept is not None
+        assert kept.id == active_session.id
         assert get_session_by_name("test-box", "old") is None  # Inactive + old - deleted
         assert get_session_by_name("test-box", "recent") is not None  # Inactive but recent - kept
 
@@ -197,6 +205,7 @@ class TestCompositeIndexes:
         # Indexes should still exist
         db_path = temp_state_db / "state.sqlite"
         import sqlite3
+
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
@@ -215,6 +224,7 @@ class TestCompositeIndexes:
 
         db_path = temp_state_db / "state.sqlite"
         import sqlite3
+
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
@@ -225,12 +235,12 @@ class TestCompositeIndexes:
             SELECT * FROM sessions
             WHERE json_extract(data, '$.box') = ?
             AND json_extract(data, '$.session_name') = ?""",
-            ("test-box", "test-session")
+            ("test-box", "test-session"),
         )
         query_plan = cursor.fetchall()
         conn.close()
 
         # Query plan should mention using the index
         query_plan_str = " ".join(str(row) for row in query_plan)
-        # SQLite should use idx_sessions_box_name for this query
-        assert "idx_sessions_box_name" in query_plan_str or "USING INDEX" in query_plan_str.upper()
+        # Mutation killed: dropping idx_sessions_box_name (a scan or another index).
+        assert "idx_sessions_box_name" in query_plan_str

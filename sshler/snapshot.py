@@ -7,12 +7,22 @@ import logging
 import os
 import shlex
 import time
+from typing import Protocol
 
 from . import state
-from .settings import SshlerSettings
-from .tmux import discover_local_sessions, local_tmux_command
+from .tmux import discover_local_sessions, local_tmux_command, run_bounded, run_local_tmux
 
 logger = logging.getLogger(__name__)
+
+
+class SnapshotSettings(Protocol):
+    """The two live fields the loop re-reads on every tick."""
+
+    @property
+    def snapshot_enabled(self) -> bool: ...
+
+    @property
+    def snapshot_interval(self) -> int: ...
 
 _last_snapshot_at: float | None = None
 _recovery_sessions: list[dict] = []
@@ -41,7 +51,7 @@ async def capture_local_windows(session_name: str) -> list[dict] | None:
     then groups them by window index.  Each window dict carries a
     ``panes`` list so recovery can recreate splits.
     """
-    command = local_tmux_command(session_name) + [
+    args = [
         "list-panes",
         "-s",
         "-F",
@@ -50,16 +60,11 @@ async def capture_local_windows(session_name: str) -> list[dict] | None:
         session_name,
     ]
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await process.communicate()
+        returncode, stdout, _ = await run_local_tmux(session_name, args)
     except Exception:
         return None
 
-    if process.returncode != 0:
+    if returncode != 0:
         return None
 
     win_map: dict[int, dict] = {}
@@ -122,7 +127,7 @@ async def snapshot_all_sessions() -> int:
     return count
 
 
-async def snapshot_loop(settings: SshlerSettings) -> None:
+async def snapshot_loop(settings: SnapshotSettings) -> None:
     """Background task that periodically snapshots tmux state."""
     logger.info(
         "Snapshot loop started (enabled=%s interval=%ss)",
@@ -220,41 +225,13 @@ async def _run_tmux(
 ) -> tuple[int, bytes, bytes]:
     """Run a tmux command with a timeout. Returns (returncode, stdout, stderr).
 
-    When *capture_output* is False, stdout/stderr are sent to DEVNULL and
-    ``proc.wait()`` is used instead of ``communicate()``.  This avoids a
-    hang caused by tmux server processes inheriting pipe FDs — the server
-    keeps the pipes open so ``communicate()`` never sees EOF.
+    Delegates to ``tmux.run_bounded``, which kills and reaps the child on
+    timeout or cancellation. When *capture_output* is False, stdout/stderr go
+    to DEVNULL and only the exit is awaited: a tmux server forked by
+    ``new-session`` inherits the client's fds, so with pipes ``communicate()``
+    would never see EOF.
     """
-    if capture_output:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            try:
-                await proc.communicate()
-            except Exception:
-                pass
-            raise
-        return proc.returncode, stdout, stderr
-    else:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            raise
-        return proc.returncode, b"", b""
+    return await run_bounded(cmd, timeout, capture_output=capture_output)
 
 
 async def _cleanup_stale_socket(session_name: str) -> None:
@@ -266,7 +243,7 @@ async def _cleanup_stale_socket(session_name: str) -> None:
     base = local_tmux_command(session_name)
     try:
         await _run_tmux(base + ["kill-server"], timeout=2, capture_output=False)
-    except (asyncio.TimeoutError, Exception):
+    except (TimeoutError, Exception):
         pass
 
 
@@ -283,11 +260,13 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
     # auto-reconnect creates a bare 1-window session before the user triggers
     # recovery from the UI.
     try:
-        rc, _, _ = await _run_tmux(base + ["has-session", "-t", session_name], timeout=2, capture_output=False)
+        rc, _, _ = await _run_tmux(
+            base + ["has-session", "-t", session_name], timeout=2, capture_output=False
+        )
         if rc == 0:
             logger.info("Session %s already exists — killing for full recreation", session_name)
             await _cleanup_stale_socket(session_name)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # Stale socket — clean it up so new-session works
         logger.info("Stale socket for %s, cleaning up", session_name)
         await _cleanup_stale_socket(session_name)
@@ -310,7 +289,7 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
         if rc != 0:
             logger.error("Failed to create session %s (rc=%d)", session_name, rc)
             return False
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("Timed out creating session %s", session_name)
         return False
     except Exception:
@@ -322,7 +301,9 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
 
     # Echo last command in first pane of first window
     if first.get("command"):
-        await _tmux_send_keys(base, session_name, 0, f"Last running: {first['command']}", pane_index=0)
+        await _tmux_send_keys(
+            base, session_name, 0, f"Last running: {first['command']}", pane_index=0
+        )
 
     # Create additional panes in first window
     await _recreate_panes(base, session_name, first)
@@ -338,17 +319,24 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
             new_win_cmd += ["-n", win["name"]]
         try:
             await _run_tmux(new_win_cmd, capture_output=False)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             continue
 
         if win.get("command"):
-            await _tmux_send_keys(base, session_name, win["index"], f"Last running: {win['command']}", pane_index=0)
+            await _tmux_send_keys(
+                base, session_name, win["index"], f"Last running: {win['command']}", pane_index=0
+            )
 
         # Create additional panes in this window
         await _recreate_panes(base, session_name, win)
 
     total_panes = sum(len(w.get("panes", [])) or 1 for w in windows)
-    logger.info("Recreated session %s with %d window(s), %d pane(s)", session_name, len(windows), total_panes)
+    logger.info(
+        "Recreated session %s with %d window(s), %d pane(s)",
+        session_name,
+        len(windows),
+        total_panes,
+    )
     return True
 
 
@@ -362,7 +350,7 @@ async def _configure_session_bindings(base: list[str]) -> None:
             base + ["bind-key", "c", "new-window", "-c", "#{pane_current_path}"],
             capture_output=False,
         )
-    except (asyncio.TimeoutError, Exception):
+    except (TimeoutError, Exception):
         logger.debug("Failed to set bind-key for pane_current_path")
 
 
@@ -387,18 +375,27 @@ async def _recreate_panes(base: list[str], session_name: str, win: dict) -> None
         try:
             rc, _, _ = await _run_tmux(split_cmd, capture_output=False)
             if rc != 0:
-                logger.debug("split-window failed for %s:%d (rc=%d)", session_name, win["index"], rc)
+                logger.debug(
+                    "split-window failed for %s:%d (rc=%d)", session_name, win["index"], rc
+                )
                 continue
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             continue
 
         if pane.get("command"):
             # send-keys without explicit pane targets the active (newly split) pane
-            await _tmux_send_keys(base, session_name, win["index"], f"Last running: {pane['command']}")
+            await _tmux_send_keys(
+                base, session_name, win["index"], f"Last running: {pane['command']}"
+            )
 
 
 async def _tmux_send_keys(
-    base: list[str], session: str, window_index: int, message: str, *, pane_index: int | None = None,
+    base: list[str],
+    session: str,
+    window_index: int,
+    message: str,
+    *,
+    pane_index: int | None = None,
 ) -> None:
     """Send an echo command to a tmux window/pane."""
     escaped = shlex.quote(message)
@@ -408,5 +405,5 @@ async def _tmux_send_keys(
     cmd = base + ["send-keys", "-t", target, f"echo {escaped}", "Enter"]
     try:
         await _run_tmux(cmd, capture_output=False)
-    except (asyncio.TimeoutError, Exception):
+    except (TimeoutError, Exception):
         pass

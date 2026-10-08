@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NButton, NIcon, NModal, NSpace, NSpin, NSwitch, useMessage } from "naive-ui";
-import { PhArrowCounterClockwise, PhArrowsOut, PhCopy, PhDownloadSimple, PhEye, PhFile, PhFilePdf, PhMagnifyingGlassMinus, PhMagnifyingGlassPlus, PhPencil, PhPrinter, PhX } from "@phosphor-icons/vue";
+import { PhArrowCounterClockwise, PhArrowsOut, PhCaretLeft, PhCaretRight, PhCopy, PhDownloadSimple, PhEye, PhFile, PhFilePdf, PhMagnifyingGlassMinus, PhMagnifyingGlassPlus, PhPencil, PhPrinter, PhX } from "@phosphor-icons/vue";
 import type { FilePreview } from "@/api/types";
 import { fetchFilePreview, downloadFile } from "@/api/http";
 import CodeEditor from "@/components/CodeEditor.vue";
@@ -22,12 +22,17 @@ const props = defineProps<{
    *  Used by the file list "Print" context-menu action so the user doesn't
    *  have to open the modal and click Print themselves. */
   autoPrint?: boolean;
+  /** Ordered list of file paths (from the current directory listing) that the
+   *  prev/next navigation buttons step through. Optional — when omitted or
+   *  empty, navigation controls are hidden. */
+  siblings?: string[];
 }>();
 
 const emit = defineEmits<{
   (e: "update:show", value: boolean): void;
   (e: "edit", path: string): void;
   (e: "compare", path: string): void;
+  (e: "navigate", path: string): void;
 }>();
 
 const { t } = useI18n();
@@ -51,7 +56,7 @@ const readerMode = ref(false);
 const isImage = computed(() => !!(meta.value?.image_data && meta.value?.image_mime && !meta.value?.image_too_large));
 
 const isExcelFile = computed(() => {
-  const name = meta.value?.name?.toLowerCase() || props.path.split("/").pop()?.toLowerCase() || "";
+  const name = props.path.split("/").pop()?.toLowerCase() || "";
   return name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".ods");
 });
 
@@ -137,7 +142,7 @@ function onImageDblClick(e: MouseEvent) {
 }
 
 const isMarkdownFile = computed(() => {
-  const name = meta.value?.name?.toLowerCase() || props.path.split("/").pop()?.toLowerCase() || "";
+  const name = props.path.split("/").pop()?.toLowerCase() || "";
   return name.endsWith(".md") || name.endsWith(".markdown") || name.endsWith(".mdx");
 });
 
@@ -176,7 +181,7 @@ function resolveImagePath(src: string): string | null {
   if (!src) return null;
   if (/^(data:|https?:|\/\/|blob:|mailto:|#)/i.test(src)) return null;
   const parentDir = meta.value?.parent || props.path.split('/').slice(0, -1).join('/') || '/';
-  if (src.startsWith('/')) return src.split('#')[0].split('?')[0];
+  if (src.startsWith('/')) return stripQueryAndHash(src);
   const base = parentDir.endsWith('/') ? parentDir : parentDir + '/';
   const parts = base.split('/').filter(Boolean);
   for (const seg of src.split('/')) {
@@ -184,7 +189,12 @@ function resolveImagePath(src: string): string | null {
     if (seg === '..') { parts.pop(); continue; }
     parts.push(seg);
   }
-  return ('/' + parts.join('/')).split('#')[0].split('?')[0];
+  return stripQueryAndHash('/' + parts.join('/'));
+}
+
+/** The part of `s` before its first `?` or `#`. */
+function stripQueryAndHash(s: string): string {
+  return s.replace(/[?#][\s\S]*$/, '');
 }
 
 /**
@@ -269,8 +279,7 @@ const renderMermaidBlocks = async () => {
   // Bail if the modal closed / content changed while we were loading mermaid
   if (token !== mermaidRenderToken) return;
 
-  for (let i = 0; i < blocks.length; i++) {
-    const codeEl = blocks[i];
+  for (const [i, codeEl] of blocks.entries()) {
     const pre = codeEl.parentElement;
     const host = pre?.tagName === "PRE" ? pre : codeEl;
     // textContent already does one decode pass; decodeHtmlEntities catches the
@@ -311,8 +320,9 @@ const renderMermaidBlocks = async () => {
         const viewBox = svgEl.getAttribute("viewBox");
         if (viewBox) {
           const parts = viewBox.split(/\s+/).map(Number);
-          if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-            const aspect = parts[2] / parts[3];
+          const [, , vbWidth = 0, vbHeight = 0] = parts;
+          if (parts.length === 4 && vbWidth > 0 && vbHeight > 0) {
+            const aspect = vbWidth / vbHeight;
             // Wider than ~1.4:1 prints better in landscape than portrait at
             // any reasonable scale. The print stylesheet uses @page wide-landscape.
             if (aspect > 1.4) wrapper.classList.add("mermaid-wide");
@@ -499,6 +509,56 @@ const getLanguageFromFilename = (filename: string) => {
   return langMap[ext || ""] || "text";
 };
 
+// ── Prev/next navigation through sibling files ───────────────────────────
+const siblingList = computed(() => props.siblings || []);
+const siblingIndex = computed(() => siblingList.value.indexOf(props.path));
+const canGoPrev = computed(() => siblingIndex.value > 0);
+const canGoNext = computed(() => siblingIndex.value !== -1 && siblingIndex.value < siblingList.value.length - 1);
+const siblingPositionLabel = computed(() => (
+  siblingIndex.value === -1 ? "" : `${siblingIndex.value + 1} / ${siblingList.value.length}`
+));
+
+function goToPrevSibling() {
+  const target = siblingList.value[siblingIndex.value - 1];
+  if (!canGoPrev.value || target === undefined) return;
+  emit("navigate", target);
+}
+
+function goToNextSibling() {
+  const target = siblingList.value[siblingIndex.value + 1];
+  if (!canGoNext.value || target === undefined) return;
+  emit("navigate", target);
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
+
+function handlePreviewKeydown(e: KeyboardEvent) {
+  if (!props.show) return;
+  if (isTypingTarget(e.target)) return;
+  if (e.key === "ArrowLeft") {
+    if (!canGoPrev.value) return;
+    e.preventDefault();
+    goToPrevSibling();
+  } else if (e.key === "ArrowRight") {
+    if (!canGoNext.value) return;
+    e.preventDefault();
+    goToNextSibling();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handlePreviewKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", handlePreviewKeydown);
+});
+
 watch(() => props.show, async (showing) => {
   if (!showing) { readerMode.value = false; return; }
   if (!props.box || !props.path) return;
@@ -645,7 +705,7 @@ function handleMarkdownClick(event: MouseEvent) {
   }
 
   // Strip fragment/anchor from path
-  const cleanPath = resolved.split('#')[0];
+  const cleanPath = resolved.replace(/#[\s\S]*$/, '');
 
   if (!props.box) return;
 
@@ -680,6 +740,15 @@ defineExpose({ updateContent });
       <div v-else class="modal-header">
         <NIcon size="16"><PhEye weight="duotone" /></NIcon>
         <span>Preview: {{ path.split('/').pop() }}</span>
+        <div v-if="siblingList.length > 0" class="preview-nav">
+          <NButton size="tiny" quaternary :disabled="!canGoPrev" title="Previous file" @click="goToPrevSibling">
+            <NIcon size="14"><PhCaretLeft weight="duotone" /></NIcon>
+          </NButton>
+          <span class="preview-nav-position text-muted small">{{ siblingPositionLabel }}</span>
+          <NButton size="tiny" quaternary :disabled="!canGoNext" title="Next file" @click="goToNextSibling">
+            <NIcon size="14"><PhCaretRight weight="duotone" /></NIcon>
+          </NButton>
+        </div>
         <div class="modal-actions">
           <NButton v-if="isMarkdownFile && markdownRenderMode" size="small" title="Reader mode" @click="readerMode = true">
             <NIcon size="14"><PhArrowsOut weight="duotone" /></NIcon>
@@ -821,6 +890,19 @@ defineExpose({ updateContent });
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.preview-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.preview-nav-position {
+  min-width: 4.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .preview-container {

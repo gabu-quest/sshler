@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
-
-os.environ["SSHLER_CONFIG_DIR"] = tempfile.mkdtemp(prefix="sshler_")
 
 from sshler.snapshot import recreate_session
 
@@ -68,10 +64,27 @@ async def test_recreate_creates_all_windows(two_window_snapshot: list[dict]) -> 
         result = await recreate_session("myproj", two_window_snapshot)
 
     assert result is True
-    subcmds = [next((c for c in cmd if not c.startswith("-") and not c.startswith("ts-") and c != "tmux"), "") for cmd in calls]
-    # Must have: has-session, new-session, bind-key, send-keys (first win), split-window (second pane of win 1), new-window, send-keys (win 1)
+    subcmds = [
+        next(
+            (c for c in cmd if not c.startswith("-") and not c.startswith("ts-") and c != "tmux"),
+            "",
+        )
+        for cmd in calls
+    ]
+    assert subcmds == [
+        "has-session",
+        "new-session",
+        "bind-key",
+        "send-keys",
+        "new-window",
+        "send-keys",
+        "split-window",
+        "send-keys",
+    ]
     assert any("new-session" in cmd for cmd in calls), f"Expected new-session in {calls}"
-    assert any("new-window" in cmd for cmd in calls), f"Expected new-window for second window in {calls}"
+    assert any("new-window" in cmd for cmd in calls), (
+        f"Expected new-window for second window in {calls}"
+    )
 
 
 @pytest.mark.asyncio

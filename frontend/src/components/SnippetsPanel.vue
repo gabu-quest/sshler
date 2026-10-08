@@ -142,8 +142,9 @@ const handleDelete = async (id: string) => {
 
 <template>
   <NDrawer :show="props.show" width="min(380px, calc(100vw - 16px))" placement="right" @update:show="emit('update:show', $event)">
-    <NDrawerContent :title="t('snippets.title')" closable>
-      <template #header-extra>
+    <NDrawerContent closable>
+      <template #header>
+        <span class="drawer-title">{{ t('snippets.title') }}</span>
         <NButton size="small" type="primary" :aria-label="t('snippets.add')" @click="showAddForm = !showAddForm">
           <NIcon size="14"><PhPlus weight="bold" /></NIcon>
         </NButton>
@@ -262,6 +263,10 @@ const handleDelete = async (id: string) => {
 </template>
 
 <style scoped>
+.drawer-title {
+  margin-right: 8px;
+}
+
 .snippet-form {
   display: flex;
   flex-direction: column;

@@ -30,6 +30,14 @@ import type {
   DiffNotebookList,
   DiffNotebookDeleteResult,
   ExcelPreview,
+  ArtifactCreateResult,
+  ArtifactDeleteResult,
+  ArtifactList,
+  ArtifactMode,
+  ArtifactPageList,
+  ArtifactProject,
+  ArtifactProjectList,
+  ArtifactRegistration,
 } from "./types";
 
 export interface TransferProgress {
@@ -505,15 +513,32 @@ export async function writeFile(
   });
 }
 
+/** A refused upload: ``status`` is the HTTP status (0 for a network error), so a caller
+ * can tell "already exists" (409) and other client errors (4xx, not worth retrying)
+ * from a server or network failure. */
+export class UploadError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "UploadError";
+    this.status = status;
+  }
+}
+
 export async function uploadFile(
   name: string,
   directory: string,
   file: File,
   token: string | null,
   onProgress?: (percent: number) => void,
+  options: { overwrite?: boolean } = {},
 ): Promise<SimpleMessage> {
   const form = new FormData();
   form.append("directory", directory);
+  if (options.overwrite) {
+    form.append("overwrite", "true");
+  }
   form.append("file", file);
 
   // Build headers (excluding Content-Type for FormData)
@@ -539,7 +564,7 @@ export async function uploadFile(
       };
     }
 
-    xhr.onerror = () => reject(new Error("upload failed: network error"));
+    xhr.onerror = () => reject(new UploadError("upload failed: network error", 0));
     xhr.onload = async () => {
       const status = xhr.status;
       const body = xhr.responseText || "{}";
@@ -547,20 +572,20 @@ export async function uploadFile(
         try {
           resolve(JSON.parse(body) as SimpleMessage);
         } catch (err) {
-          reject(new Error(`upload parse failed: ${err}`));
+          reject(new UploadError(`upload parse failed: ${err}`, status));
         }
         return;
       }
       try {
         const parsed = JSON.parse(body);
         if (parsed?.detail) {
-          reject(new Error(Array.isArray(parsed.detail) ? parsed.detail.join(", ") : String(parsed.detail)));
+          reject(new UploadError(Array.isArray(parsed.detail) ? parsed.detail.join(", ") : String(parsed.detail), status));
           return;
         }
       } catch {
         // ignore parse errors
       }
-      reject(new Error(`upload failed with ${status}`));
+      reject(new UploadError(`upload failed with ${status}`, status));
     };
 
     xhr.send(form);
@@ -715,11 +740,26 @@ export async function deleteSession(
   sessionId: string,
   token: string | null,
   killTmux = false,
+  force = false,
 ): Promise<SimpleMessage> {
-  const qs = killTmux ? "?kill_tmux=true" : "";
+  const params = new URLSearchParams();
+  if (killTmux) params.set("kill_tmux", "true");
+  if (force) params.set("force", "true");
+  const qs = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<SimpleMessage>(
     `${API_BASE}/boxes/${encodeURIComponent(boxName)}/sessions/${encodeURIComponent(sessionId)}${qs}`,
     { method: "DELETE", headers: buildHeaders(token) },
+  );
+}
+
+export async function forceKillSessionByName(
+  boxName: string,
+  sessionName: string,
+  token: string | null,
+): Promise<SimpleMessage> {
+  return apiFetch<SimpleMessage>(
+    `${API_BASE}/boxes/${encodeURIComponent(boxName)}/sessions/by-name/${encodeURIComponent(sessionName)}/force-kill`,
+    { method: "POST", headers: buildHeaders(token) },
   );
 }
 
@@ -815,8 +855,9 @@ export async function directorySize(
   name: string,
   path: string,
   token: string | null,
-): Promise<{ size_bytes: number }> {
-  return apiFetch<{ size_bytes: number }>(
+): Promise<{ size_bytes: number | null }> {
+  // null: the server could not measure the folder (neither `du -sb` nor `du -sk`).
+  return apiFetch<{ size_bytes: number | null }>(
     `${API_BASE}/boxes/${encodeURIComponent(name)}/dir-size?path=${encodeURIComponent(path)}`,
     { headers: buildHeaders(token) },
   );
@@ -843,11 +884,32 @@ export async function exportPdf(
   return res.blob();
 }
 
+/**
+ * The file name a `Content-Disposition` header carries: the RFC 5987
+ * `filename*=UTF-8''<percent-encoded>` form first (exact, any script), else the
+ * plain `filename="..."` fallback; null when neither is present or decodable.
+ */
+export function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const extended = /filename\*\s*=\s*UTF-8''([^;\s]+)/i.exec(header)?.[1];
+  if (extended !== undefined) {
+    try {
+      return decodeURIComponent(extended);
+    } catch {
+      // Malformed percent-encoding: fall through to the plain form.
+    }
+  }
+  const plain = /filename\s*=\s*(?:"([^"]*)"|([^;\s]+))/i.exec(header);
+  return (plain?.[1] ?? plain?.[2]) || null;
+}
+
+/** Zip a folder on the box. `filename` is the server's name for the zip (for
+ *  `~` it is the real home folder name), null when the response has none. */
 export async function downloadDirectory(
   name: string,
   path: string,
   token: string | null,
-): Promise<Blob> {
+): Promise<{ blob: Blob; filename: string | null }> {
   const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/download-dir`, window.location.origin);
   url.searchParams.set("path", path);
   const res = await fetch(url.toString().replace(window.location.origin, ""), {
@@ -858,7 +920,8 @@ export async function downloadDirectory(
     const detail = await res.text().catch(() => '');
     throw new Error(`download failed ${res.status}: ${detail}`);
   }
-  return res.blob();
+  const filename = filenameFromContentDisposition(res.headers.get("Content-Disposition"));
+  return { blob: await res.blob(), filename };
 }
 
 export async function statPath(
@@ -1077,10 +1140,13 @@ export async function searchDirectories(
   query: string,
   token: string | null,
   limit: number = 20,
+  options: { root?: string | null; files?: boolean } = {},
 ): Promise<SearchResponse> {
   const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/search`, window.location.origin);
   url.searchParams.set("q", query);
   url.searchParams.set("limit", String(limit));
+  if (options.root) url.searchParams.set("root", options.root);
+  if (options.files) url.searchParams.set("files", "true");
   return apiFetch<SearchResponse>(url.toString().replace(window.location.origin, ""), {
     headers: buildHeaders(token),
   });
@@ -1304,5 +1370,130 @@ export async function deleteDiffNotebook(
       method: "DELETE",
       headers: buildHeaders(token),
     },
+  );
+}
+
+// --- Local HTML artifacts ---
+
+export async function fetchArtifactProjects(
+  token: string | null,
+): Promise<ArtifactProjectList> {
+  return apiFetch<ArtifactProjectList>(`${API_BASE}/artifact-projects`, {
+    headers: buildHeaders(token),
+  });
+}
+
+export async function createArtifactProject(
+  name: string,
+  token: string | null,
+): Promise<ArtifactProject> {
+  return apiFetch<ArtifactProject>(`${API_BASE}/artifact-projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...buildHeaders(token) },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function renameArtifactProject(
+  id: string,
+  name: string,
+  token: string | null,
+): Promise<ArtifactProject> {
+  return apiFetch<ArtifactProject>(
+    `${API_BASE}/artifact-projects/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...buildHeaders(token) },
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+export async function deleteArtifactProject(
+  id: string,
+  cascade: boolean,
+  token: string | null,
+): Promise<{ ok: boolean; removed: boolean; registrations_removed: number }> {
+  return apiFetch(
+    `${API_BASE}/artifact-projects/${encodeURIComponent(id)}?cascade=${cascade}`,
+    { method: "DELETE", headers: buildHeaders(token) },
+  );
+}
+
+export interface ArtifactFilters {
+  q?: string;
+  project?: string;
+  group?: string;
+  mode?: ArtifactMode;
+  exists?: boolean;
+}
+
+export async function fetchArtifacts(
+  token: string | null,
+  filters: ArtifactFilters = {},
+): Promise<ArtifactList> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.size ? `?${params.toString()}` : "";
+  return apiFetch<ArtifactList>(`${API_BASE}/artifacts${query}`, {
+    headers: buildHeaders(token),
+  });
+}
+
+export async function createArtifact(
+  body: Record<string, unknown>,
+  token: string | null,
+): Promise<ArtifactCreateResult> {
+  return apiFetch<ArtifactCreateResult>(`${API_BASE}/artifacts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...buildHeaders(token) },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateArtifact(
+  id: string,
+  body: Record<string, unknown>,
+  token: string | null,
+): Promise<ArtifactRegistration> {
+  return apiFetch<ArtifactRegistration>(
+    `${API_BASE}/artifacts/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...buildHeaders(token) },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function fetchArtifactPages(
+  id: string,
+  token: string | null,
+): Promise<ArtifactPageList> {
+  return apiFetch<ArtifactPageList>(
+    `${API_BASE}/artifacts/${encodeURIComponent(id)}/pages`,
+    { headers: buildHeaders(token) },
+  );
+}
+
+export async function rescanArtifact(
+  id: string,
+  token: string | null,
+): Promise<ArtifactPageList> {
+  return apiFetch<ArtifactPageList>(
+    `${API_BASE}/artifacts/${encodeURIComponent(id)}/rescan`,
+    { method: "POST", headers: buildHeaders(token) },
+  );
+}
+
+export async function deleteArtifact(
+  id: string,
+  token: string | null,
+): Promise<ArtifactDeleteResult> {
+  return apiFetch<ArtifactDeleteResult>(
+    `${API_BASE}/artifacts/${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: buildHeaders(token) },
   );
 }

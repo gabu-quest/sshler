@@ -36,6 +36,7 @@ import {
 
 import { openClaudeSession } from "@/api/http";
 import type { ClaudeSession } from "@/api/types";
+import { isString, isStringArray, usePersistedRef } from "@/composables/usePersistedRef";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import {
   DEFAULT_RESUME_TEMPLATE,
@@ -54,7 +55,7 @@ const token = computed(
   () => bootstrapStore.token || bootstrapStore.payload?.token || null,
 );
 
-const filter = ref("");
+const filter = usePersistedRef<string>("sshler:claude:filter", "", isString);
 const resumingId = ref<string | null>(null);
 
 // Global resume-command template (draft edited in the header popover).
@@ -178,12 +179,29 @@ const groups = computed<SessionGroup[]>(() => {
   });
 });
 
-// Repos start collapsed. A live filter expands every matching repo so search
-// hits are never hidden inside a collapsed section; clearing the filter
-// collapses them again. Expand-all / collapse-all buttons give manual control.
-const expandedNames = ref<string[]>([]);
+// The user's manual expand/collapse choices (expand-all / collapse-all, or
+// toggling individual repos) persist across visits. A live filter expands
+// every matching repo on top of that so search hits are never hidden inside
+// a collapsed section; clearing the filter restores the manual set rather
+// than collapsing everything — typing a search must never wipe out what the
+// user had deliberately expanded.
+const manualExpanded = usePersistedRef<string[]>("sshler:claude:expanded", [], isStringArray);
+const expandedNames = ref<string[]>([...manualExpanded.value]);
+
 watch(filter, (query) => {
-  expandedNames.value = query.trim() ? groups.value.map((g) => g.key) : [];
+  expandedNames.value = query.trim()
+    ? groups.value.map((g) => g.key)
+    : [...manualExpanded.value];
+});
+
+// Any change to expandedNames while no filter is active is a genuine manual
+// choice (toggling a panel, or the expand-all/collapse-all buttons below) —
+// persist it. While a filter is active, expandedNames reflects the forced
+// auto-expand above, not the user's manual intent, so it's left untouched.
+watch(expandedNames, (names) => {
+  if (!filter.value.trim()) {
+    manualExpanded.value = [...names];
+  }
 });
 
 function expandAll(): void {

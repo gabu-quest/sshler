@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
-import { batchDelete, createFolder, crossBoxTransfer, gitDiffFiles, sameBoxTransfer } from "@/api/http";
+import { batchDelete, createFolder, crossBoxTransfer, sameBoxTransfer } from "@/api/http";
 import type { TransferProgress, TransferResult } from "@/api/http";
 import type { DirectoryEntry } from "@/api/types";
 import type { GitBranch, GitCommit } from "@/api/types";

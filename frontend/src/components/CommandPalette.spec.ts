@@ -112,7 +112,6 @@ describe("CommandPalette Properties", () => {
         { query: "theme", expectedMatches: ["Toggle Theme", "Cycle Theme"] },
         { query: "box", expectedMatches: ["Boxes"] },
         { query: "reload", expectedMatches: ["Reload Application"] },
-        { query: "search", expectedMatches: ["Global Search"] },
       ];
 
       for (const { query, expectedMatches } of searchTerms) {
@@ -189,7 +188,6 @@ describe("CommandPalette Properties", () => {
       expect(wrapper.queryByText("Navigation")).toBeTruthy();
       expect(wrapper.queryByText("Appearance")).toBeTruthy();
       expect(wrapper.queryByText("System")).toBeTruthy();
-      expect(wrapper.queryByText("Search")).toBeTruthy();
     });
   });
 
@@ -216,6 +214,12 @@ describe("CommandPalette Properties", () => {
         { action: "Boxes", expectedRoute: "/boxes" },
         { action: "Terminal", expectedRoute: "/terminal" },
         { action: "Settings", expectedRoute: "/settings" },
+        { action: "Commander", expectedRoute: "/commander" },
+        { action: "Multi-Terminal", expectedRoute: "/multi-terminal" },
+        { action: "Progress", expectedRoute: "/progress" },
+        { action: "Artifacts", expectedRoute: "/artifacts" },
+        { action: "Claude Sessions", expectedRoute: "/claude" },
+        { action: "Diff", expectedRoute: "/diff" },
       ];
 
       for (const { action, expectedRoute } of navigationTests) {
@@ -422,6 +426,69 @@ describe("CommandPalette Properties", () => {
       expect(wrapper.queryByText(/Use arrow keys to navigate/)).toBeTruthy();
       expect(wrapper.queryByText(/Enter to select/)).toBeTruthy();
       expect(wrapper.queryByText(/Escape to close/)).toBeTruthy();
+    });
+  });
+
+  describe("Parity with AppHeader navigation", () => {
+    // This list mirrors AppHeader.vue's `links` computed (frontend/src/components/AppHeader.vue
+    // ~lines 148-161). If AppHeader gains/loses a destination, update both places.
+    const appHeaderDestinations = [
+      { label: "Overview", route: "/" },
+      { label: "Boxes", route: "/boxes" },
+      { label: "Files", route: "/files" },
+      { label: "Commander", route: "/commander" },
+      { label: "Terminal", route: "/terminal" },
+      { label: "Multi-Terminal", route: "/multi-terminal" },
+      { label: "Progress", route: "/progress" },
+      { label: "Artifacts", route: "/artifacts" },
+      { label: "Claude Sessions", route: "/claude" },
+      { label: "Diff", route: "/diff" },
+      { label: "Settings", route: "/settings" },
+    ];
+
+    it("has a palette action routing to every AppHeader destination", async () => {
+      const wrapper = render(CommandPalette);
+      const button = wrapper.getByRole("button");
+
+      for (const { label, route } of appHeaderDestinations) {
+        await fireEvent.click(button);
+        await nextTick();
+
+        const actionElement = wrapper.getByText(label);
+        await fireEvent.click(actionElement);
+
+        expect(mockPush).toHaveBeenCalledWith(route);
+        mockPush.mockClear();
+      }
+    });
+
+    it("does not list a global-search action or accept the old Ctrl+Shift+F shortcut", async () => {
+      const wrapper = render(CommandPalette);
+      const button = wrapper.getByRole("button");
+      await fireEvent.click(button);
+      await nextTick();
+
+      // No stub "Global Search" action and no orphaned "Search" category
+      expect(wrapper.queryByText("Global Search")).toBeNull();
+      expect(wrapper.queryByText("Search")).toBeNull();
+
+      const input = wrapper.getByRole("textbox");
+      await fireEvent.keyDown(input, { key: "Escape" });
+      await nextTick();
+      expect(wrapper.queryByText("Command Palette")).toBeNull();
+
+      // Ctrl+Shift+F must no longer be intercepted to open the palette / select an action
+      const shortcutEvent = new KeyboardEvent("keydown", {
+        key: "f",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const wasDefaultPrevented = !document.dispatchEvent(shortcutEvent);
+
+      expect(wasDefaultPrevented).toBe(false);
+      expect(wrapper.queryByText("Command Palette")).toBeNull();
     });
   });
 });

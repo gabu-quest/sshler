@@ -17,7 +17,8 @@ from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .helpers import _normalize_local_path, _normalize_directory_path
+from .files import _remote_path
+from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_delete, rate_limit_file_ops
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,28 @@ def _validate_batch_size(paths: list[str]) -> None:
         )
     if not paths:
         raise HTTPException(status_code=400, detail="No paths provided")
+
+
+async def _resolve_tilde_paths(
+    connection, validated: list[tuple[str, str]], failed: list[dict]
+) -> list[tuple[str, str]]:
+    """Resolve ``~`` in each validated path against the remote home. SFTP and the
+    quoted shell commands do not expand it. A path that no longer validates is
+    reported in ``failed``; a failed home lookup (HTTP 502) aborts the batch."""
+    resolved: list[tuple[str, str]] = []
+    for orig, vpath in validated:
+        try:
+            resolved.append((orig, await _remote_path(connection, vpath)))
+        except ValidationError as exc:
+            failed.append({"path": orig, "error": str(exc)})
+    return resolved
+
+
+async def _resolve_tilde_destination(connection, destination: str) -> str:
+    try:
+        return await _remote_path(connection, destination)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -100,6 +123,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     async with ssh_pool.connection(
                         box, lambda: deps.connect_for_box(box, application_config)
                     ) as connection:
+                        validated = await _resolve_tilde_paths(connection, validated, failed)
                         sftp_client = await connection.start_sftp_client()
                         try:
                             for orig, vpath in validated:
@@ -161,7 +185,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             try:
                 dest_validated = PathValidator.validate_remote_path(payload.destination)
             except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}")
+                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
 
             validated: list[tuple[str, str]] = []
             for path in payload.paths:
@@ -177,12 +201,18 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     async with ssh_pool.connection(
                         box, lambda: deps.connect_for_box(box, application_config)
                     ) as connection:
+                        dest_resolved = await _resolve_tilde_destination(
+                            connection, dest_validated
+                        )
+                        validated = await _resolve_tilde_paths(connection, validated, failed)
                         sftp_client = await connection.start_sftp_client()
                         try:
                             for orig, vpath in validated:
                                 try:
-                                    target = str(PurePosixPath(dest_validated) / PurePosixPath(vpath).name)
-                                    await sftp_client.rename(vpath, target)
+                                    remote_target = str(
+                                        PurePosixPath(dest_resolved) / PurePosixPath(vpath).name
+                                    )
+                                    await sftp_client.rename(vpath, remote_target)
                                     succeeded.append(orig)
                                 except Exception as exc:
                                     failed.append({"path": orig, "error": str(exc)})
@@ -231,7 +261,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             try:
                 dest_validated = PathValidator.validate_remote_path(payload.destination)
             except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}")
+                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
 
             validated: list[tuple[str, str]] = []
             for path in payload.paths:
@@ -247,11 +277,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     async with ssh_pool.connection(
                         box, lambda: deps.connect_for_box(box, application_config)
                     ) as connection:
+                        dest_resolved = await _resolve_tilde_destination(
+                            connection, dest_validated
+                        )
+                        validated = await _resolve_tilde_paths(connection, validated, failed)
                         for orig, vpath in validated:
                             try:
-                                target = str(PurePosixPath(dest_validated) / PurePosixPath(vpath).name)
+                                remote_target = str(
+                                    PurePosixPath(dest_resolved) / PurePosixPath(vpath).name
+                                )
                                 await connection.run(
-                                    f"cp -r {shlex.quote(vpath)} {shlex.quote(target)}",
+                                    f"cp -r {shlex.quote(vpath)} {shlex.quote(remote_target)}",
                                     check=True,
                                 )
                                 succeeded.append(orig)

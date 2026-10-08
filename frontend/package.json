@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:check": "vue-tsc -b && vite build",
+    "type-check": "vue-tsc --build",
     "test": "vitest run",
     "preview": "vite preview"
   },

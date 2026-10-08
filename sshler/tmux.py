@@ -1,7 +1,7 @@
 """ts-style per-session tmux server utilities.
 
 The ``ts`` CLI tool runs each tmux session on its own server via
-``-L ts-<name>``, creating sockets at ``/tmp/tmux-<UID>/ts-<name>``.
+``-L ts-<name>``, creating sockets at ``$TMUX_TMPDIR/tmux-<UID>/ts-<name>`` (``/tmp`` by default).
 This module provides the same convention so sshler and ts can see each
 other's sessions.
 
@@ -12,11 +12,13 @@ default tmux server.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import platform
 import re
 import shutil
+import signal
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,20 @@ _IS_WINDOWS = platform.system().lower().startswith("windows")
 
 SOCKET_PREFIX = "ts-"
 SOCKET_TIMEOUT = 2  # seconds — matches ts
+# Upper bound for any one local tmux command. Generous because a server that is
+# still loading the user's config (plugins, session restore) answers slowly; the
+# point is that no caller can wait forever on a wedged server.
+TMUX_COMMAND_TIMEOUT = 5.0
+# ``capture-pane -S -`` on a long history can take far longer than a normal
+# command, so a capture gets its own, larger bound.
+TMUX_CAPTURE_TIMEOUT = 30.0
+# After a timeout the child is SIGKILLed; this bounds the wait for asyncio to
+# see it exit. ``wait()`` also waits for the stdout/stderr pipes, which a
+# grandchild (e.g. a freshly forked tmux server) may hold open indefinitely.
+REAP_GRACE = 1.0
+# Subcommands that may fork a tmux server. The server inherits the client's
+# stdout/stderr, so these must never run with captured output.
+_SERVER_STARTING_COMMANDS = frozenset({"new-session", "new", "start-server", "start"})
 
 
 def local_tmux_command(session: str) -> list[str]:
@@ -40,6 +56,74 @@ def local_tmux_command(session: str) -> list[str]:
     return ["tmux", "-L", f"{SOCKET_PREFIX}{session}"]
 
 
+def default_tmux_command() -> list[str]:
+    """Build a tmux command targeting the user's default tmux server."""
+    if _IS_WINDOWS:
+        return ["wsl", "--", "tmux"]
+    return ["tmux"]
+
+
+async def _kill_and_reap(process: asyncio.subprocess.Process) -> None:
+    """SIGKILL *process* and wait (bounded) until it has been reaped."""
+    try:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        with contextlib.suppress(asyncio.TimeoutError, Exception):
+            await asyncio.wait_for(process.wait(), timeout=REAP_GRACE)
+    finally:
+        # A grandchild may still hold the pipe write ends after the child is
+        # gone; closing the transport releases our read ends either way.
+        transport = getattr(process, "_transport", None)
+        if transport is not None:
+            with contextlib.suppress(Exception):
+                transport.close()
+
+
+async def run_bounded(
+    argv: list[str], timeout: float, *, capture_output: bool = True
+) -> tuple[int, bytes, bytes]:
+    """Run *argv* bounded by *timeout*; return ``(returncode, stdout, stderr)``.
+
+    Every local tmux (and ``ts-add``) subprocess goes through here. On timeout
+    or cancellation the child is killed and reaped before the exception
+    propagates, so a wedged command never outlives its bound. Raises
+    ``asyncio.TimeoutError`` on timeout.
+
+    With *capture_output* False, stdout/stderr go to DEVNULL and only the exit
+    is awaited: a tmux server forked by the command inherits those fds, and
+    with pipes ``communicate()`` would never see EOF.
+    """
+    stream = asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=stream,
+        stderr=stream,
+    )
+    try:
+        if capture_output:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        else:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+            stdout, stderr = b"", b""
+    except BaseException:
+        await _kill_and_reap(process)
+        raise
+    return process.returncode if process.returncode is not None else -1, stdout, stderr
+
+
+def _session_names(stdout: bytes) -> set[str]:
+    return {
+        line.strip()
+        for line in stdout.decode("utf-8", errors="ignore").splitlines()
+        if line.strip()
+    }
+
+
+# A Windows-looking path (drive or UNC): only there does `\\` separate segments.
+_WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[/\\]|\\\\)")
+
+
 def ts_session_name(directory: str) -> str:
     """Tmux session name for a LOCAL directory, matching the ``ts`` CLI exactly.
 
@@ -52,10 +136,9 @@ def ts_session_name(directory: str) -> str:
     Same-basename directories collide onto one session — this is ``ts``'s own
     behavior and is intentional for parity. Remote boxes do not use this.
     """
-    # Split on POSIX (/) and Windows (\) separators — matches generateSessionName
-    # in frontend/src/utils/sessionName.ts, which does the same. Without this, a
-    # Windows path has no "/" so the whole path became the session name.
-    parts = [segment for segment in re.split(r"[/\\]", directory or "") if segment]
+    path = directory or ""
+    separators = r"[/\\]" if _WINDOWS_PATH.match(path) else "/"
+    parts = [segment for segment in re.split(separators, path) if segment]
     base = parts[-1] if parts else "home"
     if base in (".", "..", "~"):
         base = "home"
@@ -79,53 +162,32 @@ def _socket_dir() -> Path:
     """
     if _IS_WINDOWS:
         return Path("C:/nonexistent/tmux-sockets")
-    return Path(f"/tmp/tmux-{os.getuid()}")
+    # Same rule as tmux itself: $TMUX_TMPDIR when set, otherwise /tmp.
+    return Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / f"tmux-{os.getuid()}"
 
 
 async def _query_server(server_name: str) -> set[str]:
     """Query a single tmux server for session names, with timeout."""
-    cmd = ["tmux", "-L", server_name, "list-sessions", "-F", "#{session_name}"]
+    cmd = local_tmux_command(server_name.removeprefix(SOCKET_PREFIX)) + [
+        "list-sessions", "-F", "#{session_name}",
+    ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(
-            proc.communicate(), timeout=SOCKET_TIMEOUT
-        )
-        if proc.returncode == 0 and stdout:
-            return {
-                line.strip()
-                for line in stdout.decode().strip().split("\n")
-                if line.strip()
-            }
-    except (asyncio.TimeoutError, Exception) as exc:
+        returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
+        if returncode == 0:
+            return _session_names(stdout)
+    except (TimeoutError, Exception) as exc:
         logger.debug("Failed to query tmux server %s: %s", server_name, exc)
     return set()
 
 
 async def _query_default_server() -> set[str]:
     """Query the default tmux server (backward compat for pre-ts sessions)."""
-    cmd = ["tmux", "list-sessions", "-F", "#{session_name}"]
-    if _IS_WINDOWS:
-        cmd = ["wsl", "--", *cmd]
+    cmd = default_tmux_command() + ["list-sessions", "-F", "#{session_name}"]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(
-            proc.communicate(), timeout=SOCKET_TIMEOUT
-        )
-        if proc.returncode == 0 and stdout:
-            return {
-                line.strip()
-                for line in stdout.decode().strip().split("\n")
-                if line.strip()
-            }
-    except (asyncio.TimeoutError, Exception) as exc:
+        returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
+        if returncode == 0:
+            return _session_names(stdout)
+    except (TimeoutError, Exception) as exc:
         logger.debug("Failed to query default tmux server: %s", exc)
     return set()
 
@@ -133,7 +195,7 @@ async def _query_default_server() -> set[str]:
 async def discover_local_sessions() -> set[str]:
     """Discover live local tmux sessions across all ts-* servers.
 
-    Scans ``/tmp/tmux-<UID>/ts-*`` sockets and queries each for session
+    Scans the ``tmux-<UID>/ts-*`` sockets in ``_socket_dir()`` and queries each for session
     names.  Also checks the default tmux server as a backward-compat
     fallback for sessions created before the ts convention was adopted.
 
@@ -168,19 +230,10 @@ async def list_local_window_names(session: str) -> set[str]:
         "list-windows", "-t", session, "-F", "#{window_name}",
     ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SOCKET_TIMEOUT)
-        if proc.returncode == 0 and stdout:
-            return {
-                line.strip()
-                for line in stdout.decode("utf-8", errors="ignore").splitlines()
-                if line.strip()
-            }
-    except (asyncio.TimeoutError, Exception) as exc:
+        returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
+        if returncode == 0:
+            return _session_names(stdout)
+    except (TimeoutError, Exception) as exc:
         logger.debug("list_local_window_names(%s) failed: %s", session, exc)
     return set()
 
@@ -195,28 +248,88 @@ async def record_ts_history(session: str, directory: str) -> None:
     if ts_add is None:
         return
     try:
-        proc = await asyncio.create_subprocess_exec(
-            ts_add, session, directory,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        await run_bounded(
+            [ts_add, session, directory], TMUX_COMMAND_TIMEOUT, capture_output=False
         )
-        await asyncio.wait_for(proc.communicate(), timeout=5.0)
     except Exception:
         pass
 
 
+async def run_local_tmux(
+    session_name: str,
+    args: list[str],
+    timeout: float | None = None,
+    *,
+    capture_output: bool = True,
+) -> tuple[int, bytes, bytes]:
+    """Run ``tmux -L ts-<session> <args>`` and return ``(returncode, stdout, stderr)``.
+
+    Bounded by ``TMUX_COMMAND_TIMEOUT`` (or *timeout*) through ``run_bounded``,
+    which kills and reaps the child on timeout or cancellation. Raises
+    ``asyncio.TimeoutError`` on timeout. A subcommand that may fork a server
+    (``new-session``, ``start-server``) always runs without captured output.
+    """
+    if args and args[0] in _SERVER_STARTING_COMMANDS:
+        capture_output = False
+    limit = TMUX_COMMAND_TIMEOUT if timeout is None else timeout
+    return await run_bounded(
+        local_tmux_command(session_name) + args, limit, capture_output=capture_output
+    )
+
+
 async def _run_local_tmux_command(session_name: str, args: list[str]) -> None:
-    """Run ``tmux -L ts-<session> <args>`` for its side effect (output ignored)."""
-    command = local_tmux_command(session_name) + args
+    """Run ``tmux -L ts-<session> <args>`` for its side effect (output discarded)."""
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await process.communicate()
+        await run_local_tmux(session_name, args, capture_output=False)
     except Exception as exc:
         logger.debug(f"Local tmux command failed: {' '.join(args)}: {exc}")
+
+
+async def _list_local_pane_pids(session_name: str) -> list[int]:
+    """Return the pane process PIDs for a local ``ts`` session (empty on error).
+
+    Uses ``-a`` scoped to this session's own socket (``ts-<name>``); since sshler
+    runs one session per socket this only ever sees this session's panes.
+    """
+    cmd = local_tmux_command(session_name) + [
+        "list-panes", "-a", "-F", "#{pane_pid}",
+    ]
+    pids: list[int] = []
+    try:
+        returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
+        if returncode == 0:
+            for line in stdout.decode("utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.append(int(line))
+    except (TimeoutError, Exception) as exc:
+        logger.debug("_list_local_pane_pids(%s) failed: %s", session_name, exc)
+    return pids
+
+
+async def force_kill_local_session(session_name: str) -> None:
+    """Forcibly terminate a local ``ts`` session and its shell processes.
+
+    Captures the session's pane PIDs, kills its per-session tmux server
+    (``kill-server`` on the ``ts-<name>`` socket — which cannot reach any other
+    session's socket), then SIGKILLs any pane processes that survived the SIGHUP
+    from the server dying. Best-effort: every step is suppressed so a partial
+    failure never blocks session deletion.
+
+    LOCAL ONLY. Remote boxes share the default tmux server, so ``kill-server``
+    there would nuke unrelated sessions — callers must not use this for remote.
+    """
+    # 1. Capture pane PIDs before the socket goes away.
+    pids = await _list_local_pane_pids(session_name)
+    # 2. Kill this session's tmux server (scoped to its own socket).
+    await _run_local_tmux_command(session_name, ["kill-server"])
+    # 3. SIGKILL any survivors. Try the process group first (catches children
+    #    the shell spawned) then the bare PID as a fallback.
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, signal.SIGKILL)
 
 
 # Distinct 256-color tmux codes for per-session status bars. Picked to read

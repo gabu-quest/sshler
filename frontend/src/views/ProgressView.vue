@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "@/i18n";
 
 import {
+  NAlert,
   NButton,
   NCard,
   NEmpty,
@@ -46,6 +47,11 @@ const refreshing = ref(false);
 
 const bars = computed<ProgressBar[]>(() => progressStore.allBars);
 const isEmpty = computed(() => bars.value.length === 0);
+const finishedBars = computed<ProgressBar[]>(() =>
+  bars.value.filter((bar) => bar.status !== "running"),
+);
+const hasFinishedBars = computed(() => finishedBars.value.length > 0);
+const clearingFinished = ref(false);
 const connectionState = computed(() => {
   if (progressStore.connected) return "connected";
   if (progressStore.connecting) return "connecting";
@@ -134,6 +140,22 @@ async function handleDelete(name: string) {
   }
 }
 
+async function handleClearFinished() {
+  const targets = finishedBars.value.map((bar) => bar.name);
+  if (targets.length === 0) return;
+  clearingFinished.value = true;
+  try {
+    await Promise.all(
+      targets.map((name) => progressStore.remove(name, bootstrapStore.token)),
+    );
+    message.success(t("progress.clear_finished_done", { n: targets.length }));
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err));
+  } finally {
+    clearingFinished.value = false;
+  }
+}
+
 onMounted(() => {
   progressStore.connect(bootstrapStore.token);
   handleRefresh();
@@ -163,8 +185,39 @@ onMounted(() => {
           </template>
           {{ t("common.refresh") }}
         </NButton>
+        <NPopconfirm
+          placement="bottom"
+          class="progress-view__clear-popconfirm"
+          @positive-click="handleClearFinished"
+        >
+          <template #trigger>
+            <NButton
+              size="small"
+              type="warning"
+              quaternary
+              :disabled="!hasFinishedBars"
+              :loading="clearingFinished"
+              data-testid="clear-finished-button"
+            >
+              <template #icon>
+                <NIcon :component="PhTrash" />
+              </template>
+              {{ t("progress.clear_finished", { n: finishedBars.length }) }}
+            </NButton>
+          </template>
+          {{ t("progress.clear_finished_confirm", { n: finishedBars.length }) }}
+        </NPopconfirm>
       </div>
     </header>
+
+    <NAlert
+      v-if="!scope"
+      type="info"
+      class="progress-view__no-scope"
+      data-testid="no-scope-banner"
+    >
+      {{ t("progress.no_scope_banner") }}
+    </NAlert>
 
     <div v-if="isEmpty" class="progress-view__empty">
       <NEmpty :description="t('progress.empty')">
@@ -310,6 +363,10 @@ onMounted(() => {
 .progress-view__conn.conn--connected { color: #22c55e; }
 .progress-view__conn.conn--connecting { color: #f59e0b; }
 .progress-view__conn.conn--disconnected { color: #6b7280; }
+
+.progress-view__no-scope {
+  margin-bottom: 4px;
+}
 
 .progress-view__empty {
   padding: 48px 0;

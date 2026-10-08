@@ -12,8 +12,7 @@ import secrets
 from dataclasses import dataclass
 
 from argon2 import PasswordHasher as Argon2PasswordHasher
-from argon2.exceptions import VerifyMismatchError, InvalidHashError
-
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 # Top 100 most common passwords (subset for validation)
 COMMON_PASSWORDS = {

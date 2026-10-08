@@ -1,19 +1,18 @@
 """Tests for grep (file content search) API."""
 
-import os
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from sshler.webapp import ServerSettings, make_app
 
-
 TEST_TOKEN = "grep-test-token"
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
@@ -31,14 +30,14 @@ def auth_headers() -> dict[str, str]:
 
 
 class TestGrepSearch:
-    def test_grep_finds_content(self, tmp_path):
+    def test_grep_finds_content(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "greet.py").write_text("def greet():\n    print('Hello World')\n")
         (workdir / "other.txt").write_text("nothing here\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -58,13 +57,13 @@ class TestGrepSearch:
         finally:
             client.close()
 
-    def test_grep_case_insensitive(self, tmp_path):
+    def test_grep_case_insensitive(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "test.txt").write_text("FOO\nfoo\nFoO\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -77,13 +76,13 @@ class TestGrepSearch:
         finally:
             client.close()
 
-    def test_grep_case_sensitive(self, tmp_path):
+    def test_grep_case_sensitive(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "test.txt").write_text("FOO\nfoo\nFoO\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -97,13 +96,13 @@ class TestGrepSearch:
         finally:
             client.close()
 
-    def test_grep_no_results(self, tmp_path):
+    def test_grep_no_results(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "test.txt").write_text("nothing relevant\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -117,7 +116,7 @@ class TestGrepSearch:
         finally:
             client.close()
 
-    def test_grep_multiple_files(self, tmp_path):
+    def test_grep_multiple_files(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -125,7 +124,7 @@ class TestGrepSearch:
         (workdir / "b.txt").write_text("target line 2\n")
         (workdir / "c.txt").write_text("no match\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -140,9 +139,9 @@ class TestGrepSearch:
         finally:
             client.close()
 
-    def test_grep_pattern_too_long(self, tmp_path):
+    def test_grep_pattern_too_long(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -154,9 +153,9 @@ class TestGrepSearch:
         finally:
             client.close()
 
-    def test_grep_null_bytes_rejected(self, tmp_path):
+    def test_grep_null_bytes_rejected(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -172,13 +171,13 @@ class TestGrepSearch:
 class TestGrepInjectionPrevention:
     """Verify that shell injection attempts are safely handled."""
 
-    def test_semicolon_injection(self, tmp_path):
+    def test_semicolon_injection(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "safe.txt").write_text("safe content\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             # Pattern with injection attempt — grep should treat as literal
             resp = client.get(
@@ -194,13 +193,13 @@ class TestGrepInjectionPrevention:
         finally:
             client.close()
 
-    def test_command_substitution_injection(self, tmp_path):
+    def test_command_substitution_injection(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "safe.txt").write_text("safe\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",
@@ -213,13 +212,13 @@ class TestGrepInjectionPrevention:
         finally:
             client.close()
 
-    def test_backtick_injection(self, tmp_path):
+    def test_backtick_injection(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "safe.txt").write_text("safe\n")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/grep",

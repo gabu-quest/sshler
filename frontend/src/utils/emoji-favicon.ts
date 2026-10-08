@@ -62,7 +62,7 @@ export function fnv1aHash(str: string): number {
 export function getEmojiForString(str: string): string {
   if (!str) return '📁';
   const hash = fnv1aHash(str);
-  return DIR_EMOJIS[hash % DIR_EMOJIS.length];
+  return DIR_EMOJIS[hash % DIR_EMOJIS.length]!; // modulo keeps the index in range
 }
 
 /**
@@ -71,7 +71,7 @@ export function getEmojiForString(str: string): string {
 export function getEmojiForBox(boxName: string): string {
   if (!boxName) return '🖥️';
   const hash = fnv1aHash(boxName);
-  return BOX_EMOJIS[hash % BOX_EMOJIS.length];
+  return BOX_EMOJIS[hash % BOX_EMOJIS.length]!; // modulo keeps the index in range
 }
 
 /**

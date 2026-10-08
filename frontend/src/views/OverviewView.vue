@@ -14,8 +14,7 @@ import {
   NTag,
   NEmpty,
   NTooltip,
-  NProgress,
-  useMessage
+  NProgress
 } from "naive-ui";
 import { useI18n } from "@/i18n";
 import {
@@ -39,7 +38,6 @@ import type { BoxStats } from "@/api/types";
 import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
 const router = useRouter();
-const message = useMessage();
 const { t } = useI18n();
 const bootstrapStore = useBootstrapStore();
 const boxesStore = useBoxesStore();
@@ -48,7 +46,6 @@ const favoritesStore = useFavoritesStore();
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token);
 const hasServers = computed(() => boxesStore.items.length > 0);
-const recentServer = computed(() => boxesStore.items.find(box => box.pinned) || boxesStore.items[0]);
 const pinnedBoxes = computed(() => boxesStore.items.filter(box => box.pinned));
 const totalFavorites = computed(() =>
   boxesStore.items.reduce((acc, box) => acc + (box.favorites?.length || 0), 0)
@@ -179,7 +176,7 @@ const getFavoriteFilesUrl = (box: string, path: string) => {
 // Handle left-click: open in background tab (don't switch focus)
 const openInBackgroundTab = (event: MouseEvent, url: string) => {
   event.preventDefault();
-  const newTab = window.open(url, '_blank');
+  window.open(url, '_blank');
   // Try to keep focus on current tab (not always reliable)
   window.focus();
 };
@@ -288,26 +285,6 @@ const getStatusColor = (status: string) => {
     case 'unknown': return '#8c8c8c';
     default: return '#8c8c8c';
   }
-};
-
-const handleQuickConnect = () => {
-  if (recentServer.value) {
-    router.push(`/terminal?box=${recentServer.value.name}`);
-  } else {
-    message.warning(t('overview.no_servers_available'));
-  }
-};
-
-const handleBrowseFiles = () => {
-  if (recentServer.value) {
-    router.push(`/files?box=${recentServer.value.name}`);
-  } else {
-    message.warning(t('overview.no_servers_available'));
-  }
-};
-
-const handleNewTerminal = () => {
-  router.push('/terminal');
 };
 
 const handleConnectToServer = (serverName: string) => {

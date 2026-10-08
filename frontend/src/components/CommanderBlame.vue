@@ -61,7 +61,7 @@ const processedLines = computed<ProcessedBlameLine[]>(() => {
 
 function commitColor(hash: string): string {
   if (!commitColorMap.value.has(hash)) {
-    commitColorMap.value.set(hash, BLAME_COLORS[commitColorMap.value.size % BLAME_COLORS.length]);
+    commitColorMap.value.set(hash, BLAME_COLORS[commitColorMap.value.size % BLAME_COLORS.length]!); // modulo keeps the index in range
   }
   return commitColorMap.value.get(hash)!;
 }

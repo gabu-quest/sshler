@@ -121,8 +121,7 @@ export function usePdfExport() {
     loadingBar.start();
     let succeeded = 0;
     try {
-      for (let i = 0; i < paths.length; i++) {
-        const path = paths[i];
+      for (const [i, path] of paths.entries()) {
         const name = path.split("/").pop() || path;
         const prefix = `PDF ${i + 1}/${paths.length}: ${name}`;
         try {

@@ -1,12 +1,8 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted, watch, type Component } from 'vue'
+import { ref, nextTick, onMounted, watch, type Component } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   PhKeyReturn,
-  PhArrowUp,
-  PhArrowDown,
-  PhArrowLeft,
-  PhArrowRight,
   PhKeyboard,
   PhHandPalm,
   PhStopCircle,

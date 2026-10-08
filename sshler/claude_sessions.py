@@ -46,7 +46,7 @@ _UUID_RE = re.compile(
 )
 
 # path -> (mtime, size, info)
-_CACHE: dict[str, tuple[float, int, "ClaudeSessionInfo"]] = {}
+_CACHE: dict[str, tuple[float, int, ClaudeSessionInfo]] = {}
 
 # cwd -> git repo root (or None). Many sessions share a cwd, so the upward
 # ``.git`` walk runs once per directory rather than once per transcript.
@@ -94,7 +94,7 @@ class ClaudeSessionInfo:
 
 def is_valid_session_id(session_id: str) -> bool:
     """True iff *session_id* is a canonical UUID (safe to interpolate)."""
-    return bool(_UUID_RE.match(session_id))
+    return bool(_UUID_RE.fullmatch(session_id))
 
 
 def _projects_dir() -> Path:

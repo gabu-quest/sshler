@@ -67,8 +67,6 @@ watch(() => props.show, (visible) => {
 
 onUnmounted(stopRefresh)
 
-const close = () => emit('update:show', false)
-
 const resetAddForm = () => {
   newType.value = 'local'
   newLocalHost.value = '127.0.0.1'
@@ -116,8 +114,9 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
 
 <template>
   <NDrawer :show="props.show" width="min(400px, calc(100vw - 16px))" placement="right" @update:show="emit('update:show', $event)">
-    <NDrawerContent :title="t('tunnels.title')" closable>
-      <template #header-extra>
+    <NDrawerContent closable>
+      <template #header>
+        <span class="drawer-title">{{ t('tunnels.title') }}</span>
         <NButton size="small" type="primary" :aria-label="t('tunnels.add')" @click="showAddForm = !showAddForm">
           <NIcon size="14"><PhPlus weight="bold" /></NIcon>
         </NButton>
@@ -216,6 +215,10 @@ const typeColor = (t: string) => t === 'local' ? 'success' : 'warning'
 </template>
 
 <style scoped>
+.drawer-title {
+  margin-right: 8px;
+}
+
 .tunnel-form {
   display: flex;
   flex-direction: column;

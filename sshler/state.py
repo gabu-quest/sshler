@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import re
 import secrets
 import threading
 import time
+import unicodedata
 from collections.abc import Iterable, Sequence
 from functools import partial
 from pathlib import Path
@@ -210,6 +213,37 @@ class DiffNotebook(SQLerModel):
     updated_at: float = Field(default_factory=time.time)
 
 
+class ArtifactProject(SQLerModel):
+    """Top-level project used to organize locally served artifacts."""
+
+    __tablename__ = "artifact_projects"
+
+    id: str = Field(default_factory=lambda: secrets.token_urlsafe(12))
+    name: str
+    normalized_name: str
+    slug: str = ""
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
+class ArtifactRegistration(SQLerModel):
+    """A local file or directory registered with the artifact catalog."""
+
+    __tablename__ = "artifact_registrations"
+
+    id: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
+    project_id: str
+    group_path: str = ""
+    source_path: str
+    mode: str
+    entrypoint: str | None = None
+    title_override: str | None = None
+    slug: str = ""
+    mount_path: str = ""
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
 class Layout(SQLerModel):
     """Saved multi-terminal layout presets."""
 
@@ -233,6 +267,61 @@ class Layout(SQLerModel):
     def terminals(self, value: list[dict]) -> None:
         """Persist terminal configuration as JSON."""
         self.terminals_json = json.dumps(value)
+
+
+def artifact_slug(value: str, fallback: str = "artifact") -> str:
+    """Convert a human label into a URL-safe artifact alias."""
+    ascii_value = (
+        unicodedata.normalize("NFKD", value)
+        .encode("ascii", errors="ignore")
+        .decode("ascii")
+        .lower()
+    )
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
+    return (slug or fallback)[:80].rstrip("-")
+
+
+def _unique_artifact_slug(base: str, used: set[str], stable_id: str) -> str:
+    if base not in used:
+        return base
+    suffix = artifact_slug(stable_id, "item")[:8]
+    candidate = f"{base[: max(1, 79 - len(suffix))]}-{suffix}"
+    counter = 2
+    while candidate in used:
+        tail = f"{suffix}-{counter}"
+        candidate = f"{base[: max(1, 79 - len(tail))]}-{tail}"
+        counter += 1
+    return candidate
+
+
+def _ensure_artifact_aliases() -> None:
+    """Backfill stable slugs for rows created before alias routing existed."""
+    used_projects: set[str] = set()
+    projects = list(ArtifactProject.query().order_by("created_at").all())
+    for project in projects:
+        base = artifact_slug(project.slug or project.name, "project")
+        chosen = _unique_artifact_slug(base, used_projects, project.id)
+        used_projects.add(chosen)
+        if project.slug != chosen:
+            project.slug = chosen
+            project.save()
+
+    used_by_project: dict[str, set[str]] = {}
+    registrations = list(ArtifactRegistration.query().order_by("created_at").all())
+    for registration in registrations:
+        used = used_by_project.setdefault(registration.project_id, set())
+        source_name = Path(registration.source_path).stem or Path(
+            registration.source_path
+        ).name
+        base = artifact_slug(
+            registration.slug or registration.title_override or source_name,
+            "artifact",
+        )
+        chosen = _unique_artifact_slug(base, used, registration.id)
+        used.add(chosen)
+        if registration.slug != chosen:
+            registration.slug = chosen
+            registration.save()
 
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
@@ -298,6 +387,19 @@ def initialize(config_dir: Path) -> None:
         DiffNotebook.set_db(db)
         DiffNotebook.ensure_index("id")
         DiffNotebook.ensure_index("created_at")
+
+        ArtifactProject.set_db(db)
+        ArtifactProject.ensure_index("id")
+        ArtifactProject.ensure_index("normalized_name")
+        ArtifactProject.ensure_index("slug")
+
+        ArtifactRegistration.set_db(db)
+        ArtifactRegistration.ensure_index("id")
+        ArtifactRegistration.ensure_index("project_id")
+        ArtifactRegistration.ensure_index("source_path")
+        ArtifactRegistration.ensure_index("slug")
+        ArtifactRegistration.ensure_index("mount_path")
+        _ensure_artifact_aliases()
 
         # Create composite indexes for performance optimization
         # Note: sqler only supports single-column indexes via ensure_index(),
@@ -617,7 +719,9 @@ async def get_session_by_name_async(box_name: str, session_name: str) -> Session
     return await asyncio.to_thread(get_session_by_name, box_name, session_name)
 
 
-def update_session_activity(session_id: str, active: bool = True, window_count: int | None = None) -> bool:
+def update_session_activity(
+    session_id: str, active: bool = True, window_count: int | None = None
+) -> bool:
     """Update session activity status and optionally window count."""
     _require_db()
 
@@ -679,7 +783,9 @@ async def create_session_async(
     working_directory: str,
     metadata: dict | None = None,
 ) -> Session:
-    return await asyncio.to_thread(create_session, box_name, session_name, working_directory, metadata)
+    return await asyncio.to_thread(
+        create_session, box_name, session_name, working_directory, metadata
+    )
 
 
 async def delete_session_async(session_id: str) -> bool:
@@ -848,8 +954,6 @@ async def purge_stale_snapshots_async(max_age_days: int = 7) -> int:
 
 
 # Directory Visit Tracking (Frecency)
-
-import math
 
 
 def _calculate_frecency_score(visit_count: int, last_visited: float) -> float:
@@ -1274,3 +1378,366 @@ def delete_diff_notebook(notebook_id: str) -> bool:
 
 async def delete_diff_notebook_async(notebook_id: str) -> bool:
     return await asyncio.to_thread(delete_diff_notebook, notebook_id)
+
+
+# --- Artifact projects and registrations ---
+
+
+def _normalize_project_name(name: str) -> str:
+    return " ".join(name.split()).casefold()
+
+
+def get_or_create_artifact_project(name: str) -> tuple[ArtifactProject, bool]:
+    """Return a case-insensitively named project and whether it was created."""
+    _require_db()
+    clean_name = " ".join(name.split())
+    normalized = _normalize_project_name(clean_name)
+    now = time.time()
+    with _DB_LOCK:
+        existing = (
+            ArtifactProject.query().filter(F("normalized_name") == normalized).first()
+        )
+        if existing:
+            return existing, False
+        used = {row.slug for row in ArtifactProject.query().all()}
+        project_id = secrets.token_urlsafe(12)
+        slug = _unique_artifact_slug(
+            artifact_slug(clean_name, "project"), used, project_id
+        )
+        project = ArtifactProject(
+            id=project_id,
+            name=clean_name,
+            normalized_name=normalized,
+            slug=slug,
+            created_at=now,
+            updated_at=now,
+        )
+        project.save()
+        return project, True
+
+
+async def get_or_create_artifact_project_async(
+    name: str,
+) -> tuple[ArtifactProject, bool]:
+    return await asyncio.to_thread(get_or_create_artifact_project, name)
+
+
+def get_artifact_project(project_id: str) -> ArtifactProject | None:
+    _require_db()
+    with _DB_LOCK:
+        return ArtifactProject.query().filter(F("id") == project_id).first()
+
+
+async def get_artifact_project_async(project_id: str) -> ArtifactProject | None:
+    return await asyncio.to_thread(get_artifact_project, project_id)
+
+
+def list_artifact_projects() -> list[ArtifactProject]:
+    _require_db()
+    with _DB_LOCK:
+        return list(ArtifactProject.query().order_by("name").all())
+
+
+async def list_artifact_projects_async() -> list[ArtifactProject]:
+    return await asyncio.to_thread(list_artifact_projects)
+
+
+def rename_artifact_project(project_id: str, name: str) -> ArtifactProject | None:
+    _require_db()
+    clean_name = " ".join(name.split())
+    normalized = _normalize_project_name(clean_name)
+    now = time.time()
+    with _DB_LOCK:
+        project = ArtifactProject.query().filter(F("id") == project_id).first()
+        if not project:
+            return None
+        collision = (
+            ArtifactProject.query().filter(F("normalized_name") == normalized).first()
+        )
+        if collision and collision.id != project_id:
+            raise ValueError("A project with that name already exists")
+        project.name = clean_name
+        project.normalized_name = normalized
+        project.updated_at = now
+        project.save()
+        return project
+
+
+async def rename_artifact_project_async(
+    project_id: str, name: str
+) -> ArtifactProject | None:
+    return await asyncio.to_thread(rename_artifact_project, project_id, name)
+
+
+def list_artifact_registrations(
+    project_id: str | None = None,
+) -> list[ArtifactRegistration]:
+    _require_db()
+    with _DB_LOCK:
+        query = ArtifactRegistration.query()
+        if project_id is not None:
+            query = query.filter(F("project_id") == project_id)
+        return list(query.order_by("created_at", desc=True).all())
+
+
+async def list_artifact_registrations_async(
+    project_id: str | None = None,
+) -> list[ArtifactRegistration]:
+    return await asyncio.to_thread(list_artifact_registrations, project_id)
+
+
+def get_artifact_registration(registration_id: str) -> ArtifactRegistration | None:
+    _require_db()
+    with _DB_LOCK:
+        return (
+            ArtifactRegistration.query().filter(F("id") == registration_id).first()
+        )
+
+
+async def get_artifact_registration_async(
+    registration_id: str,
+) -> ArtifactRegistration | None:
+    return await asyncio.to_thread(get_artifact_registration, registration_id)
+
+
+def find_artifact_registration(
+    source_path: str, mode: str, entrypoint: str | None
+) -> ArtifactRegistration | None:
+    _require_db()
+    with _DB_LOCK:
+        rows = (
+            ArtifactRegistration.query().filter(F("source_path") == source_path).all()
+        )
+        return next(
+            (
+                row
+                for row in rows
+                if row.mode == mode and row.entrypoint == entrypoint
+            ),
+            None,
+        )
+
+
+async def find_artifact_registration_async(
+    source_path: str, mode: str, entrypoint: str | None
+) -> ArtifactRegistration | None:
+    return await asyncio.to_thread(
+        find_artifact_registration, source_path, mode, entrypoint
+    )
+
+
+def get_artifact_project_by_slug(slug: str) -> ArtifactProject | None:
+    _require_db()
+    with _DB_LOCK:
+        return ArtifactProject.query().filter(F("slug") == slug).first()
+
+
+def get_artifact_registration_by_alias(
+    project_slug: str, registration_slug: str
+) -> ArtifactRegistration | None:
+    _require_db()
+    with _DB_LOCK:
+        project = ArtifactProject.query().filter(F("slug") == project_slug).first()
+        if project is None:
+            return None
+        rows = (
+            ArtifactRegistration.query()
+            .filter(F("project_id") == project.id)
+            .all()
+        )
+        return next((row for row in rows if row.slug == registration_slug), None)
+
+
+def find_artifact_registration_by_mount(
+    request_path: str,
+) -> tuple[ArtifactRegistration, str] | None:
+    """Resolve the longest registered root mount and return its remaining path."""
+    _require_db()
+    with _DB_LOCK:
+        rows = [
+            row
+            for row in ArtifactRegistration.query().all()
+            if row.mount_path
+            and (
+                request_path == row.mount_path
+                or request_path.startswith(f"{row.mount_path}/")
+            )
+        ]
+        if not rows:
+            return None
+        registration = max(rows, key=lambda row: len(row.mount_path))
+        relative = request_path[len(registration.mount_path) :].lstrip("/")
+        return registration, relative
+
+
+def create_artifact_registration(
+    *,
+    project_id: str,
+    group_path: str,
+    source_path: str,
+    mode: str,
+    entrypoint: str | None,
+    title_override: str | None,
+    slug: str | None = None,
+    mount_path: str = "",
+) -> ArtifactRegistration:
+    _require_db()
+    now = time.time()
+    with _DB_LOCK:
+        project_rows = (
+            ArtifactRegistration.query().filter(F("project_id") == project_id).all()
+        )
+        used = {row.slug for row in project_rows}
+        source_name = Path(source_path).stem or Path(source_path).name
+        slug_base = artifact_slug(slug or title_override or source_name, "artifact")
+        if slug is not None and slug_base in used:
+            raise ValueError("An artifact with that alias already exists in the project")
+        chosen_slug = _unique_artifact_slug(
+            slug_base, used, secrets.token_urlsafe(16)
+        )
+        if mount_path and any(
+            row.mount_path == mount_path
+            for row in ArtifactRegistration.query().all()
+        ):
+            raise ValueError("That artifact mount path is already registered")
+        registration = ArtifactRegistration(
+            project_id=project_id,
+            group_path=group_path,
+            source_path=source_path,
+            mode=mode,
+            entrypoint=entrypoint,
+            title_override=title_override,
+            slug=chosen_slug,
+            mount_path=mount_path,
+            created_at=now,
+            updated_at=now,
+        )
+        registration.save()
+        return registration
+
+
+async def create_artifact_registration_async(
+    *,
+    project_id: str,
+    group_path: str,
+    source_path: str,
+    mode: str,
+    entrypoint: str | None,
+    title_override: str | None,
+    slug: str | None = None,
+    mount_path: str = "",
+) -> ArtifactRegistration:
+    return await asyncio.to_thread(
+        create_artifact_registration,
+        project_id=project_id,
+        group_path=group_path,
+        source_path=source_path,
+        mode=mode,
+        entrypoint=entrypoint,
+        title_override=title_override,
+        slug=slug,
+        mount_path=mount_path,
+    )
+
+
+def update_artifact_registration(
+    registration_id: str,
+    **changes: object,
+) -> ArtifactRegistration | None:
+    _require_db()
+    allowed = {
+        "project_id",
+        "group_path",
+        "source_path",
+        "mode",
+        "entrypoint",
+        "title_override",
+        "slug",
+        "mount_path",
+    }
+    with _DB_LOCK:
+        registration = (
+            ArtifactRegistration.query().filter(F("id") == registration_id).first()
+        )
+        if not registration:
+            return None
+        next_project_id = str(changes.get("project_id", registration.project_id))
+        next_slug = str(changes.get("slug", registration.slug))
+        slug_collision = next(
+            (
+                row
+                for row in ArtifactRegistration.query()
+                .filter(F("project_id") == next_project_id)
+                .all()
+                if row.id != registration_id and row.slug == next_slug
+            ),
+            None,
+        )
+        if slug_collision:
+            raise ValueError("An artifact with that alias already exists in the project")
+        next_mount = str(changes.get("mount_path", registration.mount_path))
+        if next_mount:
+            mount_collision = next(
+                (
+                    row
+                    for row in ArtifactRegistration.query().all()
+                    if row.id != registration_id and row.mount_path == next_mount
+                ),
+                None,
+            )
+            if mount_collision:
+                raise ValueError("That artifact mount path is already registered")
+        for key, value in changes.items():
+            if key in allowed:
+                setattr(registration, key, value)
+        registration.updated_at = time.time()
+        registration.save()
+        return registration
+
+
+async def update_artifact_registration_async(
+    registration_id: str, **changes: object
+) -> ArtifactRegistration | None:
+    return await asyncio.to_thread(
+        update_artifact_registration, registration_id, **changes
+    )
+
+
+def delete_artifact_registration(registration_id: str) -> bool:
+    _require_db()
+    with _DB_LOCK:
+        registration = (
+            ArtifactRegistration.query().filter(F("id") == registration_id).first()
+        )
+        if not registration:
+            return False
+        registration.delete()
+        return True
+
+
+async def delete_artifact_registration_async(registration_id: str) -> bool:
+    return await asyncio.to_thread(delete_artifact_registration, registration_id)
+
+
+def delete_artifact_project(project_id: str, *, cascade: bool = False) -> tuple[bool, int]:
+    """Delete a project, optionally unregistering its artifacts first."""
+    _require_db()
+    with _DB_LOCK:
+        project = ArtifactProject.query().filter(F("id") == project_id).first()
+        if not project:
+            return False, 0
+        registrations = list(
+            ArtifactRegistration.query().filter(F("project_id") == project_id).all()
+        )
+        if registrations and not cascade:
+            raise ValueError("Project still contains artifact registrations")
+        for registration in registrations:
+            registration.delete()
+        project.delete()
+        return True, len(registrations)
+
+
+async def delete_artifact_project_async(
+    project_id: str, *, cascade: bool = False
+) -> tuple[bool, int]:
+    return await asyncio.to_thread(delete_artifact_project, project_id, cascade=cascade)

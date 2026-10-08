@@ -46,10 +46,16 @@ const getLanguageExtension = (lang: string) => {
   switch (lang.toLowerCase()) {
     case 'javascript':
     case 'js':
-    case 'jsx':
-    case 'ts':
-    case 'tsx':
       return javascript()
+    case 'jsx':
+      return javascript({ jsx: true })
+    case 'typescript':
+    case 'ts':
+      return javascript({ typescript: true })
+    case 'tsx':
+      return javascript({ typescript: true, jsx: true })
+    case 'vue':
+      return html()
     case 'python':
     case 'py':
       return python()

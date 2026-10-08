@@ -11,6 +11,7 @@ render and closed after — cheap (~50ms) and keeps requests isolated.
 A module-level asyncio.Lock serializes Page creation; sshler is a
 single-user localhost tool, so parallelism here would buy nothing.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,7 +42,9 @@ class PDFRenderer:
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            logger.info("PDF export unavailable: playwright not installed (pip install 'sshler[pdf]')")
+            logger.info(
+                "PDF export unavailable: playwright not installed (pip install 'sshler[pdf]')"
+            )
             self.available = False
             return
 

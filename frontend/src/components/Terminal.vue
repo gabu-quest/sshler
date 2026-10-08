@@ -19,6 +19,7 @@ import {
   PhX,
   PhXCircle,
   PhPower,
+  PhSkull,
   PhMouse,
   PhCopy,
   PhClipboard,
@@ -39,8 +40,10 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { statPath, fetchSnapshotStatus, captureTmuxPane } from '@/api/http'
+import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
+import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
+import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
 import type { ApiSession } from '@/api/types'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
 
@@ -87,7 +90,7 @@ const emit = defineEmits<Emits>()
 const message = useMessage()
 const bootstrapStore = useBootstrapStore()
 const appStore = useAppStore()
-const { isMobile, isTouch } = useResponsive()
+const { isMobile } = useResponsive()
 const { t } = useI18n()
 
 // Computed font size: cap at 12px on mobile
@@ -440,6 +443,17 @@ const updateCwdFromOsc = (payload: string) => {
   if (cwd) currentCwd.value = cwd
 }
 
+/** Activate an OSC 8 hyperlink: web links in a new tab, file:// in the file viewer */
+const openOscLink = (uri: string) => {
+  const target = classifyOscLink(uri)
+  if (target.kind === 'web') {
+    window.open(target.url, '_blank', 'noopener,noreferrer')
+  } else if (target.kind === 'file') {
+    const path = parseOscCwd(target.url)
+    if (path) handleFilePathClick(path)
+  }
+}
+
 /** Resolve a file path from terminal output and open it in Files view */
 const handleFilePathClick = async (rawPath: string) => {
   const box = props.boxName
@@ -789,6 +803,21 @@ const tmuxKillWindowConfirmed = () => sendTmuxCommand('kill-window')
 // Kill session (called after NPopconfirm)
 const tmuxKillSession = () => sendTmuxCommand('kill-session')
 
+// Force-kill session ("super off"): unlike kill-session (SIGHUP over the WS),
+// this hits the REST endpoint that runs kill-server on the session's own socket
+// then SIGKILLs any pane process that ignored SIGHUP. Local box only.
+const tmuxForceKillSession = async () => {
+  if (isNativeShell.value) return
+  const name = sessionOverride.value ?? props.sessionName
+  if (!name) return
+  try {
+    await forceKillSessionByName(props.boxName, name, tokenValue.value)
+    message.success(t('terminal.force_kill_session_done', { name }))
+  } catch {
+    message.error(t('terminal.force_kill_session_failed', { name }))
+  }
+}
+
 // Mouse mode toggle (tmux mouse on/off)
 const mouseMode = ref(true)
 
@@ -801,12 +830,6 @@ const setTmuxMouse = (on: boolean) => {
     const cmd = on ? 'set -g mouse on\n' : 'set -g mouse off\n'
     websocket?.send(textEncoder.encode(cmd))
   }, 100)
-}
-
-// Sync tmux mouse state after connect
-const syncMouseMode = () => {
-  // Always ensure tmux matches our ref on connect
-  setTmuxMouse(mouseMode.value)
 }
 
 const enterCopyMode = () => {
@@ -882,8 +905,13 @@ const createTerminal = () => {
     rightClickSelectsWord: false,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: false,
-    convertEol: true,
+    ...PTY_STREAM_OPTIONS,
     allowProposedApi: true,
+    // OSC 8 hyperlinks (Claude Code, ls --hyperlink, gcc): open without xterm's confirm() prompt
+    linkHandler: {
+      allowNonHttpProtocols: true,
+      activate: (_event: MouseEvent, uri: string) => openOscLink(uri),
+    },
     // When external input is active, suppress xterm keyboard capture
     disableStdin: props.externalInput
   })
@@ -894,7 +922,10 @@ const createTerminal = () => {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.loadAddon(searchAddon)
-  terminal.loadAddon(new ClipboardAddon())
+  terminal.loadAddon(new ClipboardAddon(undefined, new TerminalClipboardProvider(
+    (text) => navigator.clipboard.writeText(text),
+    copyWithFallback,
+  )))
 
   // Track the shell's working directory from the cwd-reporting OSC sequences that
   // shell integrations emit on each prompt. This is what makes clicked relative
@@ -915,9 +946,9 @@ const createTerminal = () => {
     return false // 9;4 (progress), 9;<text> (notify), etc. are not ours
   })
   terminal.parser.registerOscHandler(1337, (data: string) => {
-    const m = data.match(/^CurrentDir=(.+)$/)
-    if (m) {
-      updateCwdFromOsc(m[1])
+    const dir = data.match(/^CurrentDir=(.+)$/)?.[1]
+    if (dir !== undefined) {
+      updateCwdFromOsc(dir)
       return true
     }
     return false
@@ -1007,6 +1038,14 @@ const createTerminal = () => {
   terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
     if (event.type !== 'keydown') return true
 
+    // Shift+Enter: ESC CR, so chat-style TUIs insert a newline instead of submitting
+    const shiftEnter = shiftEnterSequence(event)
+    if (shiftEnter) {
+      event.preventDefault()
+      terminal?.input(shiftEnter, true)
+      return false
+    }
+
     // Ctrl+C: copy if selection exists, else let terminal handle (SIGINT)
     if (event.ctrlKey && event.key === 'c') {
       if (terminal?.hasSelection()) {
@@ -1078,7 +1117,7 @@ const createTerminal = () => {
 
   // Copy on selection (like tmux mouse mode)
   // Note: Uses mouseup event for better clipboard API compatibility
-  terminalRef.value?.addEventListener('mouseup', (event) => {
+  terminalRef.value?.addEventListener('mouseup', () => {
     // Small delay to ensure selection is complete
     setTimeout(() => {
       const selection = terminal?.getSelection()
@@ -1132,7 +1171,7 @@ const createTerminal = () => {
 const setupResizeObserver = () => {
   if (!terminalRef.value || !fitAddon) return
 
-  resizeObserver = new ResizeObserver((entries) => {
+  resizeObserver = new ResizeObserver(() => {
     if (resizeTimeout) {
       clearTimeout(resizeTimeout)
     }
@@ -1180,57 +1219,6 @@ const handleBell = () => {
         tag: 'terminal-bell'
       })
     }
-  }
-}
-
-const handleOSC777 = (data: string) => {
-  try {
-    // Parse OSC 777 notification
-    const match = data.match(/notify=(.+)/)
-    if (!match || !match[1]) return
-
-    const payload = match[1]
-    let title = 'Terminal Notification'
-    let messageText = payload
-
-    // Check if it's JSON
-    if (payload.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(payload)
-        title = parsed.title || title
-        messageText = parsed.message || parsed.body || messageText
-      } catch {
-        // Not JSON, try pipe format
-        const parts = payload.split('|')
-        if (parts.length >= 2 && parts[0] && parts[1]) {
-          title = decodeURIComponent(parts[0])
-          messageText = decodeURIComponent(parts[1])
-        }
-      }
-    } else {
-      // Try pipe format
-      const parts = payload.split('|')
-      if (parts.length >= 2 && parts[0] && parts[1]) {
-        title = decodeURIComponent(parts[0])
-        messageText = decodeURIComponent(parts[1])
-      }
-    }
-
-    emit('notification', { title, message: messageText })
-
-    // Show browser notification
-    if (Notification.permission === 'granted') {
-      new Notification(title, {
-        body: messageText,
-        icon: '/favicon.svg',
-        tag: 'terminal-osc777'
-      })
-    }
-
-    // Show toast
-    message.info(`${title}: ${messageText}`)
-  } catch (error) {
-    console.warn('Failed to parse OSC 777 notification:', error)
   }
 }
 
@@ -1891,6 +1879,21 @@ defineExpose({
               </NTooltip>
             </template>
             {{ t('terminal.kill_session_confirm') }}
+          </NPopconfirm>
+          <NPopconfirm
+            :positive-text="t('terminal.force_kill_session')"
+            :negative-text="t('common.cancel')"
+            @positive-click="tmuxForceKillSession"
+          >
+            <template #trigger>
+              <NTooltip :delay="400">
+                <template #trigger>
+                  <button class="toolbar-btn toolbar-btn-danger"><PhSkull :size="14" weight="bold" /></button>
+                </template>
+                {{ t('terminal.force_kill_session') }}
+              </NTooltip>
+            </template>
+            {{ t('terminal.force_kill_session_confirm') }}
           </NPopconfirm>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />

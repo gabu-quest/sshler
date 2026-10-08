@@ -94,13 +94,14 @@ describe("DirectorySearchInput", () => {
     // Should not have called API yet (only 300ms since first, but query kept changing)
     expect(searchDirectories).not.toHaveBeenCalled();
 
-    // Wait for debounce
-    vi.advanceTimersByTime(300);
+    // Wait for debounce (async form so the fired timer's promise chain settles)
+    await vi.advanceTimersByTimeAsync(300);
 
     // Now should have called once with final query
-    await waitFor(() => {
-      expect(searchDirectories).toHaveBeenCalledTimes(1);
-      expect(searchDirectories).toHaveBeenCalledWith("testbox", "pro", "test-token");
+    expect(searchDirectories).toHaveBeenCalledTimes(1);
+    expect(searchDirectories).toHaveBeenCalledWith("testbox", "pro", "test-token", 20, {
+      root: undefined,
+      files: false,
     });
   });
 
@@ -133,9 +134,35 @@ describe("DirectorySearchInput", () => {
     // Click a result
     await fireEvent.mouseDown(getByText("/home/user/projects"));
 
-    // Check select event was emitted
+    // Check select event was emitted with the path and is_directory flag
     expect(emitted().select).toBeTruthy();
-    expect(emitted().select[0]).toEqual(["/home/user/projects"]);
+    expect(emitted().select?.[0]).toEqual(["/home/user/projects", true]);
+  });
+
+  it("emits select with isDirectory=false for file results", async () => {
+    (searchDirectories as ReturnType<typeof vi.fn>).mockResolvedValue({
+      box: "testbox",
+      query: "report",
+      results: [
+        { path: "/home/user/report.pdf", score: 0.1, source: "discovery", is_directory: false },
+      ],
+    });
+
+    const { getByTestId, getByText, emitted } = render(DirectorySearchInput, {
+      props: { box: "testbox", token: "test-token", files: true },
+    });
+
+    await fireEvent.update(getByTestId("search-input"), "report");
+    vi.advanceTimersByTime(300);
+
+    await waitFor(() => {
+      expect(getByText("/home/user/report.pdf")).toBeTruthy();
+    });
+
+    await fireEvent.mouseDown(getByText("/home/user/report.pdf"));
+
+    expect(emitted().select).toBeTruthy();
+    expect(emitted().select?.[0]).toEqual(["/home/user/report.pdf", false]);
   });
 
   it("shows loading state while searching", async () => {

@@ -15,7 +15,8 @@ from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .helpers import _normalize_local_path, _normalize_directory_path
+from .files import _remote_path
+from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_grep
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         _rate_limit: None = Depends(rate_limit_grep),
     ) -> APIGrepResponse:
         if len(pattern) > MAX_PATTERN_LENGTH:
-            raise HTTPException(status_code=400, detail=f"Pattern too long (max {MAX_PATTERN_LENGTH} chars)")
+            raise HTTPException(
+                status_code=400, detail=f"Pattern too long (max {MAX_PATTERN_LENGTH} chars)"
+            )
         if "\0" in pattern:
             raise HTTPException(status_code=400, detail="Pattern cannot contain null bytes")
 
@@ -102,8 +105,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GREP_TIMEOUT)
-            except asyncio.TimeoutError:
-                raise HTTPException(status_code=504, detail="Search timed out")
+            except TimeoutError as exc:
+                raise HTTPException(status_code=504, detail="Search timed out") from exc
 
             output = stdout.decode("utf-8", errors="replace")
             matches, truncated = _parse_grep_output(output, limit)
@@ -120,29 +123,37 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             validated_dir = PathValidator.validate_remote_path(directory)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        # Build command as list, then join with shlex.quote for safety
-        cmd_parts = ["grep", "-rn"]
-        if not case_sensitive:
-            cmd_parts.append("-i")
-        cmd_parts.extend([f"-m", str(limit), "--", pattern, validated_dir])
-        cmd = " ".join(shlex.quote(p) for p in cmd_parts) + " 2>/dev/null"
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         ssh_pool = get_pool()
         try:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
+                # The quoted shell argument would not expand `~`: resolve it here.
+                validated_dir = await _remote_path(connection, validated_dir)
+
+                # Build command as list, then join with shlex.quote for safety
+                cmd_parts = ["grep", "-rn"]
+                if not case_sensitive:
+                    cmd_parts.append("-i")
+                cmd_parts.extend(["-m", str(limit), "--", pattern, validated_dir])
+                cmd = " ".join(shlex.quote(p) for p in cmd_parts) + " 2>/dev/null"
+
                 try:
                     result = await asyncio.wait_for(
                         connection.run(cmd, check=False),
                         timeout=GREP_TIMEOUT,
                     )
-                except asyncio.TimeoutError:
-                    raise HTTPException(status_code=504, detail="Search timed out")
+                except TimeoutError as exc:
+                    raise HTTPException(status_code=504, detail="Search timed out") from exc
 
-                output = result.stdout or ""
+                remote_out = result.stdout or ""
+                output = (
+                    remote_out
+                    if isinstance(remote_out, str)
+                    else remote_out.decode("utf-8", errors="replace")
+                )
                 matches, truncated = _parse_grep_output(output, limit)
 
                 return APIGrepResponse(
@@ -154,7 +165,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 )
         except HTTPException:
             raise
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except SSHError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return router

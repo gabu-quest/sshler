@@ -78,7 +78,7 @@ function isMarkdownPath(p: string): boolean {
 function resolveImagePath(src: string, parentDir: string): string | null {
   if (!src) return null;
   if (/^(data:|https?:|\/\/|blob:|mailto:|#)/i.test(src)) return null;
-  if (src.startsWith("/")) return src.split("#")[0].split("?")[0];
+  if (src.startsWith("/")) return stripQueryAndHash(src);
   const base = parentDir.endsWith("/") ? parentDir : parentDir + "/";
   const parts = base.split("/").filter(Boolean);
   for (const seg of src.split("/")) {
@@ -86,7 +86,12 @@ function resolveImagePath(src: string, parentDir: string): string | null {
     if (seg === "..") { parts.pop(); continue; }
     parts.push(seg);
   }
-  return ("/" + parts.join("/")).split("#")[0].split("?")[0];
+  return stripQueryAndHash("/" + parts.join("/"));
+}
+
+/** The part of `s` before its first `?` or `#`. */
+function stripQueryAndHash(s: string): string {
+  return s.replace(/[?#][\s\S]*$/, "");
 }
 
 /** Lazy mermaid singleton. */
@@ -125,8 +130,7 @@ async function renderMermaidBlocks(container: HTMLElement, theme: PrintableTheme
   );
   if (blocks.length === 0) return;
   const mermaid = await getMermaid(theme);
-  for (let i = 0; i < blocks.length; i++) {
-    const codeEl = blocks[i];
+  for (const [i, codeEl] of blocks.entries()) {
     const pre = codeEl.parentElement;
     const host = pre?.tagName === "PRE" ? pre : codeEl;
     let source = decodeHtmlEntities(codeEl.textContent ?? "");
@@ -144,8 +148,9 @@ async function renderMermaidBlocks(container: HTMLElement, theme: PrintableTheme
         const viewBox = svgEl.getAttribute("viewBox");
         if (viewBox) {
           const parts = viewBox.split(/\s+/).map(Number);
-          if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-            const aspect = parts[2] / parts[3];
+          const [, , vbWidth = 0, vbHeight = 0] = parts;
+          if (parts.length === 4 && vbWidth > 0 && vbHeight > 0) {
+            const aspect = vbWidth / vbHeight;
             if (aspect > 1.4) wrapper.classList.add("mermaid-wide");
           }
         }

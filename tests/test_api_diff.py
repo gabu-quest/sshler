@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
-
 
 TEST_TOKEN = "diff-api-token"
 
@@ -27,8 +26,8 @@ def setup_config(tmp_path: Path) -> Path:
     return config_dir
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     state.reset_state()
     state.initialize(config_dir)
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
@@ -43,15 +42,25 @@ def sample_envelope(label_suffix: str = "") -> dict:
         "v": 1,
         "cells": [
             {
-                "l": {"box": "local", "directory": "/r", "ref": "main", "path": f"a{label_suffix}.ts"},
-                "r": {"box": "local", "directory": "/r", "ref": "feat", "path": f"a{label_suffix}.ts"},
+                "l": {
+                    "box": "local",
+                    "directory": "/r",
+                    "ref": "main",
+                    "path": f"a{label_suffix}.ts",
+                },
+                "r": {
+                    "box": "local",
+                    "directory": "/r",
+                    "ref": "feat",
+                    "path": f"a{label_suffix}.ts",
+                },
             }
         ],
     }
 
 
-def test_create_returns_id_label_and_round_trippable_envelope(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_create_returns_id_label_and_round_trippable_envelope(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         env = sample_envelope()
         resp = client.post(
@@ -70,8 +79,8 @@ def test_create_returns_id_label_and_round_trippable_envelope(tmp_path):
         client.close()
 
 
-def test_create_then_get_round_trips(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_create_then_get_round_trips(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         env = sample_envelope("x")
         created = client.post(
@@ -92,8 +101,8 @@ def test_create_then_get_round_trips(tmp_path):
         client.close()
 
 
-def test_list_returns_meta_only_no_envelope(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_list_returns_meta_only_no_envelope(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         for i in range(3):
             client.post(
@@ -116,11 +125,12 @@ def test_list_returns_meta_only_no_envelope(tmp_path):
         client.close()
 
 
-def test_list_is_newest_first(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_list_is_newest_first(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         # Insert with deliberate small delays so created_at differs.
         import time as _t
+
         ids: list[str] = []
         for i in range(3):
             r = client.post(
@@ -136,8 +146,8 @@ def test_list_is_newest_first(tmp_path):
         client.close()
 
 
-def test_delete_first_call_removed_true_second_call_false(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_delete_first_call_removed_true_second_call_false(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         created = client.post(
             "/api/v1/diff/notebooks",
@@ -160,8 +170,8 @@ def test_delete_first_call_removed_true_second_call_false(tmp_path):
         client.close()
 
 
-def test_get_unknown_id_returns_404(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_get_unknown_id_returns_404(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.get(
             "/api/v1/diff/notebooks/abcd1234",
@@ -172,26 +182,34 @@ def test_get_unknown_id_returns_404(tmp_path):
         client.close()
 
 
-def test_get_malformed_id_returns_404_not_500(tmp_path):
-    """Path-traversal-shaped ids must be refused at the validation layer."""
-    client = build_client(setup_config(tmp_path))
+@pytest.mark.parametrize(
+    ("bad_id", "expected_status"),
+    [
+        # Fails the id regex (right length, illegal characters) -> 404.
+        ("..!!!!!!", 404),
+        # Traversal shape: not a single path segment, so no notebook route matches -> 404.
+        ("../etc/passwd", 404),
+        # Longer than the 32-char max: FastAPI's Path(max_length) rejects it -> 422.
+        ("x" * 33, 422),
+    ],
+)
+def test_get_malformed_id_is_refused_at_validation(tmp_path, monkeypatch, bad_id, expected_status):
+    """Path-traversal-shaped ids must be refused at the validation layer.
+
+    Mutations killed: validation removed so a bad id reaches the store (500 or
+    200), or the length/regex layer swapping its status.
+    """
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
-        # FastAPI's Path(min_length=8) catches the short input first → 422; the
-        # regex catches longer-but-invalid shapes → 404. Both are acceptable
-        # "definitely not a real id" responses. Assert neither is 500.
-        for bad_id in ["..!!!!!!", "../etc/passwd", "x" * 33]:
-            r = client.get(
-                f"/api/v1/diff/notebooks/{bad_id}",
-                headers=auth_headers(),
-            )
-            assert r.status_code in (404, 422), f"unexpected status for {bad_id}: {r.status_code}"
+        r = client.get(f"/api/v1/diff/notebooks/{bad_id}", headers=auth_headers())
+        assert r.status_code == expected_status
     finally:
         client.close()
 
 
-def test_create_with_v2_envelope_is_422(tmp_path):
+def test_create_with_v2_envelope_is_422(tmp_path, monkeypatch):
     """Pydantic rejects envelope versions the server doesn't understand."""
-    client = build_client(setup_config(tmp_path))
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         bad_envelope = {"v": 2, "cells": []}
         resp = client.post(
@@ -204,8 +222,8 @@ def test_create_with_v2_envelope_is_422(tmp_path):
         client.close()
 
 
-def test_create_with_missing_envelope_is_422(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_create_with_missing_envelope_is_422(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/diff/notebooks",
@@ -217,31 +235,34 @@ def test_create_with_missing_envelope_is_422(tmp_path):
         client.close()
 
 
-def test_no_token_returns_4xx(tmp_path):
+def test_no_token_returns_403(tmp_path, monkeypatch):
     """Token gate covers diff notebook routes like every other API route."""
-    client = build_client(setup_config(tmp_path))
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
-        # The exact status depends on the auth layer (403 by default for
-        # missing/invalid token in this project). Just assert "not 2xx".
+        # The auth layer answers 403 for a missing token in this project.
         resp = client.get("/api/v1/diff/notebooks")
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 403
         resp2 = client.post(
             "/api/v1/diff/notebooks",
             json={"envelope": sample_envelope()},
         )
-        assert resp2.status_code in (401, 403)
+        assert resp2.status_code == 403
     finally:
         client.close()
 
 
-def test_create_with_default_repo_preserved(tmp_path):
+def test_create_with_default_repo_preserved(tmp_path, monkeypatch):
     """The optional `def` field round-trips correctly through the `def_` alias."""
-    client = build_client(setup_config(tmp_path))
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         env = {
             "v": 1,
-            "cells": [{"l": {"box": "local", "directory": "/r", "ref": "main", "path": "a.ts"},
-                        "r": {"box": "local", "directory": "/r", "ref": "feat", "path": "a.ts"}}],
+            "cells": [
+                {
+                    "l": {"box": "local", "directory": "/r", "ref": "main", "path": "a.ts"},
+                    "r": {"box": "local", "directory": "/r", "ref": "feat", "path": "a.ts"},
+                }
+            ],
             "def": {"box": "local", "directory": "/r"},
         }
         created = client.post(
@@ -258,9 +279,9 @@ def test_create_with_default_repo_preserved(tmp_path):
         client.close()
 
 
-def test_oversized_envelope_returns_413(tmp_path):
+def test_oversized_envelope_returns_413(tmp_path, monkeypatch):
     """1 MB cap protects the DB from a runaway payload."""
-    client = build_client(setup_config(tmp_path))
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         # Build an envelope that JSON-serializes past 1 MB. Each cell is ~150 bytes;
         # need ~7000 cells. We pack the path with junk to inflate faster.

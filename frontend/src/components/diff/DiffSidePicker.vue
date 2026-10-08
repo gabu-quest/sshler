@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, type InputHTMLAttributes } from "vue";
 import { NSelect, NInput, NAutoComplete, NIcon } from "naive-ui";
 import { PhArrowLeft, PhArrowRight, PhGitBranch, PhFolder, PhFile } from "@phosphor-icons/vue";
 
@@ -78,6 +78,10 @@ watch(() => [local.value.box, local.value.directory], () => {
 // Initial load
 loadRefs();
 
+// InputHTMLAttributes has no index signature for data-* attributes, so the
+// test id goes through a typed record that NAutoComplete spreads onto <input>.
+const refInputProps = computed(() => ({ "data-testid": `diff-ref-${props.variant}` }) as InputHTMLAttributes);
+
 const variantIcon = computed(() => (props.variant === "left" ? PhArrowLeft : PhArrowRight));
 const variantLabel = computed(() =>
   props.variant === "left" ? t("diff.side.left") : t("diff.side.right"),
@@ -137,7 +141,7 @@ const variantLabel = computed(() =>
         @select="emitChange"
         @blur="emitChange"
         @keyup.enter="emitChange"
-        :input-props="{ 'data-testid': `diff-ref-${variant}` }"
+        :input-props="refInputProps"
       />
     </label>
 

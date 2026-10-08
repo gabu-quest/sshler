@@ -7,9 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from pathlib import Path
-from unittest import mock
 
 import httpx
 import pytest

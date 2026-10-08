@@ -300,7 +300,7 @@ describe("Files Store Properties", () => {
           await store.doUpload(boxName, directory, mockFile, "test-token");
 
           // Verify API was called
-          expect(mockUploadFile).toHaveBeenCalledWith(boxName, directory, mockFile, "test-token", expect.any(Function));
+          expect(mockUploadFile).toHaveBeenCalledWith(boxName, directory, mockFile, "test-token", expect.any(Function), {});
 
           // Verify upload progress was tracked and state cleared on success
           expect(store.uploadProgress).toBe(100);
@@ -328,10 +328,13 @@ describe("Files Store Properties", () => {
           const mockFile = new File(['test content'], fileName, { type: 'text/plain' });
 
           // Mock upload error
-          mockUploadFile.mockRejectedValueOnce(new Error(errorMessage));
+          const failure = new Error(errorMessage);
+          mockUploadFile.mockRejectedValueOnce(failure);
 
-          // Test file upload
-          await store.doUpload(boxName, directory, mockFile, "test-token");
+          // The failure reaches the caller (wave 5d, WS-AG). Mutation: swallow it in
+          // doUpload (the pre-5d store); the caller then counts and toasts a refused
+          // file as uploaded, and this await resolves instead of rejecting.
+          await expect(store.doUpload(boxName, directory, mockFile, "test-token")).rejects.toBe(failure);
 
           // Verify error was captured
           expect(store.uploadError).toBe(errorMessage);
@@ -341,6 +344,18 @@ describe("Files Store Properties", () => {
           expect(store.uploadFileName).toBeNull();
         }
       ), { numRuns: 20 });
+    });
+  });
+
+  describe("upload replace flag (wave 5d, WS-AG)", () => {
+    // Mutation: doUpload drops its options argument; the re-send after "Replace" goes
+    // out without the overwrite flag and the server refuses it again.
+    it("forwards { overwrite: true } to uploadFile", async () => {
+      const store = useFilesStore();
+      const file = new File(["x"], "a.txt");
+      await store.doUpload("box", "/srv", file, "tok", { overwrite: true });
+      expect(mockUploadFile).toHaveBeenCalledTimes(1);
+      expect(mockUploadFile).toHaveBeenCalledWith("box", "/srv", file, "tok", expect.any(Function), { overwrite: true });
     });
   });
 

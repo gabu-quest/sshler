@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
-import { PhMagnifyingGlass, PhFolder, PhClockCounterClockwise } from "@phosphor-icons/vue";
+import { PhMagnifyingGlass, PhFolder, PhFile, PhClockCounterClockwise } from "@phosphor-icons/vue";
 import { searchDirectories } from "@/api/http";
 import type { SearchResult } from "@/api/types";
 import { useI18n } from "@/i18n";
@@ -9,10 +9,14 @@ import { useI18n } from "@/i18n";
 const props = defineProps<{
   box: string | null;
   token: string | null;
+  /** Directory to scope filesystem discovery under (default: home) */
+  root?: string | null;
+  /** Include files in results, not just directories */
+  files?: boolean;
 }>();
 
 const emit = defineEmits<{
-  (e: "select", path: string): void;
+  (e: "select", path: string, isDirectory: boolean): void;
 }>();
 
 const { t } = useI18n();
@@ -51,7 +55,10 @@ async function performSearch(searchQuery: string) {
   showDropdown.value = true;
 
   try {
-    const response = await searchDirectories(props.box, searchQuery, props.token);
+    const response = await searchDirectories(props.box, searchQuery, props.token, 20, {
+      root: props.root ?? undefined,
+      files: props.files,
+    });
     results.value = response.results;
   } catch (err) {
     console.error("Directory search failed:", err);
@@ -62,7 +69,7 @@ async function performSearch(searchQuery: string) {
 }
 
 function selectResult(result: SearchResult) {
-  emit("select", result.path);
+  emit("select", result.path, result.is_directory !== false);
   query.value = "";
   showDropdown.value = false;
   results.value = [];
@@ -82,11 +89,11 @@ function handleFocus() {
 }
 
 function formatPath(path: string): string {
-  // Show shortened path for long paths
-  if (path.length > 50) {
+  // Show shortened path only for very long paths (dropdown grows past the input width)
+  if (path.length > 90) {
     const parts = path.split("/");
-    if (parts.length > 3) {
-      return `.../${parts.slice(-3).join("/")}`;
+    if (parts.length > 5) {
+      return `.../${parts.slice(-5).join("/")}`;
     }
   }
   return path;
@@ -127,13 +134,11 @@ function formatPath(path: string): string {
           @mousedown.prevent="selectResult(result)"
         >
           <NIcon size="14" class="result-icon">
-            <PhFolder v-if="result.source === 'frecency'" weight="duotone" />
-            <PhClockCounterClockwise v-else weight="duotone" />
+            <PhFile v-if="result.is_directory === false" weight="duotone" />
+            <PhClockCounterClockwise v-else-if="result.source === 'frecency'" weight="duotone" />
+            <PhFolder v-else weight="duotone" />
           </NIcon>
           <span class="result-path" :title="result.path">{{ formatPath(result.path) }}</span>
-          <span class="result-score" :class="result.source">
-            {{ result.source === "frecency" ? t('dirsearch.visited') : t('dirsearch.found') }}
-          </span>
         </div>
       </div>
 
@@ -158,7 +163,9 @@ function formatPath(path: string): string {
   position: absolute;
   top: 100%;
   left: 0;
-  right: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(90vw, 680px);
   z-index: 1000;
   margin-top: 4px;
   background: var(--surface);
@@ -209,25 +216,6 @@ function formatPath(path: string): string {
   white-space: nowrap;
 }
 
-.result-score {
-  flex-shrink: 0;
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.result-score.frecency {
-  background: var(--accent-bg);
-  color: var(--accent);
-}
-
-.result-score.discovery {
-  background: var(--surface-variant);
-  color: var(--muted);
-}
-
 .search-empty {
   padding: 16px;
 }
@@ -242,6 +230,8 @@ function formatPath(path: string): string {
     position: fixed;
     left: 8px;
     right: 8px;
+    width: auto;
+    max-width: none;
     max-height: 50vh;
   }
 

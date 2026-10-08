@@ -17,6 +17,8 @@ export interface BootstrapPayload {
   platform?: string;
   windows_shells?: WindowsShell[];
   default_shell?: string | null;
+  artifact_server_enabled?: boolean;
+  artifact_server_port?: number | null;
 }
 
 export interface ApiBox {
@@ -131,6 +133,7 @@ export interface SearchResult {
   path: string;
   score: number;
   source: "frecency" | "discovery";
+  is_directory?: boolean;
 }
 
 export interface SearchResponse {
@@ -332,6 +335,63 @@ export interface DiffNotebookList {
 }
 
 export interface DiffNotebookDeleteResult {
+  ok: boolean;
+  removed: boolean;
+}
+
+export type ArtifactMode = "file" | "site" | "collection";
+
+export interface ArtifactProject {
+  id: string;
+  name: string;
+  slug: string;
+  registration_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ArtifactRegistration {
+  id: string;
+  project_id: string;
+  project_name: string;
+  project_slug: string;
+  group_path: string;
+  source_path: string;
+  mode: ArtifactMode;
+  entrypoint: string | null;
+  title: string | null;
+  slug: string;
+  alias_path: string;
+  mount_path: string | null;
+  exists: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ArtifactCreateResult extends ArtifactRegistration {
+  created: boolean;
+}
+
+export interface ArtifactPage {
+  relative_path: string;
+  title: string;
+  group_path: string;
+  serve_path: string;
+}
+
+export interface ArtifactProjectList {
+  projects: ArtifactProject[];
+}
+
+export interface ArtifactList {
+  artifacts: ArtifactRegistration[];
+}
+
+export interface ArtifactPageList {
+  pages: ArtifactPage[];
+}
+
+export interface ArtifactDeleteResult {
   ok: boolean;
   removed: boolean;
 }

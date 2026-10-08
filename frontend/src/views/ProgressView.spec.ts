@@ -39,6 +39,7 @@ vi.mock("naive-ui", () => {
       template:
         '<div class="stub-popconfirm" @click="$emit(\'positive-click\')"><slot name="trigger" /><slot /></div>',
     },
+    NAlert: stub('<div class="stub-alert" :data-type="type"><slot /></div>', ["type"]),
     useMessage: () => ({
       success: vi.fn(),
       error: vi.fn(),
@@ -201,7 +202,10 @@ describe("ProgressView", () => {
 
     const { container } = mountView();
     // The stub-popconfirm forwards its own click event as positive-click.
-    const popconfirm = container.querySelector(".stub-popconfirm") as HTMLElement;
+    // Scope to the per-row popconfirm — the header now also has one (clear-finished).
+    const popconfirm = container.querySelector(
+      ".progress-row .stub-popconfirm",
+    ) as HTMLElement;
     expect(popconfirm).not.toBeNull();
     await fireEvent.click(popconfirm);
 
@@ -222,5 +226,68 @@ describe("ProgressView", () => {
     const connectSpy = vi.spyOn(progress, "connect");
     mountView();
     expect(connectSpy).toHaveBeenCalledWith("test-token");
+  });
+
+  it("clear finished deletes only done/failed/cancelled bars, never running ones", async () => {
+    const progress = useProgressStore();
+    const removeSpy = vi.spyOn(progress, "remove").mockResolvedValue(true);
+    progress._injectEventForTest({
+      type: "snapshot",
+      bars: [
+        makeBar("keep-running-1", { status: "running" }),
+        makeBar("keep-running-2", { status: "running" }),
+        makeBar("drop-done", { status: "done" }),
+        makeBar("drop-failed", { status: "failed" }),
+        makeBar("drop-cancelled", { status: "cancelled" }),
+      ],
+    });
+
+    const { container } = mountView();
+    const clearPopconfirm = container.querySelector(
+      ".progress-view__clear-popconfirm",
+    ) as HTMLElement;
+    expect(clearPopconfirm).not.toBeNull();
+    await fireEvent.click(clearPopconfirm);
+    await Promise.resolve();
+
+    expect(removeSpy).toHaveBeenCalledTimes(3);
+    const deletedNames = removeSpy.mock.calls.map((call) => call[0]).sort();
+    expect(deletedNames).toEqual(["drop-cancelled", "drop-done", "drop-failed"]);
+    expect(removeSpy).not.toHaveBeenCalledWith("keep-running-1", expect.anything());
+    expect(removeSpy).not.toHaveBeenCalledWith("keep-running-2", expect.anything());
+  });
+
+  it("clear finished button is disabled when there are no finished bars", async () => {
+    const progress = useProgressStore();
+    progress._injectEventForTest({
+      type: "snapshot",
+      bars: [
+        makeBar("only-running-1", { status: "running" }),
+        makeBar("only-running-2", { status: "running" }),
+      ],
+    });
+
+    const { container } = mountView();
+    const clearButton = container.querySelector(
+      '[data-testid="clear-finished-button"]',
+    ) as HTMLButtonElement;
+    expect(clearButton).not.toBeNull();
+    expect(clearButton.disabled).toBe(true);
+  });
+
+  it("shows the no-scope banner when no box is active, hides it otherwise", async () => {
+    useAppStore().activeBox = null;
+    const { container, unmount } = mountView();
+    const banner = container.querySelector('[data-testid="no-scope-banner"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("Select a box to enable live subscriptions");
+    unmount();
+  });
+
+  it("does not show the no-scope banner when a box is active", () => {
+    // beforeEach already sets activeBox = "test-box".
+    const { container } = mountView();
+    const banner = container.querySelector('[data-testid="no-scope-banner"]');
+    expect(banner).toBeNull();
   });
 });

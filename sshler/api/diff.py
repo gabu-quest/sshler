@@ -119,7 +119,9 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001 - deps reser
         response_model_exclude_none=True,
         response_model_by_alias=True,
     )
-    async def get_notebook(notebook_id: str = Path(..., min_length=8, max_length=32)) -> APIDiffNotebookFull:
+    async def get_notebook(
+        notebook_id: str = Path(..., min_length=8, max_length=32),
+    ) -> APIDiffNotebookFull:
         _validate_id(notebook_id)
         row = await state.get_diff_notebook_async(notebook_id)
         if row is None:
@@ -148,7 +150,9 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001 - deps reser
         return _full_from(row)
 
     @router.delete("/diff/notebooks/{notebook_id}")
-    async def delete_notebook(notebook_id: str = Path(..., min_length=8, max_length=32)) -> dict[str, bool]:
+    async def delete_notebook(
+        notebook_id: str = Path(..., min_length=8, max_length=32),
+    ) -> dict[str, bool]:
         _validate_id(notebook_id)
         removed = await state.delete_diff_notebook_async(notebook_id)
         return {"ok": True, "removed": removed}

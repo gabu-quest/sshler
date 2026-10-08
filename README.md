@@ -138,6 +138,12 @@ The app opens at `http://127.0.0.1:8822` and redirects to the Vue SPA at `/app/`
 - **Honest percentages** - The displayed percent is rounded **down**: a 3300-step build at 3299/3300 reads 99%, never a misleading 100% until it's actually done.
 - **Live updates** - One WebSocket (`/ws/progress`) fans out every upsert/delete to every connected browser tab. Multi-machine? Open `/app/progress` on your phone too.
 
+**🌐 Local HTML Artifacts**
+- **One catalog for generated HTML** - Register a single page, a static site, or a recursively discovered collection under a required project and optional nested group.
+- **Agent- and script-friendly CLI** - `sshler artifact add ./report.html --project demo --group reports` registers a completed output; list, show, update, rescan, open, and remove commands cover its lifecycle.
+- **Safe local viewing** - HTML is served from a separate loopback-only origin with strict path containment and no CORS permission. Inline JavaScript works without granting access to the main API origin.
+- **Non-destructive cleanup** - Trash actions and CLI removal unregister catalog metadata only. Source files and directories remain untouched.
+
 **♿ Accessibility**
 - **WCAG 2.1 AA Compliant** - Semantic HTML, ARIA labels, keyboard navigation
 - **Screen Reader Support** - Proper focus management and announcements
@@ -254,6 +260,34 @@ Names must match `^[A-Za-z0-9._:-]{1,64}$` (push to the same name = update the s
 Subscriptions are **per box**: open a box (Files/Terminal), then hit the `+` on the header strip — or use `/app/progress` — to subscribe to the bars you want. Each box remembers its own set, so `sshler` and `maintenance` can show different bars. The thin strip under the header renders the active box's subscribed bars on every page.
 
 See `examples/progress-bar-build-watcher.sh` for a copy-pasteable demo loop including `trap` → `--status failed` on error.
+
+### Registering generated HTML
+
+Start sshler, create HTML anywhere inside your workspace, and register it by path:
+
+```bash
+# One self-contained page
+sshler artifact add ./report.html --project demo --group reports
+
+# A static site with assets
+sshler artifact add ./site --project demo --group prototypes --mode site --entry index.html
+
+# Recursively discover HTML pages
+sshler artifact add ./reports --project demo --group runs --discover
+
+sshler artifact find "quarterly summary" --project demo
+sshler artifact list --project demo
+sshler artifact open <id>
+sshler artifact remove <id>
+```
+
+Open `/app/artifacts` to search and filter registrations, expand page lists by clicking an
+artifact row, preview pages, and unregister with the trash action. Stable cross-links use
+`/r/<project-slug>/<artifact-slug>/`; `artifact add --mount <path>` can preserve existing
+root-relative links. Opening and previewing require a loopback address. `remove` always leaves
+source files unchanged.
+
+See [`ROADMAP-ARTIFACTS.md`](ROADMAP-ARTIFACTS.md) for the architecture and security model.
 
 ### Key Shortcuts
 
@@ -401,7 +435,10 @@ SSHLER_COOKIE_SECURE=false  # Only for localhost dev!
    # /etc/caddy/Caddyfile or ~/Caddyfile
 
    sshler.company.internal {
-       reverse_proxy localhost:8822
+       reverse_proxy localhost:8822 {
+           # Overwrite any X-Real-IP the client sent (see SSHLER_TRUST_PROXY_HEADERS)
+           header_up X-Real-IP {remote_host}
+       }
    }
    ```
 
@@ -412,6 +449,10 @@ SSHLER_COOKIE_SECURE=false  # Only for localhost dev!
    SSHLER_PORT=8822
    SSHLER_PUBLIC_URL=https://sshler.company.internal
    SSHLER_COOKIE_SECURE=true  # Required for HTTPS
+   # Caddy overwrites X-Real-IP (header_up above), so sshler may trust it for
+   # rate limits and login lockouts. Leave unset unless a proxy on this host
+   # overwrites X-Real-IP; otherwise sshler keys on the connection's address.
+   SSHLER_TRUST_PROXY_HEADERS=true
    ```
 
 4. Start Caddy:
@@ -521,6 +562,11 @@ server {
     }
 }
 ```
+
+`proxy_set_header X-Real-IP $remote_addr` overwrites any `X-Real-IP` the client sent,
+so set `SSHLER_TRUST_PROXY_HEADERS=true` with this config. Without that setting sshler
+ignores `X-Real-IP` and keys rate limits and login lockouts on the connection's address,
+which behind a proxy is the proxy's.
 
 **Traefik:**
 
@@ -684,12 +730,13 @@ If you use [Claude Code](https://claude.ai/code) to develop sshler, this repo sh
 - `docs/skills/markdown-preview/SKILL.md` — what renders, what doesn't, and quirks of the print-to-PDF pipeline.
 - `docs/skills/progress-bars/SKILL.md` — push protocol, WebSocket fan-out, per-box subscription model.
 - `docs/skills/diff-notebook/SKILL.md` — the multi-cell diff workspace: command parser, base64 URL state, server-side persistence, the "no new backend" architecture decision.
+- `docs/skills/artifacts/SKILL.md` — create HTML in the current workspace, choose a serving mode, and register it in the catalog.
 
 Claude won't auto-discover these — they live in the repo but aren't registered with the Claude Code runtime. A common pattern is to **symlink them into your global skills directory** (typically `~/.claude/skills/`) so any Claude Code session on your machine can load them by name:
 
 ```bash
 # One-time setup per machine
-for skill in markdown-preview progress-bars diff-notebook; do
+for skill in markdown-preview progress-bars diff-notebook artifacts; do
   mkdir -p ~/.claude/skills/sshler-$skill
   ln -sf "$PWD/docs/skills/$skill/SKILL.md" ~/.claude/skills/sshler-$skill/SKILL.md
 done
@@ -822,6 +869,12 @@ sshler serve
 - **正直なパーセンテージ** - 表示パーセントは**切り捨て**です。3300 ステップのビルドで 3299/3300 なら 99% と表示され、実際に完了するまで誤解を招く 100% にはなりません。
 - **ライブ更新** - WebSocket (`/ws/progress`) が接続中の全タブに upsert/delete イベントをファンアウト。複数マシン？スマホでも `/app/progress` を開けます。
 
+**ローカル HTML 成果物**
+- **生成 HTML を一か所で管理** - 単一ページ、静的サイト、再帰的に検出する HTML コレクションを、必須のプロジェクトと任意のネストしたグループに登録できます。
+- **エージェントやスクリプト向け CLI** - `sshler artifact add ./report.html --project demo --group reports` で完成した出力を登録し、list、show、update、rescan、open、remove で管理できます。
+- **安全なローカル表示** - HTML は厳密なパス制約と CORS 許可なしの別ループバックオリジンから配信されます。
+- **非破壊の整理** - ゴミ箱操作と CLI の remove はカタログ情報だけを解除し、元のファイルやディレクトリは変更しません。
+
 **🤖 Claude セッションダッシュボード**
 - **`/app/claude` — Claude Code セッションの再開** - このマシン上で再開可能な [Claude Code](https://claude.ai/code) の会話（`~/.claude/projects/*/*.jsonl` から読み取り）を一覧表示し、ワンクリックでブラウザ内ターミナルに再開します。タイトルは Claude Code の `/resume` ピッカーと同じ規則です（`/rename` で付けた名前 → AI 生成タイトル → 最初のプロンプトの順）。
 - **Git リポジトリ単位でグループ化・折りたたみ可能** - セッションはリポジトリのルート単位でグループ化されます（`repo/subdir` で実行した会話も `/resume` と同様に `repo` の下に表示）。各グループは折りたたみ可能で、アプリの他の場所と同じディレクトリ絵文字が付きます。初期状態は折りたたみで、フィルタ入力で該当グループが自動展開され、「すべて展開／すべて折りたたむ」ボタンもあります。
@@ -945,6 +998,19 @@ sshler progress delete build
 購読は**ホストごと**です。ホスト（ファイル／ターミナル）を開いてから、ヘッダーストリップの `+` ボタン、または `/app/progress` で監視したいバーを購読してください。ホストごとに購読セットが記憶されるので、`sshler` と `maintenance` で異なるバーを表示できます。ヘッダー下の細いストリップが、アクティブなホストの購読済みバーを全ページで表示します。
 
 エラー時に `trap` → `--status failed` するデモループは `examples/progress-bar-build-watcher.sh` を参照。
+
+### 生成 HTML を登録する
+
+```bash
+sshler artifact add ./report.html --project demo --group reports
+sshler artifact add ./site --project demo --group prototypes --mode site --entry index.html
+sshler artifact add ./reports --project demo --group runs --discover
+sshler artifact list --project demo
+sshler artifact open <id>
+sshler artifact remove <id>
+```
+
+`/app/artifacts` でプロジェクト、登録、ページ検出、プレビュー、ゴミ箱操作を管理できます。開く・プレビューする機能はループバックアドレス経由で利用でき、`remove` は元のファイルを残します。設計とセキュリティモデルは [`ROADMAP-ARTIFACTS.md`](ROADMAP-ARTIFACTS.md) を参照してください。
 
 ### キーショートカット
 
@@ -1090,7 +1156,10 @@ SSHLER_COOKIE_SECURE=false  # localhost 開発専用！
    # /etc/caddy/Caddyfile または ~/Caddyfile
 
    sshler.company.internal {
-       reverse_proxy localhost:8822
+       reverse_proxy localhost:8822 {
+           # クライアントが送った X-Real-IP を上書き（SSHLER_TRUST_PROXY_HEADERS 参照）
+           header_up X-Real-IP {remote_host}
+       }
    }
    ```
 
@@ -1101,6 +1170,10 @@ SSHLER_COOKIE_SECURE=false  # localhost 開発専用！
    SSHLER_PORT=8822
    SSHLER_PUBLIC_URL=https://sshler.company.internal
    SSHLER_COOKIE_SECURE=true  # HTTPS 必須
+   # Caddy が X-Real-IP を上書きする（上記 header_up）ので、レート制限と
+   # ログインロックアウトにその値を使ってよい。同じホストのプロキシが X-Real-IP を
+   # 上書きしない構成では設定しないこと（接続元アドレスが使われる）。
+   SSHLER_TRUST_PROXY_HEADERS=true
    ```
 
 4. Caddy を起動：
@@ -1210,6 +1283,11 @@ server {
     }
 }
 ```
+
+`proxy_set_header X-Real-IP $remote_addr` はクライアントが送った `X-Real-IP` を上書きするので、
+この設定では `SSHLER_TRUST_PROXY_HEADERS=true` を設定してください。この設定がないと sshler は
+`X-Real-IP` を無視し、レート制限とログインロックアウトを接続元アドレス（プロキシの背後では
+プロキシのアドレス）で数えます。
 
 **Traefik:**
 
@@ -1342,12 +1420,13 @@ systemctl --user enable --now sshler.service
 - `docs/skills/markdown-preview/SKILL.md` — 何がレンダリングされ、何がされないか、そして印刷／PDF パイプラインの癖。
 - `docs/skills/progress-bars/SKILL.md` — プッシュプロトコル、WebSocket ファンアウト、ホストごとの購読モデル。
 - `docs/skills/diff-notebook/SKILL.md` — マルチセルの差分ワークスペース：コマンドパーサー、base64 URL 状態、サーバー側の永続化、「新しいバックエンドを作らない」という設計判断。
+- `docs/skills/artifacts/SKILL.md` — 現在のワークスペースで HTML を作成し、配信モードを選んでカタログへ登録する手順。
 
 Claude はこれらを自動では検出しません。リポジトリ内には存在しますが、Claude Code ランタイムには登録されていないためです。よく使われる方法は、**グローバルスキルディレクトリ（通常は `~/.claude/skills/`）へシンボリックリンクを張る**ことです。こうすると、このマシン上のどの Claude Code セッションからでも名前で読み込めるようになります：
 
 ```bash
 # マシンごとに一度だけセットアップ
-for skill in markdown-preview progress-bars diff-notebook; do
+for skill in markdown-preview progress-bars diff-notebook artifacts; do
   mkdir -p ~/.claude/skills/sshler-$skill
   ln -sf "$PWD/docs/skills/$skill/SKILL.md" ~/.claude/skills/sshler-$skill/SKILL.md
 done

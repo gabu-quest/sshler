@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
+
+Clock = Callable[[], float]
+
+
+def _system_clock() -> float:
+    """Default clock: `time.time()`, looked up at call time so the module stays patchable."""
+    return time.time()
 
 
 @dataclass
@@ -13,12 +20,13 @@ class TokenBucket:
 
     capacity: int
     refill_rate: float  # tokens per second
+    clock: Clock = field(default=_system_clock, repr=False, compare=False)
     tokens: float = field(init=False)
     last_refill: float = field(init=False)
 
     def __post_init__(self):
         self.tokens = float(self.capacity)
-        self.last_refill = time.time()
+        self.last_refill = self.clock()
 
     def consume(self, tokens: int = 1) -> bool:
         """Try to consume tokens. Returns True if allowed, False if rate limited."""
@@ -31,7 +39,7 @@ class TokenBucket:
 
     def _refill(self):
         """Refill tokens based on time passed."""
-        now = time.time()
+        now = self.clock()
         elapsed = now - self.last_refill
 
         # Add tokens based on time elapsed
@@ -50,6 +58,7 @@ class RateLimiter:
         rate: int,  # requests allowed
         per: int,  # per this many seconds
         capacity_multiplier: float = 1.5,
+        clock: Clock = _system_clock,
     ):
         """Initialize rate limiter.
 
@@ -57,14 +66,16 @@ class RateLimiter:
             rate: Number of requests allowed
             per: Time period in seconds
             capacity_multiplier: Bucket capacity = rate * multiplier (allows bursts)
+            clock: Returns the current time in seconds; shared with every bucket
         """
+        self.clock = clock
         self.rate = rate
         self.per = per
         self.refill_rate = rate / per
         self.capacity = int(rate * capacity_multiplier)
         self._buckets: dict[str, TokenBucket] = {}
         self._cleanup_interval = 300  # cleanup every 5 minutes
-        self._last_cleanup = time.time()
+        self._last_cleanup = clock()
 
     def check(self, key: str) -> bool:
         """Check if request is allowed for the given key.
@@ -83,13 +94,14 @@ class RateLimiter:
             self._buckets[key] = TokenBucket(
                 capacity=self.capacity,
                 refill_rate=self.refill_rate,
+                clock=self.clock,
             )
 
         return self._buckets[key].consume()
 
     def _maybe_cleanup(self):
         """Remove stale buckets to prevent memory growth."""
-        now = time.time()
+        now = self.clock()
         if now - self._last_cleanup < self._cleanup_interval:
             return
 

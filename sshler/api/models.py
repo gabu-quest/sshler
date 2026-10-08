@@ -132,7 +132,9 @@ class APISessionUpdate(BaseModel):
     active: bool | None = None
     window_count: int | None = None
     metadata: dict | None = None
-    session_name: str | None = Field(None, min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9_.-]+$')
+    session_name: str | None = Field(
+        None, min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$"
+    )
 
 
 class APIClaudeSession(BaseModel):
@@ -201,6 +203,8 @@ class APIBootstrap(BaseModel):
     platform: str = "posix"
     windows_shells: list[APIWindowsShell] = []
     default_shell: str | None = None
+    artifact_server_enabled: bool = False
+    artifact_server_port: int | None = None
 
 
 class APIPoolConfig(BaseModel):

@@ -5,7 +5,6 @@ Loads configuration from environment variables with sensible defaults.
 
 from __future__ import annotations
 
-import os
 from typing import Literal
 
 from pydantic import Field
@@ -28,7 +27,20 @@ class SshlerSettings(BaseSettings):
     port: int = Field(default=8822, description="Port to bind to")
     public_url: str = Field(
         default="",
-        description="Public URL where sshler is accessible (used for CORS/origin checks). Auto-derived from host:port if empty.",
+        description=(
+            "Public URL where sshler is accessible (used for CORS/origin checks). "
+            "Auto-derived from host:port if empty."
+        ),
+    )
+
+    trust_proxy_headers: bool = Field(
+        default=False,
+        description=(
+            "Trust X-Real-IP on connections from 127.0.0.1. Enable only when a reverse "
+            "proxy on this host overwrites X-Real-IP with the client's address; "
+            "otherwise any local process could pick the address that rate limits and "
+            "login lockouts key on."
+        ),
     )
 
     # Session/Cookie settings

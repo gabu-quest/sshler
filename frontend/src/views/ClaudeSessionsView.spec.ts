@@ -152,7 +152,7 @@ describe("ClaudeSessionsView", () => {
 
     const rows = screen.getAllByTestId("claude-session");
     expect(rows).toHaveLength(1);
-    expect(screen.getAllByTestId("claude-title")[0].textContent?.trim()).toBe("Beta session");
+    expect(screen.getAllByTestId("claude-title")[0]?.textContent?.trim()).toBe("Beta session");
   });
 
   it("primary resume opens in the background and stays on the list", async () => {
@@ -267,5 +267,112 @@ describe("ClaudeSessionsView", () => {
     await fireEvent.click(screen.getByTestId("resume-a"));
     await vi.waitFor(() => expect(mockOpen).toHaveBeenCalled());
     expect(mockOpen).toHaveBeenCalledWith("a", null, "claudeee --resume {id}");
+  });
+
+  describe("persistence", () => {
+    it("hydrates the filter text from localStorage on mount", async () => {
+      localStorage.setItem("sshler:claude:filter", JSON.stringify("Beta"));
+      mockFetch.mockResolvedValue([
+        makeSession("a", { title: "Alpha session" }),
+        makeSession("b", { title: "Beta session" }),
+      ]);
+
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+
+      const input = screen.container.querySelector(".stub-input") as HTMLInputElement;
+      expect(input.value).toBe("Beta");
+      expect(screen.getAllByTestId("claude-session")).toHaveLength(1);
+      expect(screen.getAllByTestId("claude-title")[0]?.textContent?.trim()).toBe("Beta session");
+    });
+
+    it("persists filter text typed by the user to localStorage", async () => {
+      mockFetch.mockResolvedValue([makeSession("a", { title: "Alpha session" })]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+
+      const input = screen.container.querySelector(".stub-input") as HTMLInputElement;
+      await fireEvent.update(input, "Alpha");
+
+      await vi.waitFor(() => {
+        expect(localStorage.getItem("sshler:claude:filter")).toBe(JSON.stringify("Alpha"));
+      });
+    });
+
+    it("falls back to an empty filter on malformed persisted JSON", async () => {
+      localStorage.setItem("sshler:claude:filter", "{not valid json");
+      mockFetch.mockResolvedValue([
+        makeSession("a", { title: "Alpha session" }),
+        makeSession("b", { title: "Beta session" }),
+      ]);
+
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+
+      const input = screen.container.querySelector(".stub-input") as HTMLInputElement;
+      expect(input.value).toBe("");
+      expect(screen.getAllByTestId("claude-session")).toHaveLength(2);
+    });
+
+    it("persists expand-all as the manual expansion set", async () => {
+      mockFetch.mockResolvedValue([
+        makeSession("a", { title: "one", cwd: "/work/alpha", repo_root: "/work/alpha" }),
+        makeSession("b", { title: "two", cwd: "/work/beta", repo_root: "/work/beta" }),
+      ]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+
+      await fireEvent.click(screen.getByTestId("claude-expand-all"));
+
+      await vi.waitFor(() => {
+        const raw = localStorage.getItem("sshler:claude:expanded");
+        expect(raw).not.toBeNull();
+        expect(JSON.parse(raw as string).sort()).toEqual(["/work/alpha", "/work/beta"]);
+      });
+    });
+
+    it("hydrates the manual expansion set from localStorage on mount", async () => {
+      localStorage.setItem("sshler:claude:expanded", JSON.stringify(["/work/alpha"]));
+      mockFetch.mockResolvedValue([
+        makeSession("a", { title: "one", cwd: "/work/alpha", repo_root: "/work/alpha" }),
+      ]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+
+      // Re-collapsing everything must start from the persisted set, not an
+      // empty one — collapse-all should clear it back to [].
+      await fireEvent.click(screen.getByTestId("claude-collapse-all"));
+      await vi.waitFor(() => {
+        expect(localStorage.getItem("sshler:claude:expanded")).toBe(JSON.stringify([]));
+      });
+    });
+
+    it("clearing the filter after typing restores the manual set instead of wiping it", async () => {
+      localStorage.setItem("sshler:claude:expanded", JSON.stringify(["/work/alpha"]));
+      mockFetch.mockResolvedValue([
+        makeSession("a", { title: "one", cwd: "/work/alpha", repo_root: "/work/alpha" }),
+        makeSession("b", { title: "two", cwd: "/work/beta", repo_root: "/work/beta" }),
+      ]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+
+      const input = screen.container.querySelector(".stub-input") as HTMLInputElement;
+
+      // Typing a filter auto-expands every matching repo…
+      await fireEvent.update(input, "two");
+      // …but must not overwrite the persisted manual set with the auto-expand.
+      expect(localStorage.getItem("sshler:claude:expanded")).toBe(
+        JSON.stringify(["/work/alpha"]),
+      );
+
+      // Clearing the filter restores the manual set — it does NOT collapse
+      // everything to empty.
+      await fireEvent.update(input, "");
+      await vi.waitFor(() => {
+        expect(localStorage.getItem("sshler:claude:expanded")).toBe(
+          JSON.stringify(["/work/alpha"]),
+        );
+      });
+    });
   });
 });

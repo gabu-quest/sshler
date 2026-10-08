@@ -2,8 +2,8 @@
 
 These run cross-platform: the registry only touches the ``WinPTYProcess``
 surface, so a fake process stands in for pywinpty. The fake's ``stdout.read``
-genuinely BLOCKS a worker thread (the registry drains it via
-``asyncio.to_thread``) until the test ``feed()``s output or ``feed_eof()``s /
+genuinely BLOCKS a worker thread (the registry drains it on its own
+read executor) until the test ``feed()``s output or ``feed_eof()``s /
 ``terminate()``s it — exactly mirroring how a real ConPTY blocks until data or
 child exit.
 """
@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import queue
-import sys
-import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -25,24 +24,13 @@ from sshler.win_terminal_registry import (
     WindowsTerminalRegistry,
 )
 
-# The blocking-fake ConPTY exercises real worker threads + ``asyncio.to_thread``;
-# the drain/attach ordering races differently under Linux CI's scheduler. The
-# code under test is Windows-only (native ConPTY persistence), so gate these to
-# Windows — they pass deterministically on the real target platform.
-pytestmark = pytest.mark.skipif(
-    sys.platform != "win32",
-    reason="Native Windows ConPTY persistence registry — Windows-only target; "
-    "thread-timing fakes are non-deterministic under Linux CI.",
-)
-
-
 # --------------------------------------------------------------------------
 # Blocking fake ConPTY process
 # --------------------------------------------------------------------------
 
 
 class _FakeStdin:
-    def __init__(self, proc: "FakeWinProc") -> None:
+    def __init__(self, proc: FakeWinProc) -> None:
         self._proc = proc
 
     def write(self, data: bytes) -> int:
@@ -51,10 +39,17 @@ class _FakeStdin:
 
 
 class _FakeStdout:
-    def __init__(self, proc: "FakeWinProc") -> None:
+    def __init__(self, proc: FakeWinProc) -> None:
         self._proc = proc
 
     def read(self, size: int = 1024) -> str:
+        # Announce that the drain is back for more BEFORE blocking: the drain
+        # only calls read() again after it has appended the previous chunk to
+        # the ring and awaited every sink, so this count is the sync point
+        # that FakeWinProc.settled() waits on.
+        with self._proc._cond:
+            self._proc._reads += 1
+            self._proc._cond.notify_all()
         # Blocks the worker thread until fed; None sentinel == EOF.
         item = self._proc._queue.get()
         if item is None:
@@ -66,7 +61,10 @@ class FakeWinProc:
     """Mimics WinPTYProcess: blocking read, recorded writes/resizes, EOF on terminate."""
 
     def __init__(self) -> None:
-        self._queue: "queue.Queue[str | None]" = queue.Queue()
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._cond = threading.Condition()
+        self._reads_at_feed = 0
+        self._reads = 0
         self.written: list[bytes] = []
         self.size: tuple[int, int] | None = None
         self.resize_calls = 0
@@ -77,10 +75,33 @@ class FakeWinProc:
         self.stdout = _FakeStdout(self)
 
     def feed(self, data: str) -> None:
+        with self._cond:
+            self._reads_at_feed = self._reads
         self._queue.put(data)
 
     def feed_eof(self) -> None:
         self._queue.put(None)
+
+    async def settled(self, observed, expected, timeout: float = 10.0) -> None:
+        """Wait until ``observed()`` equals *expected* and the drain has moved past the last feed.
+
+        Two conditions, neither a sleep: the output the test cares about
+        (``observed()``, a callable returning e.g. the ring snapshot or a sink's
+        received list) equals *expected*, and the drain has called ``read()`` again
+        since the last ``feed()``, which means that chunk was appended and fanned
+        out to every sink. Neither depends on how many reads the drain makes per
+        chunk. *timeout* is only a ceiling; on expiry the assertion names the
+        expected and the actual output.
+        """
+
+        def _wait() -> bool:
+            with self._cond:
+                return self._cond.wait_for(
+                    lambda: self._reads > self._reads_at_feed and observed() == expected, timeout
+                )
+
+        ok = await asyncio.to_thread(_wait)
+        assert ok, f"drain output wrong: expected {expected!r}, actual {observed()!r}"
 
     def resize(self, cols: int, rows: int) -> None:
         self.size = (cols, rows)
@@ -99,16 +120,6 @@ def _const_spawn(proc: FakeWinProc):
         return proc
 
     return _spawn
-
-
-async def _await_until(predicate, timeout: float = 3.0) -> None:
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("condition not met within timeout")
 
 
 @pytest_asyncio.fixture
@@ -201,7 +212,8 @@ async def test_cap_frees_a_slot_after_kill(make_registry):
 
     killed = await reg.kill(("local", "a"))
     assert killed is True
-    await _await_until(lambda: len(reg.live_keys()) == 1)
+    # kill() awaits _remove, which drops the entry before returning.
+    assert reg.live_keys() == [("local", "b")]
 
     # Slot freed: a new distinct session is now accepted.
     s3, created = await reg.get_or_create(("local", "c"), _const_spawn(p3), 80, 24)
@@ -242,9 +254,10 @@ async def test_blocked_drains_do_not_starve_default_thread_pool():
 
     RED (pre-fix, drains on the default pool): with the default pool shrunk to
     2 workers and 6 idle shells, 2 blocked reads fill the pool and the rest
-    queue, so the canary ``to_thread`` below never runs -> TimeoutError.
-    GREEN (post-fix): drains use a dedicated executor, the default pool stays
-    free, and the canary returns promptly.
+    queue, so only 2 of 6 drains ever reach ``read()`` (the readiness wait
+    fails) and the canary ``to_thread`` below could never run.
+    GREEN (post-fix): drains use a dedicated executor, all 6 block in
+    ``read()``, the default pool stays free, and the canary returns promptly.
 
     This test owns its registry (no auto-teardown fixture) and unblocks every
     drain + restores a working default pool in ``finally`` so it fails cleanly
@@ -260,9 +273,19 @@ async def test_blocked_drains_do_not_starve_default_thread_pool():
     try:
         for i, proc in enumerate(procs):
             await reg.get_or_create(("local", f"idle{i}"), _const_spawn(proc), 80, 24)
-        await _await_until(lambda: len(reg.live_keys()) == 6)
-        # Let every drain task reach its blocking read submission.
-        await asyncio.sleep(0.05)
+        assert len(reg.live_keys()) == 6
+
+        # Wait until every drain is blocked inside stdout.read(). The wait runs on
+        # recovery_pool, not the sabotaged default pool. Under the bug only two
+        # drains could get a default-pool worker, so this would time out at 2 of 6.
+        def _all_reading() -> bool:
+            for proc in procs:
+                with proc._cond:
+                    if not proc._cond.wait_for(lambda p=proc: p._reads >= 1, 5.0):
+                        return False
+            return True
+
+        assert await loop.run_in_executor(recovery_pool, _all_reading) is True
 
         # Stand-in for a DB write / keystroke: must still complete promptly,
         # proving the blocked drains are NOT on the default pool.
@@ -292,7 +315,7 @@ async def test_drain_fills_ring_buffer(make_registry):
 
     proc.feed("hello")
     proc.feed("world")
-    await _await_until(lambda: s._ring_size == 10)
+    await proc.settled(s.snapshot, b"helloworld")
 
     assert s.snapshot() == b"helloworld"
     assert s._ring_size == 10
@@ -300,13 +323,14 @@ async def test_drain_fills_ring_buffer(make_registry):
 
 @pytest.mark.asyncio
 async def test_ring_trims_to_cap(make_registry):
+    # Kills: trimming with `>=` instead of `>` in TerminalSession._append.
     reg = make_registry(ring_bytes=8)
     proc = FakeWinProc()
     s, _ = await reg.get_or_create(("local", "ring"), _const_spawn(proc), 80, 24)
 
     for ch in "0123456789":  # 10 one-byte chunks; cap is 8
         proc.feed(ch)
-    await _await_until(lambda: s._ring_size == 8 and s.snapshot() == b"23456789")
+    await proc.settled(s.snapshot, b"23456789")
 
     assert s._ring_size == 8
     assert s.snapshot() == b"23456789"
@@ -319,12 +343,13 @@ async def test_ring_trims_to_cap(make_registry):
 
 @pytest.mark.asyncio
 async def test_attach_returns_clear_plus_full_ring(make_registry):
+    # Kills: attach() returning the snapshot without CLEAR_SEQ.
     reg = make_registry()
     proc = FakeWinProc()
     s, _ = await reg.get_or_create(("local", "c"), _const_spawn(proc), 80, 24)
 
     proc.feed("abcdef")
-    await _await_until(lambda: s.snapshot() == b"abcdef")
+    await proc.settled(s.snapshot, b"abcdef")
 
     received: list[bytes] = []
 
@@ -339,6 +364,7 @@ async def test_attach_returns_clear_plus_full_ring(make_registry):
 
 @pytest.mark.asyncio
 async def test_live_output_after_attach_reaches_sink(make_registry):
+    # Kills: attach() not registering the sink.
     reg = make_registry()
     proc = FakeWinProc()
     s, _ = await reg.get_or_create(("local", "d"), _const_spawn(proc), 80, 24)
@@ -350,7 +376,7 @@ async def test_live_output_after_attach_reaches_sink(make_registry):
 
     await reg.attach(s, sink, 80, 24)
     proc.feed("xyz")
-    await _await_until(lambda: received == [b"xyz"])
+    await proc.settled(lambda: received, [b"xyz"])
 
     assert received == [b"xyz"]
 
@@ -362,7 +388,7 @@ async def test_no_lost_or_duplicated_bytes_across_attach(make_registry):
     s, _ = await reg.get_or_create(("local", "e"), _const_spawn(proc), 80, 24)
 
     proc.feed("A")
-    await _await_until(lambda: s.snapshot() == b"A")
+    await proc.settled(s.snapshot, b"A")
 
     received: list[bytes] = []
 
@@ -371,7 +397,7 @@ async def test_no_lost_or_duplicated_bytes_across_attach(make_registry):
 
     replay = await reg.attach(s, sink, 80, 24)
     proc.feed("B")
-    await _await_until(lambda: received == [b"B"])
+    await proc.settled(lambda: received, [b"B"])
 
     assert replay == CLEAR_SEQ + b"A"
     assert received == [b"B"]
@@ -402,7 +428,7 @@ async def test_mirror_fans_out_to_all_sinks(make_registry):
     await reg.attach(s, s1, 80, 24)
     await reg.attach(s, s2, 80, 24)
     proc.feed("X")
-    await _await_until(lambda: r1 == [b"X"] and r2 == [b"X"])
+    await proc.settled(lambda: (r1, r2), ([b"X"], [b"X"]))
 
     assert r1 == [b"X"]
     assert r2 == [b"X"]
@@ -421,7 +447,7 @@ async def test_mirror_new_tab_replays_without_disturbing_existing(make_registry)
 
     await reg.attach(s, sa, 80, 24)
     proc.feed("live1")
-    await _await_until(lambda: a == [b"live1"])
+    await proc.settled(lambda: a, [b"live1"])
 
     b: list[bytes] = []
 
@@ -434,7 +460,7 @@ async def test_mirror_new_tab_replays_without_disturbing_existing(make_registry)
     assert a == [b"live1"]  # existing tab untouched by the new attach
 
     proc.feed("live2")
-    await _await_until(lambda: a == [b"live1", b"live2"] and b == [b"live2"])
+    await proc.settled(lambda: (a, b), ([b"live1", b"live2"], [b"live2"]))
 
     assert a == [b"live1", b"live2"]
     assert b == [b"live2"]
@@ -442,6 +468,7 @@ async def test_mirror_new_tab_replays_without_disturbing_existing(make_registry)
 
 @pytest.mark.asyncio
 async def test_dead_sink_dropped_others_continue(make_registry):
+    # Kills: the drain no longer discarding a sink that raised.
     reg = make_registry()
     proc = FakeWinProc()
     s, _ = await reg.get_or_create(("local", "h"), _const_spawn(proc), 80, 24)
@@ -458,15 +485,14 @@ async def test_dead_sink_dropped_others_continue(make_registry):
     await reg.attach(s, bad_sink, 80, 24)
 
     proc.feed("hi")
-    await _await_until(lambda: good == [b"hi"])
-    await _await_until(lambda: bad_sink not in s.sinks)
+    await proc.settled(lambda: (good, bad_sink in s.sinks), ([b"hi"], False))
 
     assert good == [b"hi"]
     assert bad_sink not in s.sinks
     assert good_sink in s.sinks
 
     proc.feed("again")
-    await _await_until(lambda: good == [b"hi", b"again"])
+    await proc.settled(lambda: (good, bad_sink in s.sinks), ([b"hi", b"again"], False))
     assert good == [b"hi", b"again"]
 
 
@@ -476,7 +502,22 @@ async def test_dead_sink_dropped_others_continue(make_registry):
 
 
 @pytest.mark.asyncio
-async def test_detach_keeps_process_alive(make_registry):
+async def test_detach_keeps_process_alive(make_registry, monkeypatch):
+    # Injected clock: detach stamps detached_since from the registry module's
+    # time.monotonic(). The registry's `time` name is replaced by a proxy that
+    # overrides only `monotonic` and delegates everything else to the real module.
+    # Kills: detach() not stamping detached_since, or not discarding the sink.
+    import time as real_time
+
+    import sshler.win_terminal_registry as registry_mod
+
+    class _FixedMonotonic:
+        monotonic = staticmethod(lambda: 500.0)
+
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+    monkeypatch.setattr(registry_mod, "time", _FixedMonotonic())
     reg = make_registry()
     proc = FakeWinProc()
     key = ("local", "i")
@@ -494,10 +535,11 @@ async def test_detach_keeps_process_alive(make_registry):
     assert reg.get(key) is s
     assert s.drain_task is not None
     assert s.drain_task.done() is False
-    assert s.detached_since is not None
+    assert s.sinks == set()
+    assert s.detached_since == 500.0
 
     proc.feed("more")
-    await _await_until(lambda: s.snapshot() == b"more")
+    await proc.settled(s.snapshot, b"more")
 
     assert received == []  # detached: no live delivery
     assert s.snapshot() == b"more"  # but still buffered
@@ -517,11 +559,12 @@ async def test_reattach_after_detach_replays_gap(make_registry):
 
     await reg.attach(s, s1, 80, 24)
     proc.feed("seen")
-    await _await_until(lambda: r1 == [b"seen"])
+    await proc.settled(lambda: r1, [b"seen"])
+    assert r1 == [b"seen"]
     await reg.detach(s, s1)
 
     proc.feed("gap")  # produced while fully detached
-    await _await_until(lambda: s.snapshot() == b"seengap")
+    await proc.settled(s.snapshot, b"seengap")
 
     r2: list[bytes] = []
 
@@ -530,6 +573,7 @@ async def test_reattach_after_detach_replays_gap(make_registry):
 
     replay = await reg.attach(s, s2, 80, 24)
     assert replay == CLEAR_SEQ + b"seengap"
+    assert r1 == [b"seen"]  # the detached tab got nothing produced after detach
 
 
 # --------------------------------------------------------------------------
@@ -553,7 +597,8 @@ async def test_reaper_removes_exited_and_marks_inactive(make_registry):
     s.session_id = "sid-123"
 
     proc.feed_eof()  # shell exits on its own
-    await _await_until(lambda: s.exited is True)
+    await asyncio.wait_for(s.exited_event.wait(), timeout=10)
+    assert s.exited is True
 
     result = await reg.reap_once()
 
@@ -568,9 +613,11 @@ async def test_ttl_zero_never_idle_reaps(make_registry):
     proc = FakeWinProc()
     key = ("local", "persist")
     s, _ = await reg.get_or_create(key, _const_spawn(proc), 80, 24)
-    s.detached_since = time.monotonic() - 10_000  # ancient, but TTL disabled
+    # Injected clock: detached 10,000s before `now`, but TTL 0 disables idle reaping.
+    # Kills: dropping the `self._ttl > 0` guard in reap_once.
+    s.detached_since = 1_000.0
 
-    result = await reg.reap_once()
+    result = await reg.reap_once(now=11_000.0)
 
     assert result == []
     assert reg.get(key) is s
@@ -579,13 +626,20 @@ async def test_ttl_zero_never_idle_reaps(make_registry):
 
 @pytest.mark.asyncio
 async def test_ttl_positive_idle_reaps(make_registry):
+    # Injected clock: detached at t=1000 with a 10s TTL. Just before the
+    # deadline nothing is reaped; at exactly t=1010 the shell is reaped.
+    # Kills: `>=` -> `>` on the TTL comparison, and an off-by-one deadline.
     reg = make_registry(ttl_seconds=10)
     proc = FakeWinProc()
     key = ("local", "stale")
     s, _ = await reg.get_or_create(key, _const_spawn(proc), 80, 24)
-    s.detached_since = time.monotonic() - 100  # past the 10s TTL
+    s.detached_since = 1_000.0
 
-    result = await reg.reap_once()
+    assert await reg.reap_once(now=1_009.5) == []
+    assert reg.get(key) is s
+    assert proc.terminated is False
+
+    result = await reg.reap_once(now=1_010.0)
 
     assert result == [key]
     assert reg.get(key) is None

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import getpass
+import json
+import os
 import re
 import secrets
 import shutil
@@ -12,14 +13,13 @@ import sys
 import threading
 import time
 import webbrowser
-import json
-import os
 from pathlib import Path
+from urllib.parse import urlencode
 
 import uvicorn
 from dotenv import load_dotenv
 
-from .auth import PasswordHasher, PasswordValidator, PasswordPolicy
+from .auth import PasswordHasher, PasswordPolicy, PasswordValidator
 from .config import get_config_dir
 from .webapp import ServerSettings, make_app
 
@@ -66,6 +66,7 @@ def _read_runtime_token() -> str | None:
     except OSError:
         return None
 
+
 _RELOAD_ENV_KEY = "SSHLER_RELOAD_SETTINGS"
 _PID_FILE = (
     Path(os.environ.get("TEMP", "/tmp")) / "sshler.pid"
@@ -104,11 +105,7 @@ def _get_sshler_pids() -> list[int]:
     """Find sshler processes by checking for uvicorn serving sshler."""
     pids = []
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "uvicorn.*sshler"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["pgrep", "-f", "uvicorn.*sshler"], capture_output=True, text=True)
         if result.returncode == 0:
             for line in result.stdout.strip().split("\n"):
                 if line.strip():
@@ -222,6 +219,8 @@ def _reload_app():
         max_upload_bytes=payload.get("max_upload_bytes", 50 * 1024 * 1024),
         allow_ssh_alias=payload.get("allow_ssh_alias", True),
         basic_auth=tuple(payload["basic_auth"]) if payload.get("basic_auth") else None,
+        serve_artifacts=payload.get("serve_artifacts", True),
+        artifact_port=payload.get("artifact_port", 0),
     )
     return make_app(settings)
 
@@ -243,7 +242,7 @@ def _start_vite_dev_server(frontend_dir: Path) -> subprocess.Popen:
     """Start the Vite development server for the frontend."""
     if not frontend_dir.exists():
         raise RuntimeError(f"Frontend directory not found: {frontend_dir}")
-    
+
     package_json = frontend_dir / "package.json"
     if not package_json.exists():
         raise RuntimeError(f"package.json not found in {frontend_dir}")
@@ -271,7 +270,7 @@ def _start_vite_dev_server(frontend_dir: Path) -> subprocess.Popen:
         cmd = [npm, "run", "dev"]
 
     print(f"[sshler] Starting Vite dev server: {' '.join(cmd)}")
-    
+
     # Start Vite dev server
     process = subprocess.Popen(
         cmd,
@@ -279,9 +278,9 @@ def _start_vite_dev_server(frontend_dir: Path) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
-        bufsize=1
+        bufsize=1,
     )
-    
+
     return process
 
 
@@ -289,11 +288,11 @@ def _monitor_vite_process(process: subprocess.Popen) -> None:
     """Monitor Vite process output and print relevant messages."""
     if not process.stdout:
         return
-        
-    for line in iter(process.stdout.readline, ''):
+
+    for line in iter(process.stdout.readline, ""):
         if line.strip():
             # Filter and format Vite output
-            if any(keyword in line.lower() for keyword in ['local:', 'ready', 'hmr', 'error']):
+            if any(keyword in line.lower() for keyword in ["local:", "ready", "hmr", "error"]):
                 print(f"[vite] {line.strip()}")
 
 
@@ -319,65 +318,65 @@ def serve_dev(
     log_level: str = "info",
     open_browser: bool = True,
     token: str | None = None,
+    serve_artifacts: bool = True,
+    artifact_port: int = 0,
 ) -> None:
     """Start both FastAPI and Vite dev servers for development.
-    
+
     English:
         Starts the FastAPI backend with auto-reload and the Vite frontend dev server
         concurrently. Provides hot module replacement for frontend changes and
         automatic restart for backend changes.
-    
+
     日本語:
         FastAPI バックエンドを自動リロード付きで起動し、同時に Vite フロントエンド
         開発サーバーも起動します。フロントエンドの変更にはホットモジュール置換、
         バックエンドの変更には自動再起動を提供します。
     """
-    
+
     # Find frontend directory
     current_dir = Path.cwd()
     frontend_dir = current_dir / "frontend"
-    
+
     if not frontend_dir.exists():
         print("[sshler] Error: frontend/ directory not found")
         print("[sshler] Make sure you're running from the project root")
         sys.exit(1)
-    
+
     # Start Vite dev server
     try:
         vite_process = _start_vite_dev_server(frontend_dir)
     except RuntimeError as e:
         print(f"[sshler] Error starting Vite: {e}")
         sys.exit(1)
-    
+
     # Start monitoring Vite output in a separate thread
     vite_monitor_thread = threading.Thread(
-        target=_monitor_vite_process, 
-        args=(vite_process,), 
-        daemon=True
+        target=_monitor_vite_process, args=(vite_process,), daemon=True
     )
     vite_monitor_thread.start()
-    
+
     # Add localhost:5173 to allowed origins for Vite dev server
     dev_origins = (allow_origins or []) + ["http://localhost:5173", "http://127.0.0.1:5173"]
-    
+
     # Setup signal handlers for graceful shutdown
     def signal_handler(signum, frame):
         print("\n[sshler] Shutting down development servers...")
         _cleanup_processes(vite_process)
         sys.exit(0)
-    
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     # Wait a moment for Vite to start
     time.sleep(2)
-    
+
     # Open browser to Vite dev server URL
     if open_browser:
         vite_url = "http://localhost:5173/app/"
         print(f"[sshler] Opening browser to {vite_url}")
         _open_browser_later(vite_url, delay=1.0)
-    
+
     try:
         # Start FastAPI with reload
         serve(
@@ -391,6 +390,8 @@ def serve_dev(
             log_level=log_level,
             open_browser=False,  # We already opened to Vite
             token=token,
+            serve_artifacts=serve_artifacts,
+            artifact_port=artifact_port,
         )
     except KeyboardInterrupt:
         pass
@@ -409,6 +410,8 @@ def serve(
     log_level: str = "info",
     open_browser: bool = True,
     token: str | None = None,
+    serve_artifacts: bool = True,
+    artifact_port: int = 0,
 ) -> None:
     """Start the sshler FastAPI application via uvicorn.
 
@@ -424,18 +427,25 @@ def serve(
     # Auto-add the actual listening address to allowed origins
     # so origin checks pass regardless of custom port
     auto_origins = list(allow_origins or [])
-    listen_origins = {f"http://{host}:{port}", f"http://localhost:{port}", f"http://127.0.0.1:{port}"}
+    listen_origins = {
+        f"http://{host}:{port}",
+        f"http://localhost:{port}",
+        f"http://127.0.0.1:{port}",
+    }
     for o in listen_origins:
         if o not in auto_origins:
             auto_origins.append(o)
 
+    csrf_token = token or secrets.token_urlsafe(32)
     settings = ServerSettings(
         allow_origins=auto_origins,
-        csrf_token=token or secrets.token_urlsafe(32),
+        csrf_token=csrf_token,
         max_upload_bytes=max_upload_mb * 1024 * 1024,
         allow_ssh_alias=allow_ssh_alias,
         basic_auth=basic_auth,
         serve_spa=True,
+        serve_artifacts=serve_artifacts,
+        artifact_port=artifact_port,
     )
 
     fastapi_application = make_app(settings)
@@ -448,7 +458,7 @@ def serve(
 
     # Cache the active token so local `sshler progress` calls can find it
     # without needing the user to copy/paste from stdout into an env var.
-    _write_runtime_token(settings.csrf_token)
+    _write_runtime_token(csrf_token)
 
     print(f"[sshler] listening on {application_url}")
     print(f"[sshler] X-SSHLER-TOKEN={settings.csrf_token}")
@@ -465,6 +475,8 @@ def serve(
                 "max_upload_bytes": settings.max_upload_bytes,
                 "allow_ssh_alias": settings.allow_ssh_alias,
                 "basic_auth": list(settings.basic_auth) if settings.basic_auth else None,
+                "serve_artifacts": settings.serve_artifacts,
+                "artifact_port": settings.artifact_port,
             }
             os.environ[_RELOAD_ENV_KEY] = json.dumps(payload)
             uvicorn.run(
@@ -474,6 +486,8 @@ def serve(
                 reload=True,
                 log_level=log_level,
                 factory=True,
+                # Watch the installed package, not the cwd sshler happens to start in.
+                reload_dirs=[str(Path(__file__).resolve().parent)],
             )
         else:
             uvicorn.run(
@@ -490,28 +504,28 @@ def serve(
 def fix_frontend():
     """Fix frontend issues by rebuilding and clearing cache."""
     print("Fixing frontend issues...")
-    
+
     # Build frontend
     if not build_frontend():
         return False
-    
+
     # Clear any cached files
-    frontend_dir = Path(__file__).parent.parent / "frontend"
     dist_dir = Path(__file__).parent / "static" / "dist"
-    
+
     if dist_dir.exists():
         print("Clearing dist cache...")
         import shutil
+
         try:
             shutil.rmtree(dist_dir)
         except Exception as e:
             print(f"Warning: Could not clear dist cache: {e}")
-    
+
     # Rebuild
     if build_frontend():
         print("Frontend fixed! Hard refresh your browser (Ctrl+F5)")
         return True
-    
+
     return False
 
 
@@ -521,15 +535,11 @@ def build_frontend():
     if not frontend_dir.exists():
         print("Frontend directory not found")
         return False
-    
+
     print("Building Vue frontend...")
     try:
-        result = subprocess.run(
-            ["pnpm", "build"],
-            cwd=frontend_dir,
-            check=True,
-            capture_output=True,
-            text=True
+        subprocess.run(
+            ["pnpm", "build"], cwd=frontend_dir, check=True, capture_output=True, text=True
         )
         print("Frontend build completed successfully!")
         return True
@@ -585,7 +595,7 @@ def hash_password(username: str | None = None, append_to_env: bool = True) -> No
     if not is_valid:
         print("\nError: Password does not meet security requirements:")
         for error in errors:
-          print(f"  - {error}")
+            print(f"  - {error}")
         print("\nPassword requirements:")
         print(f"  - At least {policy.min_length} characters long")
         print("  - At least 1 uppercase letter (A-Z)")
@@ -645,11 +655,14 @@ def hash_password(username: str | None = None, append_to_env: bool = True) -> No
 
                 # Remove existing auth lines
                 for line in existing_content.splitlines():
-                    if not any(line.startswith(prefix) for prefix in [
-                        "SSHLER_USERNAME=",
-                        "SSHLER_PASSWORD=",
-                        "SSHLER_PASSWORD_HASH="
-                    ]):
+                    if not any(
+                        line.startswith(prefix)
+                        for prefix in [
+                            "SSHLER_USERNAME=",
+                            "SSHLER_PASSWORD=",
+                            "SSHLER_PASSWORD_HASH=",
+                        ]
+                    ):
                         new_lines.append(line)
             else:
                 new_lines = existing_content.splitlines() if existing_content else []
@@ -658,11 +671,13 @@ def hash_password(username: str | None = None, append_to_env: bool = True) -> No
             if new_lines and new_lines[-1].strip():  # Add blank line if needed
                 new_lines.append("")
 
-            new_lines.extend([
-                "# Authentication (generated by sshler hash-password)",
-                f"SSHLER_USERNAME={username}",
-                f"SSHLER_PASSWORD_HASH={password_hash}",
-            ])
+            new_lines.extend(
+                [
+                    "# Authentication (generated by sshler hash-password)",
+                    f"SSHLER_USERNAME={username}",
+                    f"SSHLER_PASSWORD_HASH={password_hash}",
+                ]
+            )
 
             # Write back to file
             env_file.write_text("\n".join(new_lines) + "\n")
@@ -675,7 +690,7 @@ def hash_password(username: str | None = None, append_to_env: bool = True) -> No
             print("\nYou can now start sshler with:")
             print("  sshler serve")
 
-        except (IOError, PermissionError) as e:
+        except (OSError, PermissionError) as e:
             print(f"\nWarning: Could not write to .env file: {e}")
             print("\nManually add these lines to your .env file:")
             print(f"SSHLER_USERNAME={username}")
@@ -692,8 +707,12 @@ def hash_password(username: str | None = None, append_to_env: bool = True) -> No
 
 
 def _resolve_progress_url(args: argparse.Namespace) -> str:
-    """Pick the sshler base URL: --url > $SSHLER_PROGRESS_URL > default."""
-    url = getattr(args, "url", None) or os.environ.get("SSHLER_PROGRESS_URL")
+    """Pick the sshler base URL while preserving the progress-specific env var."""
+    url = (
+        getattr(args, "url", None)
+        or os.environ.get("SSHLER_URL")
+        or os.environ.get("SSHLER_PROGRESS_URL")
+    )
     return (url or _DEFAULT_PROGRESS_URL).rstrip("/")
 
 
@@ -762,15 +781,13 @@ def progress_push(args: argparse.Namespace) -> int:
     name = args.name
     if not _PROGRESS_NAME_RE.match(name):
         print(
-            f"[sshler] invalid name '{name}': must match "
-            f"^[A-Za-z0-9._:-]{{1,64}}$",
+            f"[sshler] invalid name '{name}': must match ^[A-Za-z0-9._:-]{{1,64}}$",
             file=sys.stderr,
         )
         return 2
     if args.status not in _PROGRESS_STATUSES:
         print(
-            f"[sshler] invalid status '{args.status}': must be one of "
-            f"{list(_PROGRESS_STATUSES)}",
+            f"[sshler] invalid status '{args.status}': must be one of {list(_PROGRESS_STATUSES)}",
             file=sys.stderr,
         )
         return 2
@@ -888,8 +905,7 @@ def progress_delete(args: argparse.Namespace) -> int:
     name = args.name
     if not _PROGRESS_NAME_RE.match(name):
         print(
-            f"[sshler] invalid name '{name}': must match "
-            f"^[A-Za-z0-9._:-]{{1,64}}$",
+            f"[sshler] invalid name '{name}': must match ^[A-Za-z0-9._:-]{{1,64}}$",
             file=sys.stderr,
         )
         return 2
@@ -988,6 +1004,246 @@ def _add_progress_common_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Local HTML artifact catalog CLI
+# ---------------------------------------------------------------------------
+
+
+def _artifact_request(
+    args: argparse.Namespace,
+    method: str,
+    path: str,
+    body: dict | None = None,
+) -> tuple[int, dict | None]:
+    import httpx
+
+    url = _resolve_progress_url(args)
+    token = _resolve_progress_token(args)
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.request(
+                method,
+                f"{url}/api/v1{path}",
+                headers={"X-SSHLER-TOKEN": token},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        print(f"[sshler] HTTP error: {exc}", file=sys.stderr)
+        return 1, None
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail", response.text)
+        except (ValueError, AttributeError):
+            detail = response.text
+        print(
+            f"[sshler] artifact request failed: HTTP {response.status_code} {detail}",
+            file=sys.stderr,
+        )
+        return 1, None
+    return 0, response.json()
+
+
+def _artifact_catalog_url(args: argparse.Namespace, artifact_id: str) -> str:
+    return f"{_resolve_progress_url(args)}/app/artifacts/{artifact_id}"
+
+
+def _render_artifact(artifact: dict, args: argparse.Namespace) -> str:
+    status = "ready" if artifact.get("exists") else "missing"
+    lines = [
+        f"ID:      {artifact.get('id', '')}",
+        f"Title:   {artifact.get('title') or '(from HTML)'}",
+        f"Project: {artifact.get('project_name', '')}",
+        f"Group:   {artifact.get('group_path') or '(root)'}",
+        f"Mode:    {artifact.get('mode', '')}",
+        f"Status:  {status}",
+        f"Source:  {artifact.get('source_path', '')}",
+        f"Alias:   {artifact.get('alias_path') or '(none)'}",
+        f"Mount:   {artifact.get('mount_path') or '(none)'}",
+        f"Catalog: {_artifact_catalog_url(args, str(artifact.get('id', '')))}",
+    ]
+    return "\n".join(lines)
+
+
+def artifact_add(args: argparse.Namespace) -> int:
+    source = str(Path(args.path).expanduser().resolve())
+    mode = "collection" if getattr(args, "discover", False) else args.mode
+    body: dict = {
+        "source_path": source,
+        "mode": mode,
+        "group_path": args.group or "",
+    }
+    for key in ("project", "entrypoint", "title", "slug", "mount_path"):
+        value = getattr(args, key, None)
+        if value is not None:
+            body[key] = value
+    code, data = _artifact_request(args, "POST", "/artifacts", body)
+    if code or data is None:
+        return code
+    data["catalog_url"] = _artifact_catalog_url(args, data["id"])
+    if args.json_output:
+        print(json.dumps(data))
+    else:
+        verb = "Registered" if data.get("created") else "Already registered"
+        print(f"[sshler] {verb.lower()} artifact\n{_render_artifact(data, args)}")
+        if data.get("mode") != "file":
+            print(
+                "[sshler] scope: non-hidden regular files beneath the source "
+                "directory can be served"
+            )
+    return 0
+
+
+def artifact_list(args: argparse.Namespace) -> int:
+    params: dict[str, str] = {}
+    for argument, parameter in (
+        ("project", "project"),
+        ("group", "group"),
+        ("mode", "mode"),
+        ("query", "q"),
+    ):
+        value = getattr(args, argument, None)
+        if value:
+            params[parameter] = str(value)
+    if getattr(args, "exists", None) is not None:
+        params["exists"] = "true" if args.exists else "false"
+    path = "/artifacts"
+    if params:
+        path = f"{path}?{urlencode(params)}"
+    code, data = _artifact_request(args, "GET", path)
+    if code or data is None:
+        return code
+    artifacts = data.get("artifacts", [])
+    payload = {"artifacts": artifacts}
+    if args.json_output:
+        print(json.dumps(payload))
+        return 0
+    if not artifacts:
+        print("(no artifacts)")
+        return 0
+    for artifact in artifacts:
+        marker = "✓" if artifact.get("exists") else "!"
+        group = artifact.get("group_path") or "(root)"
+        title = artifact.get("title") or Path(artifact.get("source_path", "")).stem
+        print(
+            f"{marker} {artifact['id']}  {artifact['project_name']} / {group}  "
+            f"{title} [{artifact['mode']}]"
+        )
+    return 0
+
+
+def artifact_find(args: argparse.Namespace) -> int:
+    return artifact_list(args)
+
+
+def artifact_show(args: argparse.Namespace) -> int:
+    code, data = _artifact_request(args, "GET", f"/artifacts/{args.id}")
+    if code or data is None:
+        return code
+    page_code, pages = _artifact_request(args, "GET", f"/artifacts/{args.id}/pages")
+    if page_code == 0 and pages is not None:
+        data["pages"] = pages.get("pages", [])
+    data["catalog_url"] = _artifact_catalog_url(args, args.id)
+    if args.json_output:
+        print(json.dumps(data))
+    else:
+        print(_render_artifact(data, args))
+        for page in data.get("pages", []):
+            print(f"  - {page['title']}: {page['relative_path'] or '(entry)'}")
+    return 0
+
+
+def artifact_update(args: argparse.Namespace) -> int:
+    body: dict = {}
+    if args.path is not None:
+        body["source_path"] = str(Path(args.path).expanduser().resolve())
+    for key in (
+        "project",
+        "group_path",
+        "mode",
+        "entrypoint",
+        "title",
+        "slug",
+        "mount_path",
+    ):
+        value = getattr(args, key, None)
+        if value is not None:
+            body["group_path" if key == "group_path" else key] = value
+    if not body:
+        print("[sshler] no artifact updates supplied", file=sys.stderr)
+        return 2
+    code, data = _artifact_request(args, "PATCH", f"/artifacts/{args.id}", body)
+    if code or data is None:
+        return code
+    if args.json_output:
+        print(json.dumps(data))
+    else:
+        print(f"[sshler] updated artifact\n{_render_artifact(data, args)}")
+    return 0
+
+
+def artifact_rescan(args: argparse.Namespace) -> int:
+    code, data = _artifact_request(args, "POST", f"/artifacts/{args.id}/rescan")
+    if code or data is None:
+        return code
+    if args.json_output:
+        print(json.dumps(data))
+    else:
+        print(f"[sshler] found {len(data.get('pages', []))} HTML page(s)")
+    return 0
+
+
+def artifact_remove(args: argparse.Namespace) -> int:
+    code, data = _artifact_request(args, "DELETE", f"/artifacts/{args.id}")
+    if code or data is None:
+        return code
+    if args.json_output:
+        print(json.dumps(data))
+    elif data.get("removed"):
+        print("[sshler] unregistered artifact; files on disk were not changed")
+    else:
+        print("[sshler] artifact did not exist (no-op)")
+    return 0
+
+
+def artifact_open(args: argparse.Namespace) -> int:
+    code, data = _artifact_request(args, "GET", f"/artifacts/{args.id}")
+    if code or data is None:
+        return code
+    url = _artifact_catalog_url(args, args.id)
+    if args.json_output:
+        print(json.dumps({"id": args.id, "catalog_url": url}))
+    else:
+        print(f"[sshler] opening {url}")
+        webbrowser.open(url)
+    return 0
+
+
+def _add_artifact_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--url",
+        help="sshler base URL (default: $SSHLER_URL or http://127.0.0.1:8822)",
+    )
+    parser.add_argument(
+        "--token",
+        help="X-SSHLER-TOKEN value (default: $SSHLER_TOKEN or runtime-token cache)",
+    )
+    parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit raw JSON instead of pretty output",
+    )
+
+
+def _add_artifact_filter_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--project", help="Filter by project name or slug")
+    parser.add_argument("--group", help="Filter by group and its descendants")
+    parser.add_argument("--mode", choices=["file", "site", "collection"], help="Filter by mode")
+    presence = parser.add_mutually_exclusive_group()
+    presence.add_argument("--exists", dest="exists", action="store_true", default=None)
+    presence.add_argument("--missing", dest="exists", action="store_false")
+
+
 def main() -> None:
     """Parse CLI arguments and invoke the requested subcommand.
 
@@ -1016,22 +1272,20 @@ def main() -> None:
 
     # Hash-password command
     hash_parser = subcommands.add_parser(
-        "hash-password",
-        help="Generate Argon2 password hash for authentication"
+        "hash-password", help="Generate Argon2 password hash for authentication"
     )
     hash_parser.add_argument(
-        "--username",
-        help="Username for authentication (will prompt if not provided)"
+        "--username", help="Username for authentication (will prompt if not provided)"
     )
     hash_parser.add_argument(
-        "--no-env",
-        action="store_true",
-        help="Do not append hash to .env file (just display it)"
+        "--no-env", action="store_true", help="Do not append hash to .env file (just display it)"
     )
-    hash_parser.set_defaults(func=lambda args: hash_password(
-        username=getattr(args, "username", None),
-        append_to_env=not getattr(args, "no_env", False)
-    ))
+    hash_parser.set_defaults(
+        func=lambda args: hash_password(
+            username=getattr(args, "username", None),
+            append_to_env=not getattr(args, "no_env", False),
+        )
+    )
 
     # Status command
     status_parser = subcommands.add_parser("status", help="Check if sshler is running")
@@ -1094,6 +1348,78 @@ def main() -> None:
     delete_parser.add_argument("name", help="Bar name to delete")
     _add_progress_common_args(delete_parser)
 
+    artifact_parser = subcommands.add_parser(
+        "artifact", help="Register and manage local HTML artifacts"
+    )
+    artifact_sub = artifact_parser.add_subparsers(dest="artifact_command")
+
+    artifact_add_parser = artifact_sub.add_parser("add", help="Register a file or directory")
+    artifact_add_parser.add_argument("path")
+    artifact_add_parser.add_argument("--project")
+    artifact_add_parser.add_argument("--group")
+    artifact_add_parser.add_argument(
+        "--mode",
+        default="auto",
+        choices=["auto", "file", "site", "collection"],
+    )
+    artifact_add_parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Register a directory as a recursively discovered collection",
+    )
+    artifact_add_parser.add_argument("--entry", dest="entrypoint")
+    artifact_add_parser.add_argument("--title")
+    artifact_add_parser.add_argument("--slug", help="Stable URL alias within the project")
+    artifact_add_parser.add_argument(
+        "--mount",
+        dest="mount_path",
+        help="Optional root-relative URL mount, such as published/reports",
+    )
+    _add_artifact_common_args(artifact_add_parser)
+
+    artifact_list_parser = artifact_sub.add_parser("list", help="List artifacts")
+    _add_artifact_filter_args(artifact_list_parser)
+    _add_artifact_common_args(artifact_list_parser)
+
+    artifact_find_parser = artifact_sub.add_parser(
+        "find", help="Search titles, paths, projects, groups, and discovered pages"
+    )
+    artifact_find_parser.add_argument("query")
+    _add_artifact_filter_args(artifact_find_parser)
+    _add_artifact_common_args(artifact_find_parser)
+
+    artifact_show_parser = artifact_sub.add_parser("show", help="Show one artifact")
+    artifact_show_parser.add_argument("id")
+    _add_artifact_common_args(artifact_show_parser)
+
+    artifact_update_parser = artifact_sub.add_parser("update", help="Update an artifact")
+    artifact_update_parser.add_argument("id")
+    artifact_update_parser.add_argument("--source", dest="path")
+    artifact_update_parser.add_argument("--project")
+    artifact_update_parser.add_argument("--group", dest="group_path")
+    artifact_update_parser.add_argument("--mode", choices=["file", "site", "collection"])
+    artifact_update_parser.add_argument("--entry", dest="entrypoint")
+    artifact_update_parser.add_argument("--title")
+    artifact_update_parser.add_argument("--slug", help="Stable URL alias within the project")
+    artifact_update_parser.add_argument(
+        "--mount",
+        dest="mount_path",
+        help="Root-relative URL mount; pass an empty value to clear it",
+    )
+    _add_artifact_common_args(artifact_update_parser)
+
+    artifact_rescan_parser = artifact_sub.add_parser("rescan", help="Refresh discovered pages")
+    artifact_rescan_parser.add_argument("id")
+    _add_artifact_common_args(artifact_rescan_parser)
+
+    artifact_open_parser = artifact_sub.add_parser("open", help="Open an artifact catalog page")
+    artifact_open_parser.add_argument("id")
+    _add_artifact_common_args(artifact_open_parser)
+
+    artifact_remove_parser = artifact_sub.add_parser("remove", help="Unregister an artifact")
+    artifact_remove_parser.add_argument("id")
+    _add_artifact_common_args(artifact_remove_parser)
+
     # Ping notification sender CLI
     ping_parser = subcommands.add_parser(
         "ping",
@@ -1107,7 +1433,9 @@ def main() -> None:
         choices=["success", "warning", "error", "info"],
         help="Notification color type",
     )
-    ping_parser.add_argument("--icon", default=None, help="Emoji shown as notification avatar (e.g. 🚀)")
+    ping_parser.add_argument(
+        "--icon", default=None, help="Emoji shown as notification avatar (e.g. 🚀)"
+    )
     ping_parser.add_argument(
         "--duration",
         type=int,
@@ -1115,7 +1443,9 @@ def main() -> None:
         metavar="MS",
         help="Auto-dismiss after this many milliseconds (omit for manual dismiss)",
     )
-    ping_parser.add_argument("--source", default=None, help="Label identifying the sender (e.g. deploy-bot)")
+    ping_parser.add_argument(
+        "--source", default=None, help="Label identifying the sender (e.g. deploy-bot)"
+    )
     ping_parser.add_argument(
         "--metadata",
         default=None,
@@ -1143,7 +1473,7 @@ def main() -> None:
     serve_parser.add_argument(
         "--dev",
         action="store_true",
-        help="Start in development mode with both FastAPI and Vite dev servers"
+        help="Start in development mode with both FastAPI and Vite dev servers",
     )
     serve_parser.add_argument(
         "--allow-origin",
@@ -1180,6 +1510,17 @@ def main() -> None:
     )
     serve_parser.add_argument("--token", help="Provide a fixed X-SSHLER-TOKEN value")
     serve_parser.add_argument(
+        "--artifact-port",
+        type=int,
+        default=0,
+        help="Loopback artifact sidecar port (default: choose an available port)",
+    )
+    serve_parser.add_argument(
+        "--no-artifacts",
+        action="store_true",
+        help="Disable the local HTML artifact sidecar",
+    )
+    serve_parser.add_argument(
         "--no-browser",
         dest="open_browser",
         action="store_false",
@@ -1195,7 +1536,7 @@ def main() -> None:
     elif parsed_args.command == "hash-password":
         hash_password(
             username=getattr(parsed_args, "username", None),
-            append_to_env=not getattr(parsed_args, "no_env", False)
+            append_to_env=not getattr(parsed_args, "no_env", False),
         )
     elif parsed_args.command == "status":
         sys.exit(status())
@@ -1216,8 +1557,27 @@ def main() -> None:
         else:
             progress_parser.print_help()
             sys.exit(1)
+    elif parsed_args.command == "artifact":
+        sub = getattr(parsed_args, "artifact_command", None)
+        handlers = {
+            "add": artifact_add,
+            "list": artifact_list,
+            "find": artifact_find,
+            "show": artifact_show,
+            "update": artifact_update,
+            "rescan": artifact_rescan,
+            "open": artifact_open,
+            "remove": artifact_remove,
+        }
+        handler = handlers.get(sub) if isinstance(sub, str) else None
+        if handler is None:
+            artifact_parser.print_help()
+            sys.exit(1)
+        sys.exit(handler(parsed_args))
     elif parsed_args.command in (None, "serve"):
-        bind_host_value = getattr(parsed_args, "bind", None) or getattr(parsed_args, "host", "127.0.0.1")
+        bind_host_value = getattr(parsed_args, "bind", None) or getattr(
+            parsed_args, "host", "127.0.0.1"
+        )
         bind_host: str = bind_host_value if bind_host_value is not None else "127.0.0.1"
         no_password = getattr(parsed_args, "no_password", False)
         basic_auth: tuple[str, str] | None = None
@@ -1238,14 +1598,25 @@ def main() -> None:
             # No auth configured - check if we're binding to a non-localhost interface
             if bind_host not in ("127.0.0.1", "localhost"):
                 print("=" * 70, file=sys.stderr)
-                print("SECURITY ERROR: Authentication required for non-localhost binding", file=sys.stderr)
+                print(
+                    "SECURITY ERROR: Authentication required for non-localhost binding",
+                    file=sys.stderr,
+                )
                 print("=" * 70, file=sys.stderr)
                 print(f"\nYou are trying to bind to: {bind_host}", file=sys.stderr)
-                print("This would expose sshler to your network without authentication!", file=sys.stderr)
+                print(
+                    "This would expose sshler to your network without authentication!",
+                    file=sys.stderr,
+                )
                 print("\nTo fix this, choose one of these options:", file=sys.stderr)
                 print("\n1. Set up authentication with environment variables:", file=sys.stderr)
-                print("   sshler hash-password  # This will guide you through setup", file=sys.stderr)
-                print("\n2. Use --auth flag (not recommended - password visible in process list):", file=sys.stderr)
+                print(
+                    "   sshler hash-password  # This will guide you through setup", file=sys.stderr
+                )
+                print(
+                    "\n2. Use --auth flag (not recommended - password visible in process list):",
+                    file=sys.stderr,
+                )
                 print("   sshler serve --host 0.0.0.0 --auth username:password", file=sys.stderr)
                 print("\n3. Use --no-password flag (UNSAFE - only for testing):", file=sys.stderr)
                 print("   sshler serve --host 0.0.0.0 --no-password", file=sys.stderr)
@@ -1258,7 +1629,9 @@ def main() -> None:
                 print("=" * 70, file=sys.stderr)
                 print("⚠️  WARNING: Running without authentication", file=sys.stderr)
                 print("=" * 70, file=sys.stderr)
-                print(f"Binding to: {bind_host}:{getattr(parsed_args, 'port', 8822)}", file=sys.stderr)
+                print(
+                    f"Binding to: {bind_host}:{getattr(parsed_args, 'port', 8822)}", file=sys.stderr
+                )
                 print("This is ONLY safe because you're bound to localhost.", file=sys.stderr)
                 print("\nFor production deployments, set up authentication:", file=sys.stderr)
                 print("  sshler hash-password", file=sys.stderr)
@@ -1267,11 +1640,16 @@ def main() -> None:
         elif no_password and bind_host not in ("127.0.0.1", "localhost"):
             # --no-password with non-localhost - show big warning
             print("=" * 70, file=sys.stderr)
-            print("⚠️  SECURITY WARNING: Running without authentication on network interface!", file=sys.stderr)
+            print(
+                "⚠️  SECURITY WARNING: Running without authentication on network interface!",
+                file=sys.stderr,
+            )
             print("=" * 70, file=sys.stderr)
             print(f"Binding to: {bind_host}:{getattr(parsed_args, 'port', 8822)}", file=sys.stderr)
             print("Anyone on your network can access this sshler instance!", file=sys.stderr)
-            print("\nThis is EXTREMELY UNSAFE and should ONLY be used for testing.", file=sys.stderr)
+            print(
+                "\nThis is EXTREMELY UNSAFE and should ONLY be used for testing.", file=sys.stderr
+            )
             print("Press Ctrl+C now to cancel, or wait 5 seconds to continue...", file=sys.stderr)
             print("=" * 70, file=sys.stderr)
             try:
@@ -1300,6 +1678,8 @@ def main() -> None:
                 log_level=getattr(parsed_args, "log_level", "info"),
                 open_browser=getattr(parsed_args, "open_browser", True),
                 token=getattr(parsed_args, "token", None),
+                serve_artifacts=not getattr(parsed_args, "no_artifacts", False),
+                artifact_port=getattr(parsed_args, "artifact_port", 0),
             )
         else:
             serve(
@@ -1313,6 +1693,8 @@ def main() -> None:
                 log_level=getattr(parsed_args, "log_level", "info"),
                 open_browser=getattr(parsed_args, "open_browser", True),
                 token=getattr(parsed_args, "token", None),
+                serve_artifacts=not getattr(parsed_args, "no_artifacts", False),
+                artifact_port=getattr(parsed_args, "artifact_port", 0),
             )
     else:
         parser.print_help()

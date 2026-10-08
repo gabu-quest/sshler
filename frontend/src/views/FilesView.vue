@@ -27,9 +27,42 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { UploadError, touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
+
+// Persisted view state (sort order + all/files/dirs filter) — survives page reloads.
+const SORT_STATE_KEY = "sshler:files:sort";
+const VIEW_FILTER_KEY = "sshler:files:viewFilter";
+
+type SortState = { columnKey: string; order: 'ascend' | 'descend' };
+const DEFAULT_SORT_STATE: SortState = { columnKey: 'name', order: 'ascend' };
+
+const readSortState = (): SortState => {
+  if (typeof localStorage === "undefined") return DEFAULT_SORT_STATE;
+  const stored = localStorage.getItem(SORT_STATE_KEY);
+  if (!stored) return DEFAULT_SORT_STATE;
+  try {
+    const parsed = JSON.parse(stored);
+    if (
+      parsed && typeof parsed === "object" &&
+      typeof parsed.columnKey === "string" &&
+      (parsed.order === "ascend" || parsed.order === "descend")
+    ) {
+      return { columnKey: parsed.columnKey, order: parsed.order };
+    }
+  } catch {
+    // malformed JSON — fall through to default
+  }
+  return DEFAULT_SORT_STATE;
+};
+
+const readViewFilter = (): "all" | "files" | "dirs" => {
+  if (typeof localStorage === "undefined") return "all";
+  const stored = localStorage.getItem(VIEW_FILTER_KEY);
+  if (stored === "all" || stored === "files" || stored === "dirs") return stored;
+  return "all";
+};
 
 const route = useRoute();
 const bootstrapStore = useBootstrapStore();
@@ -53,11 +86,10 @@ const actionBusy = ref(false);
 const uploadTarget = ref<File | null>(null);
 const renameTarget = ref<string | null>(null);
 const renameValue = ref("");
-const moveDestination = ref("");
 const copyDestination = ref("");
 const copyNewName = ref("");
 const status = ref<string>("unknown");
-const viewFilter = ref<"all" | "files" | "dirs">("all");
+const viewFilter = ref<"all" | "files" | "dirs">(readViewFilter());
 const previewing = ref(false);
 const previewPath = ref("");
 const autoPrint = ref(false);
@@ -70,7 +102,7 @@ const expandedDirs = ref<Set<string>>(new Set());
 const childrenCache = ref<Map<string, any[]>>(new Map());
 const expandingDir = ref<string | null>(null);
 const refreshing = ref(false);
-const sortState = ref<{ columnKey: string; order: 'ascend' | 'descend' }>({ columnKey: 'name', order: 'ascend' });
+const sortState = ref<SortState>(readSortState());
 const batchModal = ref<{ visible: boolean; mode: "move" | "copy" }>({ visible: false, mode: "move" });
 const currentGitInfo = ref<GitInfo | null>(null);
 const chmodModalVisible = ref(false);
@@ -180,6 +212,10 @@ const filteredRows = computed(() => {
 
   return result;
 });
+// Ordered list of currently-visible non-directory file paths — feeds the preview
+// modal's prev/next navigation so reviewing a folder doesn't require close/reopen.
+const previewSiblings = computed(() => filteredRows.value.filter((r: any) => !r.is_directory).map((r: any) => r.path));
+
 const selectedPaths = computed({
   get: () => filesStore.selectedFiles,
   set: (val: string[]) => filesStore.setSelectedFiles(val),
@@ -197,6 +233,15 @@ const displayDirName = computed(() => {
   const parts = currentDir.value.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] || 'Root';
 });
+
+// Persist sort order + view filter across reloads
+watch(viewFilter, (val) => {
+  if (typeof localStorage !== "undefined") localStorage.setItem(VIEW_FILTER_KEY, val);
+});
+
+watch(sortState, (val) => {
+  if (typeof localStorage !== "undefined") localStorage.setItem(SORT_STATE_KEY, JSON.stringify(val));
+}, { deep: true });
 
 // Update browser tab title and favicon
 watch([selectedBox, currentDir], () => {
@@ -274,6 +319,20 @@ const navigateToDirectory = async (path: string) => {
   expandedDirs.value = new Set();
   childrenCache.value = new Map();
   await reloadDir();
+};
+
+const handleSearchSelect = async (path: string, isDirectory: boolean) => {
+  if (isDirectory) {
+    await navigateToDirectory(path);
+    return;
+  }
+  // File hit: jump to its parent directory and open the preview
+  const parentDir = path.split('/').slice(0, -1).join('/') || '/';
+  if (parentDir !== currentDir.value) {
+    await navigateToDirectory(parentDir);
+  }
+  previewPath.value = path;
+  previewing.value = true;
 };
 
 const navigateUp = async () => {
@@ -377,6 +436,12 @@ const handleRowClick = (row: any, e: MouseEvent) => {
   } else if (e.shiftKey && selectedPaths.value.length > 0) {
     const lastSelected = selectedPaths.value[selectedPaths.value.length - 1];
     const lastIndex = filteredRows.value.findIndex((r: any) => r.path === lastSelected);
+    // An anchor no longer among the rows (another folder, filtered out) gives no
+    // range: select just the clicked row rather than slice(-1, ...).
+    if (lastIndex === -1) {
+      filesStore.setSelectedFiles([row.path]);
+      return;
+    }
     const currentIndex = filteredRows.value.findIndex((r: any) => r.path === row.path);
     const start = Math.min(lastIndex, currentIndex);
     const end = Math.max(lastIndex, currentIndex);
@@ -660,28 +725,34 @@ async function doRename() {
   }
 }
 
-async function doMoveCopy(kind: "move" | "copy") {
-  if (!selectedBox.value || !renameTarget.value) return;
-  actionBusy.value = true;
-  try {
-    if (kind === "move") {
-      await filesStore.doMove(selectedBox.value, renameTarget.value, moveDestination.value, tokenValue.value || null);
-      message.success(t('files.moved'));
-    } else {
-      await filesStore.doCopy(selectedBox.value, renameTarget.value, copyDestination.value, copyNewName.value || null, tokenValue.value || null);
-      message.success(t('files.copied'));
-    }
-    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    renameTarget.value = null;
-  } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
-  } finally {
-    actionBusy.value = false;
-  }
+/**
+ * Ask whether to replace an existing file. Resolves true only for "Replace"; "No",
+ * Escape, a mask click or the dialog closing any other way resolve false. The dialog has
+ * no close button, so its focus trap lands on "No, keep it" first and Enter presses it.
+ */
+function askReplace(name: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    dialog.warning({
+      title: t('files.replace_title'),
+      content: t('files.replace_confirm', { name }),
+      positiveText: t('files.replace_yes'),
+      negativeText: t('files.replace_no'),
+      closable: false,
+      onPositiveClick: () => resolve(true),
+      onNegativeClick: () => resolve(false),
+      onEsc: () => resolve(false),
+      onMaskClick: () => resolve(false),
+      onAfterLeave: () => resolve(false),
+    });
+  });
 }
 
-async function uploadOne(file: File): Promise<void> {
+/**
+ * Upload one file: "uploaded", or "skipped" when it already exists and the user keeps
+ * it. A 409 asks to replace (Yes re-sends with the overwrite flag); any other 4xx is
+ * final; a network or server failure is retried with backoff.
+ */
+async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
   uploadTarget.value = file;
   const maxAttempts = 3;
   let lastError: unknown = null;
@@ -689,8 +760,16 @@ async function uploadOne(file: File): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null);
-      return;
+      return "uploaded";
     } catch (err) {
+      const status = err instanceof UploadError ? err.status : null;
+      if (status === 409) {
+        filesStore.uploadError = null; // the prompt answers this one
+        if (!(await askReplace(file.name))) return "skipped";
+        await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null, { overwrite: true });
+        return "uploaded";
+      }
+      if (status !== null && status >= 400 && status < 500) throw err;
       lastError = err;
       if (attempt < maxAttempts) {
         message.warning(t('files.upload_failed_retry') + ' ' + t('files.upload_attempt', { n: String(attempt + 1), max: String(maxAttempts) }));
@@ -706,14 +785,17 @@ async function handleUpload(files: FileList | null) {
   if (!files || !files.length || !selectedBox.value) return;
   actionBusy.value = true;
 
-  let failed = 0;
+  let uploaded = 0;
   for (let i = 0; i < files.length; i++) {
     const file = files.item(i);
     if (!file) continue;
     try {
-      await uploadOne(file);
+      if ((await uploadOne(file)) === "uploaded") {
+        uploaded++;
+      } else {
+        message.warning(t('files.upload_skipped', { name: file.name }), { closable: true, duration: 0 });
+      }
     } catch (err) {
-      failed++;
       const errorMsg = err instanceof Error ? err.message : String(err);
       message.error(`${file.name}: ${errorMsg}`, { closable: true, duration: 0 });
     }
@@ -722,9 +804,8 @@ async function handleUpload(files: FileList | null) {
   uploadTarget.value = null;
   actionBusy.value = false;
 
-  const succeeded = files.length - failed;
-  if (succeeded > 0) {
-    message.success(succeeded === 1 ? t('files.uploaded') : `${succeeded} files uploaded`);
+  if (uploaded > 0) {
+    message.success(uploaded === 1 ? t('files.uploaded') : `${uploaded} files uploaded`);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
   }
@@ -793,21 +874,39 @@ function formatBytes(bytes: number): string {
 const SIZE_WARN_THRESHOLD = 100 * 1024 * 1024; // 100 MB
 const SIZE_HARD_LIMIT = 500 * 1024 * 1024; // 500 MB
 
+// Toolbar: download the directory currently shown, through the same flow as a row action.
+async function handleDownloadCurrentDirectory() {
+  const dir = currentDir.value;
+  const trimmed = dir.replace(/\/+$/, '');
+  // `/` has no folder name and `~` is resolved by the server; give both a fixed file name.
+  const last = trimmed.split('/').pop() || '';
+  const name = last === '~' ? 'home' : last || 'root';
+  await handleDownloadDirectory({ path: dir, name, is_directory: true });
+}
+
 async function handleDownloadDirectory(row: any) {
   if (!selectedBox.value || !row.is_directory) return;
   let loadingMsg: { destroy: () => void } | null = null;
   try {
     loadingMsg = message.loading('Calculating directory size...', { duration: 0 });
-    const { size_bytes } = await directorySize(selectedBox.value, row.path, tokenValue.value || null);
+    const sized = await directorySize(selectedBox.value, row.path, tokenValue.value || null);
+    // The server sends null when neither `du -sb` nor `du -sk` worked on the box.
+    const size_bytes = sized.size_bytes;
     loadingMsg.destroy();
     loadingMsg = null;
 
-    if (size_bytes > SIZE_HARD_LIMIT) {
+    if (size_bytes === null) {
+      // Unknown size: ask instead of blocking; the server still enforces its own limit.
+      const proceed = window.confirm(
+        `Could not determine the size of this directory. Download as .zip anyway?`
+      );
+      if (!proceed) return;
+    } else if (size_bytes > SIZE_HARD_LIMIT) {
       message.error(`Directory is ${formatBytes(size_bytes)} — too large to download (max ${formatBytes(SIZE_HARD_LIMIT)})`);
       return;
     }
 
-    if (size_bytes > SIZE_WARN_THRESHOLD) {
+    if (size_bytes !== null && size_bytes > SIZE_WARN_THRESHOLD) {
       const proceed = window.confirm(
         `This directory is ${formatBytes(size_bytes)}. Download as .zip?`
       );
@@ -815,17 +914,19 @@ async function handleDownloadDirectory(row: any) {
     }
 
     loadingMsg = message.loading('Creating zip...', { duration: 0 });
-    const blob = await downloadDirectory(selectedBox.value, row.path, tokenValue.value || null);
+    const { blob, filename } = await downloadDirectory(selectedBox.value, row.path, tokenValue.value || null);
     loadingMsg.destroy();
     loadingMsg = null;
 
+    // The server's name wins: for `~` it is the real home folder name.
+    const zipName = filename ?? `${row.name || 'download'}.zip`;
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
-    anchor.download = `${row.name || 'download'}.zip`;
+    anchor.download = zipName;
     anchor.click();
     URL.revokeObjectURL(objectUrl);
-    message.success(`Downloaded ${row.name}.zip (${formatBytes(blob.size)})`);
+    message.success(`Downloaded ${zipName} (${formatBytes(blob.size)})`);
   } catch (err) {
     loadingMsg?.destroy();
     message.error(err instanceof Error ? err.message : String(err));
@@ -913,8 +1014,9 @@ async function handleArchiveCreate(format: string, paths?: string[]) {
   if (!archivePaths.length) return;
   actionBusy.value = true;
   const ext = format === "zip" ? ".zip" : ".tar.gz";
-  const archiveName = archivePaths.length === 1
-    ? archivePaths[0].split('/').pop() + ext
+  const single = archivePaths.length === 1 ? archivePaths[0] : undefined;
+  const archiveName = single !== undefined
+    ? single.split('/').pop() + ext
     : `archive${ext}`;
   try {
     await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null);
@@ -952,12 +1054,12 @@ async function bulkDownload() {
   if (!selectedBox.value || !selectedPaths.value.length) return;
   // Build deduplicated download names: if two files share a basename,
   // prefix each with its parent folder name to avoid Windows zip conflicts.
-  const basenames = selectedPaths.value.map(p => p.split('/').pop() || 'download');
-  const counts: Record<string, number> = {};
-  basenames.forEach(n => { counts[n] = (counts[n] ?? 0) + 1; });
-  const downloadNames = selectedPaths.value.map((path, i) => {
-    const base = basenames[i];
-    if (counts[base] > 1) {
+  const basename = (p: string) => p.split('/').pop() || 'download';
+  const counts = new Map<string, number>();
+  for (const p of selectedPaths.value) counts.set(basename(p), (counts.get(basename(p)) ?? 0) + 1);
+  const downloadNames = selectedPaths.value.map((path) => {
+    const base = basename(path);
+    if ((counts.get(base) ?? 0) > 1) {
       const parts = path.split('/');
       const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
       return parent ? `${parent}_${base}` : base;
@@ -965,23 +1067,25 @@ async function bulkDownload() {
     return base;
   });
   // Second pass: if parent-prefix trick still produces duplicates, append _2, _3 …
-  const seen: Record<string, number> = {};
-  const finalNames = downloadNames.map(name => {
-    if (seen[name] === undefined) { seen[name] = 0; return name; }
-    seen[name]++;
+  const seen = new Map<string, number>();
+  const downloads = selectedPaths.value.map((path, i) => {
+    const name = downloadNames[i] ?? basename(path);
+    const n = seen.get(name);
+    if (n === undefined) { seen.set(name, 0); return { path, name }; }
+    seen.set(name, n + 1);
     const dot = name.lastIndexOf('.');
-    return dot > 0
-      ? `${name.slice(0, dot)}_${seen[name]}${name.slice(dot)}`
-      : `${name}_${seen[name]}`;
+    return {
+      path,
+      name: dot > 0 ? `${name.slice(0, dot)}_${n + 1}${name.slice(dot)}` : `${name}_${n + 1}`,
+    };
   });
-  for (let i = 0; i < selectedPaths.value.length; i++) {
-    const path = selectedPaths.value[i];
+  for (const { path, name } of downloads) {
     try {
       const blob = await downloadFile(selectedBox.value, path, tokenValue.value || null);
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
-      anchor.download = finalNames[i];
+      anchor.download = name;
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
@@ -992,12 +1096,17 @@ async function bulkDownload() {
 
 // Mobile-friendly actions button that opens context menu
 const mobileActionsButton = (row: any) => {
+  if (row._isParent) return null;
   return h(NButton, {
     size: "tiny",
     quaternary: true,
     onClick: (e: MouseEvent) => showContextMenu(e, row)
   }, { default: () => '...' });
 };
+
+// The `..` row is navigation only: no checkbox, no actions.
+const isParentRow = (row: any) => !!row._isParent;
+const tableRowClassName = (row: any) => (row._isParent ? 'files-parent-row' : '');
 
 // Table columns — responsive: on mobile show only name + actions
 const columns = computed(() => {
@@ -1056,7 +1165,7 @@ const columns = computed(() => {
 
   if (isMobile.value) {
     return [
-      { type: "selection" as const },
+      { type: "selection" as const, disabled: isParentRow },
       nameCol,
       {
         title: "", key: "actions", width: 48,
@@ -1068,7 +1177,7 @@ const columns = computed(() => {
   const sortOrder = (key: string) => sortState.value.columnKey === key ? sortState.value.order : false as const;
 
   return [
-    { type: "selection" as const },
+    { type: "selection" as const, disabled: isParentRow },
     { ...nameCol, sorter: true, sortOrder: sortOrder('name') },
     {
       title: "type", key: "is_directory", sorter: true, sortOrder: sortOrder('is_directory'),
@@ -1096,6 +1205,7 @@ const columns = computed(() => {
     {
       title: "actions", key: "actions",
       render(row: any) {
+        if (row._isParent) return null;
         const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
         return h("div", { style: "display:flex;gap:4px;align-items:center;" }, [
           h(NTooltip, { trigger: "hover", placement: "left" }, {
@@ -1217,7 +1327,9 @@ const columns = computed(() => {
             <DirectorySearchInput
               :box="selectedBox"
               :token="tokenValue"
-              @select="navigateToDirectory"
+              :root="currentDir"
+              :files="true"
+              @select="handleSearchSelect"
             />
             <NInput v-model:value="filterQuery" :placeholder="t('files.filter_placeholder')" size="small" style="width: 140px">
               <template #prefix><NIcon size="14"><PhMagnifyingGlass weight="duotone" /></NIcon></template>
@@ -1225,6 +1337,9 @@ const columns = computed(() => {
             <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">{{ t('common.all') }}</NButton>
             <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">{{ t('common.files') }}</NButton>
             <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">{{ t('common.folders') }}</NButton>
+            <NButton size="small" quaternary class="download-current-dir" @click="handleDownloadCurrentDirectory" :disabled="!selectedBox" :title="t('files.download_current_dir')">
+              <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>
+            </NButton>
             <NButton size="small" quaternary @click="expandAllDirs" :disabled="!selectedBox || !!expandingDir" :title="'Expand All'">
               <NIcon size="14"><PhArrowsOutSimple weight="duotone" /></NIcon>
             </NButton>
@@ -1292,7 +1407,7 @@ const columns = computed(() => {
         <!-- File Table -->
         <FileUploadZone v-else :current-dir="currentDir" @upload="handleUpload">
           <div aria-live="polite" :aria-label="t('a11y.file_list')" class="file-table-scroll-wrap" :class="{ 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }" ref="fileTableWrapRef">
-            <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
+            <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :row-class-name="tableRowClassName" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
           </div>
         </FileUploadZone>
 
@@ -1364,9 +1479,11 @@ const columns = computed(() => {
       :token="tokenValue"
       :theme="editorTheme"
       :auto-print="autoPrint"
+      :siblings="previewSiblings"
       @update:show="onPreviewShowChange"
       @edit="(path: string) => handleEdit({ path, is_directory: false })"
       @compare="(path: string) => openDiffModal(path)"
+      @navigate="(path: string) => { previewPath = path; autoPrint = false }"
     />
 
     <!-- File Editor Modal -->
@@ -1651,6 +1768,11 @@ h1 {
 .file-browser :deep(.n-data-table-tbody .n-data-table-tr:focus-within) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* `..` has no selection checkbox */
+.file-browser :deep(.files-parent-row .n-data-table-td--selection .n-checkbox) {
+  visibility: hidden;
 }
 
 /* Ensure proper contrast for selected rows */
