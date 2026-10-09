@@ -179,21 +179,21 @@ class TestRemoteTmuxCommandStrings:
         `shlex.quote` around `working_directory`."""
         connection = _RecordingConnection()
         asyncio.run(ssh.open_tmux(connection, working_directory=HOSTILE_DIR, session="evil;id"))
-        assert connection.commands == ["tmux new -As evil_id -c '/srv/a b;id'"]
+        assert connection.commands == ["tmux -L ts-evil_id new -As evil_id -c '/srv/a b;id'"]
 
     def test_remote_rename_window_quotes_new_name(self):
         """Kills: dropping `shlex.quote(str(new_name))` in the remote rename branch."""
         connection = _RecordingConnection()
         payload = json.dumps({"op": "rename-window", "target": HOSTILE_NAME})
         asyncio.run(webapp._handle_control_message(payload, object(), connection, "demo", "ssh"))
-        assert connection.commands == ["tmux rename-window -t demo 'x; rm -rf ~ $(id)'"]
+        assert connection.commands == ["tmux -L ts-demo rename-window -t demo 'x; rm -rf ~ $(id)'"]
 
     def test_remote_select_window_quotes_target(self):
         """Kills: dropping `shlex.quote(str(target))` in the remote select-window branch."""
         connection = _RecordingConnection()
         payload = json.dumps({"op": "select-window", "target": "1;reboot"})
         asyncio.run(webapp._handle_control_message(payload, object(), connection, "demo", "ssh"))
-        assert connection.commands == ["tmux select-window -t demo:'1;reboot'"]
+        assert connection.commands == ["tmux -L ts-demo select-window -t 'demo:1;reboot'"]
 
 
 class TestLocalTmuxArgv:

@@ -5,8 +5,9 @@ The ``ts`` CLI tool runs each tmux session on its own server via
 This module provides the same convention so sshler and ts can see each
 other's sessions.
 
-Remote (SSH) tmux operations are unaffected — they use the remote host's
-default tmux server.
+Remote (SSH) tmux operations use the same convention. This is important when
+``ts`` is run directly after ``ssh host``: both clients must address the same
+remote socket, not create look-alike sessions on tmux's default socket.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 from pathlib import Path
@@ -124,6 +126,11 @@ def _session_names(stdout: bytes) -> set[str]:
 _WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[/\\]|\\\\)")
 
 
+def remote_tmux_command(session: str, args: list[str]) -> str:
+    """Build a safely quoted remote command for the session's ``ts`` server."""
+    return shlex.join(["tmux", "-L", f"{SOCKET_PREFIX}{session}", *args])
+
+
 def ts_session_name(directory: str) -> str:
     """Tmux session name for a LOCAL directory, matching the ``ts`` CLI exactly.
 
@@ -134,7 +141,7 @@ def ts_session_name(directory: str) -> str:
     plain terminal via ``ts`` (and vice-versa) if sshler is down.
 
     Same-basename directories collide onto one session — this is ``ts``'s own
-    behavior and is intentional for parity. Remote boxes do not use this.
+    behavior and is intentional for parity. Remote tmux boxes use this too.
     """
     path = directory or ""
     separators = r"[/\\]" if _WINDOWS_PATH.match(path) else "/"

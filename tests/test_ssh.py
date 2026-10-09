@@ -3,7 +3,47 @@ from types import SimpleNamespace
 import pytest
 
 from sshler import ssh as ssh_module
-from sshler.ssh import connect, sftp_list_directory
+from sshler.ssh import connect, open_tmux, sftp_list_directory
+
+
+@pytest.mark.asyncio
+async def test_open_tmux_uses_remote_ts_server():
+    calls = {}
+
+    class FakeConnection:
+        async def create_process(self, **kwargs):
+            calls.update(kwargs)
+            return "process"
+
+    result = await open_tmux(
+        FakeConnection(),
+        "/home/gabu/projects/blogler",
+        "blogler",
+        columns=100,
+        rows=40,
+    )
+
+    assert result == "process"
+    assert calls["command"] == (
+        "tmux -L ts-blogler new -As blogler -c /home/gabu/projects/blogler"
+    )
+    assert calls["term_size"] == (100, 40)
+
+
+@pytest.mark.asyncio
+async def test_open_tmux_sanitizes_session_before_selecting_ts_server():
+    calls = {}
+
+    class FakeConnection:
+        async def create_process(self, **kwargs):
+            calls.update(kwargs)
+            return "process"
+
+    await open_tmux(FakeConnection(), "/srv/My Project", "My Project")
+
+    assert calls["command"] == (
+        "tmux -L ts-My_Project new -As My_Project -c '/srv/My Project'"
+    )
 
 
 @pytest.mark.asyncio

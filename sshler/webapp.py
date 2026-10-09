@@ -65,6 +65,7 @@ from .tmux import (
     _run_local_tmux_command,
     local_tmux_command,
     record_ts_history,
+    remote_tmux_command,
     run_local_tmux,
 )
 from .validation import PathValidator, ValidationError
@@ -1852,7 +1853,10 @@ async def _handle_control_message(
             elif connection is not None:
                 try:
                     await connection.run(
-                        f"tmux select-window -t {shlex.quote(session)}:{shlex.quote(str(target))}",
+                        remote_tmux_command(
+                            session,
+                            ["select-window", "-t", f"{session}:{target}"],
+                        ),
                         check=False,
                     )
                 except Exception as exc:
@@ -1878,8 +1882,9 @@ async def _handle_control_message(
                 )
             elif connection is not None:
                 try:
-                    rename_command = (
-                        f"tmux rename-window -t {shlex.quote(session)} {shlex.quote(str(new_name))}"
+                    rename_command = remote_tmux_command(
+                        session,
+                        ["rename-window", "-t", session, str(new_name)],
                     )
                     await connection.run(rename_command, check=False)
                 except Exception as exc:
@@ -1891,8 +1896,16 @@ async def _list_tmux_windows(
 ) -> list[dict[str, str | bool]] | None:
     try:
         result = await connection.run(
-            "tmux list-windows -F '#{window_index} #{window_name} #{window_active}' -t "
-            f"{shlex.quote(session)}",
+            remote_tmux_command(
+                session,
+                [
+                    "list-windows",
+                    "-F",
+                    "#{window_index} #{window_name} #{window_active}",
+                    "-t",
+                    session,
+                ],
+            ),
             check=False,
         )
     except Exception as exc:

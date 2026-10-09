@@ -3,7 +3,7 @@
  *
  * A tmux session name is the *key* tmux uses to attach-or-create.
  *
- * LOCAL box: we match the `ts` CLI's naming EXACTLY — the directory basename
+ * TMUX boxes: we match the `ts` CLI's naming EXACTLY — the directory basename
  * with only `.`/`:` replaced by `_` (hyphens preserved), no hash. This makes
  * sshler and `ts` share one tmux session per directory, so if sshler is down
  * the user can `ts` into the same session from a plain terminal. (Consequence:
@@ -11,9 +11,8 @@
  * behavior; accepted for parity.) Keep this byte-identical to `ts_session_name`
  * in sshler/tmux.py.
  *
- * REMOTE boxes: `ts` sockets are local-only, so we keep the collision-safe
- * hashed name (basename + short fnv hash of the full `box::path` identity) so
- * two same-basename remote dirs don't collapse onto one terminal.
+ * Remote sessions use `tmux -L ts-<name>` on the remote host too, so running
+ * `ts` after a normal `ssh host` attaches to the exact same session.
  */
 import { fnv1aHash } from './emoji-favicon'
 
@@ -24,38 +23,25 @@ const WINDOWS_PATH = /^(?:[A-Za-z]:[/\\]|\\\\)/
  * Deterministic tmux session name for a directory.
  *
  * @param directory Absolute path (or `~`) the terminal opens in.
- * @param boxName   Box the terminal lives on. `"local"` → `ts`-parity naming.
+ * @param _boxName  Box the terminal lives on. Unused: every box uses `ts` naming;
+ *                  kept so callers need not change.
  */
-export function generateSessionName(directory: string, boxName?: string): string {
+export function generateSessionName(directory: string, _boxName?: string): string {
   const dir = directory && directory !== '~' ? directory : '~'
   // `\` separates segments only in a Windows-looking path; in a POSIX path it
   // is an ordinary character, as in ts_session_name.
   const pathParts = dir.split(WINDOWS_PATH.test(dir) ? /[/\\]/ : '/').filter(Boolean)
 
-  if (boxName === 'local') {
-    // ts rule: `.`/`:` -> `_`. Then the same tmux-safe filter the backend's
-    // /ws/term applies (PathValidator.sanitize_session_name) so the name we
-    // compute == the session the backend actually opens == what `ts` uses (for
-    // clean names — hyphens are preserved by both). Kept byte-identical to
-    // ts_session_name in sshler/tmux.py, including the home mapping.
-    let base = pathParts[pathParts.length - 1] || 'home'
-    if (base === '~' || base === '.' || base === '..') base = 'home'
-    // `.`/`:` gone first (also keeps them out of tmux `session:window.pane` targets).
-    // Unicode-aware (\p{L}\p{N}, per code point) to equal Python's str.isalnum().
-    return base.replace(/[.:]/g, '_').replace(/[^\p{L}\p{N}_-]/gu, '_') || 'home'
-  }
-
-  // Human-readable base = last path component, sanitized for tmux/shell safety.
-  const lastPart = pathParts[pathParts.length - 1] || (dir === '~' ? 'home' : 'root')
-  const base =
-    lastPart.replace(/[^a-zA-Z0-9]/g, '_').replace(/^_+|_+$/g, '') ||
-    (dir === '~' ? 'home' : 'root')
-
-  // Hash the FULL identity so same-basename / different-path never collides.
-  const identity = `${boxName ?? ''}::${dir}`
-  const hash = fnv1aHash(identity).toString(36).slice(0, 4)
-
-  return `${base}-${hash}`
+  // ts rule: `.`/`:` -> `_`. Then the same tmux-safe filter the backend's
+  // /ws/term applies (PathValidator.sanitize_session_name) so the name we
+  // compute == the session the backend actually opens == what `ts` uses (for
+  // clean names — hyphens are preserved by both). Kept byte-identical to
+  // ts_session_name in sshler/tmux.py, including the home mapping.
+  let base = pathParts[pathParts.length - 1] || 'home'
+  if (base === '~' || base === '.' || base === '..') base = 'home'
+  // `.`/`:` gone first (also keeps them out of tmux `session:window.pane` targets).
+  // Unicode-aware (\p{L}\p{N}, per code point) to equal Python's str.isalnum().
+  return base.replace(/[.:]/g, '_').replace(/[^\p{L}\p{N}_-]/gu, '_') || 'home'
 }
 
 /**

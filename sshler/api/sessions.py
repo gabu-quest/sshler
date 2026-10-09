@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 import re
-import shlex
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -14,6 +13,7 @@ from ..config import AppConfig
 from ..tmux import (
     discover_local_sessions,
     force_kill_local_session,
+    remote_tmux_command,
     run_local_tmux,
 )
 from ..validation import PathValidator, ValidationError
@@ -41,9 +41,20 @@ async def _get_live_tmux_sessions_local() -> set[str]:
 
 
 async def _get_live_tmux_sessions_remote(connection) -> set[str]:
-    """Get live tmux session names from remote host via SSH."""
+    """Get live tmux sessions across remote ``ts-*`` and legacy sockets."""
     try:
-        result = await connection.run("tmux list-sessions -F '#{session_name}'", check=False)
+        result = await connection.run(
+            """
+tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+socket_dir=/tmp/tmux-$(id -u)
+for socket in "$socket_dir"/ts-*; do
+    [ -S "$socket" ] || continue
+    server=${socket##*/}
+    timeout 2 tmux -L "$server" list-sessions -F '#{session_name}' 2>/dev/null || true
+done
+""",
+            check=False,
+        )
         if result.returncode == 0 and result.stdout:
             return set(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
     except Exception as exc:
@@ -181,8 +192,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     connection = await deps.connect_for_box(box, application_config)
                     try:
                         result = await connection.run(
-                            f"tmux rename-session -t {shlex.quote(record.session_name)} "
-                            f"{shlex.quote(new_name)}",
+                            remote_tmux_command(
+                                record.session_name,
+                                ["rename-session", "-t", record.session_name, new_name],
+                            ),
                             check=False,
                         )
                         if result.returncode != 0:
@@ -264,7 +277,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     connection = await deps.connect_for_box(box, application_config)
                     try:
                         await connection.run(
-                            f"tmux kill-session -t {shlex.quote(record.session_name)}",
+                            remote_tmux_command(
+                                record.session_name,
+                                ["kill-session", "-t", record.session_name],
+                            ),
                             check=False,
                         )
                     finally:
@@ -472,10 +488,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
             else:
                 connection = await deps.connect_for_box(box, application_config)
                 try:
-                    quoted = " ".join(shlex.quote(a) for a in capture_args)
                     try:
                         result = await asyncio.wait_for(
-                            connection.run(f"tmux {quoted}", check=False), timeout=limit
+                            connection.run(
+                                remote_tmux_command(session_name, capture_args), check=False
+                            ),
+                            timeout=limit,
                         )
                     except TimeoutError as exc:
                         raise _capture_timeout(name, session_name, limit) from exc

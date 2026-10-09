@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
 import socket
 from asyncio.subprocess import Process
 from pathlib import Path
 
 import asyncssh
+
+from .tmux import remote_tmux_command
 
 
 class SSHError(Exception):
@@ -137,8 +138,8 @@ async def open_tmux(
     """Launch or attach to a tmux session on the remote host.
 
     English:
-        Spawns ``tmux new -As`` ensuring the session name is safe and returning
-        the running process object.
+        Spawns ``tmux -L ts-<session> new -As`` ensuring the session name is
+        safe and returning the running process object.
 
     日本語:
         ``tmux new -As`` コマンドを発行し、セッション名を安全な形式に整えてプロセス
@@ -159,7 +160,10 @@ async def open_tmux(
 
     # sanitize session name minimally
     safe_session = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in session) or "sshler"
-    command = f"tmux new -As {shlex.quote(safe_session)} -c {shlex.quote(working_directory)}"
+    command = remote_tmux_command(
+        safe_session,
+        ["new", "-As", safe_session, "-c", working_directory],
+    )
     process = await connection.create_process(
         command=command,
         term_type=terminal_type,
