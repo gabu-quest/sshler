@@ -331,13 +331,13 @@ def _term_url(workdir: Path) -> str:
     return f"/ws/term?host=local&dir={workdir}&session={SESSION}&cols=80&rows=24&token={TOKEN}"
 
 
-def _receive_until(ws, marker: bytes, max_messages: int = 50) -> bytes:  # type: ignore[no-untyped-def]
+def _receive_until(ws, marker: bytes, count: int = 1, max_messages: int = 50) -> bytes:  # type: ignore[no-untyped-def]
     received = b""
     for _ in range(max_messages):
         message = ws.receive()
         if message.get("bytes"):
             received += message["bytes"]
-            if marker in received:
+            if received.count(marker) >= count:
                 return received
     return received
 
@@ -390,10 +390,12 @@ def test_local_terminal_round_trips_bytes_through_a_real_pty(
 
     with client.websocket_connect(_term_url(workdir)) as ws:
         ws.send_bytes(b"marker-7f3a\n")
-        echoed = _receive_until(ws, b"marker-7f3a")
+        echoed = _receive_until(ws, b"marker-7f3a", count=2)
         history_recorded = _wait_until(lambda: bool(history), 3.0)
 
-    assert b"marker-7f3a" in echoed
+    # Once from the tty's own echo, once from `cat`: the fake tmux ran (and logged its
+    # argv) only if the second copy arrives.
+    assert echoed.count(b"marker-7f3a") == 2
     assert [call for call in fake_tmux.calls() if call.startswith("new ")] == [
         f"new -As {SESSION} -c {workdir}"
     ]
