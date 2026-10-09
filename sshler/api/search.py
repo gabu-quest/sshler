@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 import os
 import shlex
 import shutil
+import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +19,7 @@ from ..config import AppConfig
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
+from . import helpers
 from .dependencies import APIDependencies
 
 if TYPE_CHECKING:
@@ -101,6 +104,77 @@ async def _query_zoxide(pattern: str) -> list[tuple[str, float]]:
         return []
 
 
+LOCAL_DISCOVERY_TIMEOUT = 10.0
+
+
+class _DiscoveryDeadlineError(Exception):
+    """The built-in discovery ran past LOCAL_DISCOVERY_TIMEOUT."""
+
+
+def _discover_local_builtin(
+    root: str,
+    pattern: str,
+    max_depth: int,
+    limit: int,
+    include_files: bool,
+    timeout: float,
+) -> list[tuple[str, bool]]:
+    """The GNU ``find`` expression of ``_discover_local``, without a find binary.
+
+    Used for a Windows local box, whose ``find`` is ``find.exe`` (a text
+    search). Same results as the GNU path: preorder walk below ``root`` down to
+    ``max_depth``, any entry named in PRUNE_DIRS (case-sensitive) neither listed
+    nor entered, symlinks neither listed nor entered, case-insensitive glob on
+    the entry name, regular files only with ``include_files``, ``root`` itself
+    never listed, at most ``limit`` results. Paths are ``root`` with ``/``
+    separators joined to the entry names with ``/``, the form the local file
+    routes hand to the client on Windows. Past ``timeout`` it returns ``[]``,
+    as the GNU path does when find is killed.
+    """
+    root = root.replace("\\", "/") if helpers.LOCAL_IS_WINDOWS else root
+    if os.path.basename(root.rstrip("/")) in PRUNE_DIRS:
+        return []
+    folded = pattern.lower()
+    deadline = time.monotonic() + timeout
+    results: list[tuple[str, bool]] = []
+
+    def walk(path: str, depth: int) -> bool:
+        if time.monotonic() > deadline:
+            raise _DiscoveryDeadlineError
+        try:
+            with os.scandir(path) as entries:
+                listed = list(entries)
+        except OSError:
+            return False
+        prefix = path if path.endswith("/") else path + "/"
+        for entry in listed:
+            if entry.name in PRUNE_DIRS:
+                continue
+            try:
+                if entry.is_symlink():
+                    continue
+                is_dir = entry.is_dir(follow_symlinks=False)
+                is_file = not is_dir and entry.is_file(follow_symlinks=False)
+            except OSError:
+                continue
+            child = prefix + entry.name
+            wanted = is_dir or (include_files and is_file)
+            if wanted and fnmatch.fnmatchcase(entry.name.lower(), folded):
+                results.append((child, is_dir))
+                if len(results) >= limit:
+                    return True
+            if is_dir and depth < max_depth and walk(child, depth + 1):
+                return True
+        return False
+
+    try:
+        walk(root, 1)
+    except _DiscoveryDeadlineError:
+        logger.warning("Local discovery timed out")
+        return []
+    return results
+
+
 async def _discover_local(
     root: str,
     pattern: str,
@@ -110,10 +184,22 @@ async def _discover_local(
 ) -> list[tuple[str, bool]]:
     """Discover directories (and optionally files) on the local filesystem.
 
-    Runs GNU find directly (no shell) under ``root``, pruning VCS/build noise.
+    Runs GNU find directly (no shell) under ``root``, pruning VCS/build noise;
+    on Windows the same walk runs in Python (``_discover_local_builtin``).
     Returns list of (path, is_directory) tuples. Permission errors on
     subtrees are tolerated — find still prints the matches it can reach.
     """
+    if helpers.LOCAL_IS_WINDOWS:
+        return await asyncio.to_thread(
+            _discover_local_builtin,
+            root,
+            pattern,
+            max_depth,
+            limit,
+            include_files,
+            LOCAL_DISCOVERY_TIMEOUT,
+        )
+
     args = ["find", root, "-maxdepth", str(max_depth), "("]
     for index, name in enumerate(PRUNE_DIRS):
         if index:
@@ -133,7 +219,9 @@ async def _discover_local(
             stderr=asyncio.subprocess.DEVNULL,
         )
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=LOCAL_DISCOVERY_TIMEOUT
+            )
         except TimeoutError:
             proc.kill()
             logger.warning("Local discovery timed out")
