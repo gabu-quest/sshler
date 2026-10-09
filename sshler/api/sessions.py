@@ -40,21 +40,22 @@ async def _get_live_tmux_sessions_local() -> set[str]:
     return await discover_local_sessions()
 
 
-async def _get_live_tmux_sessions_remote(connection) -> set[str]:
-    """Get live tmux sessions across remote ``ts-*`` and legacy sockets."""
-    try:
-        result = await connection.run(
-            """
-tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+# Lists sessions on the remote default tmux server and on every per-session
+# ``ts-*`` server, so sessions opened by sshler or by ``ts`` both count as live.
+_REMOTE_LIST_SESSIONS = """tmux list-sessions -F '#{session_name}' 2>/dev/null || true
 socket_dir=/tmp/tmux-$(id -u)
 for socket in "$socket_dir"/ts-*; do
     [ -S "$socket" ] || continue
     server=${socket##*/}
     timeout 2 tmux -L "$server" list-sessions -F '#{session_name}' 2>/dev/null || true
 done
-""",
-            check=False,
-        )
+"""
+
+
+async def _get_live_tmux_sessions_remote(connection) -> set[str]:
+    """Get live tmux sessions across remote ``ts-*`` and legacy sockets."""
+    try:
+        result = await connection.run(_REMOTE_LIST_SESSIONS, check=False)
         if result.returncode == 0 and result.stdout:
             return set(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
     except Exception as exc:
