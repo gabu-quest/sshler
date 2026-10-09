@@ -156,6 +156,7 @@ SITES: list[tuple[str, Callable[[], Awaitable[Any]], Any]] = [
 ]
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH, reaped by pid")
 @pytest.mark.parametrize(("call", "expected"), [s[1:] for s in SITES], ids=[s[0] for s in SITES])
 def test_a_stalled_child_is_gone_within_2s_of_its_timeout(
     stalled_pid_file: Path, call: Callable[[], Awaitable[Any]], expected: Any
@@ -169,6 +170,7 @@ def test_a_stalled_child_is_gone_within_2s_of_its_timeout(
     assert _gone_within(int(stalled_pid_file.read_text()), 2.0)
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH, reaped by pid")
 def test_a_cancelled_command_kills_and_reaps_its_child(stalled_pid_file: Path) -> None:
     async def cancel_mid_command() -> None:
         task = asyncio.ensure_future(tmux.run_local_tmux(SESSION, ["list-panes"], timeout=30))
@@ -199,6 +201,7 @@ HOLDS_THE_PIPE = (
 )
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH and /proc/self/fd")
 def test_a_timed_out_command_releases_its_pipes_while_a_grandchild_holds_them(
     fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -247,6 +250,7 @@ def test_a_timed_out_command_releases_its_pipes_while_a_grandchild_holds_them(
 SERVER_STARTING = ["new-session", "new", "start-server", "start"]
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH that fork a child")
 @pytest.mark.parametrize("subcommand", SERVER_STARTING)
 def test_starting_a_server_returns_while_its_child_holds_stdout(
     fork_pid_file: Path, subcommand: str
@@ -267,6 +271,7 @@ def test_starting_a_server_returns_while_its_child_holds_stdout(
     os.kill(forked[0], 0)
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH that fork a child")
 @pytest.mark.parametrize("subcommand", SERVER_STARTING)
 def test_side_effect_commands_return_while_a_forked_child_holds_stdout(
     fork_pid_file: Path, subcommand: str
@@ -283,6 +288,7 @@ def test_side_effect_commands_return_while_a_forked_child_holds_stdout(
     assert len(fork_pid_file.read_text().split()) == 1
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH that fork a child")
 def test_claude_open_returns_while_the_new_server_holds_stdout(
     fork_pid_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -333,6 +339,7 @@ def test_claude_open_returns_while_the_new_server_holds_stdout(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.posix_only("#!/bin/sh stand-ins for tmux on PATH, reaped by pid")
 def test_capture_timeout_is_a_504_that_says_it_timed_out(stalled_pid_file: Path) -> None:
     client = _client()
 

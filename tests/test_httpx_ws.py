@@ -35,6 +35,7 @@ async def test_httpx_status_handshake(tmp_path, monkeypatch):
         assert status.status_code == 200
 
 
+@pytest.mark.posix_only("a PTY running the sh fake tmux behind /ws/term")
 def test_ws_connect(tmp_path, monkeypatch, fake_tmux, tmux_tripwire):
     """Bytes sent to /ws/term reach the PTY child (``cat``) and come back over the socket."""
     monkeypatch.setenv("SSHLER_CONFIG_DIR", str(_config_dir(tmp_path)))

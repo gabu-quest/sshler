@@ -66,7 +66,12 @@ async def test_recreate_creates_all_windows(two_window_snapshot: list[dict]) -> 
     assert result is True
     subcmds = [
         next(
-            (c for c in cmd if not c.startswith("-") and not c.startswith("ts-") and c != "tmux"),
+            # On a Windows host local_tmux_command() prefixes `wsl --`; skip that too.
+            (
+                c
+                for c in cmd
+                if not c.startswith("-") and not c.startswith("ts-") and c not in {"tmux", "wsl"}
+            ),
             "",
         )
         for cmd in calls

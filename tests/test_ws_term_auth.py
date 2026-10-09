@@ -121,6 +121,7 @@ def _receive_until(websocket, marker: bytes, count: int, seconds: float = 5.0) -
     return received
 
 
+@pytest.mark.posix_only("a PTY running the sh fake tmux behind /ws/term")
 def test_hostile_session_name_reaches_local_tmux_argv_sanitized(
     monkeypatch: pytest.MonkeyPatch,
     client: TestClient,

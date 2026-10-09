@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from platform_support import posix_only_skip
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -32,11 +33,23 @@ collect_ignore = ["test_terminal_teardown.py"] if sys.platform == "win32" else [
 E2E_DIR = Path(__file__).resolve().parent / "e2e"
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "posix_only(mechanism): skipped on Windows; the test drives the named POSIX-only "
+        "mechanism (see tests/platform_support.py)",
+    )
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Mark everything under tests/e2e so `-m "not e2e"` selects the unit suite."""
+    """Mark everything under tests/e2e so `-m "not e2e"` selects the unit suite, and
+    skip ``posix_only`` tests on Windows with a reason naming the mechanism."""
     for item in items:
         if E2E_DIR in Path(str(item.path)).parents:
             item.add_marker(pytest.mark.e2e)
+        skip = posix_only_skip(item.get_closest_marker("posix_only"), sys.platform)
+        if skip is not None:
+            item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")
@@ -109,6 +122,10 @@ def _hermetic_env(
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setenv("HOME", str(home))
+        if sys.platform == "win32":
+            # Path.home() and expanduser() read USERPROFILE on Windows, not HOME;
+            # without this the developer's ~/.ssh/config hosts leak into load_config().
+            monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     _reset_process_globals()
     yield

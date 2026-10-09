@@ -5,16 +5,19 @@ User: "it shoudl offer to replace it, default choice is no." Local and remote bo
 409 for "already exists" on upload so one client path covers both; without the overwrite
 flag the server never replaces. Review: `stat` follows symlinks, so a dangling link read
 as free and the write went through it. Each test names its mutation.
+
+A returned path is in the local file API's POSIX form (`C:/Users/x` on Windows, see
+`_compose_local_child_path`), which is what the frontend parses; hence `as_posix()`.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from platform_support import make_symlink
 
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
@@ -78,7 +81,7 @@ def test_upload_with_overwrite_replaces_an_existing_local_file(client, work):
     stay."""
     (work / "a.bin").write_bytes(b"precious")
     resp = upload(client, work, "a.bin", b"replacement", overwrite="true")
-    assert (resp.status_code, resp.json()["path"]) == (200, str(work / "a.bin"))
+    assert (resp.status_code, resp.json()["path"]) == (200, (work / "a.bin").as_posix())
     assert (work / "a.bin").read_bytes() == b"replacement"
 
 
@@ -94,7 +97,7 @@ def test_upload_and_touch_refuse_a_dangling_local_symlink(client, work, tmp_path
     """Mutation: check with `Path.exists()` (follows the link) and open "wb"; the
     dangling link reads as free and the write creates its target outside `work`."""
     target = tmp_path / "outside.txt"
-    os.symlink(target, work / "link")
+    make_symlink(work / "link", target)
     resp = upload(client, work, "link", b"payload")
     assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
     resp = touch(client, work, "link")
@@ -107,7 +110,7 @@ def test_upload_with_overwrite_never_writes_through_a_local_symlink(client, work
     the bytes land in the link's target."""
     target = tmp_path / "outside.txt"
     target.write_bytes(b"keep me")
-    os.symlink(target, work / "link")
+    make_symlink(work / "link", target)
     resp = upload(client, work, "link", b"payload", overwrite="true")
     assert (resp.status_code, resp.json()) == (
         400,
@@ -120,9 +123,9 @@ def test_upload_and_touch_still_create_a_new_local_file(client, work):
     """Mutation: answer "already exists" for every name; a free name must still be
     created with the exact bytes."""
     resp = upload(client, work, "new.bin", b"data")
-    assert (resp.status_code, resp.json()["path"]) == (200, str(work / "new.bin"))
+    assert (resp.status_code, resp.json()["path"]) == (200, (work / "new.bin").as_posix())
     resp = touch(client, work, "new.txt")
-    assert (resp.status_code, resp.json()["path"]) == (200, str(work / "new.txt"))
+    assert (resp.status_code, resp.json()["path"]) == (200, (work / "new.txt").as_posix())
     assert sorted(p.name for p in work.iterdir()) == ["new.bin", "new.txt"]
     assert (work / "new.bin").read_bytes() == b"data"
     assert (work / "new.txt").read_bytes() == b""

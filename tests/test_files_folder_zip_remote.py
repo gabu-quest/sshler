@@ -20,6 +20,7 @@ import asyncssh
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from platform_support import mkdir_or_skip_unholdable_name
 
 from sshler import ssh_pool, state
 from sshler.api import files as files_api
@@ -515,21 +516,36 @@ def test_remote_file_download_header_is_exact_for_a_japanese_name(remote, monkey
     )
 
 
-def test_local_zip_header_is_exact_for_a_japanese_folder(remote, tmp_path):
-    """Mutation: pass `filename=` to FileResponse again for a name with `"`; the quoted
-    string is broken (the local box is a different code path from the remote one)."""
+@pytest.mark.parametrize(
+    ("name", "header"),
+    [
+        (
+            "ドキュメント",
+            "attachment; filename=\"______.zip\"; "
+            "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88.zip",
+        ),
+        (
+            'ドキュメント"x',
+            "attachment; filename=\"_______x.zip\"; "
+            "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88%22x.zip",
+        ),
+    ],
+    ids=["japanese", "japanese-and-quote"],
+)
+def test_local_zip_header_is_exact_for_a_japanese_folder(remote, tmp_path, name, header):
+    """Mutations: build the header as a bare `filename="{name}"` (a Japanese name cannot be
+    encoded in a header); pass `filename=` to FileResponse again for a name with `"` (the
+    quoted string is broken). The local box is a different code path from the remote one.
+    NTFS cannot hold `"`, so that case skips on Windows when mkdir refuses the name."""
     client, replies, log = remote
-    folder = tmp_path / 'ドキュメント"x'
-    folder.mkdir()
+    folder = tmp_path / name
+    mkdir_or_skip_unholdable_name(folder)
     (folder / "a.txt").write_text("a", encoding="utf-8")
     resp = client.get(
         "/api/v1/boxes/local/download-dir", params={"path": str(folder)}, headers=HEADERS
     )
     assert resp.status_code == 200
-    assert resp.headers["content-disposition"] == (
-        "attachment; filename=\"_______x.zip\"; "
-        "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88%22x.zip"
-    )
+    assert resp.headers["content-disposition"] == header
 
 
 # --- download-dir streams with a size cap ------------------------------------

@@ -128,6 +128,7 @@ def _receive_until(websocket, marker: bytes, count: int, seconds: float = 5.0) -
     return received
 
 
+@pytest.mark.posix_only("a PTY running the sh fake tmux behind /ws/term")
 def test_local_box_connects_successfully(
     monkeypatch, configured_app: TestClient, fake_tmux, tmux_tripwire: Path, tmp_path: Path
 ):

@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from sshler import ssh, webapp
+from sshler import ssh, tmux, webapp
 from sshler.validation import PathValidator, ValidationError
 
 
@@ -223,7 +223,9 @@ class TestLocalTmuxArgv:
             captured.append(argv)
             return object()
 
+        # Model a POSIX host on any host: both flags, or a Windows run gets `wsl --`.
         monkeypatch.setattr(webapp, "LOCAL_IS_WINDOWS", False)
+        monkeypatch.setattr(tmux, "_IS_WINDOWS", False)
         monkeypatch.setattr(webapp.asyncio, "create_subprocess_exec", fake_exec)
         asyncio.run(webapp._open_local_tmux(HOSTILE_DIR, "demo"))
         assert captured == [

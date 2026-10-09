@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from platform_support import make_symlink
 
 from sshler import claude_sessions as scanner
 from sshler import state
@@ -279,7 +280,7 @@ def test_scanner_ignores_symlink_escape(tmp_path, monkeypatch):
         [{"type": "ai-title", "aiTitle": "SECRET", "sessionId": UUID_E, "cwd": "/x"}],
     )
     # A symlink inside projects/ pointing at it — glob() would otherwise follow it.
-    (projects / "evil").symlink_to(outside, target_is_directory=True)
+    make_symlink(projects / "evil", outside, target_is_directory=True)
 
     assert scanner.list_claude_sessions() == []
     assert scanner.get_claude_session(UUID_E) is None

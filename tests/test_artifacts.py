@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from platform_support import make_symlink
 
 from sshler import state
 from sshler.artifacts import (
@@ -113,7 +114,7 @@ def test_collection_discovery_ignores_hidden_and_symlinked_directories(
     (visible / "ok.html").write_text("<title>OK</title>", encoding="utf-8")
     (hidden / "hidden.html").write_text("<title>Hidden</title>", encoding="utf-8")
     (outside / "outside.html").write_text("<title>Outside</title>", encoding="utf-8")
-    (site / "linked").symlink_to(outside, target_is_directory=True)
+    make_symlink(site / "linked", outside, target_is_directory=True)
     registration = _registration(tmp_path, mode="collection", entrypoint=None)
 
     pages = discover_pages(registration, refresh=True)
@@ -253,9 +254,9 @@ def test_sidecar_refuses_symlink_escaping_registered_root(tmp_path: Path) -> Non
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.html").write_text("TOP-SECRET-BODY", encoding="utf-8")
-    (site / "leak.html").symlink_to(outside / "secret.html")
+    make_symlink(site / "leak.html", outside / "secret.html")
     # A symlinked directory pointing out of the root must not leak either.
-    (site / "leakdir").symlink_to(outside, target_is_directory=True)
+    make_symlink(site / "leakdir", outside, target_is_directory=True)
     registration = _registration(tmp_path)
     sidecar = ArtifactSidecar()
     port = sidecar.start()

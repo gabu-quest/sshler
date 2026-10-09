@@ -138,13 +138,8 @@ def test_favorites_and_pin(tmp_path, monkeypatch):
         client.close()
 
 
-def test_sessions_crud(tmp_path, monkeypatch, fake_tmux, tmux_tripwire):
-    async def no_history(_session: str, _directory: str) -> None:
-        return None
-
-    monkeypatch.setattr("sshler.webapp.record_ts_history", no_history)
-    workdir = tmp_path / "work"
-    workdir.mkdir()
+def test_sessions_crud(tmp_path, monkeypatch):
+    """Session rows are created, listed, updated and deleted without touching tmux."""
     config_dir = setup_config(tmp_path)
     client = build_client(config_dir, monkeypatch)
     try:
@@ -174,6 +169,38 @@ def test_sessions_crud(tmp_path, monkeypatch, fake_tmux, tmux_tripwire):
         assert payload["window_count"] == 2
         assert payload["metadata"]["cols"] == 80
 
+        delete_resp = client.delete(
+            f"/api/v1/boxes/local/sessions/{session_id}",
+            headers=auth_headers(),
+        )
+        assert delete_resp.status_code == 200
+        # download path
+        download = client.get(
+            "/api/v1/boxes/local/download",
+            params={"path": str(tmp_path / "config" / "boxes.yaml")},
+            headers=auth_headers(),
+        )
+        assert download.status_code == 200
+    finally:
+        client.close()
+        state.reset_state()
+
+
+@pytest.mark.posix_only("a PTY running the sh fake tmux behind /ws/term")
+def test_local_ws_term_echoes_and_records_its_session(
+    tmp_path, monkeypatch, fake_tmux, tmux_tripwire
+):
+    """A local /ws/term opens `new -As` in the work dir, echoes bytes and records the row."""
+
+    async def no_history(_session: str, _directory: str) -> None:
+        return None
+
+    monkeypatch.setattr("sshler.webapp.record_ts_history", no_history)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    config_dir = setup_config(tmp_path)
+    client = build_client(config_dir, monkeypatch)
+    try:
         echoed = b""
         with client.websocket_connect(
             f"/ws/term?host=local&dir={workdir}&session=test&cols=10&rows=5&token={TEST_TOKEN}"
@@ -196,19 +223,6 @@ def test_sessions_crud(tmp_path, monkeypatch, fake_tmux, tmux_tripwire):
         assert [(row["box"], row["working_directory"]) for row in terminal_rows] == [
             ("local", str(workdir))
         ]
-
-        delete_resp = client.delete(
-            f"/api/v1/boxes/local/sessions/{session_id}",
-            headers=auth_headers(),
-        )
-        assert delete_resp.status_code == 200
-        # download path
-        download = client.get(
-            "/api/v1/boxes/local/download",
-            params={"path": str(tmp_path / "config" / "boxes.yaml")},
-            headers=auth_headers(),
-        )
-        assert download.status_code == 200
     finally:
         client.close()
         state.reset_state()
