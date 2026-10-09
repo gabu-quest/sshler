@@ -58,6 +58,24 @@ const router = createRouter({
       },
     },
     {
+      path: "/artifacts",
+      name: "artifacts",
+      component: () => import("@/views/ArtifactsView.vue"),
+      meta: {
+        title: "Artifacts",
+        description: "Register and open local HTML artifacts",
+      },
+    },
+    {
+      path: "/artifacts/:id",
+      name: "artifact-detail",
+      component: () => import("@/views/ArtifactsView.vue"),
+      meta: {
+        title: "Artifacts",
+        description: "Open a registered local HTML artifact",
+      },
+    },
+    {
       path: "/claude",
       name: "claude-sessions",
       component: () => import("@/views/ClaudeSessionsView.vue"),

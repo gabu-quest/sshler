@@ -1,39 +1,50 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import type { Component } from "vue";
 
 import { NButton, NIcon, NList, NListItem, NModal } from "naive-ui";
-import {
-  PhHardDrives,
-  PhKeyboard,
-  PhLightning,
-  PhMagnifyingGlass,
-  PhRobot,
-  PhTerminal,
-} from "@phosphor-icons/vue";
+import { PhKeyboard, PhMagnifyingGlass } from "@phosphor-icons/vue";
 
-import { useRouter } from "vue-router";
+import { useI18n } from "@/i18n";
 
-const router = useRouter();
+export interface NavShortcutLink {
+  to: string;
+  label: string;
+  icon: Component;
+  shortcut: string;
+}
+
+const props = defineProps<{ links: NavShortcutLink[] }>();
+
+const { t } = useI18n();
 const show = ref(false);
 
-const shortcuts = [
-  { label: "Command Palette", combo: "Cmd/Ctrl + K", icon: PhMagnifyingGlass },
-  { label: "Files", combo: "Alt + F", icon: PhLightning },
-  { label: "Terminal", combo: "Alt + T", icon: PhTerminal },
-  { label: "Boxes", combo: "Alt + B", icon: PhHardDrives },
-  { label: "Claude Sessions", combo: "Alt + L", icon: PhRobot },
-];
+// Single source of truth: every entry is derived from AppHeader's own `links`
+// table (passed in as a prop) plus the one shortcut ShortcutsOverlay itself
+// owns (Cmd/Ctrl+K for the command palette). This is the only place the full
+// shortcut list is assembled, so it cannot silently drift out of sync with
+// what AppHeader actually implements.
+const shortcuts = computed(() => [
+  { label: t("shortcuts.command_palette"), combo: "Cmd/Ctrl + K", icon: PhMagnifyingGlass },
+  ...props.links.map((link) => ({
+    label: link.label,
+    combo: link.shortcut.replace(/\+/g, " + "),
+    icon: link.icon,
+  })),
+]);
 
+function isTypingTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
+
+// NOTE: navigation shortcuts (Alt+F, Alt+T, etc.) are handled exclusively by
+// AppHeader.handleKeydown. This component only owns the "open this overlay"
+// shortcut — it must never re-implement navigation, or both handlers fire.
 function onKeydown(e: KeyboardEvent) {
+  if (isTypingTarget(e.target)) return;
   const key = e.key.toLowerCase();
-  if (e.altKey && key === "f") {
-    e.preventDefault();
-    router.push("/files");
-  }
-  if (e.altKey && key === "t") {
-    e.preventDefault();
-    router.push("/terminal");
-  }
   if (e.shiftKey && key === "/") {
     e.preventDefault();
     show.value = true;
@@ -52,7 +63,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
     <template #header>
       <div class="title">
         <NIcon size="18"><PhKeyboard weight="duotone" /></NIcon>
-        <span>Shortcuts</span>
+        <span>{{ t("shortcuts.title") }}</span>
       </div>
     </template>
     <NList>

@@ -14,6 +14,11 @@ import {
   PhHouseLine,
   PhArrowClockwise,
   PhMagnifyingGlass,
+  PhColumns,
+  PhChartBar,
+  PhRobot,
+  PhGitDiff,
+  PhGlobe,
 } from "@phosphor-icons/vue";
 
 import { useRouter } from "vue-router";
@@ -73,6 +78,16 @@ const actions = computed((): CommandAction[] => [
     keywords: ["browse", "sftp", "directory"],
   },
   {
+    id: "nav-commander",
+    label: t('palette.action_commander'),
+    description: t('palette.action_commander_desc'),
+    icon: PhColumns,
+    shortcut: "Alt+C",
+    category: t('nav.navigation'),
+    action: () => router.push("/commander"),
+    keywords: ["split", "panes", "multi-pane"],
+  },
+  {
     id: "nav-terminal",
     label: t('palette.action_terminal'),
     description: t('palette.action_terminal_desc'),
@@ -81,6 +96,56 @@ const actions = computed((): CommandAction[] => [
     category: t('nav.navigation'),
     action: () => router.push("/terminal"),
     keywords: ["shell", "tmux", "console"],
+  },
+  {
+    id: "nav-multi-terminal",
+    label: t('palette.action_multi_terminal'),
+    description: t('palette.action_multi_terminal_desc'),
+    icon: PhTerminal,
+    shortcut: "Alt+M",
+    category: t('nav.navigation'),
+    action: () => router.push("/multi-terminal"),
+    keywords: ["shell", "tmux", "console", "multiple", "split"],
+  },
+  {
+    id: "nav-progress",
+    label: t('palette.action_progress'),
+    description: t('palette.action_progress_desc'),
+    icon: PhChartBar,
+    shortcut: "Alt+P",
+    category: t('nav.navigation'),
+    action: () => router.push("/progress"),
+    keywords: ["bars", "tasks", "jobs"],
+  },
+  {
+    id: "nav-artifacts",
+    label: t("palette.action_artifacts"),
+    description: t("palette.action_artifacts_desc"),
+    icon: PhGlobe,
+    shortcut: "Alt+A",
+    category: t("nav.navigation"),
+    action: () => router.push("/artifacts"),
+    keywords: ["html", "pages", "projects", "catalog"],
+  },
+  {
+    id: "nav-claude",
+    label: t('palette.action_claude'),
+    description: t('palette.action_claude_desc'),
+    icon: PhRobot,
+    shortcut: "Alt+L",
+    category: t('nav.navigation'),
+    action: () => router.push("/claude"),
+    keywords: ["ai", "sessions", "resume"],
+  },
+  {
+    id: "nav-diff",
+    label: t('palette.action_diff'),
+    description: t('palette.action_diff_desc'),
+    icon: PhGitDiff,
+    shortcut: "Alt+D",
+    category: t('nav.navigation'),
+    action: () => router.push("/diff"),
+    keywords: ["git", "compare", "notebook"],
   },
   {
     id: "nav-settings",
@@ -127,18 +192,6 @@ const actions = computed((): CommandAction[] => [
     category: "System",
     action: () => window.location.reload(),
     keywords: ["refresh", "restart"],
-  },
-  {
-    id: "search-global",
-    label: t('palette.action_search'),
-    description: t('palette.action_search_desc'),
-    icon: PhMagnifyingGlass,
-    shortcut: "Ctrl+Shift+F",
-    category: "Search",
-    action: () => {
-      // Global search coming soon
-    },
-    keywords: ["find", "locate"],
   },
 ]);
 
@@ -285,22 +338,6 @@ function onGlobalKey(e: KeyboardEvent) {
       query.value = "";
       selectedIndex.value = 0;
     }
-  }
-  
-  // Global search shortcut
-  if (cmdKey && e.shiftKey && e.key.toLowerCase() === "f") {
-    e.preventDefault();
-    show.value = true;
-    query.value = "";
-    selectedIndex.value = 0;
-    // Focus on search action
-    nextTick(() => {
-      const searchAction = filtered.value.find(a => a.id === "search-global");
-      if (searchAction) {
-        const index = filtered.value.indexOf(searchAction);
-        selectedIndex.value = index >= 0 ? index : 0;
-      }
-    });
   }
 }
 

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { fnv1aHash } from './emoji-favicon'
 import { generateSessionName, getColorForSession } from './sessionName'
 
 describe('generateSessionName (local: ts parity)', () => {
@@ -43,6 +44,32 @@ describe('generateSessionName (remote: collision-safe hash)', () => {
     expect(generateSessionName('/srv/app', 'web1')).not.toBe(
       generateSessionName('/srv/app', 'web2'),
     )
+  })
+})
+
+// User decision 2026-10-08: `\` separates path segments only in a
+// Windows-looking path (drive letter or UNC); in a POSIX path it is an ordinary
+// character, so `/srv/a\b` names the same session as ts_session_name ("a_b").
+describe('generateSessionName: backslash is a separator only in Windows paths', () => {
+  // Mutation killed: splitting on `\` regardless of the path's shape (the old
+  // /[/\\]/ split) turns the POSIX cases red ("b" instead of "a_b").
+  it.each([
+    ['local', '/srv/a\\b', 'a_b'],
+    ['web', '/srv/a\\b', `a_b-${fnv1aHash('web::/srv/a\\b').toString(36).slice(0, 4)}`],
+  ])('POSIX path with a backslash on %s: %j -> %j', (box, directory, expected) => {
+    expect(generateSessionName(directory, box)).toBe(expected)
+  })
+
+  // Mutation killed: never splitting on `\` turns these red (local gives
+  // "C__Users_x_proj", remote "C__Users_x_proj-<hash>").
+  it.each([
+    ['local', 'C:\\Users\\x\\proj', 'proj'],
+    ['local', 'c:\\work\\repo\\', 'repo'],
+    ['local', '\\\\server\\share\\proj', 'proj'],
+    ['local', 'C:/Users/x/proj', 'proj'],
+    ['web', 'C:\\Users\\x\\proj', `proj-${fnv1aHash('web::C:\\Users\\x\\proj').toString(36).slice(0, 4)}`],
+  ])('Windows path on %s: %j -> %j', (box, directory, expected) => {
+    expect(generateSessionName(directory, box)).toBe(expected)
   })
 })
 

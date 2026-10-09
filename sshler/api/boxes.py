@@ -1,22 +1,34 @@
 from __future__ import annotations
 
-import contextlib
 import logging
 import re
+import shlex
 import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 
-from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
 from .. import state
+from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
+from ..ssh_pool import get_pool
 from .dependencies import APIDependencies
-from .models import APIBox, APIBoxStats, APIBoxStatus, APIFavoriteToggle, APIGitInfo, APIPinToggle, APIRefreshResult
+from .models import (
+    APIBox,
+    APIBoxStats,
+    APIBoxStatus,
+    APIFavoriteToggle,
+    APIGitInfo,
+    APIPinToggle,
+    APIRefreshResult,
+)
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from ..webapp import ServerSettings  # noqa: F401
+
+
+_VALID_THEMES = {"cyberpunk", "default", "solarized", "dracula", "nord", "monokai", "light"}
 
 
 def _box_to_api(box: StoredBox | Box) -> APIBox:
@@ -77,12 +89,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         start = time.time()
         try:
-            conn = await deps.connect_for_box(box, application_config)
-            try:
-                await conn.run("true", check=True)
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.close()
+            await deps.run_pooled(
+                box, application_config, lambda conn: conn.run("true", check=True)
+            )
             latency = (time.time() - start) * 1000
             return APIBoxStatus(name=box.name, status="online", latency_ms=latency)
         except Exception:
@@ -128,7 +137,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APIRefreshResult:
         """Remove connection overrides so SSH config values apply."""
-        box = deps.get_box_or_404(application_config, name)
+        deps.get_box_or_404(application_config, name)
         stored_override = application_config.stored.get(name)
         if stored_override is not None:
             stored_override.host = None
@@ -156,6 +165,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         rebuild_boxes(application_config)
         deps.clear_connect_failure(name)
+        # Pooled connections were opened with the old settings, and the pool
+        # keeps its own 60 s failure cache: drop both so the next probe
+        # reconnects with what the refresh just applied.
+        await get_pool().invalidate(name)
         return APIRefreshResult(name=name, refreshed=True)
 
     @router.get("/boxes/{name}/stats", response_model=APIBoxStats)
@@ -170,14 +183,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
             # Local box: use psutil
             return await _get_local_stats(name)
 
-        # Remote box: use SSH commands
+        # Remote box: use SSH commands on a pooled connection
         try:
-            conn = await deps.connect_for_box(box, application_config)
-            try:
-                return await _get_remote_stats(name, conn)
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.close()
+            return await deps.run_pooled(
+                box, application_config, lambda conn: _get_remote_stats(name, conn)
+            )
         except Exception as e:
             logger.warning(f"Failed to get stats for {name}: {e}")
             return APIBoxStats(name=name, error=str(e))
@@ -194,14 +204,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if box.transport == "local":
             return await _get_local_git_info(directory)
 
-        # Remote box: use SSH commands
+        # Remote box: use SSH commands on a pooled connection
         try:
-            conn = await deps.connect_for_box(box, application_config)
-            try:
-                return await _get_remote_git_info(conn, directory)
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.close()
+            return await deps.run_pooled(
+                box, application_config, lambda conn: _get_remote_git_info(conn, directory)
+            )
         except Exception as e:
             logger.warning(f"Failed to get git info for {name}:{directory}: {e}")
             return APIGitInfo(error=str(e))
@@ -213,11 +220,13 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> dict:
         """Set terminal theme preference for a box."""
-        VALID_THEMES = {"cyberpunk", "default", "solarized", "dracula", "nord", "monokai", "light"}
         theme = payload.get("terminal_theme", "")
-        if theme and theme not in VALID_THEMES:
+        if theme and theme not in _VALID_THEMES:
             from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail=f"Invalid theme. Valid: {', '.join(sorted(VALID_THEMES))}")
+
+            raise HTTPException(
+                status_code=400, detail=f"Invalid theme. Valid: {', '.join(sorted(_VALID_THEMES))}"
+            )
 
         deps.get_box_or_404(application_config, name)
         stored = application_config.get_or_create_stored(name)
@@ -323,9 +332,9 @@ def _parse_cpu_usage(output: str) -> float | None:
     return round((active_delta / total_delta) * 100, 1)
 
 
-def _parse_memory_info(output: str) -> dict:
+def _parse_memory_info(output: str) -> dict[str, float]:
     """Parse memory info from /proc/meminfo output."""
-    result = {}
+    result: dict[str, float] = {}
     for line in output.strip().split("\n"):
         if "MemTotal:" in line:
             match = re.search(r"(\d+)", line)
@@ -396,14 +405,12 @@ async def _get_local_git_info(directory: str) -> APIGitInfo:
             return APIGitInfo(is_repo=False)
 
         # Get branch name
-        ok, branch = await run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        if not ok or not branch:
-            branch = None
+        ok, branch_out = await run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        branch = branch_out if ok and branch_out else None
 
         # Get short commit hash
-        ok, commit = await run_git(["git", "rev-parse", "--short", "HEAD"])
-        if not ok or not commit:
-            commit = None
+        ok, commit_out = await run_git(["git", "rev-parse", "--short", "HEAD"])
+        commit = commit_out if ok and commit_out else None
 
         # Check if dirty
         ok, status = await run_git(["git", "status", "--porcelain"])
@@ -415,12 +422,27 @@ async def _get_local_git_info(directory: str) -> APIGitInfo:
         return APIGitInfo(error=str(e))
 
 
+def _remote_cd_target(directory: str) -> str:
+    """``directory`` as one shell word for ``cd``, quoted against injection.
+
+    A leading ``~`` / ``~/`` stays unquoted so the remote shell still expands it to
+    the home directory; everything after it is quoted.
+    """
+    if directory == "~":
+        return "~"
+    if directory.startswith("~/"):
+        rest = directory[2:]
+        return f"~/{shlex.quote(rest)}" if rest else "~"
+    return shlex.quote(directory)
+
+
 async def _get_remote_git_info(conn, directory: str) -> APIGitInfo:
     """Get git info for a remote directory via SSH."""
+    target = _remote_cd_target(directory)
     try:
         # Check if git repo and get branch in one command
         result = await conn.run(
-            f'cd {directory} 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null',
+            f"cd {target} 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null",
             check=False,
         )
 
@@ -433,14 +455,14 @@ async def _get_remote_git_info(conn, directory: str) -> APIGitInfo:
 
         # Get short commit hash
         commit_result = await conn.run(
-            f'cd {directory} && git rev-parse --short HEAD 2>/dev/null',
+            f"cd {target} && git rev-parse --short HEAD 2>/dev/null",
             check=False,
         )
         commit = (commit_result.stdout or "").strip() or None
 
         # Check if dirty
         status_result = await conn.run(
-            f'cd {directory} && git status --porcelain 2>/dev/null | head -1',
+            f"cd {target} && git status --porcelain 2>/dev/null | head -1",
             check=False,
         )
         dirty = bool((status_result.stdout or "").strip())

@@ -195,7 +195,9 @@ def load_config(ssh_config_path: str | None = None) -> AppConfig:
     stored_without_local = dict(stored)
     stored_without_local.pop("local", None)
 
-    boxes = _build_boxes(stored_without_local, load_ssh_config(str(resolved_path) if resolved_path else None))
+    boxes = _build_boxes(
+        stored_without_local, load_ssh_config(str(resolved_path) if resolved_path else None)
+    )
     local_box = _build_local_box()
     if local_override:
         if local_override.host:
@@ -314,7 +316,9 @@ def _stored_box_from_dict(data: dict[str, Any]) -> StoredBox:
         known_hosts=data.get("known_hosts"),
         ssh_alias=data.get("ssh_alias"),
         pinned=bool(data.get("pinned", False)),
-        last_accessed=float(data["last_accessed"]) if "last_accessed" in data and data["last_accessed"] is not None else None,
+        last_accessed=float(data["last_accessed"])
+        if "last_accessed" in data and data["last_accessed"] is not None
+        else None,
         terminal_theme=data.get("terminal_theme"),
     )
 

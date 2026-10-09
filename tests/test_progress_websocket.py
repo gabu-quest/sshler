@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ from fastapi.websockets import WebSocketDisconnect
 
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
-
 
 TEST_TOKEN = "api-token"
 
@@ -26,8 +24,8 @@ def setup_config(tmp_path: Path) -> Path:
     return config_dir
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     state.reset_state()
     state.initialize(config_dir)
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
@@ -37,8 +35,8 @@ def auth_headers() -> dict[str, str]:
     return {"X-SSHLER-TOKEN": TEST_TOKEN}
 
 
-def test_snapshot_on_connect_when_empty(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_snapshot_on_connect_when_empty(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         with client.websocket_connect(f"/ws/progress?token={TEST_TOKEN}") as ws:
             snapshot = ws.receive_json()
@@ -48,8 +46,8 @@ def test_snapshot_on_connect_when_empty(tmp_path):
         client.close()
 
 
-def test_snapshot_includes_existing_bars(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_snapshot_includes_existing_bars(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/preexisting",
@@ -67,8 +65,8 @@ def test_snapshot_includes_existing_bars(tmp_path):
         client.close()
 
 
-def test_push_broadcasts_upsert_event(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_push_broadcasts_upsert_event(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         with client.websocket_connect(f"/ws/progress?token={TEST_TOKEN}") as ws:
             snapshot = ws.receive_json()
@@ -91,8 +89,8 @@ def test_push_broadcasts_upsert_event(tmp_path):
         client.close()
 
 
-def test_delete_broadcasts_delete_event(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_delete_broadcasts_delete_event(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/will-vanish",
@@ -115,8 +113,8 @@ def test_delete_broadcasts_delete_event(tmp_path):
         client.close()
 
 
-def test_two_clients_both_receive_broadcast(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_two_clients_both_receive_broadcast(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         with client.websocket_connect(
             f"/ws/progress?token={TEST_TOKEN}"
@@ -145,8 +143,8 @@ def test_two_clients_both_receive_broadcast(tmp_path):
         client.close()
 
 
-def test_bad_token_closes_connection(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_bad_token_closes_connection(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         with pytest.raises(WebSocketDisconnect) as exc_info:
             with client.websocket_connect("/ws/progress?token=wrong") as ws:

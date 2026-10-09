@@ -38,7 +38,7 @@ class WinPTYUnavailableError(RuntimeError):
 def _load_winpty() -> Any:
     """Import and return the ``winpty`` module, or raise a clear error."""
     try:
-        import winpty  # type: ignore[import-untyped, import-not-found]
+        import winpty
     except Exception as exc:  # pragma: no cover - only hit when dep is missing
         raise WinPTYUnavailableError(
             "pywinpty is not installed in this environment. Install it with "
@@ -101,7 +101,7 @@ class WinPTYProcess:
         cwd: str | None = None,
         cols: int = 80,
         rows: int = 24,
-    ) -> "WinPTYProcess":
+    ) -> WinPTYProcess:
         """Spawn *argv* in a new ConPTY sized *cols* x *rows*.
 
         Raises :class:`WinPTYUnavailableError` if pywinpty is not installed.

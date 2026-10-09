@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from platform_support import make_symlink
 
 from sshler.api.helpers import _normalize_local_path
 
@@ -31,7 +32,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
         target.write_text("content")
 
         link = allowed / "link"
-        link.symlink_to(target)
+        make_symlink(link, target)
 
         # Should work - symlink points to file within allowed base
         normalized = _normalize_local_path(str(link), allowed_base=allowed)
@@ -51,7 +52,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
         secret.write_text("secret data")
 
         evil_link = allowed / "evil_link"
-        evil_link.symlink_to(secret)
+        make_symlink(evil_link, secret)
 
         # Should raise ValueError - symlink escapes allowed base
         with pytest.raises(ValueError, match="Path escape detected"):
@@ -64,7 +65,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
 
         # Create symlink pointing to /etc/passwd
         evil_link = allowed / "evil_link"
-        evil_link.symlink_to("/etc/passwd")
+        make_symlink(evil_link, "/etc/passwd")
 
         # Should raise ValueError - symlink escapes allowed base
         with pytest.raises(ValueError, match="Path escape detected"):
@@ -88,7 +89,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
         secret.write_text("secret data")
 
         evil_link = subdir / "evil_link"
-        evil_link.symlink_to("../../secret.txt")
+        make_symlink(evil_link, "../../secret.txt")
 
         # Should raise ValueError - symlink escapes allowed base
         with pytest.raises(ValueError, match="Path escape detected"):
@@ -105,7 +106,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
 
         # Create symlink to directory outside allowed base
         evil_dir_link = allowed / "evil_dir"
-        evil_dir_link.symlink_to(outside)
+        make_symlink(evil_dir_link, outside)
 
         # Should raise ValueError - symlink escapes allowed base
         with pytest.raises(ValueError, match="Path escape detected"):
@@ -126,10 +127,10 @@ class TestNormalizeLocalPathSymlinkSecurity:
         secret.write_text("secret data")
 
         link2 = allowed / "link2"
-        link2.symlink_to("../secret.txt")
+        make_symlink(link2, "../secret.txt")
 
         link1 = allowed / "link1"
-        link1.symlink_to(link2)
+        make_symlink(link1, link2)
 
         # Should raise ValueError - chained symlinks escape allowed base
         with pytest.raises(ValueError, match="Path escape detected"):
@@ -145,7 +146,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
         (subdir / "file.txt").write_text("content")
 
         link = allowed / "link_to_subdir"
-        link.symlink_to(subdir)
+        make_symlink(link, subdir)
 
         # Should work - symlink points to directory within allowed base
         normalized = _normalize_local_path(str(link), allowed_base=allowed)
@@ -160,7 +161,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
         outside.write_text("outside data")
 
         link = allowed / "link"
-        link.symlink_to(outside)
+        make_symlink(link, outside)
 
         # Should work without restriction
         normalized = _normalize_local_path(str(link), allowed_base=None)
@@ -173,7 +174,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
 
             # Create symlink in temp dir pointing to /etc/passwd
             evil_link = tmp_path / "evil"
-            evil_link.symlink_to("/etc/passwd")
+            make_symlink(evil_link, "/etc/passwd")
 
             # Should raise ValueError when restricted to home directory
             with pytest.raises(ValueError, match="Path escape detected"):
@@ -184,7 +185,7 @@ class TestNormalizeLocalPathSymlinkSecurity:
         # This test verifies that allowed_base="~" works correctly
         # Create a symlink in temp trying to escape
         evil_link = tmp_path / "evil"
-        evil_link.symlink_to("/etc/passwd")
+        make_symlink(evil_link, "/etc/passwd")
 
         # Should raise - symlink outside home directory
         with pytest.raises(ValueError, match="Path escape detected"):

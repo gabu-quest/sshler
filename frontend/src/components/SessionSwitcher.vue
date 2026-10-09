@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty } from 'naive-ui'
-import { PhArrowsClockwise, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX, PhHouse } from '@phosphor-icons/vue'
+import { PhArrowsClockwise, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX, PhHouse, PhSkull } from '@phosphor-icons/vue'
 import type { ApiSession } from '@/api/types'
 import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession } from '@/api/http'
 import { useI18n } from '@/i18n'
@@ -84,9 +84,9 @@ async function sync() {
   }
 }
 
-async function kill(session: ApiSession) {
+async function kill(session: ApiSession, force = false) {
   try {
-    await deleteSession(props.boxName, session.id, props.token, true)
+    await deleteSession(props.boxName, session.id, props.token, true, force)
     sessions.value = sessions.value.filter(s => s.id !== session.id)
   } catch {
     // ignore
@@ -212,11 +212,19 @@ watch(() => props.boxName, load)
             </NButton>
             <NPopconfirm @positive-click.stop="kill(session)">
               <template #trigger>
-                <NButton size="tiny" quaternary type="error" @click.stop>
+                <NButton size="tiny" quaternary type="error" @click.stop :title="t('sessions.kill')">
                   <NIcon size="12"><PhTrash weight="duotone" /></NIcon>
                 </NButton>
               </template>
               {{ t('sessions.kill_confirm', { name: session.session_name }) }}
+            </NPopconfirm>
+            <NPopconfirm @positive-click.stop="kill(session, true)">
+              <template #trigger>
+                <NButton size="tiny" quaternary type="error" @click.stop :title="t('sessions.force_kill')">
+                  <NIcon size="12"><PhSkull weight="duotone" /></NIcon>
+                </NButton>
+              </template>
+              {{ t('sessions.force_kill_confirm', { name: session.session_name }) }}
             </NPopconfirm>
           </template>
         </div>

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -62,11 +63,20 @@ def _resolve_resume_command(template: str | None, session_id: str) -> str:
     return chosen.replace("{id}", session_id)
 
 
-def _window_name(session_id: str) -> str:
-    """Deterministic tmux window (tab) name for a Claude session within its dir
-    session — folds in the UUID so several conversations in one directory each
-    get their own window."""
-    return f"cl-{session_id.replace('-', '')[:6]}"
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slugify_title(title: str, length: int = 10) -> str:
+    """Lowercase alnum-dash slug of a title, truncated to stay short and readable."""
+    slug = _SLUG_RE.sub("-", title.lower()).strip("-")
+    return slug[:length].strip("-") or "session"
+
+
+def _window_name(session_id: str, title: str) -> str:
+    """Tmux window (tab) name for a Claude session within its dir session —
+    a slug of the title so tabs are recognizable at a glance, plus a short id
+    suffix so multiple conversations in one directory don't collide."""
+    return f"cl-{_slugify_title(title)}-{session_id.replace('-', '')[:4]}"
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -125,7 +135,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
 
         session = ts_session_name(session_dir)
-        window = _window_name(session_id)
+        window = _window_name(session_id, info.title)
         target = f"{session}:{window}"
 
         # Ensure the repo-root session exists.

@@ -18,7 +18,8 @@ from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .helpers import _normalize_local_path, _normalize_directory_path
+from .files import _remote_path
+from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_file_ops
 
 logger = logging.getLogger(__name__)
@@ -45,12 +46,14 @@ def _validate_archive_name(name: str, fmt: str) -> str:
     try:
         validated = PathValidator.validate_filename(name)
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     expected_exts = {"tar.gz": (".tar.gz",), "tgz": (".tgz",), "zip": (".zip",)}
     valid_exts = expected_exts.get(fmt, ())
     if not any(validated.lower().endswith(ext) for ext in valid_exts):
-        raise HTTPException(status_code=400, detail=f"Archive name must end in {' or '.join(valid_exts)}")
+        raise HTTPException(
+            status_code=400, detail=f"Archive name must end in {' or '.join(valid_exts)}"
+        )
 
     return validated
 
@@ -94,7 +97,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if not payload.paths:
             raise HTTPException(status_code=400, detail="No paths provided")
         if payload.format not in VALID_FORMATS:
-            raise HTTPException(status_code=400, detail=f"Invalid format. Must be one of: {', '.join(VALID_FORMATS)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid format. Must be one of: {', '.join(VALID_FORMATS)}",
+            )
 
         archive_name = _validate_archive_name(payload.archive_name, payload.format)
         box = deps.get_box_or_404(application_config, name)
@@ -126,7 +132,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             try:
                 await asyncio.to_thread(_create_local)
             except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
 
             return {"status": "ok", "message": f"Created {archive_name}", "path": str(archive_path)}
 
@@ -134,41 +140,48 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             dest_validated = PathValidator.validate_remote_path(payload.destination)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         validated_paths: list[str] = []
         for p in payload.paths:
             try:
                 validated_paths.append(PathValidator.validate_remote_path(p))
             except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid path {p}: {exc}")
-
-        archive_target = str(PurePosixPath(dest_validated) / archive_name)
-        quoted_paths = " ".join(shlex.quote(p) for p in validated_paths)
-
-        if payload.format in ("tar.gz", "tgz"):
-            cmd = f"tar czf {shlex.quote(archive_target)} -C / {quoted_paths}"
-        else:
-            cmd = f"cd / && zip -r {shlex.quote(archive_target)} {quoted_paths}"
+                raise HTTPException(status_code=400, detail=f"Invalid path {p}: {exc}") from exc
 
         ssh_pool = get_pool()
         try:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
+                # SFTP and the quoted shell command do not expand `~`: resolve it here.
+                dest_resolved = await _remote_path(connection, dest_validated)
+                resolved_paths = [await _remote_path(connection, p) for p in validated_paths]
+                archive_target = str(PurePosixPath(dest_resolved) / archive_name)
+                quoted_paths = " ".join(shlex.quote(p) for p in resolved_paths)
+
+                if payload.format in ("tar.gz", "tgz"):
+                    cmd = f"tar czf {shlex.quote(archive_target)} -C / {quoted_paths}"
+                else:
+                    cmd = f"cd / && zip -r {shlex.quote(archive_target)} {quoted_paths}"
+
                 try:
-                    result = await asyncio.wait_for(
+                    await asyncio.wait_for(
                         connection.run(cmd, check=True),
                         timeout=ARCHIVE_TIMEOUT,
                     )
-                except asyncio.TimeoutError:
-                    raise HTTPException(status_code=504, detail="Archive creation timed out")
+                except TimeoutError as exc:
+                    raise HTTPException(
+                        status_code=504, detail="Archive creation timed out"
+                    ) from exc
         except HTTPException:
             raise
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except SSHError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return {"status": "ok", "message": f"Created {archive_name}", "path": archive_target}
 
@@ -205,7 +218,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             except HTTPException:
                 raise
             except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
 
             return {"status": "ok", "message": "Extracted", "path": str(dest_dir)}
 
@@ -214,14 +227,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
             validated_archive = PathValidator.validate_remote_path(payload.archive_path)
             validated_dest = PathValidator.validate_remote_path(payload.destination)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         name_lower = PurePosixPath(validated_archive).name.lower()
-        if name_lower.endswith((".tar.gz", ".tgz")):
-            cmd = f"tar xzf {shlex.quote(validated_archive)} -C {shlex.quote(validated_dest)}"
-        elif name_lower.endswith(".zip"):
-            cmd = f"unzip -o {shlex.quote(validated_archive)} -d {shlex.quote(validated_dest)}"
-        else:
+        if not name_lower.endswith((".tar.gz", ".tgz", ".zip")):
             raise HTTPException(status_code=400, detail="Unsupported archive format")
 
         ssh_pool = get_pool()
@@ -229,20 +238,33 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
+                # SFTP and the quoted shell command do not expand `~`: resolve it here.
+                archive_resolved = await _remote_path(connection, validated_archive)
+                dest_resolved = await _remote_path(connection, validated_dest)
+                if name_lower.endswith((".tar.gz", ".tgz")):
+                    cmd = (
+                        f"tar xzf {shlex.quote(archive_resolved)} -C {shlex.quote(dest_resolved)}"
+                    )
+                else:
+                    cmd = (
+                        f"unzip -o {shlex.quote(archive_resolved)} -d {shlex.quote(dest_resolved)}"
+                    )
                 try:
                     await asyncio.wait_for(
                         connection.run(cmd, check=True),
                         timeout=ARCHIVE_TIMEOUT,
                     )
-                except asyncio.TimeoutError:
-                    raise HTTPException(status_code=504, detail="Extraction timed out")
+                except TimeoutError as exc:
+                    raise HTTPException(status_code=504, detail="Extraction timed out") from exc
         except HTTPException:
             raise
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except SSHError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        return {"status": "ok", "message": "Extracted", "path": validated_dest}
+        return {"status": "ok", "message": "Extracted", "path": dest_resolved}
 
     return router

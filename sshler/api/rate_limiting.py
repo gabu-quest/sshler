@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import HTTPException, Request, status
 
@@ -56,7 +56,10 @@ def create_rate_limit_dependency(
             HTTPException: 429 Too Many Requests if rate limit exceeded
         """
         # Get client IP for rate limiting
-        client_ip = request.client.host if request.client else "unknown"
+        # Imported here: auth.py imports this module for `rate_limit_login`.
+        from .auth import get_client_ip
+
+        client_ip = get_client_ip(request)
 
         # Get or create rate limiter
         limiter = get_rate_limiter(name, rate, per, capacity_multiplier)

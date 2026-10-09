@@ -17,6 +17,9 @@
  */
 import { fnv1aHash } from './emoji-favicon'
 
+/** A drive-letter (`C:\`, `C:/`) or UNC (`\\server\`) path. */
+const WINDOWS_PATH = /^(?:[A-Za-z]:[/\\]|\\\\)/
+
 /**
  * Deterministic tmux session name for a directory.
  *
@@ -25,9 +28,9 @@ import { fnv1aHash } from './emoji-favicon'
  */
 export function generateSessionName(directory: string, boxName?: string): string {
   const dir = directory && directory !== '~' ? directory : '~'
-  // Split on POSIX (/) and Windows (\) separators. POSIX-identical for /-only
-  // paths (so ts-parity holds), adds Windows-path basename handling.
-  const pathParts = dir.split(/[/\\]/).filter(Boolean)
+  // `\` separates segments only in a Windows-looking path; in a POSIX path it
+  // is an ordinary character, as in ts_session_name.
+  const pathParts = dir.split(WINDOWS_PATH.test(dir) ? /[/\\]/ : '/').filter(Boolean)
 
   if (boxName === 'local') {
     // ts rule: `.`/`:` -> `_`. Then the same tmux-safe filter the backend's
@@ -38,7 +41,8 @@ export function generateSessionName(directory: string, boxName?: string): string
     let base = pathParts[pathParts.length - 1] || 'home'
     if (base === '~' || base === '.' || base === '..') base = 'home'
     // `.`/`:` gone first (also keeps them out of tmux `session:window.pane` targets).
-    return base.replace(/[.:]/g, '_').replace(/[^A-Za-z0-9_-]/g, '_') || 'home'
+    // Unicode-aware (\p{L}\p{N}, per code point) to equal Python's str.isalnum().
+    return base.replace(/[.:]/g, '_').replace(/[^\p{L}\p{N}_-]/gu, '_') || 'home'
   }
 
   // Human-readable base = last path component, sanitized for tmux/shell safety.
@@ -88,5 +92,5 @@ const SESSION_COLORS = [
  */
 export function getColorForSession(key: string): string {
   if (!key) return '#888888'
-  return SESSION_COLORS[fnv1aHash(key) % SESSION_COLORS.length]
+  return SESSION_COLORS[fnv1aHash(key) % SESSION_COLORS.length]! // modulo keeps the index in range
 }

@@ -7,22 +7,14 @@ on Linux CI as well as on a real Windows host.
 
 from __future__ import annotations
 
-import os
-import sys
+import asyncio
+import threading
+
 import pytest
 
-from sshler.api import helpers
 from sshler import webapp
+from sshler.api import helpers
 from sshler.winpty_proc import WinPTYProcess
-
-# Native Windows ConPTY/shell-spawn coverage. Although these use mocks, the
-# whole feature targets Windows only; gate the file to Windows so it can never
-# destabilise Linux CI. The suite runs in full on the real target platform.
-pytestmark = pytest.mark.skipif(
-    sys.platform != "win32",
-    reason="Native Windows shell/ConPTY tests — Windows-only target platform.",
-)
-
 
 # A fake which-table: every native shell + wsl resolves to a stable path.
 _WHICH_TABLE = {
@@ -113,7 +105,12 @@ def test_default_windows_shell_falls_back_to_cmd(monkeypatch):
 
 
 _CATALOG = [
-    {"id": "pwsh", "label": "PowerShell 7", "argv": [r"C:\PF\pwsh.exe", "-NoLogo"], "available": True},
+    {
+        "id": "pwsh",
+        "label": "PowerShell 7",
+        "argv": [r"C:\PF\pwsh.exe", "-NoLogo"],
+        "available": True,
+    },
     {"id": "cmd", "label": "Command Prompt", "argv": [r"C:\Win\cmd.exe"], "available": True},
     {"id": "wsl", "label": "WSL", "argv": [r"C:\Win\wsl.exe"], "available": False},
 ]
@@ -210,7 +207,7 @@ class _FakePty:
 def test_winpty_stdin_decodes_bytes_to_str():
     pty = _FakePty()
     proc = WinPTYProcess(pty)
-    n = proc.stdin.write("café".encode("utf-8"))
+    n = proc.stdin.write("café".encode())
     assert pty.written == ["café"]
     assert n == len("café")
 
@@ -275,9 +272,10 @@ def test_wsl_distros_empty_on_nonzero(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_bootstrap_exposes_platform_and_shells(tmp_path):
+def _get_bootstrap(tmp_path, monkeypatch) -> dict:
     import yaml
     from fastapi.testclient import TestClient
+
     from sshler.webapp import ServerSettings, make_app
 
     config_dir = tmp_path / "config"
@@ -285,39 +283,77 @@ def test_bootstrap_exposes_platform_and_shells(tmp_path):
     (config_dir / "boxes.yaml").write_text(
         yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
     )
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
 
     client = TestClient(make_app(ServerSettings(csrf_token="t")))
     try:
-        data = client.get("/api/v1/bootstrap").json()
+        response = client.get("/api/v1/bootstrap")
     finally:
         client.close()
+    assert response.status_code == 200
+    return response.json()
 
-    assert "platform" in data
-    assert "windows_shells" in data
-    assert "default_shell" in data
 
-    if helpers.LOCAL_IS_WINDOWS:
-        assert data["platform"] == "windows"
-        assert len(data["windows_shells"]) >= 1  # guard
-        ids = {s["id"] for s in data["windows_shells"]}
-        # At least one native shell is always present on Windows.
-        assert ids & {"pwsh", "powershell", "cmd"}
-        for shell in data["windows_shells"]:
-            assert set(shell) == {"id", "label", "available"}
-    else:
-        assert data["platform"] == "posix"
-        assert data["windows_shells"] == []
-        assert data["default_shell"] is None
+def test_bootstrap_windows_exposes_exact_shell_list(tmp_path, monkeypatch):
+    """On Windows, bootstrap serves the module's shell catalog and default verbatim.
+
+    ``sshler.api.config`` computes the catalog once at import, so the test sets
+    the three module attributes directly (no reload) and checks what the route
+    serializes: platform, the exact ordered list, and that ``argv`` (host paths)
+    is never exposed.
+    Kills: the platform ternary flipped, ``available`` dropped or forced, argv
+    leaking into the payload, a shell dropped or reordered, the default not served.
+    """
+    from sshler.api import config as api_config
+    from sshler.api.models import APIWindowsShell
+
+    monkeypatch.setattr(api_config, "LOCAL_IS_WINDOWS", True)
+    monkeypatch.setattr(
+        api_config,
+        "_WINDOWS_SHELLS",
+        [
+            APIWindowsShell(id="pwsh", label="PowerShell 7", available=True),
+            APIWindowsShell(id="powershell", label="Windows PowerShell", available=True),
+            APIWindowsShell(id="cmd", label="Command Prompt", available=True),
+            APIWindowsShell(id="wsl", label="WSL", available=False),
+        ],
+    )
+    monkeypatch.setattr(api_config, "_DEFAULT_SHELL", "pwsh")
+
+    data = _get_bootstrap(tmp_path, monkeypatch)
+
+    assert data["platform"] == "windows"
+    assert data["windows_shells"] == [
+        {"id": "pwsh", "label": "PowerShell 7", "available": True},
+        {"id": "powershell", "label": "Windows PowerShell", "available": True},
+        {"id": "cmd", "label": "Command Prompt", "available": True},
+        {"id": "wsl", "label": "WSL", "available": False},
+    ]
+    assert data["default_shell"] == "pwsh"
+
+
+def test_bootstrap_posix_exposes_no_shells(tmp_path, monkeypatch):
+    """On a non-Windows host, bootstrap reports posix with no shell catalog.
+
+    Kills: the platform ternary flipped to "windows" on posix, or a non-null
+    default shell served on posix.
+    """
+    from sshler.api import config as api_config
+
+    monkeypatch.setattr(api_config, "LOCAL_IS_WINDOWS", False)
+    monkeypatch.setattr(api_config, "_WINDOWS_SHELLS", [])
+    monkeypatch.setattr(api_config, "_DEFAULT_SHELL", None)
+
+    data = _get_bootstrap(tmp_path, monkeypatch)
+
+    assert data["platform"] == "posix"
+    assert data["windows_shells"] == []
+    assert data["default_shell"] is None
 
 
 # --------------------------------------------------------------------------
 # Windows WS handler: persistence wiring (registry attach/detach, no terminate)
 # --------------------------------------------------------------------------
-
-
-import asyncio
-import threading
 
 
 class _FakeWinSession:
@@ -360,6 +396,7 @@ class _FakeRegistry:
 def test_windows_ws_attaches_and_detaches_without_terminating(tmp_path, monkeypatch):
     import yaml
     from fastapi.testclient import TestClient
+
     from sshler import state
     from sshler.webapp import ServerSettings, make_app
     from sshler.winpty_proc import WinPTYProcess
@@ -406,15 +443,20 @@ def test_windows_ws_attaches_and_detaches_without_terminating(tmp_path, monkeypa
     finally:
         client.close()
 
-    ops = [c[0] for c in fake_registry.calls]
-
-    # Re-used/created the persisted shell keyed by (box, session).
-    assert ("get_or_create", ("local", "proj")) in fake_registry.calls
-    # Attached a sink, then detached on disconnect.
-    assert "attach" in ops
-    assert "detach" in ops
+    # Exactly: create/reuse the shell keyed by (box, session), attach at the
+    # requested size, detach on disconnect. Kills: dropping the detach in the
+    # handler's finally, or keying the registry by something else.
+    assert fake_registry.calls == [
+        ("get_or_create", ("local", "proj")),
+        ("attach", 80, 24),
+        ("detach",),
+    ]
     # The ConPTY was NOT terminated — that's the whole point of persistence.
     assert fake_pty.terminated is False
     assert fake_pty.closed is False
-    # The DB row was never flipped inactive for the Windows shell.
-    assert all(active is not False for (_sid, active) in activity_calls)
+    # The handler tracked a DB row (so its finally had a session_id to flip),
+    # yet never touched its activity for the persisted Windows shell.
+    # Kills: dropping `not isinstance(process, WinPTYProcess)` from the
+    # mark-inactive guard in the /ws/term finally.
+    assert fake_session.session_id is not None  # guard: the row was tracked
+    assert activity_calls == []

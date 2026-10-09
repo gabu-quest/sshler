@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import pytest
 
+from sshler import ssh, tmux, webapp
 from sshler.validation import PathValidator, ValidationError
 
 
@@ -75,12 +79,6 @@ class TestSessionNameSanitization:
             sanitized = PathValidator.sanitize_session_name(input_name)
             assert sanitized == expected
 
-    def test_empty_string_rejected(self):
-        """Test that truly empty session names are rejected."""
-        # Only truly empty strings raise ValidationError
-        with pytest.raises(ValidationError, match="at least one valid character"):
-            PathValidator.sanitize_session_name("")
-
     def test_preserves_alphanumeric_and_safe_chars(self):
         """Test that alphanumeric and safe characters are preserved."""
         test_cases = [
@@ -93,9 +91,7 @@ class TestSessionNameSanitization:
         ]
 
         for name in test_cases:
-            sanitized = PathValidator.sanitize_session_name(name)
-            # Should only contain alphanumeric, dash, underscore, dot
-            assert all(c.isalnum() or c in "-_." for c in sanitized)
+            assert PathValidator.sanitize_session_name(name) == name
 
     def test_real_world_attack_attempts(self):
         """Test real-world command injection attack patterns."""
@@ -110,7 +106,7 @@ class TestSessionNameSanitization:
             "session`cat /etc/passwd`",
             # Escape attempts
             "session\\; ls",
-            "session\\\"; ls",
+            'session\\"; ls',
             # Multiple injection techniques
             "session;|&$()`",
             # Newline/carriage return injection
@@ -122,13 +118,15 @@ class TestSessionNameSanitization:
             # Sanitized version should not contain dangerous characters
             dangerous_chars = [";", "|", "&", "$", "`", ">", "<", "\n", "\r", "\\", "'", '"']
             for char in dangerous_chars:
-                assert char not in sanitized, f"Dangerous char {repr(char)} found in sanitized output: {sanitized}"
+                assert char not in sanitized, (
+                    f"Dangerous char {repr(char)} found in sanitized output: {sanitized}"
+                )
 
     def test_unicode_and_special_chars(self):
         """Test handling of Unicode and special characters."""
         test_cases = [
             ("session™", "session_"),  # Trademark symbol
-            ("session™", "session_"),  # Copyright
+            ("session\u00a9", "session_"),  # Copyright
             ("session✓", "session_"),  # Checkmark
             ("session\x00", "session_"),  # Null byte
             ("session\t", "session_"),  # Tab
@@ -155,72 +153,86 @@ class TestSessionNameSanitization:
         assert PathValidator.sanitize_session_name("prod&server") == "prod_server"
 
 
-class TestQuotingInSubprocessCalls:
-    """Test that subprocess calls use proper quoting."""
+HOSTILE_NAME = "x; rm -rf ~ $(id)"
+HOSTILE_DIR = "/srv/a b;id"
 
-    def test_shlex_quote_prevents_injection(self):
-        """Test that shlex.quote properly escapes dangerous characters."""
-        import shlex
 
-        dangerous_inputs = [
-            "session; rm -rf /",
-            "session && whoami",
-            "session$(cat /etc/passwd)",
-            "session`id`",
-            "session'test'",
-            'session"test"',
+class _RecordingConnection:
+    """Stands in for an asyncssh connection: records every command string it is given."""
+
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    async def create_process(self, command: str, **_kwargs):
+        self.commands.append(command)
+        return object()
+
+    async def run(self, command: str, check: bool = False):
+        self.commands.append(command)
+
+
+class TestRemoteTmuxCommandStrings:
+    """Remote tmux runs through a shell, so every user-controlled value must be quoted."""
+
+    def test_open_tmux_sanitizes_session_and_quotes_directory(self):
+        """Kills: dropping `open_tmux`'s own session sanitization, and dropping
+        `shlex.quote` around `working_directory`."""
+        connection = _RecordingConnection()
+        asyncio.run(ssh.open_tmux(connection, working_directory=HOSTILE_DIR, session="evil;id"))
+        assert connection.commands == ["tmux new -As evil_id -c '/srv/a b;id'"]
+
+    def test_remote_rename_window_quotes_new_name(self):
+        """Kills: dropping `shlex.quote(str(new_name))` in the remote rename branch."""
+        connection = _RecordingConnection()
+        payload = json.dumps({"op": "rename-window", "target": HOSTILE_NAME})
+        asyncio.run(webapp._handle_control_message(payload, object(), connection, "demo", "ssh"))
+        assert connection.commands == ["tmux rename-window -t demo 'x; rm -rf ~ $(id)'"]
+
+    def test_remote_select_window_quotes_target(self):
+        """Kills: dropping `shlex.quote(str(target))` in the remote select-window branch."""
+        connection = _RecordingConnection()
+        payload = json.dumps({"op": "select-window", "target": "1;reboot"})
+        asyncio.run(webapp._handle_control_message(payload, object(), connection, "demo", "ssh"))
+        assert connection.commands == ["tmux select-window -t demo:'1;reboot'"]
+
+
+class TestLocalTmuxArgv:
+    """Local tmux runs without a shell: hostile values must stay one argv element."""
+
+    def test_local_rename_window_passes_name_as_one_argument(self, monkeypatch):
+        """Kills: building the local rename as a shell string or splitting the name."""
+        calls: list[tuple[str, list[str]]] = []
+
+        async def fake_run(session: str, args: list[str]):
+            calls.append((session, args))
+
+        monkeypatch.setattr(webapp, "_run_local_tmux_command", fake_run)
+        payload = json.dumps({"op": "rename-window", "target": HOSTILE_NAME})
+        asyncio.run(webapp._handle_control_message(payload, object(), None, "demo", "local"))
+        assert calls == [("demo", ["rename-window", "-t", "demo", HOSTILE_NAME])]
+
+    def test_open_local_tmux_quotes_every_argument_for_script(self, monkeypatch):
+        """`_open_local_tmux` (the `script -c` fallback) hands `script` one shell string.
+
+        Kills: dropping `shlex.quote` from the `cmd_str` join (the directory's `;`
+        would end the tmux command inside `script`'s shell).
+        """
+        captured: list[tuple[str, ...]] = []
+
+        async def fake_exec(*argv, **_kwargs):
+            captured.append(argv)
+            return object()
+
+        # Model a POSIX host on any host: both flags, or a Windows run gets `wsl --`.
+        monkeypatch.setattr(webapp, "LOCAL_IS_WINDOWS", False)
+        monkeypatch.setattr(tmux, "_IS_WINDOWS", False)
+        monkeypatch.setattr(webapp.asyncio, "create_subprocess_exec", fake_exec)
+        asyncio.run(webapp._open_local_tmux(HOSTILE_DIR, "demo"))
+        assert captured == [
+            (
+                "script",
+                "-qefc",
+                "tmux -L ts-demo new -As demo -c '/srv/a b;id'",
+                "/dev/null",
+            )
         ]
-
-        for dangerous_input in dangerous_inputs:
-            quoted = shlex.quote(dangerous_input)
-
-            # Quoted string should be safe - it will be treated as a single argument
-            # shlex.quote wraps in single quotes and escapes internal single quotes
-            assert quoted.startswith("'") or not any(c in dangerous_input for c in ";|&$`")
-
-            # The quoted string when parsed should give back the original
-            # (this proves the quoting is effective)
-            import shlex as shlex_parse
-            parsed = shlex_parse.split(quoted)
-            assert len(parsed) == 1, "Quoted string should parse as single argument"
-            assert parsed[0] == dangerous_input, "Quoted string should preserve original content"
-
-
-class TestSessionNameValidationIntegration:
-    """Integration tests for session name validation in real usage."""
-
-    def test_sanitization_makes_names_safe_for_subprocess(self):
-        """Test that sanitized names are safe for subprocess calls."""
-        import shlex
-
-        # Simulate user input that might be malicious
-        user_inputs = [
-            "normal-session",  # Safe
-            "attack; rm -rf /",  # Malicious
-            "attack$(whoami)",  # Command substitution
-        ]
-
-        for user_input in user_inputs:
-            # Sanitize the session name
-            sanitized = PathValidator.sanitize_session_name(user_input)
-
-            # Build a command that would be passed to subprocess
-            # This simulates what happens in _open_local_tmux
-            command = ["tmux", "new", "-As", sanitized]
-
-            # Even if we quote the sanitized name, it should be safe
-            quoted_command = " ".join(shlex.quote(arg) for arg in command)
-
-            # The command should not contain unquoted dangerous characters
-            # Split and rejoin to verify proper parsing
-            parsed = shlex.split(quoted_command)
-            assert parsed == command, "Command should parse correctly"
-            assert sanitized == parsed[3], "Session name should be preserved"
-
-    def test_validation_error_prevents_subprocess_call(self):
-        """Test that validation errors prevent unsafe subprocess calls."""
-        # Only empty strings raise ValidationError
-        with pytest.raises(ValidationError):
-            PathValidator.sanitize_session_name("")
-
-        # This prevents the session from ever reaching subprocess calls

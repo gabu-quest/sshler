@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from platform_support import make_symlink
 
 from sshler import claude_sessions as scanner
 from sshler import state
@@ -279,7 +280,7 @@ def test_scanner_ignores_symlink_escape(tmp_path, monkeypatch):
         [{"type": "ai-title", "aiTitle": "SECRET", "sessionId": UUID_E, "cwd": "/x"}],
     )
     # A symlink inside projects/ pointing at it — glob() would otherwise follow it.
-    (projects / "evil").symlink_to(outside, target_is_directory=True)
+    make_symlink(projects / "evil", outside, target_is_directory=True)
 
     assert scanner.list_claude_sessions() == []
     assert scanner.get_claude_session(UUID_E) is None
@@ -356,6 +357,16 @@ def test_repo_root_none_outside_git(tmp_path, monkeypatch):
         ("../../etc/passwd", False),
         ("aaaaaaaa-0000-4000-8000-000000000001; rm -rf /", False),
         ("", False),
+        # Mutations killed, case by case (checked by running each mutation):
+        # "\n": ``match`` instead of ``fullmatch`` (``$`` accepts one trailing
+        # newline), and any ``strip()``/``rstrip()`` before matching.
+        (UUID_A + "\n", False),
+        # "\r\n": ``strip()``/``rstrip()`` before matching only; plain ``match``
+        # already rejects it, so this case does not kill that mutation.
+        (UUID_A + "\r\n", False),
+        # trailing / leading space: stripping spaces before matching only.
+        (UUID_A + " ", False),
+        (" " + UUID_A, False),
     ],
 )
 def test_is_valid_session_id(value, expected):
@@ -417,7 +428,7 @@ def _make_client(tmp_path, monkeypatch, *, work_cwd: str) -> TestClient:
     (config_dir / "boxes.yaml").write_text(
         yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
     )
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
 
     claude_root = tmp_path / "claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_root))
@@ -453,6 +464,32 @@ def test_open_invalid_id_returns_400(tmp_path, monkeypatch, tmux_spy):
     assert tmux_spy["runs"] == []
 
 
+def test_open_rejects_percent_encoded_newline_id(tmp_path, monkeypatch, tmux_spy):
+    """Mutations killed: ``%0A`` kills ``_UUID_RE.match`` (``$`` allows a trailing newline)
+    and ``strip()``; ``%20`` kills stripping spaces before validation only (plain ``match``
+    rejects a trailing space, so ``%20`` does not kill that mutation).
+
+    Each suffix decodes in the path param; the route must answer 400 (not 200 for
+    the real session) and must not touch tmux.
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".git").mkdir()
+    client = _make_client(tmp_path, monkeypatch, work_cwd=str(work))
+    for suffix in ("%0A", "%20"):
+        resp = client.post(
+            f"/api/v1/claude/sessions/{UUID_A}{suffix}/open", headers=_headers()
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Invalid Claude session id"
+    assert tmux_spy["runs"] == []
+    assert tmux_spy["created"] == []
+    # Positive control: the same id without the suffix is a real session.
+    ok = client.post(f"/api/v1/claude/sessions/{UUID_A}/open", headers=_headers())
+    assert ok.status_code == 200
+    assert len(tmux_spy["created"]) == 1
+
+
 def test_open_unknown_id_returns_404(tmp_path, monkeypatch, tmux_spy):
     work = tmp_path / "work"
     work.mkdir()
@@ -477,15 +514,17 @@ def test_open_spawns_and_sends_resume(tmp_path, monkeypatch, tmux_spy):
     assert body["box"] == "local"
     assert body["working_directory"] == str(work)
     assert session == "work"  # ts basename of the dir (no hash)
-    assert window == f"cl-{UUID_A.replace('-', '')[:6]}"
+    assert window == f"cl-work-sessi-{UUID_A.replace('-', '')[:4]}"  # slug of title "Work Session"
     assert body["already_open"] is False
     target = f"{session}:{window}"
 
     # dir session created, then the conversation's own window inside it.
     assert (session, ["new-session", "-d", "-s", session, "-c", str(work)]) in tmux_spy["runs"]
-    assert (session, ["new-window", "-t", session, "-n", window, "-c", str(work)]) in tmux_spy["runs"]
+    new_window = (session, ["new-window", "-t", session, "-n", window, "-c", str(work)])
+    assert new_window in tmux_spy["runs"]
     # resume typed into that window literally, then Enter, then focus it.
-    assert (session, ["send-keys", "-t", target, "-l", f"claude --resume {UUID_A}"]) in tmux_spy["runs"]
+    resume_keys = (session, ["send-keys", "-t", target, "-l", f"claude --resume {UUID_A}"])
+    assert resume_keys in tmux_spy["runs"]
     assert (session, ["send-keys", "-t", target, "Enter"]) in tmux_spy["runs"]
     assert (session, ["select-window", "-t", target]) in tmux_spy["runs"]
 
@@ -522,8 +561,10 @@ def test_open_resumes_subdir_session_into_repo_root(tmp_path, monkeypatch, tmux_
     # But the window's shell starts in the EXACT subdir so `claude --resume` (which
     # is cwd-scoped) can find the session; the repo-root session is created first.
     assert (session, ["new-session", "-d", "-s", session, "-c", str(repo)]) in tmux_spy["runs"]
-    assert (session, ["new-window", "-t", session, "-n", window, "-c", str(sub)]) in tmux_spy["runs"]
-    assert (session, ["send-keys", "-t", target, "-l", f"claude --resume {UUID_A}"]) in tmux_spy["runs"]
+    sub_window = (session, ["new-window", "-t", session, "-n", window, "-c", str(sub)])
+    assert sub_window in tmux_spy["runs"]
+    resume_keys = (session, ["send-keys", "-t", target, "-l", f"claude --resume {UUID_A}"])
+    assert resume_keys in tmux_spy["runs"]
     # Persisted under the repo-root session name.
     assert tmux_spy["created"][0]["session_name"] == "myrepo"
     assert tmux_spy["created"][0]["working_directory"] == str(repo)
@@ -604,8 +645,10 @@ def test_open_same_session_distinct_windows_for_same_dir(tmp_path, monkeypatch, 
 
     assert a["session_name"] == b["session_name"] == "work"  # same dir session
     assert a["window"] != b["window"]  # distinct windows
-    assert a["window"] == f"cl-{UUID_A.replace('-', '')[:6]}"
-    assert b["window"] == f"cl-{UUID_B.replace('-', '')[:6]}"
+    # slug of title "Work Session"
+    assert a["window"] == f"cl-work-sessi-{UUID_A.replace('-', '')[:4]}"
+    # slug of title "two" (first-prompt fallback)
+    assert b["window"] == f"cl-two-{UUID_B.replace('-', '')[:4]}"
 
 
 def test_open_reselects_existing_window(tmp_path, monkeypatch, tmux_spy):

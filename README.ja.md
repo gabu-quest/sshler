@@ -111,6 +111,12 @@ sshler serve
 - **正直なパーセンテージ** - 表示パーセントは**切り捨て**です。3300 ステップのビルドで 3299/3300 なら 99% と表示され、実際に完了するまで誤解を招く 100% にはなりません。
 - **ライブ更新** - WebSocket (`/ws/progress`) が接続中の全タブに upsert/delete イベントをファンアウト。複数マシン？スマホでも `/app/progress` を開けます。
 
+**ローカル HTML 成果物**
+- **生成 HTML を一か所で管理** - 単一ページ、静的サイト、再帰的に検出する HTML コレクションを、必須のプロジェクトと任意のネストしたグループに登録できます。
+- **エージェントやスクリプト向け CLI** - `sshler artifact add ./report.html --project demo --group reports` で完成した出力を登録し、list、show、update、rescan、open、remove で管理できます。
+- **安全なローカル表示** - HTML は厳密なパス制約と CORS 許可なしの別ループバックオリジンから配信されます。インライン JavaScript を使ってもメイン API への権限は得られません。
+- **非破壊の整理** - ゴミ箱操作と CLI の remove はカタログ情報だけを解除し、元のファイルやディレクトリは変更しません。
+
 **🤖 Claude セッションダッシュボード**
 - **`/app/claude` — Claude Code セッションの再開** - このマシン上で再開可能な [Claude Code](https://claude.ai/code) の会話（`~/.claude/projects/*/*.jsonl` から読み取り）を一覧表示し、ワンクリックでブラウザ内ターミナルに再開します。タイトルは Claude Code の `/resume` ピッカーと同じ規則です（`/rename` で付けた名前 → AI 生成タイトル → 最初のプロンプトの順）。
 - **Git リポジトリ単位でグループ化・折りたたみ可能** - セッションはリポジトリのルート単位でグループ化されます（`repo/subdir` で実行した会話も `/resume` と同様に `repo` の下に表示）。各グループは折りたたみ可能で、アプリの他の場所と同じディレクトリ絵文字が付きます。初期状態は折りたたみで、フィルタ入力で該当グループが自動展開され、「すべて展開／すべて折りたたむ」ボタンもあります。
@@ -234,6 +240,30 @@ sshler progress delete build
 購読は**ホストごと**です。ホスト（ファイル／ターミナル）を開いてから、ヘッダーストリップの `+` ボタン、または `/app/progress` で監視したいバーを購読してください。ホストごとに購読セットが記憶されるので、`sshler` と `maintenance` で異なるバーを表示できます。ヘッダー下の細いストリップが、アクティブなホストの購読済みバーを全ページで表示します。
 
 エラー時に `trap` → `--status failed` するデモループは `examples/progress-bar-build-watcher.sh` を参照。
+
+### 生成 HTML を登録する
+
+sshler を起動し、ワークスペース内に HTML を作成してパスを登録します：
+
+```bash
+# 単一の自己完結ページ
+sshler artifact add ./report.html --project demo --group reports
+
+# アセットを含む静的サイト
+sshler artifact add ./site --project demo --group prototypes --mode site --entry index.html
+
+# HTML ページを再帰的に検出
+sshler artifact add ./reports --project demo --group runs --discover
+
+sshler artifact find "quarterly summary" --project demo
+sshler artifact list --project demo
+sshler artifact open <id>
+sshler artifact remove <id>
+```
+
+`/app/artifacts` では検索と絞り込みができ、成果物の行全体をクリックしてページ一覧を開閉できます。固定リンクは `/r/<project-slug>/<artifact-slug>/` を使用し、既存のルート相対リンクは `artifact add --mount <path>` で維持できます。HTML を開く・プレビューするにはループバックアドレスが必要です。`remove` は必ず元のファイルを残します。
+
+設計とセキュリティモデルは [`ROADMAP-ARTIFACTS.md`](ROADMAP-ARTIFACTS.md) を参照してください。
 
 ### キーショートカット
 
@@ -379,7 +409,10 @@ SSHLER_COOKIE_SECURE=false  # localhost 開発専用！
    # /etc/caddy/Caddyfile または ~/Caddyfile
 
    sshler.company.internal {
-       reverse_proxy localhost:8822
+       reverse_proxy localhost:8822 {
+           # クライアントが送った X-Real-IP を上書き（SSHLER_TRUST_PROXY_HEADERS 参照）
+           header_up X-Real-IP {remote_host}
+       }
    }
    ```
 
@@ -390,6 +423,10 @@ SSHLER_COOKIE_SECURE=false  # localhost 開発専用！
    SSHLER_PORT=8822
    SSHLER_PUBLIC_URL=https://sshler.company.internal
    SSHLER_COOKIE_SECURE=true  # HTTPS 必須
+   # Caddy が X-Real-IP を上書きする（上記 header_up）ので、レート制限と
+   # ログインロックアウトにその値を使ってよい。同じホストのプロキシが X-Real-IP を
+   # 上書きしない構成では設定しないこと（接続元アドレスが使われる）。
+   SSHLER_TRUST_PROXY_HEADERS=true
    ```
 
 4. Caddy を起動：
@@ -499,6 +536,11 @@ server {
     }
 }
 ```
+
+`proxy_set_header X-Real-IP $remote_addr` はクライアントが送った `X-Real-IP` を上書きするので、
+この設定では `SSHLER_TRUST_PROXY_HEADERS=true` を設定してください。この設定がないと sshler は
+`X-Real-IP` を無視し、レート制限とログインロックアウトを接続元アドレス（プロキシの背後では
+プロキシのアドレス）で数えます。
 
 **Traefik:**
 
@@ -631,12 +673,13 @@ systemctl --user enable --now sshler.service
 - `docs/skills/markdown-preview/SKILL.md` — 何がレンダリングされ、何がされないか、そして印刷／PDF パイプラインの癖。
 - `docs/skills/progress-bars/SKILL.md` — プッシュプロトコル、WebSocket ファンアウト、ホストごとの購読モデル。
 - `docs/skills/diff-notebook/SKILL.md` — マルチセルの差分ワークスペース：コマンドパーサー、base64 URL 状態、サーバー側の永続化、「新しいバックエンドを作らない」という設計判断。
+- `docs/skills/artifacts/SKILL.md` — 現在のワークスペースで HTML を作成し、配信モードを選んでカタログへ登録する手順。
 
 Claude はこれらを自動では検出しません。リポジトリ内には存在しますが、Claude Code ランタイムには登録されていないためです。よく使われる方法は、**グローバルスキルディレクトリ（通常は `~/.claude/skills/`）へシンボリックリンクを張る**ことです。こうすると、このマシン上のどの Claude Code セッションからでも名前で読み込めるようになります：
 
 ```bash
 # マシンごとに一度だけセットアップ
-for skill in markdown-preview progress-bars diff-notebook; do
+for skill in markdown-preview progress-bars diff-notebook artifacts; do
   mkdir -p ~/.claude/skills/sshler-$skill
   ln -sf "$PWD/docs/skills/$skill/SKILL.md" ~/.claude/skills/sshler-$skill/SKILL.md
 done

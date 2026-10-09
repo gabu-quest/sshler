@@ -1,19 +1,18 @@
 """Tests for SSH connection fail cache and SSE auth."""
 
-import os
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 
-from sshler.webapp import ServerSettings, make_app
 from sshler.api.dependencies import _CONNECT_FAIL_CACHE, _CONNECT_FAIL_COOLDOWN, APIDependencies
-
+from sshler.webapp import ServerSettings, make_app
 
 TEST_TOKEN = "test-sse-token"
 
 
-def build_client(tmp_path: Path):
+def build_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fastapi.testclient import TestClient
 
     config_dir = tmp_path / "config"
@@ -21,7 +20,7 @@ def build_client(tmp_path: Path):
     (config_dir / "boxes.yaml").write_text(
         yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
     )
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
@@ -32,17 +31,17 @@ def auth_headers() -> dict[str, str]:
 # --- SSE Auth Tests (non-streaming, just check 403 vs 200) ---
 
 
-def test_stats_stream_requires_auth(tmp_path):
+def test_stats_stream_requires_auth(tmp_path, monkeypatch):
     """SSE endpoint rejects requests without token."""
-    client = build_client(tmp_path)
+    client = build_client(tmp_path, monkeypatch)
     # Non-streaming GET — FastAPI returns 403 before opening the stream
     resp = client.get("/api/v1/boxes/stats/stream")
     assert resp.status_code == 403
 
 
-def test_stats_stream_wrong_token_rejected(tmp_path):
+def test_stats_stream_wrong_token_rejected(tmp_path, monkeypatch):
     """SSE endpoint rejects wrong token."""
-    client = build_client(tmp_path)
+    client = build_client(tmp_path, monkeypatch)
     resp = client.get("/api/v1/boxes/stats/stream?token=wrong-token")
     assert resp.status_code == 403
 

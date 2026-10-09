@@ -93,8 +93,9 @@ const removePane = (paneId: string) => {
 
   // Set new active pane
   if (activePane.value === paneId) {
-    if (panes.value.length > 0) {
-      setActivePane(panes.value[Math.max(0, index - 1)].id)
+    const next = panes.value[Math.max(0, index - 1)]
+    if (next) {
+      setActivePane(next.id)
     } else {
       activePane.value = null
       clearSavedLayout()
@@ -259,8 +260,7 @@ const clearSavedLayout = () => {
 
 const restoreLayout = (saved: SavedLayout) => {
   // Remove all current panes
-  while (panes.value.length > 0) {
-    const pane = panes.value[0]
+  for (let pane = panes.value[0]; pane; pane = panes.value[0]) {
     const terminalRef = terminalRefs.value[pane.id]
     if (terminalRef) {
       terminalRef.disconnect()

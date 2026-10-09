@@ -8,13 +8,15 @@ import logging
 import os
 import secrets
 import shlex
+import signal
+import struct
 import subprocess
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import IO, Any, cast
 
 import asyncssh
 from fastapi import (
@@ -24,32 +26,33 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse, Response
+from starlette.websockets import WebSocketState
 
-from . import __version__, state
+from . import state
 from .api import APIDependencies, create_api_router
-from .api.auth import create_auth_router
-from .auth import AuthManager, PasswordHasher, PasswordValidator, PasswordPolicy
-from .session import get_session_store
-from .settings import get_settings as get_app_settings
+from .api.auth import create_auth_router, get_client_ip
 from .api.helpers import (
     DEFAULT_MAX_UPLOAD_BYTES,
     LOCAL_IS_WINDOWS,
-    available_windows_shells,
-    default_windows_shell,
     _local_is_directory,
     _normalize_directory_path,
     _normalize_local_path,
+    available_windows_shells,
+    default_windows_shell,
 )
+from .auth import AuthManager, PasswordHasher, PasswordPolicy, PasswordValidator
 from .config import (
     AppConfig,
     Box,
     find_box,
     load_config,
 )
+from .rate_limit import get_rate_limiter
+from .session import get_session_store
+from .settings import get_settings as get_app_settings
 from .spa import mount_spa
 from .ssh import (
     connect,
@@ -62,11 +65,11 @@ from .tmux import (
     _run_local_tmux_command,
     local_tmux_command,
     record_ts_history,
+    run_local_tmux,
 )
-from .winpty_proc import WinPTYProcess, WinPTYUnavailableError
-from .win_terminal_registry import TooManyTerminalsError, WindowsTerminalRegistry
 from .validation import PathValidator, ValidationError
-from .rate_limit import get_rate_limiter
+from .win_terminal_registry import TooManyTerminalsError, WindowsTerminalRegistry
+from .winpty_proc import WinPTYProcess, WinPTYUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +117,8 @@ class AuthFailureTracker:
         if len(self._failures[client_ip]) >= self._lockout_threshold:
             self._lockouts[client_ip] = now + self._lockout_duration
             logging.warning(
-                f"[Security] IP {client_ip} locked out after {len(self._failures[client_ip])} failed auth attempts"
+                f"[Security] IP {client_ip} locked out after "
+                f"{len(self._failures[client_ip])} failed auth attempts"
             )
 
     def is_locked_out(self, client_ip: str) -> bool:
@@ -231,6 +235,9 @@ class ServerSettings:
     basic_auth_header: str | None = field(init=False, default=None)
     auth_manager: AuthManager | None = field(init=False, default=None)
     serve_spa: bool = True
+    serve_artifacts: bool = False
+    artifact_port: int = 0
+    artifact_server_port_actual: int | None = field(init=False, default=None)
     snapshot_enabled: bool = field(default_factory=lambda: get_app_settings().snapshot_enabled)
     snapshot_interval: int = field(default_factory=lambda: get_app_settings().snapshot_interval)
 
@@ -302,11 +309,7 @@ async def _convert_path_to_wsl(path: str) -> str | None:
     return await asyncio.to_thread(_worker)
 
 
-# Import PTY-related modules for local terminal resize (Unix-only)
-import signal
-import struct
-from typing import IO
-
+# PTY-related modules for local terminal resize (Unix-only)
 if sys.platform != "win32":
     import fcntl
     import pty
@@ -315,62 +318,200 @@ if sys.platform != "win32":
 
 class LocalPTYProcess:
     """Wrapper for a local PTY process with resize support.
-    
+
     This class manages a process running in a pseudo-terminal, allowing
     proper terminal resize via ioctl TIOCSWINSZ + SIGWINCH.
+
+    Two lifecycle rules keep teardown from touching a recycled number:
+
+    * The master fd is closed only after every in-flight ``read``/``write`` has
+      returned, so a thread blocked on the PTY never reads or writes whatever
+      the kernel later assigns that fd number.
+    * Reaping has one owner, ``_reap_lock``: every ``waitpid`` and every signal
+      runs under it, and nothing is signalled once the pid is reaped. A zombie's
+      pid cannot be reused, so a signal sent under the lock before reaping
+      always reaches this child.
     """
-    
+
     def __init__(self, master_fd: int, pid: int, stdin: IO[bytes], stdout: IO[bytes]):
         self.master_fd = master_fd
         self.pid = pid
         self.stdin = stdin
         self.stdout = stdout
         self._returncode: int | None = None
-    
+        self._reaped = False
+        self._reap_lock = threading.Lock()
+        self._io_lock = threading.Lock()
+        self._io_in_flight = 0
+        self._closing = False
+        self._fd_closed = False
+        self._reaper_started = False
+
     @property
     def returncode(self) -> int | None:
         return self._returncode
-    
+
     def resize(self, cols: int, rows: int) -> None:
         """Resize the PTY to the given dimensions."""
         if sys.platform == "win32" or self.master_fd < 0:
             return
+        if not self._begin_io():
+            return
         try:
             # Pack rows/cols into winsize struct: rows, cols, xpixel, ypixel
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
-            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)  # type: ignore[name-defined]
+            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
             # Send SIGWINCH to the process group so child processes notice
-            try:
-                os.killpg(os.getpgid(self.pid), signal.SIGWINCH)
-            except (ProcessLookupError, PermissionError):
-                # Process may have exited or we may not have permission
-                try:
-                    os.kill(self.pid, signal.SIGWINCH)
-                except ProcessLookupError:
-                    pass
+            with self._reap_lock:
+                if not self._reaped:
+                    try:
+                        os.killpg(os.getpgid(self.pid), signal.SIGWINCH)
+                    except (ProcessLookupError, PermissionError):
+                        # Process may have exited or we may not have permission
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(self.pid, signal.SIGWINCH)
             logger.debug(f"[PTY] Resized to {cols}x{rows}")
         except Exception as exc:
             logger.warning(f"[PTY] Failed to resize: {exc}")
-    
+        finally:
+            self._end_io()
+
+    def read(self, size: int) -> bytes:
+        """Blocking read from the PTY; returns b"" once the PTY is closing."""
+        if not self._begin_io():
+            return b""
+        try:
+            return self.stdout.read(size) or b""
+        finally:
+            self._end_io()
+
+    def write(self, data: bytes) -> None:
+        """Blocking write to the PTY; dropped once the PTY is closing."""
+        if not self._begin_io():
+            return
+        try:
+            self.stdin.write(data)
+        finally:
+            self._end_io()
+
+    def _begin_io(self) -> bool:
+        with self._io_lock:
+            if self._closing:
+                return False
+            self._io_in_flight += 1
+            return True
+
+    def _end_io(self) -> None:
+        with self._io_lock:
+            self._io_in_flight -= 1
+            if self._closing and self._io_in_flight == 0:
+                self._close_fd_locked()
+
+    def _close_fd_locked(self) -> None:
+        if self._fd_closed:
+            return
+        self._fd_closed = True
+        with contextlib.suppress(OSError):
+            os.close(self.master_fd)
+
     async def wait(self) -> int:
         """Wait for the process to exit."""
-        _, status = await asyncio.to_thread(os.waitpid, self.pid, 0)
-        self._returncode = os.waitstatus_to_exitcode(status)
-        return self._returncode
-    
+        return await asyncio.to_thread(self._wait_blocking)
+
+    def _wait_blocking(self) -> int:
+        if not self._reaped:
+            waitid = getattr(os, "waitid", None)
+            if waitid is not None:
+                # Block until it exits without reaping, so the reap stays under the lock.
+                with contextlib.suppress(ChildProcessError):
+                    waitid(os.P_PID, self.pid, os.WEXITED | os.WNOWAIT)
+                self._try_reap(blocking=True)
+            else:
+                # No os.waitid (macOS before Python 3.13): poll, reaping under the lock.
+                while not self._try_reap(blocking=False):
+                    time.sleep(PTY_REAP_POLL_INTERVAL)
+        # Reaped elsewhere without a status (never by this class): not recoverable.
+        return self._returncode if self._returncode is not None else -1
+
+    def _try_reap(self, *, blocking: bool) -> bool:
+        """Reap the child if it has exited; True once it is reaped."""
+        with self._reap_lock:
+            if self._reaped:
+                return True
+            try:
+                pid, status = os.waitpid(self.pid, 0 if blocking else os.WNOHANG)
+            except ChildProcessError:
+                self._reaped = True
+                return True
+            if pid:
+                self._reaped = True
+                self._returncode = os.waitstatus_to_exitcode(status)
+            return self._reaped
+
+    def _signal(self, sig: int) -> None:
+        """Send *sig* unless the child is already reaped (its pid may be reused)."""
+        with self._reap_lock:
+            if self._reaped:
+                return
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(self.pid, sig)
+
     def terminate(self) -> None:
         """Terminate the process."""
-        try:
-            os.kill(self.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    
+        self._signal(signal.SIGTERM)
+
+    def hangup(self) -> None:
+        """Send SIGHUP, as a closing terminal would.
+
+        A tmux client detaches and exits (the session keeps running in its
+        server), which also ends any read blocked on the PTY. Closing the master
+        fd alone does not do this while a reader thread still holds it open.
+        """
+        self._signal(signal.SIGHUP)
+
     def close(self) -> None:
-        """Close the PTY file descriptors."""
-        try:
-            os.close(self.master_fd)
-        except OSError:
-            pass
+        """Hang up the client, close the PTY and reap the child (no zombies).
+
+        The fd closes now if no read or write is in flight, otherwise when the
+        last one returns (the hangup ends a blocked read).
+        """
+        self.hangup()
+        with self._io_lock:
+            self._closing = True
+            if self._io_in_flight == 0:
+                self._close_fd_locked()
+        self._reap()
+
+    def _reap(self) -> None:
+        if self._try_reap(blocking=False):
+            return
+        with self._reap_lock:
+            if self._reaper_started:
+                return
+            self._reaper_started = True
+        threading.Thread(
+            target=_reap_pty_child, args=(self,), name=f"pty-reaper-{self.pid}", daemon=True
+        ).start()
+
+
+# How long a hung-up PTY child gets to exit before the reaper sends SIGKILL.
+PTY_HANGUP_GRACE = 2.0
+# How often a reap without os.waitid polls the child.
+PTY_REAP_POLL_INTERVAL = 0.02
+
+
+def _reap_pty_child(process: LocalPTYProcess, grace: float | None = None) -> None:
+    """Reap a hung-up PTY child, escalating to SIGKILL if it ignores SIGHUP.
+
+    Killing a tmux *client* never kills its session, which lives in the server.
+    """
+    deadline = time.monotonic() + (PTY_HANGUP_GRACE if grace is None else grace)
+    while time.monotonic() < deadline:
+        if process._try_reap(blocking=False):
+            return
+        time.sleep(0.05)
+    process._signal(signal.SIGKILL)
+    process._wait_blocking()
 
 
 async def _open_local_pty_tmux(
@@ -378,7 +519,7 @@ async def _open_local_pty_tmux(
     session: str,
     cols: int = 80,
     rows: int = 24,
-) -> "LocalPTYProcess | asyncio.subprocess.Process":
+) -> LocalPTYProcess | asyncio.subprocess.Process:
     """Open a local tmux session using a real PTY for proper resize support.
 
     On Windows, falls back to the WSL-based subprocess path since pty/fcntl
@@ -393,17 +534,17 @@ async def _open_local_pty_tmux(
 
     def _spawn_pty() -> tuple[int, int]:
         """Spawn the process in a PTY (runs in thread)."""
-        master_fd, slave_fd = pty.openpty()  # type: ignore[name-defined]
+        master_fd, slave_fd = pty.openpty()
 
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)  # type: ignore[name-defined]
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
         pid = os.fork()
         if pid == 0:
             # Child process
             os.close(master_fd)
             os.setsid()
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)  # type: ignore[name-defined]
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
             os.dup2(slave_fd, 0)
             os.dup2(slave_fd, 1)
             os.dup2(slave_fd, 2)
@@ -458,14 +599,14 @@ async def _open_windows_shell(
     working_directory: str,
     cols: int = 80,
     rows: int = 24,
-) -> "WinPTYProcess":
+) -> WinPTYProcess:
     """Spawn a native Windows shell in a ConPTY for the local box.
 
     *shell_id* is one of the ids from :func:`available_windows_shells`. Spawning
     runs in a thread since pywinpty's spawn is blocking.
     """
     chosen = _resolve_windows_shell(shell_id)
-    argv = [str(a) for a in chosen["argv"]]  # type: ignore[union-attr]
+    argv = [str(a) for a in cast("list[object]", chosen["argv"])]
     cwd = working_directory or None
 
     def _spawn() -> WinPTYProcess:
@@ -531,25 +672,14 @@ async def _open_local_tmux(
 
 
 async def _list_local_tmux_windows(session: str) -> list[dict[str, str | bool]] | None:
-    command = local_tmux_command(session) + [
-        "list-windows",
-        "-F",
-        "#{window_index} #{window_name} #{window_active}",
-        "-t",
-        session,
-    ]
+    args = ["list-windows", "-F", "#{window_index} #{window_name} #{window_active}", "-t", session]
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await process.communicate()
+        returncode, stdout, _ = await run_local_tmux(session, args)
     except Exception as exc:
         logger.debug(f"Failed to list local tmux windows for session {session}: {exc}")
         return None
 
-    if process.returncode != 0:
+    if returncode != 0:
         return None
 
     windows: list[dict[str, str | bool]] = []
@@ -676,6 +806,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         load_config()  # Ensures state DB is initialized
         await initialize_pool()
         app.state.ssh_pool = get_pool()
+        artifact_sidecar = None
+        if settings.serve_artifacts:
+            from .artifacts import ArtifactSidecar
+
+            artifact_sidecar = ArtifactSidecar(settings.artifact_port)
+            settings.artifact_server_port_actual = await asyncio.to_thread(
+                artifact_sidecar.start
+            )
+            app.state.artifact_sidecar = artifact_sidecar
 
         # Detect lost sessions from before crash
         set_recovery_sessions(await reconcile_on_startup())
@@ -685,6 +824,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         if purged > 0:
             logger.info("Purged %d stale snapshot(s) at startup", purged)
 
+        # Pass the live server settings: PUT /snapshot/config mutates them and the
+        # loop re-reads both fields on every tick.
         snapshot_task = asyncio.create_task(snapshot_loop(settings=settings))
 
         # Launch headless chromium for PDF export if playwright is available.
@@ -696,19 +837,23 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         if LOCAL_IS_WINDOWS:
             win_terminal_registry.start_reaper()
 
-        yield
-        # Shutdown: Cancel snapshot loop and cleanup SSH connection pool
-        snapshot_task.cancel()
-        await shutdown_pool()
-        await PDF_RENDERER.stop()
-        await win_terminal_registry.shutdown()
+        try:
+            yield
+        finally:
+            # Shutdown: Cancel snapshot loop and cleanup pools/sidecars.
+            snapshot_task.cancel()
+            if artifact_sidecar is not None:
+                await asyncio.to_thread(artifact_sidecar.stop)
+                settings.artifact_server_port_actual = None
+            await shutdown_pool()
+            await PDF_RENDERER.stop()
+            await win_terminal_registry.shutdown()
 
     # Disable automatic /docs and /redoc endpoints
     application = FastAPI(
         title="sshler", version="0.1.0", docs_url=None, redoc_url=None, lifespan=lifespan
     )
     mount_spa(application, settings.serve_spa)
-    app_version = _compute_app_version()
 
     application.state.settings = settings
     application.state.auth_tracker = AuthFailureTracker()
@@ -725,25 +870,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             allow_headers=["*"]
         )
 
-    def _get_client_ip(request: Request) -> str:
-        """Get client IP, respecting X-Real-IP header from trusted proxies.
-
-        When behind a reverse proxy (Caddy), the actual client IP is forwarded
-        via the X-Real-IP header. We only trust this header when the request
-        comes from localhost (where Caddy runs).
-        """
-        # Trust Caddy's X-Real-IP header if present and request is from localhost
-        if request.client and request.client.host == "127.0.0.1":
-            forwarded_ip = request.headers.get("x-real-ip")
-            if forwarded_ip:
-                return forwarded_ip
-        # Otherwise use direct client IP
-        return request.client.host if request.client else "unknown"
-
     @application.middleware("http")
     async def _security_middleware(request: Request, call_next):
         auth_tracker: AuthFailureTracker = request.app.state.auth_tracker
-        client_ip = _get_client_ip(request)
+        client_ip = get_client_ip(request)
 
         # Check authentication if required
         # Skip auth for health check endpoint (needed for load balancers)
@@ -806,12 +936,18 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        frame_sources = ["'self'"]
+        if settings.artifact_server_port_actual is not None:
+            frame_sources.append(
+                f"http://127.0.0.1:{settings.artifact_server_port_actual}"
+            )
         csp_directives = [
             "default-src 'self'",
             "img-src 'self' data:",
             "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net",
             "script-src 'self' https://unpkg.com https://cdn.jsdelivr.net",
             "connect-src 'self' https://unpkg.com",
+            f"frame-src {' '.join(frame_sources)}",
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
 
@@ -852,13 +988,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             return await call_next(request)
 
         # Get client identifier (IP address, respecting X-Real-IP from trusted proxies)
-        client_ip = _get_client_ip(request)
+        client_ip = get_client_ip(request)
 
-        # Different rate limits for different endpoint types
-        if request.url.path.startswith("/ws/"):
-            # WebSocket connections: 10 per minute
-            limiter = get_rate_limiter("websocket", rate=10, per=60)
-        elif request.method == "POST":
+        # Different rate limits for different endpoint types. WebSocket upgrades
+        # never reach an http middleware, so they are not rate limited here.
+        if request.method == "POST":
             # POST requests: 120 per minute
             limiter = get_rate_limiter("post", rate=120, per=60)
         else:
@@ -900,9 +1034,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 origin_base = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
 
                 # Check if origin matches public_url or is in allowed_origins
-                # Include both env-based origins (SshlerSettings) and CLI-based origins (ServerSettings)
+                # Include both env-based origins (SshlerSettings) and CLI-based origins
+                # (ServerSettings)
                 cli_settings: ServerSettings = request.app.state.settings
-                allowed_origins = list(cli_settings.allow_origins) + app_settings.allowed_origins_list
+                allowed_origins = (
+                    list(cli_settings.allow_origins) + app_settings.allowed_origins_list
+                )
 
                 # Add public_url-derived origin if set
                 if app_settings.public_url:
@@ -988,13 +1125,22 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         transport = "ssh"
         client_host = "unknown"
         connection: asyncssh.SSHClientConnection | None = None
-        process: asyncssh.SSHClientProcess | LocalPTYProcess | WinPTYProcess | asyncio.subprocess.Process | None = None
+        process: (
+            asyncssh.SSHClientProcess
+            | LocalPTYProcess
+            | WinPTYProcess
+            | asyncio.subprocess.Process
+            | None
+        ) = None
         session_id: str | None = None
         # Native-Windows persistence: the registry owns the ConPTY lifecycle; the
         # handler attaches/detaches a sink instead of spawning/terminating.
         win_registry: WindowsTerminalRegistry | None = None
         win_session: Any = None
         win_sink: Any = None
+        # Fire-and-forget tmux setup tasks. Held here so they are not garbage
+        # collected mid-flight and so teardown can cancel them.
+        background_tasks: set[asyncio.Task[None]] = set()
 
         try:
             # Sanitize session name to prevent command injection
@@ -1143,19 +1289,27 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         return
                 else:
                     logger.info(
-                        f"[Connection] Starting local tmux: dir={normalized_directory}, session={session}"
+                        f"[Connection] Starting local tmux: dir={normalized_directory}, "
+                        f"session={session}"
                     )
 
                     try:
                         # Use PTY-based local terminal for proper resize support
                         process = await _open_local_pty_tmux(normalized_directory, session)
-                        logger.info(f"[Connection] Local PTY tmux process started successfully")
-                        # Make Ctrl+B c inherit the current pane's directory
-                        asyncio.ensure_future(_configure_tmux_bindings(session))
-                        # Record in ts history so the session appears in ts's fzf picker
-                        asyncio.ensure_future(record_ts_history(session, normalized_directory))
+                        logger.info("[Connection] Local PTY tmux process started successfully")
+                        # Make Ctrl+B c inherit the current pane's directory, and
+                        # record ts history so the session appears in ts's fzf picker.
+                        for setup in (
+                            _configure_tmux_bindings(session),
+                            record_ts_history(session, normalized_directory),
+                        ):
+                            task = asyncio.create_task(setup)
+                            background_tasks.add(task)
+                            task.add_done_callback(background_tasks.discard)
                     except Exception as exc:
-                        logger.error(f"[Connection] Failed to start local tmux: {exc}", exc_info=True)
+                        logger.error(
+                            f"[Connection] Failed to start local tmux: {exc}", exc_info=True
+                        )
                         error_msg = f"Connection failed: {exc}\r\n"
                         try:
                             await websocket.send_text(error_msg)
@@ -1178,7 +1332,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         application_config.ssh_config_path,
                         box.ssh_alias,
                     )
-                    logger.info(f"[Connection] SSH connection established successfully")
+                    logger.info("[Connection] SSH connection established successfully")
                 except Exception as exc:  # pragma: no cover
                     # network errors are environment specific
                     logger.error(f"[Connection] SSH connection failed: {exc}", exc_info=True)
@@ -1191,7 +1345,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     if not is_directory:
                         normalized_directory = box.default_dir or f"/home/{box.user}"
                 except Exception as exc:
-                    logger.debug(f"Failed to check if remote directory exists (using default): {exc}")
+                    logger.debug(
+                        f"Failed to check if remote directory exists (using default): {exc}"
+                    )
 
                 process = await open_tmux(
                     connection,
@@ -1231,7 +1387,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                                 if win_session is not None and win_registry is not None:
                                     await win_registry.write(win_session, bytes_value)
                             elif isinstance(process, LocalPTYProcess):
-                                await asyncio.to_thread(process.stdin.write, bytes_value)
+                                await asyncio.to_thread(process.write, bytes_value)
                             elif isinstance(process, asyncio.subprocess.Process):
                                 # Old script-based local process (deprecated)
                                 process.stdin.write(bytes_value)
@@ -1245,7 +1401,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 initial_message = await asyncio.wait_for(websocket.receive(), timeout=0.05)
                 if not await _process_message(dict(initial_message)):
                     return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             except WebSocketDisconnect:
                 return
@@ -1274,17 +1430,28 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
             async def reader() -> None:
                 logger.info("Reader task started")
+                # A local name so isinstance narrows it (`process` is reassigned
+                # in the enclosing handler, so mypy cannot narrow the closure).
+                proc = process
                 try:
-                    if process is None or process.stdout is None:
-                        logger.error("Reader: process or stdout is None")
+                    if proc is None:
+                        logger.error("Reader: process is None")
                         return
                     while True:
                         logger.debug("Reader: waiting for stdout data...")
-                        # LocalPTYProcess / WinPTYProcess use sync reads in a thread
-                        if isinstance(process, (LocalPTYProcess, WinPTYProcess)):
-                            data = await asyncio.to_thread(process.stdout.read, 32768)
+                        # LocalPTYProcess / WinPTYProcess use sync reads in a thread.
+                        # LocalPTYProcess.read keeps the fd open until it returns,
+                        # even if this task is cancelled while the read is queued.
+                        data: bytes | str
+                        if isinstance(proc, LocalPTYProcess):
+                            data = await asyncio.to_thread(proc.read, 32768)
+                        elif isinstance(proc, WinPTYProcess):
+                            data = await asyncio.to_thread(proc.stdout.read, 32768)
                         else:
-                            data = await process.stdout.read(32768)
+                            if proc.stdout is None:
+                                logger.error("Reader: process stdout is None")
+                                return
+                            data = await proc.stdout.read(32768)
                         if not data:
                             logger.info("Reader: got empty data, ending")
                             break
@@ -1379,7 +1546,12 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
             # For native Windows shells, attach a sink to the persisted session
             # and replay its buffer (clear + ring snapshot) before going live.
-            if isinstance(process, WinPTYProcess) and win_session is not None and win_registry is not None:
+            if (
+                isinstance(process, WinPTYProcess)
+                and win_session is not None
+                and win_registry is not None
+            ):
+
                 async def _win_sink(chunk: bytes) -> None:
                     if websocket.client_state == WebSocketState.CONNECTED:
                         await websocket.send_bytes(chunk)
@@ -1411,7 +1583,21 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         with contextlib.suppress(Exception):
                             task.result()
                 else:
-                    await asyncio.gather(reader(), writer())
+                    # The session ends when the client goes away. Output ending
+                    # first (the tmux session exited) keeps waiting for the
+                    # client, as before.
+                    reader_task = asyncio.create_task(reader())
+                    writer_task = asyncio.create_task(writer())
+                    try:
+                        await writer_task
+                    finally:
+                        # A local PTY read blocked in its thread ends when
+                        # LocalPTYProcess.close() hangs up the client below.
+                        for task in (writer_task, reader_task):
+                            task.cancel()
+                        for task in (writer_task, reader_task):
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await task
             finally:
                 poller.cancel()
                 pinger.cancel()
@@ -1430,6 +1616,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     except Exception as exc:
                         logger.warning(f"Failed to mark session inactive: {exc}")
         finally:
+            for task in background_tasks:
+                task.cancel()
             try:
                 if process:
                     if transport == "local":
@@ -1462,10 +1650,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         # runs only for non-local (SSH) transport, where `process`
                         # is an asyncssh process — no isinstance guard needed (one
                         # would wrongly skip cleanup for test/fake SSH processes).
-                        if process.stdin is not None:
-                            process.stdin.write_eof()
-                        if hasattr(process, "close"):
-                            process.close()
+                        ssh_process = cast(asyncssh.SSHClientProcess, process)
+                        if ssh_process.stdin is not None:
+                            ssh_process.stdin.write_eof()
+                        if hasattr(ssh_process, "close"):
+                            ssh_process.close()
             except Exception as exc:
                 logger.debug(f"Error during process cleanup: {exc}")
             try:
@@ -1604,24 +1793,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     return application
 
 
-def _compute_app_version() -> str:
-    parts: list[str] = [__version__]
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        git_hash = result.stdout.strip()
-        if git_hash:
-            parts.append(f"({git_hash})")
-    except Exception as exc:
-        # Git hash retrieval is best-effort for version display
-        logger.debug(f"Failed to get git hash for version display: {exc}")
-    return " ".join(part for part in parts if part)
-
-
 async def _handle_control_message(
     payload: str,
     process,
@@ -1652,8 +1823,13 @@ async def _handle_control_message(
                 else:
                     # Fallback for old script-based process (shouldn't happen)
                     try:
-                        await _run_local_tmux_command(session, ["refresh-client", "-C", f"{cols}x{rows}"])
-                        await _run_local_tmux_command(session, ["resize-window", "-t", session, "-x", str(cols), "-y", str(rows)])
+                        await _run_local_tmux_command(
+                            session, ["refresh-client", "-C", f"{cols}x{rows}"]
+                        )
+                        await _run_local_tmux_command(
+                            session,
+                            ["resize-window", "-t", session, "-x", str(cols), "-y", str(rows)],
+                        )
                         logger.info(f"[Resize] Local tmux resized to {cols}x{rows}")
                     except Exception as exc:
                         logger.debug(f"Failed to resize local tmux: {exc}")
@@ -1670,7 +1846,9 @@ async def _handle_control_message(
             if isinstance(process, WinPTYProcess):
                 pass  # Native Windows shell has no tmux windows.
             elif transport == "local":
-                await _run_local_tmux_command(session, ["select-window", "-t", f"{session}:{target}"])
+                await _run_local_tmux_command(
+                    session, ["select-window", "-t", f"{session}:{target}"]
+                )
             elif connection is not None:
                 try:
                     await connection.run(
@@ -1683,7 +1861,10 @@ async def _handle_control_message(
         data = message.get("data")
         if data:
             try:
-                process.stdin.write(data.encode())
+                if isinstance(process, LocalPTYProcess):
+                    process.write(data.encode())
+                else:
+                    process.stdin.write(data.encode())
             except Exception as exc:
                 logger.debug(f"Failed to send data to process: {exc}")
     elif operation == "rename-window":
@@ -1692,7 +1873,9 @@ async def _handle_control_message(
             if isinstance(process, WinPTYProcess):
                 pass  # Native Windows shell has no tmux windows.
             elif transport == "local":
-                await _run_local_tmux_command(session, ["rename-window", "-t", session, str(new_name)])
+                await _run_local_tmux_command(
+                    session, ["rename-window", "-t", session, str(new_name)]
+                )
             elif connection is not None:
                 try:
                     rename_command = (
@@ -1719,7 +1902,11 @@ async def _list_tmux_windows(
     if result.returncode != 0 or result.stdout is None:
         return None
 
-    stdout_str = result.stdout if isinstance(result.stdout, str) else result.stdout.decode('utf-8', errors='replace')
+    stdout_str = (
+        result.stdout
+        if isinstance(result.stdout, str)
+        else result.stdout.decode("utf-8", errors="replace")
+    )
     windows: list[dict[str, str | bool]] = []
     for line in stdout_str.splitlines():
         parts = line.split(" ", 2)

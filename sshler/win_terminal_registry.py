@@ -39,8 +39,9 @@ import logging
 import os
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

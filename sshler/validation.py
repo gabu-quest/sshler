@@ -196,8 +196,8 @@ class InputValidator:
         """
         try:
             port_int = int(port)
-        except (ValueError, TypeError):
-            raise ValidationError("Port must be a valid integer")
+        except (ValueError, TypeError) as exc:
+            raise ValidationError("Port must be a valid integer") from exc
 
         if not (1 <= port_int <= 65535):
             raise ValidationError("Port must be between 1 and 65535")
@@ -235,8 +235,8 @@ class InputValidator:
         """
         try:
             limit_int = int(limit)
-        except (ValueError, TypeError):
-            raise ValidationError("Limit must be a valid integer")
+        except (ValueError, TypeError) as exc:
+            raise ValidationError("Limit must be a valid integer") from exc
 
         if limit_int < 1:
             raise ValidationError("Limit must be at least 1")

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from sshler.api.tunnels import _active_tunnels, TunnelInfo
+import pytest
+
+from sshler.api.tunnels import TunnelInfo, _active_tunnels
 
 
 @pytest.fixture(autouse=True)

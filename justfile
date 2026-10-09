@@ -7,12 +7,26 @@ pnpm := "npx pnpm"
 default:
     @just --list
 
-# Run all tests (backend + frontend)
-test: test-backend test-frontend
+# Run every suite (backend unit, frontend, E2E); a failing suite does not stop
+# the others. Prints one line per suite and exits non-zero if any failed.
+# Extra args go to the backend suite, e.g. `just test tests/test_basic.py`.
+test *backend_args:
+    #!/usr/bin/env bash
+    set -u
+    fail=0
+    just test-backend {{backend_args}}; backend=$?
+    just test-frontend; frontend=$?
+    just test-e2e; e2e=$?
+    echo
+    for s in backend frontend e2e; do
+        rc=${!s}
+        if [ "$rc" -eq 0 ]; then echo "$s: pass"; else echo "$s: FAIL (exit $rc)"; fail=1; fi
+    done
+    exit $fail
 
-# Run backend tests
-test-backend:
-    uv run pytest
+# Run backend unit tests (everything except E2E)
+test-backend *args:
+    uv run pytest -m "not e2e" {{args}}
 
 # Run frontend tests
 test-frontend:
@@ -20,6 +34,7 @@ test-frontend:
 
 # Run E2E tests (requires playwright)
 test-e2e:
+    uv run playwright install chromium
     uv run pytest tests/e2e/ -v
 
 # Run mobile responsive E2E tests
@@ -33,8 +48,8 @@ test-mobile:
 check-editable:
     @./scripts/check-editable-install.sh
 
-# Build frontend
-build: check-editable
+# Build frontend (type-checks first; a type error stops the build)
+build: check-editable typecheck-frontend
     {{pnpm}} --prefix frontend run build
 
 # Build frontend and restart sshler.
@@ -51,7 +66,7 @@ deploy: build
 typecheck-backend:
     uv run mypy sshler/
 
-# Type check frontend
+# Type check frontend: vue-tsc over the app, the specs and the vite/vitest configs
 typecheck-frontend:
     {{pnpm}} --prefix frontend run type-check
 
@@ -74,9 +89,19 @@ install-frontend:
 install: install-frontend
     uv sync
 
-# Lint frontend
+# Lint: ruff over sshler/ and tests/, then the frontend type-check (the frontend
+# has no ESLint). Both always run; exits non-zero if either failed.
 lint:
-    {{pnpm}} --prefix frontend run lint
+    #!/usr/bin/env bash
+    set -u
+    uv run ruff check sshler tests; ruff=$?
+    just typecheck-frontend; frontend=$?
+    echo
+    for s in ruff frontend; do
+        rc=${!s}
+        if [ "$rc" -eq 0 ]; then echo "$s: pass"; else echo "$s: FAIL (exit $rc)"; fi
+    done
+    [ "$ruff" -eq 0 ] && [ "$frontend" -eq 0 ]
 
 # Full CI check: build + test + typecheck
 ci: build test typecheck

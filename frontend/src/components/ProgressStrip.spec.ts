@@ -44,8 +44,13 @@ const i18nPlugin = {
   },
 };
 
+// Fixed timestamp: the store orders bars by updated_at (newest first), so a
+// wall-clock `Date.now()` here made the order of same-batch bars depend on
+// whether the millisecond ticked between makeBar() calls (the flake under load).
+const FIXED_NOW = 1_700_000_000;
+
 function makeBar(name: string, overrides: Partial<ProgressBar> = {}): ProgressBar {
-  const now = Date.now() / 1000;
+  const now = FIXED_NOW;
   return {
     name,
     current: 4,
@@ -110,7 +115,15 @@ describe("ProgressStrip", () => {
     const progress = useProgressStore();
     progress._injectEventForTest({
       type: "snapshot",
-      bars: [makeBar("a", { label: "Build A" }), makeBar("b"), makeBar("c")],
+      // Explicit, distinct updated_at: the strip lists newest first, so "a"
+      // (newer) precedes "c". Mutation killed: giving "c" a newer updated_at than
+      // "a" flips the order and fails this test; "b" is unsubscribed and must
+      // not render.
+      bars: [
+        makeBar("a", { label: "Build A", updated_at: FIXED_NOW + 2 }),
+        makeBar("b", { updated_at: FIXED_NOW + 3 }),
+        makeBar("c", { updated_at: FIXED_NOW + 1 }),
+      ],
     });
     progress.subscribe("a");
     progress.subscribe("c");

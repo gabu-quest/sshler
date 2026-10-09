@@ -7,8 +7,15 @@ from __future__ import annotations
 
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Dict
+
+Clock = Callable[[], float]
+
+
+def _system_clock() -> float:
+    """Default clock: `time.time()`, looked up at call time so the module stays patchable."""
+    return time.time()
 
 
 @dataclass
@@ -18,9 +25,10 @@ class Session:
     session_id: str
     user_id: str
     username: str
-    created_at: float = field(default_factory=time.time)
-    last_accessed_at: float = field(default_factory=time.time)
+    created_at: float = field(default_factory=_system_clock)
+    last_accessed_at: float = field(default_factory=_system_clock)
     expires_at: float = field(default=0.0)
+    clock: Clock = field(default=_system_clock, repr=False, compare=False)
 
     def is_expired(self, idle_timeout: int = 0) -> bool:
         """Check if session is expired.
@@ -31,7 +39,7 @@ class Session:
         Returns:
             True if session is expired
         """
-        now = time.time()
+        now = self.clock()
 
         # Check absolute expiration
         if now >= self.expires_at:
@@ -45,7 +53,7 @@ class Session:
 
     def touch(self) -> None:
         """Update last accessed time."""
-        self.last_accessed_at = time.time()
+        self.last_accessed_at = self.clock()
 
 
 class SessionStore:
@@ -73,9 +81,14 @@ class SessionStore:
     See the SessionStore interface below for methods to implement.
     """
 
-    def __init__(self):
-        """Initialize empty session store."""
-        self._sessions: Dict[str, Session] = {}
+    def __init__(self, clock: Clock = _system_clock):
+        """Initialize empty session store.
+
+        Args:
+            clock: Returns the current time in seconds; shared with every session
+        """
+        self._clock = clock
+        self._sessions: dict[str, Session] = {}
 
     def create_session(
         self,
@@ -96,7 +109,7 @@ class SessionStore:
         # Generate cryptographically secure session ID (128 bits = 32 hex chars)
         session_id = secrets.token_hex(16)
 
-        now = time.time()
+        now = self._clock()
         session = Session(
             session_id=session_id,
             user_id=user_id,
@@ -104,6 +117,7 @@ class SessionStore:
             created_at=now,
             last_accessed_at=now,
             expires_at=now + ttl_seconds,
+            clock=self._clock,
         )
 
         self._sessions[session_id] = session

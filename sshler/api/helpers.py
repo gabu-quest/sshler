@@ -183,16 +183,18 @@ def _normalize_local_path(directory: str | None, allowed_base: str | Path | None
             # Python 3.9+
             if not resolved.is_relative_to(allowed_base_resolved):
                 raise ValueError(
-                    f"Path escape detected: {resolved} is outside allowed directory {allowed_base_resolved}"
+                    f"Path escape detected: {resolved} is outside allowed directory "
+                    f"{allowed_base_resolved}"
                 )
         except AttributeError:
             # Python 3.8 fallback
             try:
                 resolved.relative_to(allowed_base_resolved)
-            except ValueError:
+            except ValueError as exc:
                 raise ValueError(
-                    f"Path escape detected: {resolved} is outside allowed directory {allowed_base_resolved}"
-                )
+                    f"Path escape detected: {resolved} is outside allowed directory "
+                    f"{allowed_base_resolved}"
+                ) from exc
 
     if LOCAL_IS_WINDOWS:
         return resolved.as_posix()

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { NButton, NIcon, NSpace, NDrawer, NDrawerContent, NTooltip, NProgress, NSelect } from "naive-ui";
 import {
   PhChartBar,
+  PhGlobe,
   PhColumns,
   PhGitDiff,
   PhRobot,
@@ -14,8 +15,6 @@ import {
   PhMoon,
   PhSun,
   PhTerminal,
-  PhList,
-  PhX,
   PhLockKey,
   PhCpu,
   PhMemory,
@@ -26,7 +25,6 @@ import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { getEmojiForBox } from "@/utils/emoji-favicon";
 import { useBootstrapStore } from "@/stores/bootstrap";
-import { useBoxesStore } from "@/stores/boxes";
 import { useResponsive } from "@/composables/useResponsive";
 import { useI18n, availableLocales } from "@/i18n";
 import type { Locale } from "@/i18n";
@@ -38,8 +36,8 @@ import ShortcutsOverlay from "@/components/ShortcutsOverlay.vue";
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const bootstrapStore = useBootstrapStore();
-const boxesStore = useBoxesStore();
 const route = useRoute();
+const router = useRouter();
 const { isMobile } = useResponsive();
 const { t, locale, setLocale } = useI18n();
 
@@ -57,32 +55,6 @@ const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload
 const lastSnapshotAt = ref<number | null>(null);
 const now = ref(Date.now());
 let snapshotTickInterval: number | null = null;
-const snapshotFreshness = computed(() => {
-  if (!lastSnapshotAt.value) return 0;
-  const elapsed = now.value / 1000 - lastSnapshotAt.value;
-  return Math.max(0, 1 - elapsed / 30);
-});
-const snapshotDotStyle = computed(() => {
-  const f = snapshotFreshness.value;
-  if (f <= 0) {
-    return {
-      background: 'rgba(100, 100, 110, 0.4)',
-      boxShadow: 'none',
-    };
-  }
-  // Bright blue at f=1, fading to grey at f=0
-  const color = `rgba(56, 140, 255, ${f})`;
-  const glowSize = Math.round(4 + 6 * f);
-  return {
-    background: color,
-    boxShadow: `0 0 ${glowSize}px rgba(56, 140, 255, ${f * 0.8})`,
-  };
-});
-const snapshotTooltip = computed(() => {
-  if (!lastSnapshotAt.value) return 'No snapshots yet';
-  const elapsed = Math.floor(Date.now() / 1000 - lastSnapshotAt.value);
-  return `Session snapshot: ${elapsed}s ago`;
-});
 
 async function loadSnapshotStatus() {
   try {
@@ -155,6 +127,7 @@ const links = computed(() => {
     { to: `/terminal${boxQuery}`, label: t("nav.terminal"), icon: PhTerminal, shortcut: "Alt+T" },
     { to: `/multi-terminal${boxQuery}`, label: t("nav.multi_terminal"), icon: PhTerminal, shortcut: "Alt+M" },
     { to: "/progress", label: t("nav.progress"), icon: PhChartBar, shortcut: "Alt+P" },
+    { to: "/artifacts", label: t("nav.artifacts"), icon: PhGlobe, shortcut: "Alt+A" },
     { to: "/claude", label: t("nav.claude"), icon: PhRobot, shortcut: "Alt+L" },
     { to: "/diff", label: t("nav.diff"), icon: PhGitDiff, shortcut: "Alt+D" },
     { to: "/settings", label: t("nav.settings"), icon: PhGearSix, shortcut: "Alt+S" },
@@ -172,7 +145,7 @@ const themeLabel = computed(() => {
 });
 
 const isActive = (path: string) => {
-  const basePath = path.split('?')[0];
+  const basePath = path.split('?')[0] ?? path;
   if (basePath === "/") {
     return route.path === "/";
   }
@@ -181,10 +154,6 @@ const isActive = (path: string) => {
 
 const toggleTheme = () => {
   appStore.toggleTheme();
-};
-
-const toggleMobileMenu = () => {
-  isMobileMenuOpen.value = !isMobileMenuOpen.value;
 };
 
 const closeMobileMenu = () => {
@@ -196,29 +165,28 @@ watch(isMobile, (mobile) => {
   if (!mobile) isMobileMenuOpen.value = false;
 });
 
-// Handle keyboard shortcuts
-const handleKeydown = (event: KeyboardEvent) => {
-  if (event.altKey) {
-    const boxQuery = buildBoxQuery();
-    const shortcutMap: Record<string, string> = {
-      'h': '/',
-      'b': '/boxes',
-      'f': `/files${boxQuery}`,
-      'c': `/commander${boxQuery}`,
-      't': `/terminal${boxQuery}`,
-      'm': `/multi-terminal${boxQuery}`,
-      'l': '/claude',
-      'd': '/diff',
-      's': '/settings',
-    };
+// Don't hijack Alt+letter shortcuts while the user is typing (input/textarea/
+// contenteditable, including xterm.js's internal textarea) — otherwise a key
+// meant for the current field yanks the user out of it mid-keystroke.
+function isTypingTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
 
-    const path = shortcutMap[event.key.toLowerCase()];
-    if (path) {
+// Handle keyboard shortcuts. `links` (above) is the single source of truth
+// for the Alt+letter shortcut table — the letter is derived from each link's
+// `shortcut` field ("Alt+H" -> "h"), so this map can never drift out of sync
+// with what's rendered in the nav (or with ShortcutsOverlay, which reads the
+// same `links` array via prop).
+const handleKeydown = (event: KeyboardEvent) => {
+  if (isTypingTarget(event.target)) return;
+  if (event.altKey) {
+    const key = event.key.toLowerCase();
+    const link = links.value.find((l) => l.shortcut.toLowerCase() === `alt+${key}`);
+    if (link) {
       event.preventDefault();
-      const router = useRoute().matched[0]?.instances?.default?.$router;
-      if (router) {
-        router.push(path);
-      }
+      router.push(link.to);
     }
   }
 };
@@ -386,7 +354,7 @@ onUnmounted(() => {
           </NIcon>
         </NButton>
         <CommandPalette />
-        <ShortcutsOverlay />
+        <ShortcutsOverlay :links="links" />
       </NSpace>
     </div>
 

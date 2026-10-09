@@ -17,6 +17,7 @@ from ..config import AppConfig
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
+from .files import _remote_path
 from .helpers import _local_read_bytes, _read_file_bytes
 
 MAX_ROWS = 2000
@@ -103,7 +104,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             try:
                 validated = PathValidator.validate_local_path(path)
             except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             data, too_large = await _local_read_bytes(validated, MAX_FILE_BYTES)
             if too_large:
@@ -112,16 +113,22 @@ def get_router(deps: APIDependencies) -> APIRouter:
             try:
                 validated = PathValidator.validate_remote_path(path)
             except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
+                    # SFTP does not expand `~`: resolve it the way /file does.
+                    validated = await _remote_path(conn, validated)
                     data, too_large = await _read_file_bytes(conn, validated, MAX_FILE_BYTES)
+            except ValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except HTTPException:
+                raise
             except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"SSH error: {exc}")
+                raise HTTPException(status_code=502, detail=f"SSH error: {exc}") from exc
 
             if too_large:
                 return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
@@ -129,7 +136,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             result = await asyncio.to_thread(_parse_workbook, data)
         except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Could not parse workbook: {exc}")
+            raise HTTPException(status_code=422, detail=f"Could not parse workbook: {exc}") from exc
 
         return result
 

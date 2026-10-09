@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import secrets
 import time
@@ -24,6 +25,9 @@ class TunnelInfo:
     remote_host: str
     remote_port: int
     listener: object = field(default=None, repr=False)
+    # The SSH connection the forward runs over; held for the tunnel's
+    # lifetime and closed when the tunnel is deleted.
+    connection: object = field(default=None, repr=False)
     created_at: float = field(default_factory=time.time)
 
 
@@ -74,6 +78,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         tunnel_id = secrets.token_urlsafe(12)
 
+        connection = None
         try:
             connection = await deps.connect_for_box(box, application_config)
 
@@ -92,6 +97,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     dest_port=payload.local_port,
                 )
         except Exception as exc:
+            if connection is not None:
+                with contextlib.suppress(Exception):
+                    connection.close()
             logger.warning(f"Failed to create tunnel for {name}: {exc}", exc_info=True)
             raise HTTPException(status_code=500, detail="Tunnel creation failed") from exc
 
@@ -104,6 +112,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             remote_host=payload.remote_host,
             remote_port=payload.remote_port,
             listener=listener,
+            connection=connection,
         )
         _active_tunnels[tunnel_id] = info
         logger.info(
@@ -130,6 +139,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 info.listener.close()
         except Exception as exc:
             logger.warning(f"Error closing tunnel {tunnel_id}: {exc}")
+        if info.connection is not None:
+            with contextlib.suppress(Exception):
+                info.connection.close()  # type: ignore[attr-defined]
 
         del _active_tunnels[tunnel_id]
         logger.info(f"Tunnel {tunnel_id} closed for {name}")

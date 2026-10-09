@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { NModal, NCard, NButton, NSpace, NIcon, NSpin } from "naive-ui";
+import { NModal, NCard, NButton, NSpace, NIcon } from "naive-ui";
 import { PhArrowBendUpLeft, PhCopy } from "@phosphor-icons/vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { useI18n } from "@/i18n";
 
 const props = defineProps<{
   visible: boolean;
@@ -18,10 +17,7 @@ const emit = defineEmits<{
   (e: "close"): void;
 }>();
 
-const { t } = useI18n();
-
 const destination = ref("");
-const busy = ref(false);
 
 function handleSelect(path: string) {
   destination.value = path;

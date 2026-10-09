@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import logging
-from pathlib import Path
 import re
 import shlex
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -119,8 +119,8 @@ async def _run_local_git(args: list[str], cwd: str, timeout: int = 30) -> tuple[
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode == 0, stdout.decode("utf-8", errors="replace").strip()
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Git command timed out")
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Git command timed out") from exc
     except Exception as exc:  # pragma: no cover - local process failures vary
         logger.warning("Local git command failed in %s: %s", cwd, exc)
         return False, ""
@@ -131,8 +131,8 @@ async def _run_remote_git(connection, cmd: str, timeout: int = 30) -> tuple[bool
     try:
         result = await asyncio.wait_for(connection.run(cmd, check=False), timeout=timeout)
         return (result.exit_status or 0) == 0, (result.stdout or "").strip()
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Git command timed out")
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Git command timed out") from exc
     except Exception as exc:  # pragma: no cover - remote process failures vary
         logger.warning("Remote git command failed: %s", exc)
         return False, ""
@@ -162,7 +162,9 @@ async def _get_local_root_and_relpath(directory: str, path: str) -> tuple[str, s
         raise HTTPException(status_code=400, detail="Path is outside the git repository") from exc
 
     if str(relative) in {"", "."}:
-        raise HTTPException(status_code=400, detail="Path must point to a file inside the repository")
+        raise HTTPException(
+            status_code=400, detail="Path must point to a file inside the repository"
+        )
 
     return root, str(relative)
 
@@ -226,7 +228,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
             ssh_pool = get_pool()
             try:
-                async with ssh_pool.connection(box, lambda: deps.connect_for_box(box, application_config)) as conn:
+                async with ssh_pool.connection(
+                    box, lambda: deps.connect_for_box(box, application_config)
+                ) as conn:
                     ok, output = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 return GitLogResponse(box=name, directory=directory, commits=[], error=str(exc))
@@ -272,11 +276,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             validated_path = _validate_remote_file_path(path)
             cmd = (
                 f"{_build_remote_repo_path_command(validated_dir, validated_path)} && "
-                f"git -C \"$ROOT\" show {shlex.quote(ref)}:\"$REL\" 2>/dev/null | head -c {MAX_SHOW_BYTES}"
+                f'git -C "$ROOT" show {shlex.quote(ref)}:"$REL" 2>/dev/null'
+                f" | head -c {MAX_SHOW_BYTES}"
             )
             ssh_pool = get_pool()
             try:
-                async with ssh_pool.connection(box, lambda: deps.connect_for_box(box, application_config)) as conn:
+                async with ssh_pool.connection(
+                    box, lambda: deps.connect_for_box(box, application_config)
+                ) as conn:
                     ok, content = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -310,13 +317,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
             ssh_pool = get_pool()
             try:
-                async with ssh_pool.connection(box, lambda: deps.connect_for_box(box, application_config)) as conn:
+                async with ssh_pool.connection(
+                    box, lambda: deps.connect_for_box(box, application_config)
+                ) as conn:
                     ok, output = await _run_remote_git(conn, cmd, timeout=60)
             except SSHError as exc:
                 return GitBlameResponse(box=name, path=path, lines=[], error=str(exc))
 
         if not ok:
-            return GitBlameResponse(box=name, path=path, lines=[], error="Not a git repository or file not tracked")
+            return GitBlameResponse(
+                box=name, path=path, lines=[], error="Not a git repository or file not tracked"
+            )
 
         lines = _parse_blame_porcelain(output)
         truncated = len(lines) > MAX_BLAME_LINES
@@ -337,10 +348,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if box.transport == "local":
             root = await _get_local_repo_root(directory)
             if not root:
-                return GitBranchesResponse(box=name, directory=directory, branches=[], is_repo=False)
+                return GitBranchesResponse(
+                    box=name, directory=directory, branches=[], is_repo=False
+                )
             ok, branch_output = await _run_local_git(["git", "branch", f"--format={fmt}"], cwd=root)
             if not ok:
-                return GitBranchesResponse(box=name, directory=directory, branches=[], is_repo=False)
+                return GitBranchesResponse(
+                    box=name, directory=directory, branches=[], is_repo=False
+                )
         else:
             validated = _validate_remote_directory(directory)
             cmd = (
@@ -351,12 +366,18 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
             ssh_pool = get_pool()
             try:
-                async with ssh_pool.connection(box, lambda: deps.connect_for_box(box, application_config)) as conn:
+                async with ssh_pool.connection(
+                    box, lambda: deps.connect_for_box(box, application_config)
+                ) as conn:
                     ok, output = await _run_remote_git(conn, cmd)
             except SSHError as exc:
-                return GitBranchesResponse(box=name, directory=directory, branches=[], error=str(exc))
+                return GitBranchesResponse(
+                    box=name, directory=directory, branches=[], error=str(exc)
+                )
             if not ok:
-                return GitBranchesResponse(box=name, directory=directory, branches=[], is_repo=False)
+                return GitBranchesResponse(
+                    box=name, directory=directory, branches=[], is_repo=False
+                )
             if "---ROOT---" in output:
                 branch_output, root = output.rsplit("---ROOT---", 1)
                 branch_output = branch_output.strip()
@@ -400,7 +421,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if box.transport == "local":
             root = await _get_local_repo_root(directory)
             if not root:
-                return GitDiffFilesResponse(box=name, directory=directory, ref_a=ref_a, ref_b=ref_b, files=[])
+                return GitDiffFilesResponse(
+                    box=name, directory=directory, ref_a=ref_a, ref_b=ref_b, files=[]
+                )
             ok, output = await _run_local_git(
                 ["git", "diff", "--name-status", ref_a, ref_b],
                 cwd=root,
@@ -413,7 +436,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
             ssh_pool = get_pool()
             try:
-                async with ssh_pool.connection(box, lambda: deps.connect_for_box(box, application_config)) as conn:
+                async with ssh_pool.connection(
+                    box, lambda: deps.connect_for_box(box, application_config)
+                ) as conn:
                     ok, output = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 return GitDiffFilesResponse(
@@ -482,7 +507,9 @@ def _parse_blame_porcelain(output: str) -> list[GitBlameLine]:
         elif raw_line.startswith("author-time ") and current_hash in commit_info:
             try:
                 timestamp = int(raw_line[12:])
-                commit_info[current_hash]["date"] = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+                commit_info[current_hash]["date"] = datetime.fromtimestamp(timestamp).strftime(
+                    "%Y-%m-%d"
+                )
             except (ValueError, OSError):
                 continue
 

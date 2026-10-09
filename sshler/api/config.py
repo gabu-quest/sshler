@@ -89,6 +89,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
             platform="windows" if LOCAL_IS_WINDOWS else "posix",
             windows_shells=_WINDOWS_SHELLS,
             default_shell=_DEFAULT_SHELL,
+            artifact_server_enabled=bool(
+                deps.settings.serve_artifacts
+                and deps.settings.artifact_server_port_actual is not None
+            ),
+            artifact_server_port=deps.settings.artifact_server_port_actual,
         )
 
     @router.get("/pool/config", response_model=APIPoolConfig)

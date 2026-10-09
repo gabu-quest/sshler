@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput, NPopover, useMessage } from 'naive-ui'
 import {
   PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen,
@@ -14,7 +14,7 @@ import { useFavoritesStore } from '@/stores/favorites'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { generateSessionName, getColorForSession, lastPathSegment } from '@/utils/sessionName'
+import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
 import Terminal from '@/components/Terminal.vue'
 import TerminalTabs from '@/components/TerminalTabs.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
@@ -28,7 +28,6 @@ import { gitInfo, setBoxTerminalTheme } from '@/api/http'
 import type { GitInfo } from '@/api/types'
 
 const route = useRoute()
-const router = useRouter()
 
 const bootstrapStore = useBootstrapStore()
 const boxesStore = useBoxesStore()

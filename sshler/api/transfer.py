@@ -48,7 +48,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """Stream cross-box file transfer with SSE progress events."""
 
         if payload.src_box == payload.dest_box:
-            raise HTTPException(status_code=400, detail="Use batch copy/move for same-box transfers")
+            raise HTTPException(
+                status_code=400, detail="Use batch copy/move for same-box transfers"
+            )
 
         if not payload.paths:
             raise HTTPException(status_code=400, detail="No paths provided")

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
-
 
 TEST_TOKEN = "api-token"
 
@@ -24,8 +23,8 @@ def setup_config(tmp_path: Path) -> Path:
     return config_dir
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     state.reset_state()
     state.initialize(config_dir)
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
@@ -35,8 +34,8 @@ def auth_headers() -> dict[str, str]:
     return {"X-SSHLER-TOKEN": TEST_TOKEN}
 
 
-def test_push_creates_bar(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_push_creates_bar(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/progress/build-ci",
@@ -56,8 +55,8 @@ def test_push_creates_bar(tmp_path):
         client.close()
 
 
-def test_push_is_idempotent_upsert(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_push_is_idempotent_upsert(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         first = client.post(
             "/api/v1/progress/job",
@@ -88,8 +87,8 @@ def test_push_is_idempotent_upsert(tmp_path):
         client.close()
 
 
-def test_list_returns_all_bars_newest_first(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_list_returns_all_bars_newest_first(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/first",
@@ -112,8 +111,8 @@ def test_list_returns_all_bars_newest_first(tmp_path):
         client.close()
 
 
-def test_get_named_bar(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_get_named_bar(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/single",
@@ -131,8 +130,8 @@ def test_get_named_bar(tmp_path):
         client.close()
 
 
-def test_get_missing_returns_404(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_get_missing_returns_404(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.get("/api/v1/progress/nope", headers=auth_headers())
         assert resp.status_code == 404
@@ -140,8 +139,8 @@ def test_get_missing_returns_404(tmp_path):
         client.close()
 
 
-def test_delete_removes_bar(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_delete_removes_bar(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/temp",
@@ -158,8 +157,8 @@ def test_delete_removes_bar(tmp_path):
         client.close()
 
 
-def test_delete_missing_is_idempotent(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_delete_missing_is_idempotent(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.delete("/api/v1/progress/never-existed", headers=auth_headers())
         assert resp.status_code == 200
@@ -168,8 +167,8 @@ def test_delete_missing_is_idempotent(tmp_path):
         client.close()
 
 
-def test_auth_required(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_auth_required(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         # POST without token → 403
         resp = client.post(
@@ -184,8 +183,8 @@ def test_auth_required(tmp_path):
         client.close()
 
 
-def test_invalid_name_rejected(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_invalid_name_rejected(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/progress/has spaces",
@@ -204,8 +203,8 @@ def test_invalid_name_rejected(tmp_path):
         client.close()
 
 
-def test_invalid_status_rejected(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_invalid_status_rejected(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/progress/bar",
@@ -217,8 +216,8 @@ def test_invalid_status_rejected(tmp_path):
         client.close()
 
 
-def test_negative_or_zero_total_rejected(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_negative_or_zero_total_rejected(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/progress/bar",
@@ -237,8 +236,8 @@ def test_negative_or_zero_total_rejected(tmp_path):
         client.close()
 
 
-def test_status_done_persisted(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_status_done_persisted(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/progress/finishing",
@@ -254,8 +253,8 @@ def test_status_done_persisted(tmp_path):
         client.close()
 
 
-def test_valid_metadata_round_trips(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_valid_metadata_round_trips(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         resp = client.post(
             "/api/v1/progress/m",
@@ -272,8 +271,8 @@ def test_valid_metadata_round_trips(tmp_path):
         client.close()
 
 
-def test_metadata_replaces_by_default(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_metadata_replaces_by_default(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/m",
@@ -291,8 +290,8 @@ def test_metadata_replaces_by_default(tmp_path):
         client.close()
 
 
-def test_metadata_merge_flag_accumulates(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_metadata_merge_flag_accumulates(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/m",
@@ -310,8 +309,8 @@ def test_metadata_merge_flag_accumulates(tmp_path):
         client.close()
 
 
-def test_omitted_metadata_field_leaves_bag_intact(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_omitted_metadata_field_leaves_bag_intact(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/m",
@@ -330,8 +329,8 @@ def test_omitted_metadata_field_leaves_bag_intact(tmp_path):
         client.close()
 
 
-def test_empty_metadata_clears_bag(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_empty_metadata_clears_bag(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/m",
@@ -349,8 +348,8 @@ def test_empty_metadata_clears_bag(tmp_path):
         client.close()
 
 
-def test_malformed_metadata_keeps_last_good_and_advances(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_malformed_metadata_keeps_last_good_and_advances(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/m",
@@ -373,8 +372,8 @@ def test_malformed_metadata_keeps_last_good_and_advances(tmp_path):
         client.close()
 
 
-def test_oversized_metadata_flags_error(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_oversized_metadata_flags_error(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         big = {"k": "x" * 5000}
         resp = client.post(
@@ -390,8 +389,8 @@ def test_oversized_metadata_flags_error(tmp_path):
         client.close()
 
 
-def test_good_metadata_push_clears_prior_error(tmp_path):
-    client = build_client(setup_config(tmp_path))
+def test_good_metadata_push_clears_prior_error(tmp_path, monkeypatch):
+    client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         client.post(
             "/api/v1/progress/m",

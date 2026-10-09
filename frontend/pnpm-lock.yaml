@@ -117,6 +117,9 @@ importers:
       '@vitejs/plugin-vue':
         specifier: ^6.0.1
         version: 6.0.2(vite@7.2.7(@types/node@24.10.2))(vue@3.5.25(typescript@5.9.3))
+      '@vue/test-utils':
+        specifier: 2.4.6
+        version: 2.4.6
       '@vue/tsconfig':
         specifier: ^0.8.1
         version: 0.8.1(typescript@5.9.3)(vue@3.5.25(typescript@5.9.3))

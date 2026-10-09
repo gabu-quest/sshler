@@ -41,3 +41,24 @@ See [ROADMAP-commander.md](./ROADMAP-commander.md) for full plan.
 - [ ] M3: Cross-box file transfer (drag-drop + F5/F6)
 - [ ] M4: Git integration (log, blame, branch compare, file-at-commit)
 - [ ] M5: Polish (bookmarks, fuzzy search, mobile)
+
+### M7: Local HTML Artifacts ✅
+See [ROADMAP-ARTIFACTS.md](./ROADMAP-ARTIFACTS.md) for the architecture, security invariants, and follow-up ideas.
+- [x] Required projects, nested groups, and file/site/collection registrations
+- [x] Loopback-only static sidecar with strict path containment
+- [x] REST API, CLI, Vue catalog, previews, and agent workflow skill
+- [x] Search/filter discovery, stable cross-links, optional root mounts, and whole-row toggles
+- [x] Metadata-only unregister: source files are never deleted
+
+### M8: Test suite hardening ✅
+See [ROADMAP-TESTS.md](./ROADMAP-TESTS.md) for milestones T1–T5 and their acceptance criteria.
+- [x] T1: Hermetic test infra and the websocket hang
+- [x] T2: Security coverage
+- [x] T3: Weak assertions and timing
+- [x] T4: Static gates
+- [x] T5: Frontend coverage
+
+### M9: Field fixes reported during the test round ✅
+- [x] File view: the `..` row offers navigation only, and a toolbar control downloads the current folder as a zip
+- [x] SSH connections to a box do not grow with open tabs, reloads or a hung box
+- [x] `sshler serve --dev` reloads when the sshler package changes

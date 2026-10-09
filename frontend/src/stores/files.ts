@@ -79,14 +79,25 @@ export const useFilesStore = defineStore("files", () => {
     return await batchCopy(box, paths, destination, token);
   }
 
-  async function doUpload(box: string, directory: string, file: File, token: string | null) {
+  /**
+   * Upload one file. A failure is recorded in `uploadError` and rethrown, so the caller
+   * never counts a refused file as uploaded; `options.overwrite` asks the server to
+   * replace an existing regular file.
+   */
+  async function doUpload(
+    box: string,
+    directory: string,
+    file: File,
+    token: string | null,
+    options: { overwrite?: boolean } = {},
+  ) {
     uploadProgress.value = 0;
     uploadFileName.value = file.name;
     uploadError.value = null;
     try {
       await uploadFile(box, directory, file, token, (percent) => {
         uploadProgress.value = percent;
-      });
+      }, options);
       // Ensure final state reflects completion even if callback did not hit 100
       uploadProgress.value = Math.max(uploadProgress.value, 100);
       uploadFileName.value = null;
@@ -94,6 +105,7 @@ export const useFilesStore = defineStore("files", () => {
       uploadError.value = err instanceof Error ? err.message : String(err);
       uploadProgress.value = 0;
       uploadFileName.value = null;
+      throw err;
     }
   }
 

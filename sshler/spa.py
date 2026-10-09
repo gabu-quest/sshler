@@ -4,9 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
-from starlette.responses import Response
 from fastapi.staticfiles import StaticFiles
-
 
 SPA_DIST_DIR = Path(__file__).parent / "static" / "dist"
 
@@ -27,8 +25,8 @@ def mount_spa(app: FastAPI, serve_spa: bool) -> None:
         target_path = (spa_dist / path).resolve()
         try:
             spa_dist.resolve()
-        except Exception:
-            raise HTTPException(status_code=404)
+        except Exception as exc:
+            raise HTTPException(status_code=404) from exc
 
         if path and target_path.is_file() and str(target_path).startswith(str(spa_dist)):
             return FileResponse(target_path)

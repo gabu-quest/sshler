@@ -22,6 +22,7 @@ function makeSession(id: string, over: Partial<ClaudeSession> = {}): ClaudeSessi
     version: null,
     size_bytes: 100,
     project_dir: "-proj",
+    repo_root: null,
     ...over,
   };
 }
@@ -44,8 +45,8 @@ describe("claudeSessions store", () => {
 
     expect(mockFetch).toHaveBeenCalledWith("tok");
     expect(store.sessions).toHaveLength(2);
-    expect(store.sessions[0].title).toBe("Alpha");
-    expect(store.sessions[1].title).toBe("Beta");
+    expect(store.sessions[0]?.title).toBe("Alpha");
+    expect(store.sessions[1]?.title).toBe("Beta");
     expect(store.loaded).toBe(true);
     expect(store.error).toBeNull();
     expect(store.loading).toBe(false);

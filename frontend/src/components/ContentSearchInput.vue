@@ -113,7 +113,6 @@ function formatPath(path: string): string {
 function highlightMatch(line: string, pattern: string): string {
   if (!pattern) return escapeHtml(line);
   try {
-    const regex = new RegExp(`(${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
     return escapeHtml(line).replace(
       new RegExp(`(${escapeHtml(pattern).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"),
       '<mark>$1</mark>'

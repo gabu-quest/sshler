@@ -1,21 +1,20 @@
 """Tests for archive creation and extraction API."""
 
-import os
 import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from sshler.webapp import ServerSettings, make_app
 
-
 TEST_TOKEN = "archive-test-token"
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
@@ -33,7 +32,7 @@ def auth_headers() -> dict[str, str]:
 
 
 class TestArchiveCreate:
-    def test_create_tar_gz(self, tmp_path):
+    def test_create_tar_gz(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -42,7 +41,7 @@ class TestArchiveCreate:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/create",
@@ -69,7 +68,7 @@ class TestArchiveCreate:
         finally:
             client.close()
 
-    def test_create_zip(self, tmp_path):
+    def test_create_zip(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -77,7 +76,7 @@ class TestArchiveCreate:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/create",
@@ -101,7 +100,7 @@ class TestArchiveCreate:
         finally:
             client.close()
 
-    def test_create_archive_with_directory(self, tmp_path):
+    def test_create_archive_with_directory(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         subdir = workdir / "mydir"
@@ -110,7 +109,7 @@ class TestArchiveCreate:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/create",
@@ -130,9 +129,9 @@ class TestArchiveCreate:
         finally:
             client.close()
 
-    def test_create_invalid_format(self, tmp_path):
+    def test_create_invalid_format(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/create",
@@ -148,9 +147,9 @@ class TestArchiveCreate:
         finally:
             client.close()
 
-    def test_create_wrong_extension(self, tmp_path):
+    def test_create_wrong_extension(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/create",
@@ -167,9 +166,9 @@ class TestArchiveCreate:
         finally:
             client.close()
 
-    def test_create_too_many_paths(self, tmp_path):
+    def test_create_too_many_paths(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/create",
@@ -187,7 +186,7 @@ class TestArchiveCreate:
 
 
 class TestArchiveExtract:
-    def test_extract_tar_gz(self, tmp_path):
+    def test_extract_tar_gz(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         # Create a tar.gz to extract
         archive_path = tmp_path / "test.tar.gz"
@@ -201,7 +200,7 @@ class TestArchiveExtract:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/extract",
@@ -217,7 +216,7 @@ class TestArchiveExtract:
         finally:
             client.close()
 
-    def test_extract_zip(self, tmp_path):
+    def test_extract_zip(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         archive_path = tmp_path / "test.zip"
         with zipfile.ZipFile(str(archive_path), "w") as zf:
@@ -226,7 +225,7 @@ class TestArchiveExtract:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/extract",
@@ -241,7 +240,7 @@ class TestArchiveExtract:
         finally:
             client.close()
 
-    def test_extract_zip_traversal_prevention(self, tmp_path):
+    def test_extract_zip_traversal_prevention(self, tmp_path, monkeypatch):
         """Verify that zip files with path traversal entries are rejected."""
         config_dir = setup_config(tmp_path)
         archive_path = tmp_path / "evil.zip"
@@ -253,7 +252,7 @@ class TestArchiveExtract:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/extract",
@@ -268,7 +267,7 @@ class TestArchiveExtract:
         finally:
             client.close()
 
-    def test_extract_zip_backslash_traversal_prevention(self, tmp_path):
+    def test_extract_zip_backslash_traversal_prevention(self, tmp_path, monkeypatch):
         """Verify that backslash-based path traversal is also blocked."""
         config_dir = setup_config(tmp_path)
         archive_path = tmp_path / "evil_backslash.zip"
@@ -279,7 +278,7 @@ class TestArchiveExtract:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/extract",
@@ -294,12 +293,12 @@ class TestArchiveExtract:
         finally:
             client.close()
 
-    def test_extract_not_found(self, tmp_path):
+    def test_extract_not_found(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/archive/extract",

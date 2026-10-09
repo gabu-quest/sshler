@@ -1,7 +1,9 @@
 """Tests for frecency-based directory search functionality."""
 
+import asyncio
 import math
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -12,12 +14,11 @@ from fastapi.testclient import TestClient
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
 
-
 TEST_TOKEN = "search-test-token"
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
@@ -32,6 +33,37 @@ def setup_config(tmp_path: Path) -> Path:
 
 def auth_headers() -> dict[str, str]:
     return {"X-SSHLER-TOKEN": TEST_TOKEN}
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(
+            "gnu",
+            marks=pytest.mark.skipif(
+                sys.platform == "win32",
+                reason=(
+                    "GNU find path runs only on a POSIX local box; "
+                    "Windows uses the built-in walk"
+                ),
+            ),
+        ),
+        "builtin",
+    ]
+)
+def local_impl(request, monkeypatch) -> str:
+    """Select the local discovery implementation (GNU find or the built-in walk).
+
+    On Linux every test using it runs against both on the same tree, so the
+    built-in walk Windows depends on cannot drift from find's results.
+    """
+    monkeypatch.setattr("sshler.api.helpers.LOCAL_IS_WINDOWS", request.param == "builtin")
+    return request.param
+
+
+def discover(root: Path, pattern: str, **kwargs) -> list[tuple[str, bool]]:
+    from sshler.api.search import _discover_local
+
+    return asyncio.run(_discover_local(str(root), pattern, **kwargs))
 
 
 class TestDirectoryVisitTracking:
@@ -195,10 +227,10 @@ class TestFrecencyScoring:
 class TestSearchAPIEndpoint:
     """Tests for the /api/v1/boxes/{name}/search endpoint."""
 
-    def test_search_requires_minimum_query_length(self, tmp_path):
+    def test_search_requires_minimum_query_length(self, tmp_path, monkeypatch):
         """Search endpoint rejects queries shorter than 2 characters."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             # Single character should fail
@@ -220,10 +252,10 @@ class TestSearchAPIEndpoint:
             client.close()
             state.reset_state()
 
-    def test_search_returns_valid_response_structure(self, tmp_path):
+    def test_search_returns_valid_response_structure(self, tmp_path, monkeypatch):
         """Search endpoint returns properly structured response."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             resp = client.get(
@@ -244,38 +276,53 @@ class TestSearchAPIEndpoint:
             client.close()
             state.reset_state()
 
-    def test_search_result_structure(self, tmp_path):
-        """Each search result has required fields."""
+    def test_search_result_structure(self, tmp_path, monkeypatch, local_impl):
+        """Each source is labelled with the stage that produced it, with exact scores.
+
+        Mutations killed: the frecency stage labelled "discovery" (or vice versa),
+        a wrong score on either stage, a missing stage, a swapped rank order.
+        """
         config_dir = setup_config(tmp_path)
-        state.initialize(config_dir)
+        root = tmp_path / "tree"
+        (root / "testdisc").mkdir(parents=True)
 
-        # Create some visit data
-        state.record_directory_visit("local", "/test/projects")
+        async def fake_zoxide(pattern: str) -> list[tuple[str, float]]:
+            assert pattern == "test"
+            return [("/frecent/testthing", 5.0)]
 
-        client = build_client(config_dir)
+        monkeypatch.setattr("sshler.api.search._query_zoxide", fake_zoxide)
+
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.get(
                 "/api/v1/boxes/local/search",
-                params={"q": "test"},
+                params={"q": "test", "root": str(root)},
                 headers=auth_headers(),
             )
             assert resp.status_code == 200
 
-            data = resp.json()
-            # If we have results, verify structure
-            for result in data["results"]:
-                assert "path" in result
-                assert "score" in result
-                assert "source" in result
-                assert result["source"] in ("frecency", "discovery")
+            assert resp.json()["results"] == [
+                {
+                    "path": "/frecent/testthing",
+                    "score": 5.0,
+                    "source": "frecency",
+                    "is_directory": True,
+                },
+                {
+                    "path": (root / "testdisc").as_posix(),
+                    "score": 0.1,
+                    "source": "discovery",
+                    "is_directory": True,
+                },
+            ]
         finally:
             client.close()
             state.reset_state()
 
-    def test_search_requires_auth(self, tmp_path):
+    def test_search_requires_auth(self, tmp_path, monkeypatch):
         """Search endpoint requires authentication."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             resp = client.get(
@@ -288,10 +335,10 @@ class TestSearchAPIEndpoint:
             client.close()
             state.reset_state()
 
-    def test_search_box_not_found(self, tmp_path):
+    def test_search_box_not_found(self, tmp_path, monkeypatch):
         """Search for non-existent box returns 404."""
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             resp = client.get(
@@ -300,6 +347,258 @@ class TestSearchAPIEndpoint:
                 headers=auth_headers(),
             )
             assert resp.status_code == 404
+        finally:
+            client.close()
+            state.reset_state()
+
+
+def make_tree(tmp_path: Path) -> Path:
+    """Deterministic tree:
+
+    tree/
+      gadgets/captures/capture_x/exports/blue_vs_green_frame473.png
+      node_modules/junk/blue_thing.txt   (pruned — must never appear)
+      docs/blue-notes/                   (directory matching 'blue')
+    """
+    root = tmp_path / "tree"
+    exports = root / "gadgets" / "captures" / "capture_x" / "exports"
+    exports.mkdir(parents=True)
+    (exports / "blue_vs_green_frame473.png").write_bytes(b"png")
+    junk = root / "node_modules" / "junk"
+    junk.mkdir(parents=True)
+    (junk / "blue_thing.txt").write_text("x", encoding="utf-8")
+    (root / "docs" / "blue-notes").mkdir(parents=True)
+    return root
+
+
+class TestFindPattern:
+    def test_plain_query_becomes_substring(self):
+        from sshler.api.search import _find_pattern
+
+        assert _find_pattern("blue") == "*blue*"
+
+    def test_wildcard_query_passes_through(self):
+        from sshler.api.search import _find_pattern
+
+        assert _find_pattern("blue*png") == "blue*png"
+        assert _find_pattern("frame?73*") == "frame?73*"
+
+
+class TestLocalDiscovery:
+    """Tests for filesystem discovery on the local box (the find fallback)."""
+
+    def test_finds_nested_directories(self, tmp_path, local_impl):
+        root = make_tree(tmp_path)
+        results = discover(root, "*captur*")
+
+        assert sorted(results) == [
+            ((root / "gadgets" / "captures").as_posix(), True),
+            ((root / "gadgets" / "captures" / "capture_x").as_posix(), True),
+        ]
+
+    def test_dirs_only_by_default(self, tmp_path, local_impl):
+        root = make_tree(tmp_path)
+        assert discover(root, "*blue_vs*") == []
+
+    def test_finds_files_when_enabled_and_prunes_node_modules(self, tmp_path, local_impl):
+        root = make_tree(tmp_path)
+        results = discover(root, "*blue*", include_files=True)
+
+        expected_file = (
+            root
+            / "gadgets"
+            / "captures"
+            / "capture_x"
+            / "exports"
+            / "blue_vs_green_frame473.png"
+        ).as_posix()
+        expected_dir = (root / "docs" / "blue-notes").as_posix()
+        assert sorted(results) == sorted(
+            [(expected_file, False), (expected_dir, True)]
+        )
+
+    def test_respects_limit(self, tmp_path, local_impl):
+        root = tmp_path / "many"
+        root.mkdir()
+        for i in range(10):
+            (root / f"bluedir_{i}").mkdir()
+        results = discover(root, "*blue*", limit=3)
+        assert len(results) == 3
+        every = {((root / f"bluedir_{i}").as_posix(), True) for i in range(10)}
+        assert set(results) <= every
+        assert len(set(results)) == 3
+
+    def test_depth_limit(self, tmp_path, local_impl):
+        """find -maxdepth 6: an entry 6 levels below root is listed, 7 is not.
+
+        Mutation killed: an off-by-one depth (5 or 7) in the built-in walk.
+        """
+        root = tmp_path / "deep"
+        level = root
+        for depth in range(1, 8):
+            level = level / f"lvl{depth}"
+        level.mkdir(parents=True)
+        listed = sorted(path for path, _ in discover(root, "lvl*"))
+        assert listed == [
+            (root / "/".join(f"lvl{d}" for d in range(1, n + 1))).as_posix()
+            for n in range(1, 7)
+        ]
+
+    def test_prune_names_are_exact_and_case_sensitive(self, tmp_path, local_impl):
+        """find -name is case-sensitive: .Git and Node_Modules are searched, the
+        PRUNE_DIRS names are neither listed nor entered, whatever they are.
+
+        Mutations killed: case-folded prune names, pruning only directories
+        (a file named .cache listed), descending into a pruned directory.
+        """
+        # separate parents: on a case-insensitive file system (Windows) the
+        # differently cased names would otherwise be one directory
+        root = tmp_path / "prune"
+        (root / "a" / ".Git" / "blue_a").mkdir(parents=True)
+        (root / "b" / "Node_Modules" / "blue_b").mkdir(parents=True)
+        (root / "c" / "node_modules" / "blue_c").mkdir(parents=True)
+        (root / "c" / "__pycache__" / "blue_d").mkdir(parents=True)
+        (root / "c" / ".cache").write_text("x")
+        results = discover(root, "*", include_files=True)
+        assert sorted(results) == [
+            ((root / "a").as_posix(), True),
+            ((root / "a" / ".Git").as_posix(), True),
+            ((root / "a" / ".Git" / "blue_a").as_posix(), True),
+            ((root / "b").as_posix(), True),
+            ((root / "b" / "Node_Modules").as_posix(), True),
+            ((root / "b" / "Node_Modules" / "blue_b").as_posix(), True),
+            ((root / "c").as_posix(), True),
+        ]
+
+    def test_glob_is_case_insensitive_and_root_is_never_listed(self, tmp_path, local_impl):
+        """Mutations killed: a case-sensitive match, `?` matching zero or two
+        characters, the root itself listed when its name matches."""
+        root = tmp_path / "blue_root"
+        (root / "BLUE_upper").mkdir(parents=True)
+        (root / "frame473").mkdir()
+        (root / "frame4730").mkdir()
+        (root / "frame47").mkdir()
+        assert discover(root, "*blue*") == [((root / "BLUE_upper").as_posix(), True)]
+        assert discover(root, "frame?73") == [((root / "frame473").as_posix(), True)]
+
+    def test_symlinks_are_neither_listed_nor_entered(self, tmp_path, local_impl):
+        """find -P: a symlink is type l, so -type d/-type f never list it and the
+        walk never enters it. Mutation killed: following symlinks."""
+        outside = tmp_path / "outside"
+        (outside / "blue_inside_target").mkdir(parents=True)
+        (outside / "blue_file.txt").write_text("x")
+        root = tmp_path / "root"
+        (root / "blue_real").mkdir(parents=True)
+        try:
+            os.symlink(outside, root / "blue_link", target_is_directory=True)
+            os.symlink(outside / "blue_file.txt", root / "blue_file_link.txt")
+        except OSError as exc:
+            pytest.skip(f"this OS refused to create a symlink: {exc}")
+        results = discover(root, "*blue*", include_files=True)
+        assert results == [((root / "blue_real").as_posix(), True)]
+
+
+class TestBuiltinDiscoveryTimeout:
+    def test_past_the_deadline_returns_nothing(self, tmp_path):
+        """As the GNU path does when find is killed. Mutation killed: the
+        built-in walk ignoring its timeout."""
+        from sshler.api.search import _discover_local_builtin
+
+        root = make_tree(tmp_path)
+        assert _discover_local_builtin(str(root), "*", 6, 50, True, -1) == []
+        everything = _discover_local_builtin(str(root), "*", 6, 50, True, 60)
+        # gadgets, captures, capture_x, exports, the png, docs, blue-notes
+        assert len(everything) == 7
+
+
+class TestSearchEndpointDiscovery:
+    """Endpoint-level tests for root-scoped discovery + file results."""
+
+    def test_local_search_finds_file_under_root(self, tmp_path, monkeypatch, local_impl):
+        root = make_tree(tmp_path)
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue_vs_green", "files": "true", "root": str(root)},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 200
+
+            discovery = [
+                r for r in resp.json()["results"] if r["source"] == "discovery"
+            ]
+            assert len(discovery) == 1
+            assert discovery[0]["path"] == (
+                root
+                / "gadgets"
+                / "captures"
+                / "capture_x"
+                / "exports"
+                / "blue_vs_green_frame473.png"
+            ).as_posix()
+            assert discovery[0]["is_directory"] is False
+        finally:
+            client.close()
+            state.reset_state()
+
+    def test_local_search_wildcard_query(self, tmp_path, monkeypatch, local_impl):
+        root = make_tree(tmp_path)
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue*png", "files": "true", "root": str(root)},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 200
+            discovery = [
+                r for r in resp.json()["results"] if r["source"] == "discovery"
+            ]
+            assert len(discovery) == 1
+            assert discovery[0]["path"] == (
+                root / "gadgets" / "captures" / "capture_x" / "exports"
+                / "blue_vs_green_frame473.png"
+            ).as_posix()
+        finally:
+            client.close()
+            state.reset_state()
+
+    def test_local_search_dirs_only_without_files_flag(self, tmp_path, monkeypatch, local_impl):
+        root = make_tree(tmp_path)
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue_vs_green", "root": str(root)},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 200
+            discovery = [
+                r for r in resp.json()["results"] if r["source"] == "discovery"
+            ]
+            assert discovery == []
+        finally:
+            client.close()
+            state.reset_state()
+
+    def test_invalid_root_rejected(self, tmp_path, monkeypatch):
+        config_dir = setup_config(tmp_path)
+        client = build_client(config_dir, monkeypatch)
+
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/search",
+                params={"q": "blue", "root": "bad\0path"},
+                headers=auth_headers(),
+            )
+            assert resp.status_code == 400
         finally:
             client.close()
             state.reset_state()
@@ -323,12 +622,12 @@ class TestVisitTrackingIntegration:
 
         state.reset_state()
 
-    def test_local_box_does_not_record_visits(self, tmp_path):
+    def test_local_box_does_not_record_visits(self, tmp_path, monkeypatch):
         """Local box uses zoxide, so we don't record visits in our DB."""
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
 
         try:
             # List a local directory

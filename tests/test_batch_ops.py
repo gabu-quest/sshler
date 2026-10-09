@@ -1,19 +1,18 @@
 """Tests for batch file operations API."""
 
-import os
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from sshler.webapp import ServerSettings, make_app
 
-
 TEST_TOKEN = "batch-test-token"
 
 
-def build_client(config_dir: Path) -> TestClient:
-    os.environ["SSHLER_CONFIG_DIR"] = str(config_dir)
+def build_client(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     return TestClient(make_app(ServerSettings(csrf_token=TEST_TOKEN)))
 
 
@@ -31,7 +30,7 @@ def auth_headers() -> dict[str, str]:
 
 
 class TestBatchDelete:
-    def test_batch_delete_files(self, tmp_path):
+    def test_batch_delete_files(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -39,7 +38,7 @@ class TestBatchDelete:
         (workdir / "b.txt").write_text("b")
         (workdir / "c.txt").write_text("c")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/delete",
@@ -57,14 +56,14 @@ class TestBatchDelete:
         finally:
             client.close()
 
-    def test_batch_delete_directory(self, tmp_path):
+    def test_batch_delete_directory(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         subdir = workdir / "subdir"
         subdir.mkdir(parents=True)
         (subdir / "file.txt").write_text("content")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/delete",
@@ -79,13 +78,13 @@ class TestBatchDelete:
         finally:
             client.close()
 
-    def test_batch_delete_partial_failure(self, tmp_path):
+    def test_batch_delete_partial_failure(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
         (workdir / "exists.txt").write_text("yes")
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/delete",
@@ -102,9 +101,9 @@ class TestBatchDelete:
         finally:
             client.close()
 
-    def test_batch_delete_empty_paths(self, tmp_path):
+    def test_batch_delete_empty_paths(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/delete",
@@ -115,9 +114,9 @@ class TestBatchDelete:
         finally:
             client.close()
 
-    def test_batch_delete_too_many_paths(self, tmp_path):
+    def test_batch_delete_too_many_paths(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             paths = [f"/tmp/fake_{i}" for i in range(101)]
             resp = client.post(
@@ -132,7 +131,7 @@ class TestBatchDelete:
 
 
 class TestBatchMove:
-    def test_batch_move_files(self, tmp_path):
+    def test_batch_move_files(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -141,7 +140,7 @@ class TestBatchMove:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/move",
@@ -162,7 +161,7 @@ class TestBatchMove:
         finally:
             client.close()
 
-    def test_batch_move_partial_failure(self, tmp_path):
+    def test_batch_move_partial_failure(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -170,7 +169,7 @@ class TestBatchMove:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/move",
@@ -190,7 +189,7 @@ class TestBatchMove:
 
 
 class TestBatchCopy:
-    def test_batch_copy_files(self, tmp_path):
+    def test_batch_copy_files(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()
@@ -199,7 +198,7 @@ class TestBatchCopy:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/copy",
@@ -222,7 +221,7 @@ class TestBatchCopy:
         finally:
             client.close()
 
-    def test_batch_copy_directory(self, tmp_path):
+    def test_batch_copy_directory(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         subdir = workdir / "mydir"
@@ -231,7 +230,7 @@ class TestBatchCopy:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        client = build_client(config_dir)
+        client = build_client(config_dir, monkeypatch)
         try:
             resp = client.post(
                 "/api/v1/boxes/local/batch/copy",
