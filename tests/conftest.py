@@ -46,8 +46,14 @@ def tmux_tmpdir() -> Iterator[Path]:
     Kept short because tmux socket paths must fit in ``sun_path`` (~104 bytes).
     Every tmux server left in it is killed at the end of the session.
     """
-    path = Path(tempfile.mkdtemp(prefix="sshler-tmux-", dir="/tmp"))
+    # Windows has no /tmp and no tmux; the default temp dir is enough there.
+    path = Path(
+        tempfile.mkdtemp(prefix="sshler-tmux-", dir=None if sys.platform == "win32" else "/tmp")
+    )
     yield path
+    if sys.platform == "win32":
+        shutil.rmtree(path, ignore_errors=True)
+        return
     socket_dir = path / f"tmux-{os.getuid()}"
     if socket_dir.is_dir() and shutil.which("tmux"):
         for socket in socket_dir.iterdir():
