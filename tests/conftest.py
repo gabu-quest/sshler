@@ -26,6 +26,9 @@ from sshler.session import reset_session_store  # noqa: E402
 from sshler.settings import reset_settings  # noqa: E402
 from sshler.state import reset_state  # noqa: E402
 
+# POSIX PTY and tmux teardown tests import `pty`/`termios`, which Windows lacks.
+collect_ignore = ["test_terminal_teardown.py"] if sys.platform == "win32" else []
+
 E2E_DIR = Path(__file__).resolve().parent / "e2e"
 
 
