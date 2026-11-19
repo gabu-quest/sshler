@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
+from ..proc import run_bounded
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
@@ -312,12 +313,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             args.append(normalized)
 
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *args,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GREP_TIMEOUT)
+                _, stdout, _ = await run_bounded(args, GREP_TIMEOUT)
             except TimeoutError as exc:
                 raise HTTPException(status_code=504, detail="Search timed out") from exc
 

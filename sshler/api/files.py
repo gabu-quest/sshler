@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, Response
 
 from .. import state
 from ..config import AppConfig
+from ..proc import run_bounded
 from ..ssh import SSHError, sftp_chmod, sftp_list_directory
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
@@ -71,19 +72,21 @@ class _TempFileResponse(FileResponse):
             Path(self.path).unlink(missing_ok=True)
 
 
+# The gitignore marks of a listing are a nicety: a git that does not answer in
+# this time is given up on and the listing goes out without them.
+GITIGNORE_TIMEOUT = 5.0
+
+
 async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
     """Check which filenames in a directory are gitignored. Returns set of ignored names."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", "check-ignore", "--stdin",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        returncode, stdout, _ = await run_bounded(
+            ["git", "check-ignore", "--stdin"],
+            GITIGNORE_TIMEOUT,
             cwd=directory,
+            stdin_data="\n".join(names).encode(),
         )
-        input_data = "\n".join(names).encode()
-        stdout, _ = await proc.communicate(input=input_data)
-        if proc.returncode not in (0, 1):  # 1 means none matched, 128 means not a git repo
+        if returncode not in (0, 1):  # 1 means none matched, 128 means not a git repo
             return set()
         return set(line.strip() for line in stdout.decode().splitlines() if line.strip())
     except Exception:

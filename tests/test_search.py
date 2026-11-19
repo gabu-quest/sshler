@@ -644,3 +644,25 @@ class TestVisitTrackingIntegration:
         finally:
             client.close()
             state.reset_state()
+
+
+@pytest.mark.posix_only("#!/bin/sh stand-ins for find and zoxide first on PATH")
+class TestLocalChildrenKilledOnTimeout:
+    def test_find_is_gone_after_a_discovery_timeout(self, tmp_path, monkeypatch, stalled_program):
+        """Mutation killed: proc.kill() without a wait, or no kill at all."""
+        from sshler.api import search
+
+        gone = stalled_program("find")
+        monkeypatch.setattr("sshler.api.helpers.LOCAL_IS_WINDOWS", False)
+        monkeypatch.setattr(search, "LOCAL_DISCOVERY_TIMEOUT", 0.5)
+        assert asyncio.run(search._discover_local(str(tmp_path), "*x*")) == []
+        gone()
+
+    def test_zoxide_is_gone_after_its_timeout(self, monkeypatch, stalled_program):
+        """Mutation killed: wait_for(proc.communicate()) with no kill."""
+        from sshler.api import search
+
+        gone = stalled_program("zoxide")
+        monkeypatch.setattr(search, "ZOXIDE_TIMEOUT", 0.5)
+        assert asyncio.run(search._query_zoxide("abc")) == []
+        gone()

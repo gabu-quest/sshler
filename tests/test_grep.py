@@ -374,3 +374,23 @@ class TestGrepInjectionPrevention:
         }
         assert not Path(marker).exists()
         assert (workdir / "safe.txt").read_bytes() == f"before\nsays {pattern} here\n".encode()
+
+
+class TestGrepChildKilledOnTimeout:
+    @pytest.mark.posix_only("a #!/bin/sh stand-in for grep first on PATH")
+    def test_the_grep_child_is_gone_after_the_504(self, tmp_path, monkeypatch, stalled_program):
+        """Mutation killed: wait_for(proc.communicate()) with no kill, which left grep running."""
+        gone = stalled_program("grep")
+        monkeypatch.setattr("sshler.api.helpers.LOCAL_IS_WINDOWS", False)
+        monkeypatch.setattr("sshler.api.grep.GREP_TIMEOUT", 0.5)
+        client = build_client(setup_config(tmp_path), monkeypatch)
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/grep",
+                params={"pattern": "foo", "directory": str(tmp_path)},
+                headers=auth_headers(),
+            )
+            assert (resp.status_code, resp.json()["detail"]) == (504, "Search timed out")
+            gone()
+        finally:
+            client.close()

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 
 from .. import state
 from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
+from ..proc import run_bounded
 from ..ssh_pool import get_pool
 from .dependencies import APIDependencies
 from .models import (
@@ -370,9 +371,11 @@ def _parse_uptime(output: str) -> int | None:
     return None
 
 
+GIT_INFO_TIMEOUT = 5.0
+
+
 async def _get_local_git_info(directory: str) -> APIGitInfo:
     """Get git info for a local directory."""
-    import asyncio
     import os
     from pathlib import Path
 
@@ -388,14 +391,8 @@ async def _get_local_git_info(directory: str) -> APIGitInfo:
         # Run git commands
         async def run_git(cmd: list[str]) -> tuple[bool, str]:
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=str(target),
-                )
-                stdout, _ = await proc.communicate()
-                return proc.returncode == 0, stdout.decode().strip()
+                returncode, stdout, _ = await run_bounded(cmd, GIT_INFO_TIMEOUT, cwd=str(target))
+                return returncode == 0, stdout.decode().strip()
             except Exception:
                 return False, ""
 

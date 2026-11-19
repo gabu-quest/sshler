@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from .. import state
 from ..config import AppConfig
+from ..proc import run_bounded
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
@@ -55,6 +56,9 @@ class SearchResponse(BaseModel):
     results: list[SearchResult]
 
 
+ZOXIDE_TIMEOUT = 5.0
+
+
 async def _query_zoxide(pattern: str) -> list[tuple[str, float]]:
     """Query zoxide for matching directories.
 
@@ -66,18 +70,18 @@ async def _query_zoxide(pattern: str) -> list[tuple[str, float]]:
         return []
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            zoxide_path,
-            "query",
-            "-l",  # list mode
-            "-s",  # include scores
-            pattern,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        returncode, stdout, _ = await run_bounded(
+            [
+                zoxide_path,
+                "query",
+                "-l",  # list mode
+                "-s",  # include scores
+                pattern,
+            ],
+            ZOXIDE_TIMEOUT,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
 
-        if proc.returncode != 0:
+        if returncode != 0:
             # zoxide returns non-zero when no results found
             return []
 
@@ -213,17 +217,9 @@ async def _discover_local(
     args.extend(["-iname", pattern, "-printf", "%y\t%p\n"])
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
         try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=LOCAL_DISCOVERY_TIMEOUT
-            )
+            _, stdout, _ = await run_bounded(args, LOCAL_DISCOVERY_TIMEOUT)
         except TimeoutError:
-            proc.kill()
             logger.warning("Local discovery timed out")
             return []
 

@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -192,3 +192,32 @@ def tmux_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     return log
+
+
+@pytest.fixture
+def stalled_program(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str], Callable[[], None]]:
+    """Put a stand-in for a program first on PATH: it records its pid and sleeps.
+
+    ``gone = stalled_program("git")``; once the code under test has given up on
+    the child, ``gone()`` asserts that the stand-in is no longer a process
+    (a child that was killed but never reaped still is one).
+    """
+
+    def install(name: str) -> Callable[[], None]:
+        bin_dir = tmp_path / "stalled-bin"
+        bin_dir.mkdir(exist_ok=True)
+        pid_file = tmp_path / f"{name}.pid"
+        script = bin_dir / name
+        script.write_text(f'#!/bin/sh\necho $$ > "{pid_file}"\nexec sleep 30\n', encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+        def gone() -> None:
+            with pytest.raises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+
+        return gone
+
+    return install

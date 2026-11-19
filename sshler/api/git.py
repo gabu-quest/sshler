@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
+from ..proc import run_bounded
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
@@ -111,14 +112,8 @@ def _require_path(path: str) -> str:
 async def _run_local_git(args: list[str], cwd: str, timeout: int = 30) -> tuple[bool, str]:
     """Run a local git command and return (success, stdout)."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return proc.returncode == 0, stdout.decode("utf-8", errors="replace").strip()
+        returncode, stdout, _ = await run_bounded(args, timeout, cwd=cwd)
+        return returncode == 0, stdout.decode("utf-8", errors="replace").strip()
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail="Git command timed out") from exc
     except Exception as exc:  # pragma: no cover - local process failures vary
