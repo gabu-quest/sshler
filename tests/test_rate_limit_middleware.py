@@ -143,9 +143,7 @@ def test_limit_is_per_client_ip(limiter_clock: FrozenClock, monkeypatch: pytest.
     """
     monkeypatch.setenv("SSHLER_TRUST_PROXY_HEADERS", "true")
     reset_settings()
-    proxied = TestClient(
-        make_app(ServerSettings(csrf_token=TOKEN)), client=("127.0.0.1", 50000)
-    )
+    proxied = TestClient(make_app(ServerSettings(csrf_token=TOKEN)), client=("127.0.0.1", 50000))
     first = {"X-Real-IP": "203.0.113.1"}
     second = {"X-Real-IP": "203.0.113.2"}
     assert proxied.post(UNROUTED, headers=first).status_code == 404
@@ -225,8 +223,7 @@ def test_successful_auth_resets_failure_count(auth_env, auth_client: TestClient)
     # The good request set a session cookie; drop it so the next requests use Basic auth.
     auth_client.cookies.clear()
     statuses = [
-        auth_client.get(UNROUTED, headers=bad).status_code
-        for _ in range(LOCKOUT_THRESHOLD - 1)
+        auth_client.get(UNROUTED, headers=bad).status_code for _ in range(LOCKOUT_THRESHOLD - 1)
     ]
     assert statuses == [401] * (LOCKOUT_THRESHOLD - 1)
 

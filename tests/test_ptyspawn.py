@@ -121,7 +121,7 @@ def test_the_command_gets_exactly_the_environment_it_was_given(
 
 
 def test_arguments_with_space_quote_and_empty_arrive_exactly(script: Path) -> None:
-    args = ["a b", "it's \"q\"", "", "$HOME"]
+    args = ["a b", 'it\'s "q"', "", "$HOME"]
 
     out, code = _run([sys.executable, str(script), *args])
 

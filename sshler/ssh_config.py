@@ -131,4 +131,3 @@ def load_ssh_config(explicit_path: str | None = None) -> dict[str, HostConfig]:
     for candidate in candidates:
         aggregated.update(_parse_file(candidate, seen=seen))
     return aggregated
-

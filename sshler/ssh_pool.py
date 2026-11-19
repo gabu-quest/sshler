@@ -143,8 +143,7 @@ class SSHConnectionPool:
                     and (now - conn.last_used_at) > self._idle_timeout
                 )
                 is_too_old = (
-                    self._max_lifetime is not None
-                    and (now - conn.created_at) > self._max_lifetime
+                    self._max_lifetime is not None and (now - conn.created_at) > self._max_lifetime
                 )
 
                 if is_idle_too_long or is_too_old or not conn.is_healthy:
@@ -391,10 +390,9 @@ class SSHConnectionPool:
         )
         self._pools.setdefault(box_name, [])
         try:
-            healthy = (
-                self._may_keep(box_name, generation, created_at)
-                and await self._is_connection_healthy(connection)
-            )
+            healthy = self._may_keep(
+                box_name, generation, created_at
+            ) and await self._is_connection_healthy(connection)
         except BaseException:
             _close_quietly(connection, box_name, "cancelled release")
             raise
@@ -515,9 +513,7 @@ class SSHConnectionPool:
                 "active_connections": len(pool),
                 "total_uses": sum(conn.use_count for conn in pool),
                 "oldest_connection_age": (
-                    int(self._clock() - min(conn.created_at for conn in pool))
-                    if pool
-                    else 0
+                    int(self._clock() - min(conn.created_at for conn in pool)) if pool else 0
                 ),
             }
         return stats

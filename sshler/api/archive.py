@@ -242,9 +242,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 archive_resolved = await _remote_path(connection, validated_archive)
                 dest_resolved = await _remote_path(connection, validated_dest)
                 if name_lower.endswith((".tar.gz", ".tgz")):
-                    cmd = (
-                        f"tar xzf {shlex.quote(archive_resolved)} -C {shlex.quote(dest_resolved)}"
-                    )
+                    cmd = f"tar xzf {shlex.quote(archive_resolved)} -C {shlex.quote(dest_resolved)}"
                 else:
                     cmd = (
                         f"unzip -o {shlex.quote(archive_resolved)} -d {shlex.quote(dest_resolved)}"

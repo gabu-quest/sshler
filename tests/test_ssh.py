@@ -24,9 +24,7 @@ async def test_open_tmux_uses_remote_ts_server():
     )
 
     assert result == "process"
-    assert calls["command"] == (
-        "tmux -L ts-blogler new -As blogler -c /home/gabu/projects/blogler"
-    )
+    assert calls["command"] == ("tmux -L ts-blogler new -As blogler -c /home/gabu/projects/blogler")
     assert calls["term_size"] == (100, 40)
 
 
@@ -41,9 +39,7 @@ async def test_open_tmux_sanitizes_session_before_selecting_ts_server():
 
     await open_tmux(FakeConnection(), "/srv/My Project", "My Project")
 
-    assert calls["command"] == (
-        "tmux -L ts-My_Project new -As My_Project -c '/srv/My Project'"
-    )
+    assert calls["command"] == ("tmux -L ts-My_Project new -As My_Project -c '/srv/My Project'")
 
 
 @pytest.mark.asyncio

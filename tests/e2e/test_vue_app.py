@@ -3,6 +3,7 @@
 Run with:
     uv run pytest tests/e2e/test_vue_app.py -v
 """
+
 from __future__ import annotations
 
 import re

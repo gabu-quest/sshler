@@ -136,9 +136,7 @@ class WindowsTerminalRegistry:
         self._read_executor = ThreadPoolExecutor(
             max_workers=read_slots, thread_name_prefix="winpty-read"
         )
-        self._io_executor = ThreadPoolExecutor(
-            max_workers=16, thread_name_prefix="winpty-io"
-        )
+        self._io_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="winpty-io")
         if max_sessions <= 0:
             logger.warning(
                 "[WinRegistry] session cap disabled (max_sessions=%d); unbounded "
@@ -160,9 +158,7 @@ class WindowsTerminalRegistry:
         we're about to replace (its previous shell already exited) is excluded so
         re-attaching never trips the limit. Caller must hold ``self._lock``.
         """
-        return sum(
-            1 for k, s in self._sessions.items() if not s.exited and k != exclude
-        )
+        return sum(1 for k, s in self._sessions.items() if not s.exited and k != exclude)
 
     # --- lifecycle ---------------------------------------------------------
     async def get_or_create(
@@ -213,9 +209,7 @@ class WindowsTerminalRegistry:
                 self._io_executor, self._terminate_proc, process
             )
         if winner is None:
-            raise TooManyTerminalsError(
-                f"terminal session limit reached ({self._max_sessions})"
-            )
+            raise TooManyTerminalsError(f"terminal session limit reached ({self._max_sessions})")
         return winner, False
 
     async def attach(self, session: TerminalSession, sink: Sink, cols: int, rows: int) -> bytes:
@@ -302,9 +296,7 @@ class WindowsTerminalRegistry:
         try:
             loop = asyncio.get_running_loop()
             while True:
-                data = await loop.run_in_executor(
-                    self._read_executor, proc.stdout.read, READ_SIZE
-                )
+                data = await loop.run_in_executor(self._read_executor, proc.stdout.read, READ_SIZE)
                 if not data:
                     break  # EOF: shell exited or was terminated
                 chunk = data.encode("utf-8") if isinstance(data, str) else data

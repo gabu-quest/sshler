@@ -6,6 +6,7 @@ the resulting PDF back. If chromium isn't installed, returns 503 — the
 frontend hides the button when /api/v1/bootstrap reports pdf_available=false,
 so this path mostly handles the race where availability changes mid-session.
 """
+
 from __future__ import annotations
 
 import io

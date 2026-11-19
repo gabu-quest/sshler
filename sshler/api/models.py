@@ -139,6 +139,7 @@ class APISessionUpdate(BaseModel):
 
 class APIClaudeSession(BaseModel):
     """A resumable Claude Code session discovered on the local filesystem."""
+
     id: str  # session UUID
     cwd: str
     title: str
@@ -158,11 +159,13 @@ class APIClaudeOpenRequest(BaseModel):
     ``{id}`` replaced by the (validated) session UUID. Defaults server-side to
     ``claude --resume {id}`` when omitted.
     """
+
     command_template: str | None = Field(default=None, max_length=500)
 
 
 class APIClaudeOpenResult(BaseModel):
     """The local tmux session/window a Claude conversation was resumed into."""
+
     box: str
     session_name: str
     working_directory: str

@@ -59,11 +59,13 @@ def _parse_grep_output(output: str, limit: int) -> tuple[list[APIGrepMatch], boo
         except ValueError:
             continue
         content = parts[2][:500]  # Truncate long lines
-        matches.append(APIGrepMatch(
-            file=parts[0],
-            line_number=line_number,
-            line=content,
-        ))
+        matches.append(
+            APIGrepMatch(
+                file=parts[0],
+                line_number=line_number,
+                line=content,
+            )
+        )
         if len(matches) >= limit:
             return matches, True
     return matches, False
@@ -167,9 +169,7 @@ def _bre_to_python(pattern: str) -> str:
             continue
         if char == "^" and at_start:
             out.append("^")
-        elif char == "$" and (
-            i + 1 == len(pattern) or pattern.startswith(("\\)", "\\|"), i + 1)
-        ):
+        elif char == "$" and (i + 1 == len(pattern) or pattern.startswith(("\\)", "\\|"), i + 1)):
             out.append("$")
         elif char == "*" and not at_start:
             out.append("*")

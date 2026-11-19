@@ -53,9 +53,7 @@ def _resolve_resume_command(template: str | None, session_id: str) -> str:
     """
     chosen = (template or "").strip() or DEFAULT_RESUME_TEMPLATE
     if "{id}" not in chosen:
-        raise HTTPException(
-            status_code=400, detail="Resume command template must contain {id}"
-        )
+        raise HTTPException(status_code=400, detail="Resume command template must contain {id}")
     if any(ch in chosen for ch in ("\n", "\r", "\x00")):
         raise HTTPException(
             status_code=400, detail="Resume command template contains illegal characters"
@@ -111,9 +109,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if not is_valid_session_id(session_id):
             raise HTTPException(status_code=400, detail="Invalid Claude session id")
 
-        command = _resolve_resume_command(
-            body.command_template if body else None, session_id
-        )
+        command = _resolve_resume_command(body.command_template if body else None, session_id)
 
         info = await asyncio.to_thread(get_claude_session, session_id)
         if info is None or not info.cwd:
@@ -130,9 +126,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         session_dir = info.repo_root or info.cwd  # repo root → the tmux session
         window_dir = info.cwd  # exact cwd → where `claude --resume` actually runs
         if not Path(window_dir).is_dir():
-            raise HTTPException(
-                status_code=409, detail="Working directory no longer exists"
-            )
+            raise HTTPException(status_code=409, detail="Working directory no longer exists")
 
         session = ts_session_name(session_dir)
         window = _window_name(session_id, info.title)

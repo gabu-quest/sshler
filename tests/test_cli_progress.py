@@ -110,9 +110,7 @@ def test_push_rejects_invalid_name(monkeypatch, tmp_path, capsys):
 def test_push_rejects_invalid_status(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("SSHLER_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("SSHLER_TOKEN", "t")
-    rc = cli.progress_push(
-        _ns(name="ok", current=1.0, total=2.0, status="garbage")
-    )
+    rc = cli.progress_push(_ns(name="ok", current=1.0, total=2.0, status="garbage"))
     assert rc == 2
     assert "invalid status" in capsys.readouterr().err
 
@@ -155,9 +153,7 @@ def test_push_posts_to_correct_endpoint(monkeypatch, tmp_path, capsys):
         )
 
     _patch_httpx_client(monkeypatch, handler)
-    rc = cli.progress_push(
-        _ns(name="build", current=3.0, total=10.0, color="blue", label="lbl")
-    )
+    rc = cli.progress_push(_ns(name="build", current=3.0, total=10.0, color="blue", label="lbl"))
     assert rc == 0
     assert seen["method"] == "POST"
     assert seen["url"] == "http://127.0.0.1:8822/api/v1/progress/build"
@@ -195,9 +191,7 @@ def test_push_json_output(monkeypatch, tmp_path, capsys):
         )
 
     _patch_httpx_client(monkeypatch, handler)
-    rc = cli.progress_push(
-        _ns(name="x", current=1.0, total=2.0, json_output=True)
-    )
+    rc = cli.progress_push(_ns(name="x", current=1.0, total=2.0, json_output=True))
     assert rc == 0
     out = capsys.readouterr().out.strip()
     parsed = json.loads(out)
@@ -275,9 +269,7 @@ def test_push_invalid_meta_json_warns_but_still_pushes(monkeypatch, tmp_path, ca
         return _ok_handler(req)
 
     _patch_httpx_client(monkeypatch, handler)
-    rc = cli.progress_push(
-        _ns(name="build", current=1.0, total=2.0, meta_json="{not valid")
-    )
+    rc = cli.progress_push(_ns(name="build", current=1.0, total=2.0, meta_json="{not valid"))
     assert rc == 0  # the push still went through
     assert "metadata" not in seen["body"]  # bad metadata dropped, bar advances
     assert "invalid --meta-json" in capsys.readouterr().err
@@ -293,9 +285,7 @@ def test_push_clear_meta_sends_empty_object(monkeypatch, tmp_path):
         return _ok_handler(req)
 
     _patch_httpx_client(monkeypatch, handler)
-    rc = cli.progress_push(
-        _ns(name="build", current=1.0, total=2.0, meta=["x=1"], clear_meta=True)
-    )
+    rc = cli.progress_push(_ns(name="build", current=1.0, total=2.0, meta=["x=1"], clear_meta=True))
     assert rc == 0
     assert seen["body"]["metadata"] == {}  # clear wins over --meta
 

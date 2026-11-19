@@ -66,9 +66,7 @@ def create_rate_limit_dependency(
 
         # Check rate limit
         if not limiter.check(client_ip):
-            logger.warning(
-                f"[Security] Rate limit exceeded for {name} endpoint from {client_ip}"
-            )
+            logger.warning(f"[Security] Rate limit exceeded for {name} endpoint from {client_ip}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Rate limit exceeded. Maximum {rate} requests per {per} seconds allowed.",

@@ -295,7 +295,6 @@ class ServerSettings:
             self.basic_auth_header = "Basic " + base64.b64encode(raw).decode("ascii")
 
 
-
 async def _convert_path_to_wsl(path: str) -> str | None:
     if not LOCAL_IS_WINDOWS:
         return path
@@ -539,12 +538,10 @@ async def _open_local_pty_tmux(
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
 
-    master_fd, pid = await asyncio.to_thread(
-        spawn_on_pty, command, env=env, rows=rows, cols=cols
-    )
+    master_fd, pid = await asyncio.to_thread(spawn_on_pty, command, env=env, rows=rows, cols=cols)
 
-    stdin = os.fdopen(master_fd, 'wb', buffering=0, closefd=False)
-    stdout = os.fdopen(master_fd, 'rb', buffering=0, closefd=False)
+    stdin = os.fdopen(master_fd, "wb", buffering=0, closefd=False)
+    stdout = os.fdopen(master_fd, "rb", buffering=0, closefd=False)
 
     logger.info(f"[PTY] Spawned local tmux with PID {pid}, fd {master_fd}")
     return LocalPTYProcess(master_fd, pid, stdin, stdout)
@@ -571,9 +568,7 @@ def _resolve_windows_shell(shell_id: str) -> dict[str, object]:
         raise RuntimeError("No usable Windows shell found")
 
     if chosen["id"] == "wsl" and not chosen.get("available"):
-        raise WSLNotAvailableError(
-            "WSL is not installed. Run 'wsl --install' to enable it."
-        )
+        raise WSLNotAvailableError("WSL is not installed. Run 'wsl --install' to enable it.")
     return chosen
 
 
@@ -799,9 +794,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             from .artifacts import ArtifactSidecar
 
             artifact_sidecar = ArtifactSidecar(settings.artifact_port)
-            settings.artifact_server_port_actual = await asyncio.to_thread(
-                artifact_sidecar.start
-            )
+            settings.artifact_server_port_actual = await asyncio.to_thread(artifact_sidecar.start)
             app.state.artifact_sidecar = artifact_sidecar
 
         # Detect lost sessions from before crash
@@ -819,6 +812,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         # Launch headless chromium for PDF export if playwright is available.
         # Soft-failure — sets PDF_RENDERER.available based on outcome.
         from .pdf import PDF_RENDERER
+
         await PDF_RENDERER.start()
 
         # Sweep persisted Windows shells for exited/idle entries (Windows only).
@@ -855,7 +849,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             allow_origins=settings.allow_origins,
             allow_credentials=True,
             allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["*"]
+            allow_headers=["*"],
         )
 
     @application.middleware("http")
@@ -871,8 +865,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             if auth_tracker.is_locked_out(client_ip):
                 retry_after = auth_tracker.get_lockout_remaining(client_ip)
                 logging.warning(
-                    f"[Security] Blocked locked-out IP {client_ip} "
-                    f"({retry_after}s remaining)"
+                    f"[Security] Blocked locked-out IP {client_ip} ({retry_after}s remaining)"
                 )
                 return Response(
                     status_code=429,
@@ -926,9 +919,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         response.headers["Referrer-Policy"] = "no-referrer"
         frame_sources = ["'self'"]
         if settings.artifact_server_port_actual is not None:
-            frame_sources.append(
-                f"http://127.0.0.1:{settings.artifact_server_port_actual}"
-            )
+            frame_sources.append(f"http://127.0.0.1:{settings.artifact_server_port_actual}")
         csp_directives = [
             "default-src 'self'",
             "img-src 'self' data:",
@@ -1005,9 +996,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         app_settings = get_app_settings()
 
         # Only check state-changing methods if origin check is enabled
-        if (
-            app_settings.origin_check_enabled
-            and request.method in ("POST", "PUT", "PATCH", "DELETE")
+        if app_settings.origin_check_enabled and request.method in (
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
         ):
             origin = request.headers.get("origin") or request.headers.get("referer")
 
@@ -1449,7 +1442,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                             break
                         logger.debug(f"Reader: got {len(data)} bytes, sending to websocket")
                         # Convert str to bytes if needed (SSH returns str, local returns bytes)
-                        bytes_data = data.encode('utf-8') if isinstance(data, str) else data
+                        bytes_data = data.encode("utf-8") if isinstance(data, str) else data
                         await websocket.send_bytes(bytes_data)
                 except Exception as exc:
                     logger.debug(f"Reader ended: {exc}")
@@ -1693,6 +1686,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 return
 
         await websocket.accept()
+
         async def progress_snapshot() -> dict:
             bars = await state.list_progress_async()
             return {

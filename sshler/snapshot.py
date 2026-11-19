@@ -33,6 +33,7 @@ class SnapshotSettings(Protocol):
     @property
     def snapshot_interval(self) -> int: ...
 
+
 _last_snapshot_at: float | None = None
 _recovery_sessions: list[dict] = []
 
@@ -124,14 +125,16 @@ async def snapshot_all_sessions() -> int:
             # tmux is gone but we have a snapshot — session died mid-run
             existing_ids = {s["id"] for s in _recovery_sessions}
             if session.id not in existing_ids:
-                _recovery_sessions.append({
-                    "id": session.id,
-                    "box": session.box,
-                    "session_name": session.session_name,
-                    "working_directory": session.working_directory,
-                    "last_snapshot_at": meta["last_snapshot_at"],
-                    "windows": meta["windows"],
-                })
+                _recovery_sessions.append(
+                    {
+                        "id": session.id,
+                        "box": session.box,
+                        "session_name": session.session_name,
+                        "working_directory": session.working_directory,
+                        "last_snapshot_at": meta["last_snapshot_at"],
+                        "windows": meta["windows"],
+                    }
+                )
                 logger.warning("Detected dead session: %s", session.session_name)
                 await state.update_session_activity_async(session.id, active=False)
     if count > 0:
@@ -193,17 +196,21 @@ async def reconcile_on_startup() -> list[dict]:
             logger.info("Recovered session: %s", session.session_name)
         elif meta.get("last_snapshot_at"):
             # Has snapshot but no live tmux — lost
-            lost.append({
-                "id": session.id,
-                "box": session.box,
-                "session_name": session.session_name,
-                "working_directory": session.working_directory,
-                "last_snapshot_at": meta["last_snapshot_at"],
-                "windows": meta.get("windows", []),
-            })
-            logger.warning("Lost session: %s (last snapshot %.0fs ago)",
-                           session.session_name,
-                           time.time() - meta["last_snapshot_at"])
+            lost.append(
+                {
+                    "id": session.id,
+                    "box": session.box,
+                    "session_name": session.session_name,
+                    "working_directory": session.working_directory,
+                    "last_snapshot_at": meta["last_snapshot_at"],
+                    "windows": meta.get("windows", []),
+                }
+            )
+            logger.warning(
+                "Lost session: %s (last snapshot %.0fs ago)",
+                session.session_name,
+                time.time() - meta["last_snapshot_at"],
+            )
 
     return lost
 
@@ -233,7 +240,10 @@ TMUX_CMD_TIMEOUT = 5  # seconds
 
 
 async def _run_tmux(
-    cmd: list[str], timeout: float = TMUX_CMD_TIMEOUT, *, capture_output: bool = True,
+    cmd: list[str],
+    timeout: float = TMUX_CMD_TIMEOUT,
+    *,
+    capture_output: bool = True,
 ) -> tuple[int, bytes, bytes]:
     """Run a tmux command with a timeout. Returns (returncode, stdout, stderr).
 
@@ -291,8 +301,12 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
     first = windows[0]
     first_path = _resolve_path(first.get("path"))
     cmd = base + [
-        "new-session", "-d", "-s", session_name,
-        "-c", first_path,
+        "new-session",
+        "-d",
+        "-s",
+        session_name,
+        "-c",
+        first_path,
     ]
     if first.get("name"):
         cmd += ["-n", first["name"]]
@@ -324,8 +338,11 @@ async def recreate_session(session_name: str, windows: list[dict]) -> bool:
     for win in windows[1:]:
         win_path = _resolve_path(win.get("path"), fallback=first_path)
         new_win_cmd = base + [
-            "new-window", "-t", session_name,
-            "-c", win_path,
+            "new-window",
+            "-t",
+            session_name,
+            "-c",
+            win_path,
         ]
         if win.get("name"):
             new_win_cmd += ["-n", win["name"]]
@@ -381,8 +398,10 @@ async def _recreate_panes(base: list[str], session_name: str, win: dict) -> None
         pane_path = _resolve_path(pane.get("path"), fallback=win_path)
         split_cmd = base + [
             "split-window",
-            "-t", f"{session_name}:{win['index']}",
-            "-c", pane_path,
+            "-t",
+            f"{session_name}:{win['index']}",
+            "-c",
+            pane_path,
         ]
         try:
             rc, _, _ = await _run_tmux(split_cmd, capture_output=False)

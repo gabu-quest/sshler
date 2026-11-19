@@ -44,10 +44,23 @@ def _make_run_tmux(has_session_rc: int = 1):
 
     async def fake_run_tmux(cmd, timeout=5, *, capture_output=True):
         calls.append(cmd)
-        subcmd = next((c for c in cmd if c in {
-            "has-session", "kill-server", "new-session", "new-window",
-            "split-window", "send-keys", "bind-key",
-        }), None)
+        subcmd = next(
+            (
+                c
+                for c in cmd
+                if c
+                in {
+                    "has-session",
+                    "kill-server",
+                    "new-session",
+                    "new-window",
+                    "split-window",
+                    "send-keys",
+                    "bind-key",
+                }
+            ),
+            None,
+        )
         if subcmd == "has-session":
             return (has_session_rc, b"", b"")
         return (0, b"", b"")
@@ -103,14 +116,17 @@ async def test_recreate_kills_existing_before_recreating(two_window_snapshot: li
     assert result is True
 
     # Must kill the existing session before recreating
-    assert any("kill-server" in cmd for cmd in calls), \
+    assert any("kill-server" in cmd for cmd in calls), (
         f"Expected kill-server to destroy bare auto-reconnect session, got: {calls}"
+    )
 
     # Must still create the session with full layout
-    assert any("new-session" in cmd for cmd in calls), \
+    assert any("new-session" in cmd for cmd in calls), (
         f"Expected new-session after killing bare session, got: {calls}"
-    assert any("new-window" in cmd for cmd in calls), \
+    )
+    assert any("new-window" in cmd for cmd in calls), (
         f"Expected new-window for second window, got: {calls}"
+    )
 
     # Verify ordering: kill-server comes before new-session
     kill_idx = next(i for i, cmd in enumerate(calls) if "kill-server" in cmd)

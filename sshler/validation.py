@@ -135,10 +135,7 @@ class PathValidator:
             ValidationError: If session name is empty after sanitization
         """
         # Allow only alphanumeric, dash, underscore, dot
-        sanitized = "".join(
-            ch if ch.isalnum() or ch in "-_." else "_"
-            for ch in session_name
-        )
+        sanitized = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in session_name)
 
         if not sanitized:
             raise ValidationError("Session name must contain at least one valid character")

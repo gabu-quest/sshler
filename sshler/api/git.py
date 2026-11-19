@@ -168,14 +168,14 @@ def _build_remote_repo_path_command(directory: str, path: str) -> str:
     return (
         f"cd {shlex.quote(directory)} && "
         "ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && "
-        f"REL=$(ROOT=\"$ROOT\" DIR={shlex.quote(directory)} TARGET={shlex.quote(path)} "
+        f'REL=$(ROOT="$ROOT" DIR={shlex.quote(directory)} TARGET={shlex.quote(path)} '
         "python3 -c 'import os, sys; "
-        "root = os.environ[\"ROOT\"]; "
-        "directory = os.environ[\"DIR\"]; "
-        "target = os.environ[\"TARGET\"]; "
+        'root = os.environ["ROOT"]; '
+        'directory = os.environ["DIR"]; '
+        'target = os.environ["TARGET"]; '
         "candidate = target if os.path.isabs(target) else os.path.join(directory, target); "
         "rel = os.path.relpath(os.path.normpath(candidate), root); "
-        "(rel in {\".\", \"..\"} or rel.startswith(\"../\")) and sys.exit(3); "
+        '(rel in {".", ".."} or rel.startswith("../")) and sys.exit(3); '
         "print(rel)' 2>/dev/null)"
     )
 
@@ -308,7 +308,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             validated_path = _validate_remote_file_path(path)
             cmd = (
                 f"{_build_remote_repo_path_command(validated_dir, validated_path)} && "
-                "git -C \"$ROOT\" blame --porcelain -- \"$REL\" 2>/dev/null"
+                'git -C "$ROOT" blame --porcelain -- "$REL" 2>/dev/null'
             )
             ssh_pool = get_pool()
             try:

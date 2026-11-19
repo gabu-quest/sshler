@@ -9,6 +9,7 @@ Tests the actual mobile implementation:
 Run with:
     uv run pytest tests/e2e/test_mobile_responsive.py -v
 """
+
 from __future__ import annotations
 
 import re

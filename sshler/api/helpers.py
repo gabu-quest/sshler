@@ -82,9 +82,7 @@ def available_windows_shells() -> list[dict[str, object]]:
             argv = [exe]
             if shell_id in ("pwsh", "powershell"):
                 argv.append("-NoLogo")
-            shells.append(
-                {"id": shell_id, "label": label, "argv": argv, "available": True}
-            )
+            shells.append({"id": shell_id, "label": label, "argv": argv, "available": True})
 
     wsl_exe = shutil.which("wsl")
     if wsl_exe:
@@ -103,9 +101,7 @@ def available_windows_shells() -> list[dict[str, object]]:
 
 def default_windows_shell() -> str | None:
     """Preferred default shell id: first available of pwsh, powershell, cmd."""
-    available = {
-        str(s["id"]) for s in available_windows_shells() if s.get("available")
-    }
+    available = {str(s["id"]) for s in available_windows_shells() if s.get("available")}
     for shell_id in ("pwsh", "powershell", "cmd"):
         if shell_id in available:
             return shell_id
@@ -357,9 +353,7 @@ async def _read_file_bytes(
     return data, False
 
 
-async def _read_remote_text(
-    connection: asyncssh.SSHClientConnection, path: str, limit: int
-) -> str:
+async def _read_remote_text(connection: asyncssh.SSHClientConnection, path: str, limit: int) -> str:
     """Retrieve UTF-8 text from an SFTP connection with graceful fallback."""
 
     try:

@@ -55,8 +55,7 @@ def client_path(path: Path) -> str:
             marks=pytest.mark.skipif(
                 sys.platform == "win32",
                 reason=(
-                    "GNU grep path runs only on a POSIX local box; "
-                    "Windows uses the built-in search"
+                    "GNU grep path runs only on a POSIX local box; Windows uses the built-in search"
                 ),
             ),
         ),
@@ -369,9 +368,7 @@ class TestGrepInjectionPrevention:
         write(workdir / "safe.txt", f"before\nsays {pattern} here\n")
 
         data = grep(grep_client, workdir, pattern, case_sensitive="true")
-        assert hits(data) == {
-            (client_path(workdir / "safe.txt"), 2, f"says {pattern} here")
-        }
+        assert hits(data) == {(client_path(workdir / "safe.txt"), 2, f"says {pattern} here")}
         assert not Path(marker).exists()
         assert (workdir / "safe.txt").read_bytes() == f"before\nsays {pattern} here\n".encode()
 

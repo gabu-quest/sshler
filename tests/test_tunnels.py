@@ -55,19 +55,31 @@ class TestTunnelRegistry:
 
     def test_filter_tunnels_by_box(self):
         _active_tunnels["t1"] = TunnelInfo(
-            id="t1", box="box1", tunnel_type="local",
-            local_host="127.0.0.1", local_port=3000,
-            remote_host="127.0.0.1", remote_port=3000,
+            id="t1",
+            box="box1",
+            tunnel_type="local",
+            local_host="127.0.0.1",
+            local_port=3000,
+            remote_host="127.0.0.1",
+            remote_port=3000,
         )
         _active_tunnels["t2"] = TunnelInfo(
-            id="t2", box="box2", tunnel_type="remote",
-            local_host="127.0.0.1", local_port=5432,
-            remote_host="127.0.0.1", remote_port=5432,
+            id="t2",
+            box="box2",
+            tunnel_type="remote",
+            local_host="127.0.0.1",
+            local_port=5432,
+            remote_host="127.0.0.1",
+            remote_port=5432,
         )
         _active_tunnels["t3"] = TunnelInfo(
-            id="t3", box="box1", tunnel_type="local",
-            local_host="127.0.0.1", local_port=8080,
-            remote_host="127.0.0.1", remote_port=80,
+            id="t3",
+            box="box1",
+            tunnel_type="local",
+            local_host="127.0.0.1",
+            local_port=8080,
+            remote_host="127.0.0.1",
+            remote_port=80,
         )
 
         box1_tunnels = [t for t in _active_tunnels.values() if t.box == "box1"]
@@ -77,9 +89,13 @@ class TestTunnelRegistry:
     def test_tunnel_listener_close(self):
         mock_listener = MagicMock()
         t = TunnelInfo(
-            id="t1", box="box1", tunnel_type="local",
-            local_host="127.0.0.1", local_port=3000,
-            remote_host="127.0.0.1", remote_port=3000,
+            id="t1",
+            box="box1",
+            tunnel_type="local",
+            local_host="127.0.0.1",
+            local_port=3000,
+            remote_host="127.0.0.1",
+            remote_port=3000,
             listener=mock_listener,
         )
         _active_tunnels["t1"] = t
@@ -96,9 +112,13 @@ class TestTunnelApiModels:
         from sshler.api.tunnels import _tunnel_to_api
 
         t = TunnelInfo(
-            id="t1", box="mybox", tunnel_type="local",
-            local_host="0.0.0.0", local_port=8080,
-            remote_host="10.0.0.1", remote_port=80,
+            id="t1",
+            box="mybox",
+            tunnel_type="local",
+            local_host="0.0.0.0",
+            local_port=8080,
+            remote_host="10.0.0.1",
+            remote_port=80,
         )
         api = _tunnel_to_api(t)
         assert api.id == "t1"

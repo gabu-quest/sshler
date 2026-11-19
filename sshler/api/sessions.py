@@ -175,7 +175,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             if not new_name or len(new_name) > 64:
                 raise HTTPException(status_code=400, detail="Invalid session name")
             # Only allow safe characters
-            if not re.match(r'^[a-zA-Z0-9_.-]+$', new_name):
+            if not re.match(r"^[a-zA-Z0-9_.-]+$", new_name):
                 raise HTTPException(
                     status_code=400,
                     detail="Session name may only contain alphanumeric, underscore, dot, and dash",
@@ -453,11 +453,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
 
         # Validate session name with the same charset other endpoints use
-        if not re.match(r'^[a-zA-Z0-9_.-]+$', session_name):
+        if not re.match(r"^[a-zA-Z0-9_.-]+$", session_name):
             raise HTTPException(status_code=400, detail="Invalid session name")
-        if window is not None and not re.match(r'^[a-zA-Z0-9_.@:-]+$', window):
+        if window is not None and not re.match(r"^[a-zA-Z0-9_.@:-]+$", window):
             raise HTTPException(status_code=400, detail="Invalid window")
-        if pane is not None and not re.match(r'^[a-zA-Z0-9_.@:%-]+$', pane):
+        if pane is not None and not re.match(r"^[a-zA-Z0-9_.@:%-]+$", pane):
             raise HTTPException(status_code=400, detail="Invalid pane")
 
         target = session_name

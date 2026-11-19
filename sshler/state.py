@@ -310,9 +310,7 @@ def _ensure_artifact_aliases() -> None:
     registrations = list(ArtifactRegistration.query().order_by("created_at").all())
     for registration in registrations:
         used = used_by_project.setdefault(registration.project_id, set())
-        source_name = Path(registration.source_path).stem or Path(
-            registration.source_path
-        ).name
+        source_name = Path(registration.source_path).stem or Path(registration.source_path).name
         base = artifact_slug(
             registration.slug or registration.title_override or source_name,
             "artifact",
@@ -488,12 +486,7 @@ def list_favorites(box_name: str) -> list[str]:
 
     _require_db()
     with _DB_LOCK:
-        rows = (
-            Favorite.query()
-            .filter(F("box") == box_name)
-            .order_by("position")
-            .all()
-        )
+        rows = Favorite.query().filter(F("box") == box_name).order_by("position").all()
         return [row.path for row in rows]
 
 
@@ -555,10 +548,7 @@ def replace_favorites(box_name: str, paths: Iterable[str]) -> None:
 
     now = time.time()
     with _DB_LOCK:
-        existing = {
-            fav.path: fav
-            for fav in Favorite.query().filter(F("box") == box_name).all()
-        }
+        existing = {fav.path: fav for fav in Favorite.query().filter(F("box") == box_name).all()}
 
         for position, path in enumerate(deduped):
             favourite = existing.pop(path, None)
@@ -596,12 +586,7 @@ def remove_box(box_name: str) -> None:
 
 
 def _next_position(box_name: str) -> int:
-    existing = (
-        Favorite.query()
-        .filter(F("box") == box_name)
-        .order_by("position", desc=True)
-        .first()
-    )
+    existing = Favorite.query().filter(F("box") == box_name).order_by("position", desc=True).first()
     if not existing:
         return 0
     return existing.position + 1
@@ -976,9 +961,7 @@ def record_directory_visit(box_name: str, path: str) -> DirectoryVisit:
 
     with _DB_LOCK:
         existing = (
-            DirectoryVisit.query()
-            .filter((F("box") == box_name) & (F("path") == path))
-            .first()
+            DirectoryVisit.query().filter((F("box") == box_name) & (F("path") == path)).first()
         )
 
         if existing:
@@ -1107,12 +1090,7 @@ def create_snippet(
     _require_db()
     with _DB_LOCK:
         # Determine next sort_order
-        existing = (
-            Snippet.query()
-            .filter(F("box") == box)
-            .order_by("sort_order", desc=True)
-            .first()
-        )
+        existing = Snippet.query().filter(F("box") == box).order_by("sort_order", desc=True).first()
         next_order = (existing.sort_order + 1) if existing else 0
 
         snippet = Snippet(
@@ -1126,9 +1104,7 @@ def create_snippet(
         return snippet
 
 
-async def create_snippet_async(
-    box: str, label: str, command: str, category: str = ""
-) -> Snippet:
+async def create_snippet_async(box: str, label: str, command: str, category: str = "") -> Snippet:
     return await asyncio.to_thread(create_snippet, box, label, command, category)
 
 
@@ -1324,6 +1300,7 @@ async def delete_progress_async(name: str) -> bool:
 
 # --- Diff notebooks ---
 
+
 def save_diff_notebook(label: str, envelope_json: str, cell_count: int) -> DiffNotebook:
     """Persist a new diff notebook. Always creates a new row (no upsert)."""
     _require_db()
@@ -1394,16 +1371,12 @@ def get_or_create_artifact_project(name: str) -> tuple[ArtifactProject, bool]:
     normalized = _normalize_project_name(clean_name)
     now = time.time()
     with _DB_LOCK:
-        existing = (
-            ArtifactProject.query().filter(F("normalized_name") == normalized).first()
-        )
+        existing = ArtifactProject.query().filter(F("normalized_name") == normalized).first()
         if existing:
             return existing, False
         used = {row.slug for row in ArtifactProject.query().all()}
         project_id = secrets.token_urlsafe(12)
-        slug = _unique_artifact_slug(
-            artifact_slug(clean_name, "project"), used, project_id
-        )
+        slug = _unique_artifact_slug(artifact_slug(clean_name, "project"), used, project_id)
         project = ArtifactProject(
             id=project_id,
             name=clean_name,
@@ -1451,9 +1424,7 @@ def rename_artifact_project(project_id: str, name: str) -> ArtifactProject | Non
         project = ArtifactProject.query().filter(F("id") == project_id).first()
         if not project:
             return None
-        collision = (
-            ArtifactProject.query().filter(F("normalized_name") == normalized).first()
-        )
+        collision = ArtifactProject.query().filter(F("normalized_name") == normalized).first()
         if collision and collision.id != project_id:
             raise ValueError("A project with that name already exists")
         project.name = clean_name
@@ -1463,9 +1434,7 @@ def rename_artifact_project(project_id: str, name: str) -> ArtifactProject | Non
         return project
 
 
-async def rename_artifact_project_async(
-    project_id: str, name: str
-) -> ArtifactProject | None:
+async def rename_artifact_project_async(project_id: str, name: str) -> ArtifactProject | None:
     return await asyncio.to_thread(rename_artifact_project, project_id, name)
 
 
@@ -1489,9 +1458,7 @@ async def list_artifact_registrations_async(
 def get_artifact_registration(registration_id: str) -> ArtifactRegistration | None:
     _require_db()
     with _DB_LOCK:
-        return (
-            ArtifactRegistration.query().filter(F("id") == registration_id).first()
-        )
+        return ArtifactRegistration.query().filter(F("id") == registration_id).first()
 
 
 async def get_artifact_registration_async(
@@ -1505,15 +1472,9 @@ def find_artifact_registration(
 ) -> ArtifactRegistration | None:
     _require_db()
     with _DB_LOCK:
-        rows = (
-            ArtifactRegistration.query().filter(F("source_path") == source_path).all()
-        )
+        rows = ArtifactRegistration.query().filter(F("source_path") == source_path).all()
         return next(
-            (
-                row
-                for row in rows
-                if row.mode == mode and row.entrypoint == entrypoint
-            ),
+            (row for row in rows if row.mode == mode and row.entrypoint == entrypoint),
             None,
         )
 
@@ -1521,9 +1482,7 @@ def find_artifact_registration(
 async def find_artifact_registration_async(
     source_path: str, mode: str, entrypoint: str | None
 ) -> ArtifactRegistration | None:
-    return await asyncio.to_thread(
-        find_artifact_registration, source_path, mode, entrypoint
-    )
+    return await asyncio.to_thread(find_artifact_registration, source_path, mode, entrypoint)
 
 
 def get_artifact_project_by_slug(slug: str) -> ArtifactProject | None:
@@ -1540,11 +1499,7 @@ def get_artifact_registration_by_alias(
         project = ArtifactProject.query().filter(F("slug") == project_slug).first()
         if project is None:
             return None
-        rows = (
-            ArtifactRegistration.query()
-            .filter(F("project_id") == project.id)
-            .all()
-        )
+        rows = ArtifactRegistration.query().filter(F("project_id") == project.id).all()
         return next((row for row in rows if row.slug == registration_slug), None)
 
 
@@ -1558,10 +1513,7 @@ def find_artifact_registration_by_mount(
             row
             for row in ArtifactRegistration.query().all()
             if row.mount_path
-            and (
-                request_path == row.mount_path
-                or request_path.startswith(f"{row.mount_path}/")
-            )
+            and (request_path == row.mount_path or request_path.startswith(f"{row.mount_path}/"))
         ]
         if not rows:
             return None
@@ -1584,20 +1536,15 @@ def create_artifact_registration(
     _require_db()
     now = time.time()
     with _DB_LOCK:
-        project_rows = (
-            ArtifactRegistration.query().filter(F("project_id") == project_id).all()
-        )
+        project_rows = ArtifactRegistration.query().filter(F("project_id") == project_id).all()
         used = {row.slug for row in project_rows}
         source_name = Path(source_path).stem or Path(source_path).name
         slug_base = artifact_slug(slug or title_override or source_name, "artifact")
         if slug is not None and slug_base in used:
             raise ValueError("An artifact with that alias already exists in the project")
-        chosen_slug = _unique_artifact_slug(
-            slug_base, used, secrets.token_urlsafe(16)
-        )
+        chosen_slug = _unique_artifact_slug(slug_base, used, secrets.token_urlsafe(16))
         if mount_path and any(
-            row.mount_path == mount_path
-            for row in ArtifactRegistration.query().all()
+            row.mount_path == mount_path for row in ArtifactRegistration.query().all()
         ):
             raise ValueError("That artifact mount path is already registered")
         registration = ArtifactRegistration(
@@ -1656,9 +1603,7 @@ def update_artifact_registration(
         "mount_path",
     }
     with _DB_LOCK:
-        registration = (
-            ArtifactRegistration.query().filter(F("id") == registration_id).first()
-        )
+        registration = ArtifactRegistration.query().filter(F("id") == registration_id).first()
         if not registration:
             return None
         next_project_id = str(changes.get("project_id", registration.project_id))
@@ -1698,17 +1643,13 @@ def update_artifact_registration(
 async def update_artifact_registration_async(
     registration_id: str, **changes: object
 ) -> ArtifactRegistration | None:
-    return await asyncio.to_thread(
-        update_artifact_registration, registration_id, **changes
-    )
+    return await asyncio.to_thread(update_artifact_registration, registration_id, **changes)
 
 
 def delete_artifact_registration(registration_id: str) -> bool:
     _require_db()
     with _DB_LOCK:
-        registration = (
-            ArtifactRegistration.query().filter(F("id") == registration_id).first()
-        )
+        registration = ArtifactRegistration.query().filter(F("id") == registration_id).first()
         if not registration:
             return False
         registration.delete()

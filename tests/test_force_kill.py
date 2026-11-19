@@ -116,9 +116,7 @@ async def test_force_kill_terminates_sighup_ignoring_process(victim_session):
 
 
 @pytest.mark.asyncio
-async def test_force_kill_leaves_other_sessions_untouched(
-    victim_session, bystander_session
-):
+async def test_force_kill_leaves_other_sessions_untouched(victim_session, bystander_session):
     await _run(victim_session, "new-session", "-d", "-s", victim_session)
     await _run(bystander_session, "new-session", "-d", "-s", bystander_session)
     await asyncio.sleep(0.3)
@@ -163,9 +161,7 @@ def test_delete_endpoint_accepts_force_and_removes_row(tmp_path, monkeypatch):
         assert resp.status_code == 200
         assert resp.json()["message"] == "deleted"
 
-        listing = client.get(
-            "/api/v1/boxes/local/sessions", headers=auth_headers()
-        )
+        listing = client.get("/api/v1/boxes/local/sessions", headers=auth_headers())
         assert listing.status_code == 200
         assert all(item["id"] != session_id for item in listing.json())
     finally:
@@ -173,9 +169,7 @@ def test_delete_endpoint_accepts_force_and_removes_row(tmp_path, monkeypatch):
         state.reset_state()
 
 
-def test_force_kill_by_name_route_terminates_real_session(
-    victim_session, tmp_path, monkeypatch
-):
+def test_force_kill_by_name_route_terminates_real_session(victim_session, tmp_path, monkeypatch):
     """POST by-name/force-kill kills a live local session through the ROUTE.
 
     Mutation killed: the route no longer calling ``force_kill_local_session``
@@ -331,17 +325,13 @@ def test_delete_route_calls_force_helper_only_when_force_true(
         assert resp.status_code == 200
         # Still exactly the one forced call; the plain delete used kill-session.
         assert kill_recorders["force"] == ["forced-one"]
-        assert kill_recorders["plain"] == [
-            ("plain-one", ["kill-session", "-t", "plain-one"])
-        ]
+        assert kill_recorders["plain"] == [("plain-one", ["kill-session", "-t", "plain-one"])]
     finally:
         client.close()
         state.reset_state()
 
 
-def test_delete_route_force_without_kill_tmux_calls_nothing(
-    tmp_path, monkeypatch, kill_recorders
-):
+def test_delete_route_force_without_kill_tmux_calls_nothing(tmp_path, monkeypatch, kill_recorders):
     """Mutation killed: ``force`` alone (no ``kill_tmux``) must not kill tmux."""
     from sshler import state
     from tests.test_api_v1 import auth_headers, build_client, setup_config
@@ -384,9 +374,7 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
     async def fake_connect(self, box, application_config):
         return FakeConnection()
 
-    monkeypatch.setattr(
-        "sshler.api.dependencies.APIDependencies.connect_for_box", fake_connect
-    )
+    monkeypatch.setattr("sshler.api.dependencies.APIDependencies.connect_for_box", fake_connect)
     config_dir = _write_boxes(tmp_path, [{"name": "remote1", "host": "example.invalid"}])
     client = build_client(config_dir, monkeypatch)
     try:
@@ -443,10 +431,7 @@ def test_force_kill_by_name_remote_box_is_400_and_never_kills(
             headers=auth_headers(),
         )
         assert resp.status_code == 400
-        assert (
-            resp.json()["detail"]
-            == "force-kill by name is supported for the local box only"
-        )
+        assert resp.json()["detail"] == "force-kill by name is supported for the local box only"
         assert kill_recorders["force"] == []
     finally:
         client.close()

@@ -42,8 +42,7 @@ def auth_headers() -> dict[str, str]:
             marks=pytest.mark.skipif(
                 sys.platform == "win32",
                 reason=(
-                    "GNU find path runs only on a POSIX local box; "
-                    "Windows uses the built-in walk"
+                    "GNU find path runs only on a POSIX local box; Windows uses the built-in walk"
                 ),
             ),
         ),
@@ -166,8 +165,8 @@ class TestFrecencyScoring:
         assert len(results) == 3
         # Verify ordering by score (descending)
         assert results[0][0] == "/projects/sshler"  # 5 visits
-        assert results[1][0] == "/projects/other"   # 2 visits
-        assert results[2][0] == "/projects/demo"    # 1 visit
+        assert results[1][0] == "/projects/other"  # 2 visits
+        assert results[2][0] == "/projects/demo"  # 1 visit
 
         # Verify scores are descending
         assert results[0][1] > results[1][1] > results[2][1]
@@ -405,17 +404,10 @@ class TestLocalDiscovery:
         results = discover(root, "*blue*", include_files=True)
 
         expected_file = (
-            root
-            / "gadgets"
-            / "captures"
-            / "capture_x"
-            / "exports"
-            / "blue_vs_green_frame473.png"
+            root / "gadgets" / "captures" / "capture_x" / "exports" / "blue_vs_green_frame473.png"
         ).as_posix()
         expected_dir = (root / "docs" / "blue-notes").as_posix()
-        assert sorted(results) == sorted(
-            [(expected_file, False), (expected_dir, True)]
-        )
+        assert sorted(results) == sorted([(expected_file, False), (expected_dir, True)])
 
     def test_respects_limit(self, tmp_path, local_impl):
         root = tmp_path / "many"
@@ -440,8 +432,7 @@ class TestLocalDiscovery:
         level.mkdir(parents=True)
         listed = sorted(path for path, _ in discover(root, "lvl*"))
         assert listed == [
-            (root / "/".join(f"lvl{d}" for d in range(1, n + 1))).as_posix()
-            for n in range(1, 7)
+            (root / "/".join(f"lvl{d}" for d in range(1, n + 1))).as_posix() for n in range(1, 7)
         ]
 
     def test_prune_names_are_exact_and_case_sensitive(self, tmp_path, local_impl):
@@ -527,18 +518,19 @@ class TestSearchEndpointDiscovery:
             )
             assert resp.status_code == 200
 
-            discovery = [
-                r for r in resp.json()["results"] if r["source"] == "discovery"
-            ]
+            discovery = [r for r in resp.json()["results"] if r["source"] == "discovery"]
             assert len(discovery) == 1
-            assert discovery[0]["path"] == (
-                root
-                / "gadgets"
-                / "captures"
-                / "capture_x"
-                / "exports"
-                / "blue_vs_green_frame473.png"
-            ).as_posix()
+            assert (
+                discovery[0]["path"]
+                == (
+                    root
+                    / "gadgets"
+                    / "captures"
+                    / "capture_x"
+                    / "exports"
+                    / "blue_vs_green_frame473.png"
+                ).as_posix()
+            )
             assert discovery[0]["is_directory"] is False
         finally:
             client.close()
@@ -556,14 +548,19 @@ class TestSearchEndpointDiscovery:
                 headers=auth_headers(),
             )
             assert resp.status_code == 200
-            discovery = [
-                r for r in resp.json()["results"] if r["source"] == "discovery"
-            ]
+            discovery = [r for r in resp.json()["results"] if r["source"] == "discovery"]
             assert len(discovery) == 1
-            assert discovery[0]["path"] == (
-                root / "gadgets" / "captures" / "capture_x" / "exports"
-                / "blue_vs_green_frame473.png"
-            ).as_posix()
+            assert (
+                discovery[0]["path"]
+                == (
+                    root
+                    / "gadgets"
+                    / "captures"
+                    / "capture_x"
+                    / "exports"
+                    / "blue_vs_green_frame473.png"
+                ).as_posix()
+            )
         finally:
             client.close()
             state.reset_state()
@@ -580,9 +577,7 @@ class TestSearchEndpointDiscovery:
                 headers=auth_headers(),
             )
             assert resp.status_code == 200
-            discovery = [
-                r for r in resp.json()["results"] if r["source"] == "discovery"
-            ]
+            discovery = [r for r in resp.json()["results"] if r["source"] == "discovery"]
             assert discovery == []
         finally:
             client.close()

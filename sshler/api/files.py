@@ -58,6 +58,7 @@ from .rate_limiting import rate_limit_delete, rate_limit_upload, rate_limit_writ
 
 logger = logging.getLogger(__name__)
 
+
 class _TempFileResponse(FileResponse):
     """A ``FileResponse`` that deletes its file once the response is over.
 
@@ -137,9 +138,7 @@ _ALREADY_EXISTS = "File already exists"
 _NOT_REGULAR = "Only a regular file can be replaced"
 
 
-async def _remote_write_new(
-    sftp_client, remote_path: str, data: bytes, *, overwrite: bool
-) -> None:
+async def _remote_write_new(sftp_client, remote_path: str, data: bytes, *, overwrite: bool) -> None:
     """Write ``data`` to ``remote_path`` without ever replacing what is there, unless
     ``overwrite`` is set and it is a regular file.
 
@@ -209,7 +208,7 @@ def _attachment_header(filename: str) -> str:
     fallback = "".join(
         ch if 0x20 <= ord(ch) < 0x7F and ch not in '"\\%' else "_" for ch in filename
     )
-    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8\'\'{quote(filename, safe='')}"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 async def _du_bytes(connection, command: str, multiplier: int) -> int | None:
@@ -639,9 +638,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             ) as connection:
                 remote_src = await _remote_path(connection, payload.source)
                 remote_dest_dir = await _remote_path(connection, payload.destination)
-                remote_target = str(
-                    PurePosixPath(remote_dest_dir) / PurePosixPath(remote_src).name
-                )
+                remote_target = str(PurePosixPath(remote_dest_dir) / PurePosixPath(remote_src).name)
                 sftp_client = await connection.start_sftp_client()
                 try:
                     await sftp_client.rename(remote_src, remote_target)
@@ -1045,9 +1042,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     # BSD/macOS `du` has no -b; -k works everywhere.
                     remote_size = await _du_bytes(connection, f"du -sk {quoted}", 1024)
                 if remote_size is None:
-                    exists = await asyncio.wait_for(
-                        connection.run(f"test -d {quoted}"), timeout=10
-                    )
+                    exists = await asyncio.wait_for(connection.run(f"test -d {quoted}"), timeout=10)
                     if exists.exit_status != 0:
                         raise HTTPException(status_code=404, detail="Directory not found")
         except HTTPException:
@@ -1151,9 +1146,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         ssh_pool.discard(box.name, connection)
                 raise
         except _ZipTooLargeError as exc:
-            raise HTTPException(
-                status_code=413, detail="Directory too large to download"
-            ) from exc
+            raise HTTPException(status_code=413, detail="Directory too large to download") from exc
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1277,9 +1270,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 )
                 sftp_client = await connection.start_sftp_client()
                 try:
-                    await _remote_write_new(
-                        sftp_client, remote_path, contents, overwrite=overwrite
-                    )
+                    await _remote_write_new(sftp_client, remote_path, contents, overwrite=overwrite)
                 finally:
                     with contextlib.suppress(Exception):
                         await sftp_client.exit()  # type: ignore[func-returns-value]

@@ -40,7 +40,9 @@ def _detect_wsl_distro() -> str | None:
         # WSL confirmed — get distro name via wslpath
         result = subprocess.run(
             ["wslpath", "-m", "/"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         # Output: //wsl.localhost/Ubuntu/ or //wsl$/Ubuntu/
         if result.returncode == 0 and result.stdout.strip():
@@ -118,9 +120,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if update.max_lifetime is not None and update.max_lifetime < 0:
             raise HTTPException(status_code=400, detail="max_lifetime must be >= 0 or null")
         if update.max_connections_per_box is not None and update.max_connections_per_box < 1:
-            raise HTTPException(
-                status_code=400, detail="max_connections_per_box must be >= 1"
-            )
+            raise HTTPException(status_code=400, detail="max_connections_per_box must be >= 1")
 
         # Apply updates
         pool.update_config(

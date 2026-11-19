@@ -195,6 +195,7 @@ class TestArchiveExtract:
             content = b"extracted content"
             info.size = len(content)
             import io
+
             tf.addfile(info, io.BytesIO(content))
 
         dest = tmp_path / "dest"

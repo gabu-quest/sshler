@@ -48,7 +48,9 @@ def private_tmux(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[list[str
 def _printed_names(base: list[str]) -> list[str]:
     out = subprocess.run(
         [*base, "list-windows", "-t", "m", "-F", "#{window_name}"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     return out.split("\n")[:-1]
 
@@ -64,7 +66,9 @@ def test_the_local_window_list_returns_each_name_exactly_and_the_active_window(p
 def test_the_remote_window_list_parses_the_same_output(private_tmux):
     out = subprocess.run(
         [*private_tmux, "list-windows", "-t", "m", "-F", tmux.WINDOW_LIST_FORMAT],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
 
     class Conn:

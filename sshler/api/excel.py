@@ -4,6 +4,7 @@ parses with openpyxl, and returns structured sheet data for the frontend table.
 Only the first MAX_ROWS rows of each sheet are returned to avoid sending
 enormous payloads. Cell values are coerced to strings; None cells become "".
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,7 +47,7 @@ def _parse_workbook(data: bytes) -> ExcelPreviewResponse:
     wb = openpyxl.load_workbook(
         io.BytesIO(data),
         read_only=True,
-        data_only=True,   # return cached values, not formulas
+        data_only=True,  # return cached values, not formulas
     )
 
     sheets: list[ExcelSheet] = []
@@ -78,12 +79,14 @@ def _parse_workbook(data: bytes) -> ExcelPreviewResponse:
         while rows and all(c == "" for c in rows[-1]):
             rows.pop()
 
-        sheets.append(ExcelSheet(
-            name=sheet_name,
-            rows=rows,
-            truncated_rows=truncated_rows,
-            truncated_cols=truncated_cols,
-        ))
+        sheets.append(
+            ExcelSheet(
+                name=sheet_name,
+                rows=rows,
+                truncated_rows=truncated_rows,
+                truncated_cols=truncated_cols,
+            )
+        )
 
     wb.close()
     return ExcelPreviewResponse(sheets=sheets, active_sheet=active_name)

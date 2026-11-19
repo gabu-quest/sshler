@@ -118,9 +118,7 @@ async def connect(
             timeout=10,  # Hard cap: TCP + SSH handshake combined
         )
     except TimeoutError as exc:
-        raise SSHError(
-            f"Connection to {connect_host}:{connect_port} timed out after 10s"
-        ) from exc
+        raise SSHError(f"Connection to {connect_host}:{connect_port} timed out after 10s") from exc
     except (OSError, asyncssh.Error) as exc:
         raise SSHError(str(exc)) from exc
     return connection

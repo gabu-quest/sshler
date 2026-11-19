@@ -172,9 +172,7 @@ def test_local_rename_to_a_name_that_is_the_source_itself_is_not_refused(client,
 
 
 @pytest.mark.parametrize("existing_kind", ["file", "folder"])
-def test_local_rename_onto_an_existing_name_answers_409_and_keeps_both(
-    client, work, existing_kind
-):
+def test_local_rename_onto_an_existing_name_answers_409_and_keeps_both(client, work, existing_kind):
     (work / "src.txt").write_text("source")
     if existing_kind == "file":
         (work / "dst").write_text("other")

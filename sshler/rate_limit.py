@@ -43,10 +43,7 @@ class TokenBucket:
         elapsed = now - self.last_refill
 
         # Add tokens based on time elapsed
-        self.tokens = min(
-            self.capacity,
-            self.tokens + (elapsed * self.refill_rate)
-        )
+        self.tokens = min(self.capacity, self.tokens + (elapsed * self.refill_rate))
         self.last_refill = now
 
 
@@ -107,10 +104,7 @@ class RateLimiter:
 
         # Remove buckets that haven't been used in 10 minutes
         cutoff = now - 600
-        stale_keys = [
-            key for key, bucket in self._buckets.items()
-            if bucket.last_refill < cutoff
-        ]
+        stale_keys = [key for key, bucket in self._buckets.items() if bucket.last_refill < cutoff]
 
         for key in stale_keys:
             del self._buckets[key]

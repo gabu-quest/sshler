@@ -317,7 +317,6 @@ class TestLocalWorkLeavesTheEventLoop:
     def test_listing_keeps_order_and_a_broken_symlink_and_runs_off_the_loop(
         self, tmp_path, monkeypatch
     ):
-
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
         workdir.mkdir()

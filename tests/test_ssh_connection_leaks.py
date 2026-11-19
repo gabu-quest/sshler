@@ -240,7 +240,7 @@ class StreamClient:
                 block, self._buffer = self._buffer.split("\n\n", 1)
                 for line in block.splitlines():
                     if line.startswith("data: "):
-                        self.events.put_nowait(json.loads(line[len("data: "):]))
+                        self.events.put_nowait(json.loads(line[len("data: ") :]))
 
     def open(self) -> StreamClient:
         self.task = asyncio.create_task(self.app(self.scope, self._receive, self._send))

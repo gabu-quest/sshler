@@ -31,11 +31,7 @@ def get_client_ip(request: Request) -> str:
     get a fresh bucket, or name a victim's address to lock the victim out, so the
     socket peer is used.
     """
-    if (
-        get_settings().trust_proxy_headers
-        and request.client
-        and request.client.host == "127.0.0.1"
-    ):
+    if get_settings().trust_proxy_headers and request.client and request.client.host == "127.0.0.1":
         forwarded_ip = request.headers.get("x-real-ip")
         if forwarded_ip:
             return forwarded_ip

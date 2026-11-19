@@ -125,7 +125,9 @@ def _socket_dir() -> Path:
 async def _query_server(server_name: str) -> set[str]:
     """Query a single tmux server for session names, with timeout."""
     cmd = local_tmux_command(server_name.removeprefix(SOCKET_PREFIX)) + [
-        "list-sessions", "-F", "#{session_name}",
+        "list-sessions",
+        "-F",
+        "#{session_name}",
     ]
     try:
         returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
@@ -165,9 +167,7 @@ async def discover_local_sessions() -> set[str]:
     if sock_dir.is_dir():
         for entry in sock_dir.iterdir():
             if entry.name.startswith(SOCKET_PREFIX) and entry.is_socket():
-                tasks.append(
-                    asyncio.ensure_future(_query_server(entry.name))
-                )
+                tasks.append(asyncio.ensure_future(_query_server(entry.name)))
 
     # Also check default server for legacy sessions
     tasks.append(asyncio.ensure_future(_query_default_server()))
@@ -218,7 +218,11 @@ def parse_pane_list(text: str) -> list[tuple[int, int, str, str]]:
 async def list_local_window_names(session: str) -> set[str]:
     """Return the set of window names in a local ``ts`` session (empty if none)."""
     cmd = local_tmux_command(session) + [
-        "list-windows", "-t", session, "-F", "#{window_name}",
+        "list-windows",
+        "-t",
+        session,
+        "-F",
+        "#{window_name}",
     ]
     try:
         returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
@@ -239,9 +243,7 @@ async def record_ts_history(session: str, directory: str) -> None:
     if ts_add is None:
         return
     try:
-        await run_bounded(
-            [ts_add, session, directory], TMUX_COMMAND_TIMEOUT, capture_output=False
-        )
+        await run_bounded([ts_add, session, directory], TMUX_COMMAND_TIMEOUT, capture_output=False)
     except Exception:
         pass
 
@@ -283,7 +285,10 @@ async def _list_local_pane_pids(session_name: str) -> list[int]:
     runs one session per socket this only ever sees this session's panes.
     """
     cmd = local_tmux_command(session_name) + [
-        "list-panes", "-a", "-F", "#{pane_pid}",
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_pid}",
     ]
     pids: list[int] = []
     try:
@@ -331,14 +336,14 @@ _TMUX_SESSION_COLORS = [
     "colour203",  # red
     "colour208",  # orange
     "colour178",  # amber
-    "colour71",   # green
-    "colour37",   # teal
-    "colour33",   # blue
-    "colour62",   # indigo
+    "colour71",  # green
+    "colour37",  # teal
+    "colour33",  # blue
+    "colour62",  # indigo
     "colour135",  # purple
     "colour168",  # magenta
     "colour095",  # brown
-    "colour66",   # slate-teal
+    "colour66",  # slate-teal
     "colour130",  # rust
 ]
 

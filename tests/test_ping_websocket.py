@@ -29,9 +29,10 @@ def build_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 def test_two_ping_clients_receive_the_same_events_in_order(tmp_path, monkeypatch):
     client = build_client(tmp_path, monkeypatch)
     try:
-        with client.websocket_connect(
-            f"/ws/ping?token={TEST_TOKEN}"
-        ) as ws_a, client.websocket_connect(f"/ws/ping?token={TEST_TOKEN}") as ws_b:
+        with (
+            client.websocket_connect(f"/ws/ping?token={TEST_TOKEN}") as ws_a,
+            client.websocket_connect(f"/ws/ping?token={TEST_TOKEN}") as ws_b,
+        ):
             for title in ("first", "second"):
                 resp = client.post(
                     "/api/v1/ping", headers={"X-SSHLER-TOKEN": TEST_TOKEN}, json={"title": title}

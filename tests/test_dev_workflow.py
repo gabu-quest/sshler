@@ -68,8 +68,9 @@ def vite():
     process.stdout = None
     # Replace the ``time`` name inside ``sshler.cli`` only (serve_dev needs just
     # ``sleep``); the global ``time`` module is untouched.
-    with patch("sshler.cli._start_vite_dev_server", return_value=process) as starter, patch.object(
-        cli, "time", types.SimpleNamespace(sleep=Mock())
+    with (
+        patch("sshler.cli._start_vite_dev_server", return_value=process) as starter,
+        patch.object(cli, "time", types.SimpleNamespace(sleep=Mock())),
     ):
         process.starter = starter
         yield process
@@ -128,7 +129,10 @@ class TestServeDev:
         # The tail is a deduplicated set (order not specified): Vite's two origins
         # plus the listen address as 127.0.0.1 and localhost, nothing repeated.
         assert len(origins) == count + 4
-        assert set(origins[count:]) == set(DEV_ORIGINS) | {"http://127.0.0.1:9001", "http://localhost:9001"}
+        assert set(origins[count:]) == set(DEV_ORIGINS) | {
+            "http://127.0.0.1:9001",
+            "http://localhost:9001",
+        }
 
     def test_vite_is_started_in_frontend_dir_and_cleaned_up(self, dev_project, vite):
         """Vite runs in <cwd>/frontend and is terminated when the backend exits.
@@ -164,9 +168,10 @@ class TestServeDev:
 
         Mutations killed: RuntimeError not caught, backend started anyway.
         """
-        with patch("sshler.cli._start_vite_dev_server", side_effect=RuntimeError("no pnpm")), patch(
-            "sshler.cli.uvicorn.run"
-        ) as run:
+        with (
+            patch("sshler.cli._start_vite_dev_server", side_effect=RuntimeError("no pnpm")),
+            patch("sshler.cli.uvicorn.run") as run,
+        ):
             with pytest.raises(SystemExit) as excinfo:
                 serve_dev(open_browser=False)
 
@@ -192,6 +197,7 @@ class TestServeDev:
         assert excinfo.value.code == 0
         vite.terminate.assert_called_once_with()
 
+
 class TestViteAndCleanup:
     def test_vite_dev_server_startup(self):
         """Test that Vite dev server can be started with proper configuration."""
@@ -203,7 +209,7 @@ class TestViteAndCleanup:
             package_json.write_text('{"name": "test", "scripts": {"dev": "vite"}}')
 
             # Mock subprocess to avoid actually starting Vite
-            with patch('subprocess.Popen') as mock_popen:
+            with patch("subprocess.Popen") as mock_popen:
                 mock_process = Mock()
                 mock_process.poll.return_value = None
                 mock_process.stdout = None
@@ -213,8 +219,10 @@ class TestViteAndCleanup:
                 # Windows, where `pnpm` is a `.cmd` shim Popen can't launch by bare
                 # name). Mock the resolution + the `--version` availability check.
                 fake_pnpm = str(frontend_dir / "pnpm")
-                with patch('shutil.which', return_value=fake_pnpm) as mock_which, \
-                     patch('subprocess.run') as mock_run:
+                with (
+                    patch("shutil.which", return_value=fake_pnpm) as mock_which,
+                    patch("subprocess.run") as mock_run,
+                ):
                     mock_run.return_value = Mock(returncode=0)  # pnpm --version succeeds
 
                     result = _start_vite_dev_server(frontend_dir)
@@ -225,7 +233,7 @@ class TestViteAndCleanup:
 
                     mock_which.assert_called_once_with("pnpm")
                     assert call_args[0][0] == [fake_pnpm, "dev"]
-                    assert call_args[1]['cwd'] == frontend_dir
+                    assert call_args[1]["cwd"] == frontend_dir
                     assert result == mock_process
 
     def test_process_cleanup(self):
@@ -247,7 +255,6 @@ class TestViteAndCleanup:
 
         # Verify terminate was not called on already terminated process
         mock_process2.terminate.assert_not_called()
-
 
 
 class TestDevWorkflowIntegration:

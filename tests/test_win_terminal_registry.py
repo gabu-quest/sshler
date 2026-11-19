@@ -402,7 +402,7 @@ async def test_no_lost_or_duplicated_bytes_across_attach(make_registry):
     assert replay == CLEAR_SEQ + b"A"
     assert received == [b"B"]
     # Each byte delivered exactly once: A via replay, B via live.
-    assert replay[len(CLEAR_SEQ):] + b"".join(received) == b"AB"
+    assert replay[len(CLEAR_SEQ) :] + b"".join(received) == b"AB"
 
 
 # --------------------------------------------------------------------------

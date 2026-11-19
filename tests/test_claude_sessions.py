@@ -151,8 +151,13 @@ def test_custom_title_takes_priority_over_ai_title(tmp_path, monkeypatch):
     _write_jsonl(
         path,
         [
-            {"type": "user", "promptSource": "typed", "cwd": "/p",
-             "message": {"role": "user", "content": "first"}, "sessionId": UUID_A},
+            {
+                "type": "user",
+                "promptSource": "typed",
+                "cwd": "/p",
+                "message": {"role": "user", "content": "first"},
+                "sessionId": UUID_A,
+            },
             {"type": "ai-title", "aiTitle": "auto-generated-title", "sessionId": UUID_A},
             {"type": "custom-title", "customTitle": "camera", "sessionId": UUID_A},
         ],
@@ -185,14 +190,24 @@ def test_title_found_after_oversized_line(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     path = tmp_path / "projects" / "-proj" / f"{UUID_C}.jsonl"
     giant = json.dumps(
-        {"type": "assistant", "sessionId": UUID_C,
-         "message": {"role": "assistant", "content": "x" * 2_000_000}}
+        {
+            "type": "assistant",
+            "sessionId": UUID_C,
+            "message": {"role": "assistant", "content": "x" * 2_000_000},
+        }
     )
     _write_lines(
         path,
         [
-            json.dumps({"type": "user", "promptSource": "typed", "cwd": "/p",
-                        "message": {"role": "user", "content": "first"}, "sessionId": UUID_C}),
+            json.dumps(
+                {
+                    "type": "user",
+                    "promptSource": "typed",
+                    "cwd": "/p",
+                    "message": {"role": "user", "content": "first"},
+                    "sessionId": UUID_C,
+                }
+            ),
             giant,
             json.dumps({"type": "custom-title", "customTitle": "survived", "sessionId": UUID_C}),
         ],
@@ -477,9 +492,7 @@ def test_open_rejects_percent_encoded_newline_id(tmp_path, monkeypatch, tmux_spy
     (work / ".git").mkdir()
     client = _make_client(tmp_path, monkeypatch, work_cwd=str(work))
     for suffix in ("%0A", "%20"):
-        resp = client.post(
-            f"/api/v1/claude/sessions/{UUID_A}{suffix}/open", headers=_headers()
-        )
+        resp = client.post(f"/api/v1/claude/sessions/{UUID_A}{suffix}/open", headers=_headers())
         assert resp.status_code == 400
         assert resp.json()["detail"] == "Invalid Claude session id"
     assert tmux_spy["runs"] == []
@@ -695,9 +708,7 @@ def test_list_endpoint_returns_sessions_sorted(tmp_path, monkeypatch, tmux_spy):
         [{"type": "ai-title", "aiTitle": "Older Session", "sessionId": UUID_B, "cwd": str(work)}],
     )
     _set_mtime(older, BASE_TIME)
-    _set_mtime(
-        tmp_path / "claude" / "projects" / "-work" / f"{UUID_A}.jsonl", BASE_TIME + 500
-    )
+    _set_mtime(tmp_path / "claude" / "projects" / "-work" / f"{UUID_A}.jsonl", BASE_TIME + 500)
 
     resp = client.get("/api/v1/claude/sessions", headers=_headers())
     assert resp.status_code == 200

@@ -521,12 +521,12 @@ def test_remote_file_download_header_is_exact_for_a_japanese_name(remote, monkey
     [
         (
             "ドキュメント",
-            "attachment; filename=\"______.zip\"; "
+            'attachment; filename="______.zip"; '
             "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88.zip",
         ),
         (
             'ドキュメント"x',
-            "attachment; filename=\"_______x.zip\"; "
+            'attachment; filename="_______x.zip"; '
             "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88%22x.zip",
         ),
     ],
@@ -666,9 +666,7 @@ def listed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     async def fake_list(connection, path):
         paths.append(path)
-        return [
-            {"name": "a.txt", "is_directory": False, "size": 3, "modified": 1.0, "mode": 420}
-        ]
+        return [{"name": "a.txt", "is_directory": False, "size": 3, "modified": 1.0, "mode": 420}]
 
     monkeypatch.setattr(files_api, "sftp_list_directory", fake_list)
     return paths

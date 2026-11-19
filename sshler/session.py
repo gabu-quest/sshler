@@ -172,9 +172,7 @@ class SessionStore:
             Number of sessions cleaned up
         """
         expired_ids = [
-            sid
-            for sid, session in self._sessions.items()
-            if session.is_expired(idle_timeout)
+            sid for sid, session in self._sessions.items() if session.is_expired(idle_timeout)
         ]
 
         for sid in expired_ids:

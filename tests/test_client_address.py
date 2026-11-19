@@ -100,9 +100,7 @@ def trust_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _client(*, basic_auth: bool) -> TestClient:
     # No `with`: entering the client would run the lifespan (pool, PDF renderer).
-    settings = ServerSettings(
-        csrf_token=TOKEN, basic_auth=(USER, PASSWORD) if basic_auth else None
-    )
+    settings = ServerSettings(csrf_token=TOKEN, basic_auth=(USER, PASSWORD) if basic_auth else None)
     return TestClient(make_app(settings), client=PROXY)
 
 
@@ -274,9 +272,9 @@ def test_spoofed_header_does_not_escape_the_post_rate_limit():
     try:
         assert client.post(UNROUTED).status_code == 404
         limiter = rate_limit._rate_limiters["post"]
-        assert [limiter.check("127.0.0.1") for _ in range(POST_CAPACITY - 1)] == [
-            True
-        ] * (POST_CAPACITY - 1)
+        assert [limiter.check("127.0.0.1") for _ in range(POST_CAPACITY - 1)] == [True] * (
+            POST_CAPACITY - 1
+        )
         refused = client.post(UNROUTED, headers={"X-Real-IP": _spoofed(1)})
     finally:
         client.close()

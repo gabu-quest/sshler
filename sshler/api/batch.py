@@ -201,9 +201,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     async with ssh_pool.connection(
                         box, lambda: deps.connect_for_box(box, application_config)
                     ) as connection:
-                        dest_resolved = await _resolve_tilde_destination(
-                            connection, dest_validated
-                        )
+                        dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
                         validated = await _resolve_tilde_paths(connection, validated, failed)
                         sftp_client = await connection.start_sftp_client()
                         try:
@@ -274,9 +272,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     async with ssh_pool.connection(
                         box, lambda: deps.connect_for_box(box, application_config)
                     ) as connection:
-                        dest_resolved = await _resolve_tilde_destination(
-                            connection, dest_validated
-                        )
+                        dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
                         validated = await _resolve_tilde_paths(connection, validated, failed)
                         for orig, vpath in validated:
                             try:

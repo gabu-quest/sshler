@@ -345,9 +345,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         def add(path: str, score: float, source: str, is_directory: bool) -> None:
             if path not in seen_paths:
                 results.append(
-                    SearchResult(
-                        path=path, score=score, source=source, is_directory=is_directory
-                    )
+                    SearchResult(path=path, score=score, source=source, is_directory=is_directory)
                 )
                 seen_paths.add(path)
 

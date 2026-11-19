@@ -101,9 +101,7 @@ def test_delete_broadcasts_delete_event(tmp_path, monkeypatch):
         with client.websocket_connect(f"/ws/progress?token={TEST_TOKEN}") as ws:
             ws.receive_json()  # snapshot
 
-            resp = client.delete(
-                "/api/v1/progress/will-vanish", headers=auth_headers()
-            )
+            resp = client.delete("/api/v1/progress/will-vanish", headers=auth_headers())
             assert resp.status_code == 200
 
             event = ws.receive_json()
@@ -117,11 +115,10 @@ def test_delete_broadcasts_delete_event(tmp_path, monkeypatch):
 def test_two_clients_both_receive_broadcast(tmp_path, monkeypatch):
     client = build_client(setup_config(tmp_path), monkeypatch)
     try:
-        with client.websocket_connect(
-            f"/ws/progress?token={TEST_TOKEN}"
-        ) as ws_a, client.websocket_connect(
-            f"/ws/progress?token={TEST_TOKEN}"
-        ) as ws_b:
+        with (
+            client.websocket_connect(f"/ws/progress?token={TEST_TOKEN}") as ws_a,
+            client.websocket_connect(f"/ws/progress?token={TEST_TOKEN}") as ws_b,
+        ):
             ws_a.receive_json()  # snapshot for A
             ws_b.receive_json()  # snapshot for B
 
