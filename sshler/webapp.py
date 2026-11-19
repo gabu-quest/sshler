@@ -61,9 +61,11 @@ from .ssh import (
 )
 from .ssh_pool import get_pool, initialize_pool, shutdown_pool
 from .tmux import (
+    WINDOW_LIST_FORMAT,
     _configure_tmux_bindings,
     _run_local_tmux_command,
     local_tmux_command,
+    parse_window_list,
     record_ts_history,
     remote_tmux_command,
     run_local_tmux,
@@ -673,7 +675,7 @@ async def _open_local_tmux(
 
 
 async def _list_local_tmux_windows(session: str) -> list[dict[str, str | bool]] | None:
-    args = ["list-windows", "-F", "#{window_index} #{window_name} #{window_active}", "-t", session]
+    args = ["list-windows", "-F", WINDOW_LIST_FORMAT, "-t", session]
     try:
         returncode, stdout, _ = await run_local_tmux(session, args)
     except Exception as exc:
@@ -683,14 +685,7 @@ async def _list_local_tmux_windows(session: str) -> list[dict[str, str | bool]] 
     if returncode != 0:
         return None
 
-    windows: list[dict[str, str | bool]] = []
-    for line in stdout.decode("utf-8", errors="ignore").splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) < 3:
-            continue
-        index, name, active = parts
-        windows.append({"index": index, "name": name, "active": active == "1"})
-    return windows
+    return parse_window_list(stdout.decode("utf-8", errors="replace"))
 
 
 class ProgressBroadcaster:
@@ -1898,13 +1893,7 @@ async def _list_tmux_windows(
         result = await connection.run(
             remote_tmux_command(
                 session,
-                [
-                    "list-windows",
-                    "-F",
-                    "#{window_index} #{window_name} #{window_active}",
-                    "-t",
-                    session,
-                ],
+                ["list-windows", "-F", WINDOW_LIST_FORMAT, "-t", session],
             ),
             check=False,
         )
@@ -1920,17 +1909,4 @@ async def _list_tmux_windows(
         if isinstance(result.stdout, str)
         else result.stdout.decode("utf-8", errors="replace")
     )
-    windows: list[dict[str, str | bool]] = []
-    for line in stdout_str.splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) < 3:
-            continue
-        index, name, active = parts
-        windows.append(
-            {
-                "index": index,
-                "name": name,
-                "active": active == "1",
-            }
-        )
-    return windows
+    return parse_window_list(stdout_str)

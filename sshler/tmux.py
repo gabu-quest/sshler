@@ -180,6 +180,41 @@ async def discover_local_sessions() -> set[str]:
     return sessions
 
 
+# Window list: the fields that cannot hold free text come first and the window name
+# is last, so a name may hold spaces, ``|`` or tabs and still comes back whole.
+WINDOW_LIST_FORMAT = "#{window_index} #{window_active} #{window_name}"
+
+# Pane list: tab-separated, the folder (free text) last. The window name is not in it;
+# tmux prints a tab in a name as a tab, so it is read from the window list instead.
+PANE_LIST_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_current_command}\t#{pane_current_path}"
+
+
+def parse_window_list(text: str) -> list[dict[str, str | bool]]:
+    """Parse ``list-windows -F WINDOW_LIST_FORMAT`` output into index/name/active dicts."""
+    windows: list[dict[str, str | bool]] = []
+    for line in text.split("\n"):
+        parts = line.split(" ", 2)
+        if len(parts) < 3:
+            continue
+        index, active, name = parts
+        windows.append({"index": index, "name": name, "active": active == "1"})
+    return windows
+
+
+def parse_pane_list(text: str) -> list[tuple[int, int, str, str]]:
+    """Parse ``list-panes -F PANE_LIST_FORMAT`` output into (window, pane, command, path)."""
+    panes: list[tuple[int, int, str, str]] = []
+    for line in text.split("\n"):
+        parts = line.split("\t", 3)
+        if len(parts) < 4:
+            continue
+        try:
+            panes.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
+        except ValueError:
+            continue
+    return panes
+
+
 async def list_local_window_names(session: str) -> set[str]:
     """Return the set of window names in a local ``ts`` session (empty if none)."""
     cmd = local_tmux_command(session) + [

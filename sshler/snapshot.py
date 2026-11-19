@@ -10,7 +10,16 @@ import time
 from typing import Protocol
 
 from . import state
-from .tmux import discover_local_sessions, local_tmux_command, run_bounded, run_local_tmux
+from .tmux import (
+    PANE_LIST_FORMAT,
+    WINDOW_LIST_FORMAT,
+    discover_local_sessions,
+    local_tmux_command,
+    parse_pane_list,
+    parse_window_list,
+    run_bounded,
+    run_local_tmux,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,39 +56,42 @@ def set_recovery_sessions(sessions: list[dict]) -> None:
 async def capture_local_windows(session_name: str) -> list[dict] | None:
     """Capture per-window and per-pane state for a local tmux session.
 
-    Uses ``list-panes -s`` to capture ALL panes across all windows,
-    then groups them by window index.  Each window dict carries a
-    ``panes`` list so recovery can recreate splits.
+    Window names come from ``list-windows`` and every pane of the session
+    from ``list-panes -s``, grouped by window index.  Each window dict carries
+    a ``panes`` list so recovery can recreate splits.
     """
-    args = [
-        "list-panes",
-        "-s",
-        "-F",
-        "#{window_index}|#{window_name}|#{pane_index}|#{pane_current_command}|#{pane_current_path}",
-        "-t",
-        session_name,
-    ]
     try:
-        returncode, stdout, _ = await run_local_tmux(session_name, args)
+        win_rc, win_out, _ = await run_local_tmux(
+            session_name, ["list-windows", "-F", WINDOW_LIST_FORMAT, "-t", session_name]
+        )
+        returncode, stdout, _ = await run_local_tmux(
+            session_name, ["list-panes", "-s", "-F", PANE_LIST_FORMAT, "-t", session_name]
+        )
     except Exception:
         return None
 
-    if returncode != 0:
+    if returncode != 0 or win_rc != 0:
         return None
 
+    names = {
+        int(str(w["index"])): str(w["name"])
+        for w in parse_window_list(win_out.decode("utf-8", errors="replace"))
+    }
     win_map: dict[int, dict] = {}
-    for line in stdout.decode("utf-8", errors="ignore").splitlines():
-        parts = line.split("|", 4)
-        if len(parts) < 5:
+    for win_idx, pane_idx, command, path in parse_pane_list(
+        stdout.decode("utf-8", errors="replace")
+    ):
+        if win_idx not in names:
+            # Closed between the two calls; a window opened between them has no
+            # panes here. Either way the next tick sees it whole.
             continue
-        win_idx = int(parts[0])
-        pane = {"index": int(parts[2]), "command": parts[3], "path": parts[4]}
+        pane = {"index": pane_idx, "command": command, "path": path}
 
         if win_idx not in win_map:
             # command/path at window level = first pane (backward compat)
             win_map[win_idx] = {
                 "index": win_idx,
-                "name": parts[1],
+                "name": names[win_idx],
                 "command": pane["command"],
                 "path": pane["path"],
                 "panes": [],
