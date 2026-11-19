@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 import asyncssh
+from fastapi import HTTPException
 
 from ..ssh import sftp_read_file
 
@@ -309,6 +310,26 @@ async def _local_batch_copy(source: str, target: str) -> None:
             shutil.copy2(source, target)
 
     await asyncio.to_thread(_worker)
+
+
+async def _local_rename(source: str, new_name: str) -> str:
+    """Rename inside the source's folder; refuse a name another entry has (HTTP 409).
+
+    A name that resolves to the source itself is not taken: that is a change of
+    letter case on a filesystem that ignores case.
+    """
+
+    def _worker() -> str:
+        src = Path(source)
+        if not src.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        target = src.parent / new_name
+        if os.path.lexists(target) and not os.path.samestat(os.lstat(src), os.lstat(target)):
+            raise HTTPException(status_code=409, detail="A file with that name already exists")
+        src.rename(target)
+        return str(target)
+
+    return await asyncio.to_thread(_worker)
 
 
 async def _local_delete_file(path: str) -> None:

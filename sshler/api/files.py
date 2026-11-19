@@ -34,6 +34,7 @@ from .helpers import (
     _local_delete_file,
     _local_read_bytes,
     _local_read_text,
+    _local_rename,
     _local_write_text,
     _normalize_directory_path,
     _normalize_local_path,
@@ -409,14 +410,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         if box.transport == "local":
             source = Path(_normalize_local_path(payload.path))
-            target = source.parent / payload.new_name
-            if not source.exists():
-                raise HTTPException(status_code=404, detail="File not found")
             try:
-                source.rename(target)
+                new_name = PathValidator.validate_filename(payload.new_name)
+            except ValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            try:
+                target = await _local_rename(str(source), new_name)
+            except HTTPException:
+                raise
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
-            return APISimpleMessage(status="ok", message="renamed", path=str(target))
+            return APISimpleMessage(status="ok", message="renamed", path=target)
 
         try:
             PathValidator.validate_remote_path(payload.path)
