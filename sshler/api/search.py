@@ -22,6 +22,7 @@ from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from . import helpers
 from .dependencies import APIDependencies
+from .files import _remote_path
 
 if TYPE_CHECKING:
     pass
@@ -246,7 +247,8 @@ def _remote_find_command(
     max_depth: int,
     limit: int,
 ) -> str:
-    # "~" must stay unquoted so the remote shell expands it
+    # A bare "~" stays unquoted so the remote shell expands it; a "~/sub" root
+    # arrives here already resolved to an absolute path.
     if root is None or root in ("", "~"):
         root_expr = "~"
     else:
@@ -270,6 +272,12 @@ async def _discover_remote_directories(
     Returns list of (path, is_directory) tuples.
     """
     separator = "---SSHLER-FILES---"
+    try:
+        if root is not None and root.startswith("~/"):
+            root = await _remote_path(connection, root)
+    except Exception as exc:
+        logger.warning(f"Remote directory discovery root not usable: {exc}")
+        return []
     cmd = _remote_find_command(root, pattern, "d", max_depth, limit)
     if include_files:
         files_cmd = _remote_find_command(root, pattern, "f", max_depth, limit)

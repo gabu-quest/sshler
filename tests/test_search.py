@@ -666,3 +666,68 @@ class TestLocalChildrenKilledOnTimeout:
         monkeypatch.setattr(search, "ZOXIDE_TIMEOUT", 0.5)
         assert asyncio.run(search._query_zoxide("abc")) == []
         gone()
+
+
+class _Home:
+    """Answers the home lookup, records every other command."""
+
+    def __init__(self, home_stdout="/home/u", status=0):
+        self.home_stdout = home_stdout
+        self.status = status
+        self.commands: list[str] = []
+
+    async def run(self, command, check=False):
+        from types import SimpleNamespace
+
+        if command == 'printf %s "$HOME"':
+            return SimpleNamespace(stdout=self.home_stdout, exit_status=self.status)
+        self.commands.append(command)
+        return SimpleNamespace(stdout="", exit_status=0)
+
+
+def _remote_find(root, **kw):
+    from sshler.api.search import _discover_remote_directories
+
+    conn = _Home(**kw)
+    result = asyncio.run(_discover_remote_directories(conn, "*x*", root=root))
+    return result, conn.commands
+
+
+class TestRemoteRootUnderHome:
+    @pytest.mark.parametrize(
+        ("root", "sent"),
+        [
+            ("~/projects", "/home/u/projects"),
+            ("~/a b", "'/home/u/a b'"),
+            ("~/$(touch x)", "'/home/u/$(touch x)'"),
+            ("~/a;b", "'/home/u/a;b'"),
+            ("~//etc", "/home/u/etc"),
+            ("~", "~"),
+        ],
+    )
+    def test_the_command_names_the_absolute_root(self, root, sent):
+        """Mutation killed: shlex.quote on '~/projects', which the remote shell takes literally."""
+        _, commands = _remote_find(root)
+        assert commands == [
+            f"find {sent} -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
+
+    @pytest.mark.parametrize("root", [None, ""])
+    def test_no_root_still_means_the_remote_home(self, root):
+        _, commands = _remote_find(root)
+        assert commands == ["find ~ -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"]
+
+    def test_another_users_home_is_quoted_whole(self):
+        _, commands = _remote_find("~other/x")
+        assert commands == [
+            "find '~other/x' -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
+
+    @pytest.mark.parametrize("kw", [{"home_stdout": ""}, {"status": 1}])
+    def test_a_failed_home_lookup_finds_nothing_and_sends_no_find(self, kw):
+        result, commands = _remote_find("~/p", **kw)
+        assert (result, commands) == ([], [])
+
+    def test_an_invalid_root_finds_nothing(self):
+        result, commands = _remote_find("~/a\x00b")
+        assert (result, commands) == ([], [])
