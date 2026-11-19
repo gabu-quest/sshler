@@ -3,27 +3,20 @@
 # Run manually: pre-commit run --all-files
 
 repos:
-  # Python linting with ruff
+  # Python lint and format with ruff. Keep rev equal to the ruff version in uv.lock.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+    rev: v0.13.3
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
-  # Frontend linting (ESLint + type check)
+  # Frontend type check (the frontend has no ESLint)
   - repo: local
     hooks:
-      - id: frontend-lint
-        name: Frontend lint (ESLint)
-        entry: pnpm --prefix frontend lint
-        language: system
-        files: ^frontend/.*\.(ts|vue)$
-        pass_filenames: false
-
       - id: frontend-typecheck
         name: Frontend typecheck
-        entry: pnpm --prefix frontend vue-tsc --noEmit
+        entry: pnpm --prefix frontend type-check
         language: system
         files: ^frontend/.*\.(ts|vue)$
         pass_filenames: false
