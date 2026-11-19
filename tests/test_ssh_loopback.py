@@ -18,6 +18,7 @@ import asyncssh
 import pytest
 import pytest_asyncio
 
+from sshler.api.helpers import _read_file_bytes
 from sshler.ssh import (
     SSHError,
     connect,
@@ -165,6 +166,32 @@ async def test_bytes_that_are_not_utf8_are_read_as_replacement_characters(
 
     assert text == "caf\ufffd au lait\n"
     assert cut_inside_a_character == "caf\ufffd"
+
+
+@pytest.mark.asyncio
+async def test_a_file_larger_than_one_sftp_block_is_read_whole(loopback: LoopbackServer):
+    """One `read` call must give the whole file, not only the first block the server sends."""
+    size = 1024 * 1024 + 17
+    payload = bytes(i * 31 % 251 for i in range(size))
+    (loopback.root / "big.bin").write_bytes(payload)
+    text = "".join(f"line {i:07d}\n" for i in range(90_000))
+    (loopback.root / "big.txt").write_text(text, encoding="utf-8")
+
+    connection = await _connect(loopback)
+    try:
+        data, too_large = await _read_file_bytes(connection, "/big.bin", 2 * 1024 * 1024)
+        over_limit = await _read_file_bytes(connection, "/big.bin", size - 1)
+        read_text = await sftp_read_file(connection, "/big.txt", max_bytes=2 * 1024 * 1024)
+    finally:
+        connection.close()
+        await connection.wait_closed()
+
+    assert too_large is False
+    assert len(data) == size
+    assert data == payload
+    assert over_limit == (b"", True)
+    assert len(read_text) == 90_000 * 13
+    assert read_text == text
 
 
 @pytest.mark.asyncio
