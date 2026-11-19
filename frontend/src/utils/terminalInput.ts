@@ -1,7 +1,7 @@
 /**
  * Keyboard and OSC helpers for the xterm.js terminal.
  *
- * xterm.js 5.5 has no kitty-keyboard or modifyOtherKeys support, so Shift+Enter
+ * xterm.js (6.0 as well as 5.5) has no kitty-keyboard or modifyOtherKeys support, so Shift+Enter
  * reaches the PTY as a bare CR, identical to Enter. TUIs that want a "newline
  * without submit" (Claude Code, other chat-style CLIs) accept Meta+Enter
  * (ESC CR) for it; VS Code's Claude Code terminal setup binds Shift+Enter to the

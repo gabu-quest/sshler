@@ -376,8 +376,11 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* =============================================================================
-   XTERM.JS v5 STYLES — synced with @xterm/xterm 5.5.0
-   Our customizations: font-family, composition-view colors, viewport bg
+   XTERM.JS STYLES — synced with @xterm/xterm 6.0.0 (css/xterm.css)
+   This is the only copy: nothing imports the package's stylesheet.
+   Our customizations: font-family and ligatures off on .xterm, composition-view
+   colors, viewport bg (theme variables instead of #000/#FFF). The scroll bar's
+   width, colours and mobile hiding live in Terminal.vue.
    ============================================================================= */
 .xterm {
   font-family: var(--font-mono);
@@ -450,10 +453,6 @@ input:focus, textarea:focus, select:focus {
   top: 0;
 }
 
-.xterm .xterm-scroll-area {
-  visibility: hidden;
-}
-
 .xterm-char-measure-element {
   display: inline-block;
   visibility: hidden;
@@ -476,7 +475,7 @@ input:focus, textarea:focus, select:focus {
   cursor: crosshair;
 }
 
-/* v5: pointer-events: none is CRITICAL — without it, the accessibility layer
+/* pointer-events: none is CRITICAL — without it, the accessibility layer
    captures all mouse events, making the terminal uninteractable */
 .xterm .xterm-accessibility:not(.debug),
 .xterm .xterm-message {
@@ -490,14 +489,19 @@ input:focus, textarea:focus, select:focus {
   pointer-events: none;
 }
 
-/* v5: accessibility tree selection styling */
 .xterm .xterm-accessibility-tree:not(.debug) *::selection {
   color: transparent;
 }
 
 .xterm .xterm-accessibility-tree {
+  font-family: monospace;
   user-select: text;
   white-space: pre;
+}
+
+.xterm .xterm-accessibility-tree > div {
+  transform-origin: left;
+  width: fit-content;
 }
 
 .xterm .live-region {
@@ -508,7 +512,7 @@ input:focus, textarea:focus, select:focus {
   overflow: hidden;
 }
 
-/* v5: dim is applied via generated foreground classes, not opacity */
+/* dim is applied via generated foreground classes, not opacity */
 .xterm-dim {
   opacity: 1 !important;
 }
@@ -519,7 +523,6 @@ input:focus, textarea:focus, select:focus {
 .xterm-underline-4 { text-decoration: dotted underline; }
 .xterm-underline-5 { text-decoration: dashed underline; }
 
-/* v5: overline support */
 .xterm-overline { text-decoration: overline; }
 .xterm-overline.xterm-underline-1 { text-decoration: overline underline; }
 .xterm-overline.xterm-underline-2 { text-decoration: overline double underline; }
@@ -551,4 +554,65 @@ input:focus, textarea:focus, select:focus {
 .xterm-decoration-top {
   z-index: 2;
   position: relative;
+}
+
+/* Scroll bar: xterm's copy of vs/base/browser/ui/scrollbar/media/scrollbar.css */
+.xterm .xterm-scrollable-element > .scrollbar {
+  cursor: default;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar > .scra {
+  cursor: pointer;
+  font-size: 11px !important;
+}
+
+.xterm .xterm-scrollable-element > .visible {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0);
+  transition: opacity 100ms linear;
+  z-index: 11;
+}
+
+.xterm .xterm-scrollable-element > .invisible {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.xterm .xterm-scrollable-element > .invisible.fade {
+  transition: opacity 800ms linear;
+}
+
+.xterm .xterm-scrollable-element > .shadow {
+  position: absolute;
+  display: none;
+}
+
+.xterm .xterm-scrollable-element > .shadow.top {
+  display: block;
+  top: 0;
+  left: 3px;
+  height: 3px;
+  width: 100%;
+  box-shadow: var(--vscode-scrollbar-shadow, #000) 0 6px 6px -6px inset;
+}
+
+.xterm .xterm-scrollable-element > .shadow.left {
+  display: block;
+  top: 3px;
+  left: 0;
+  height: 100%;
+  width: 3px;
+  box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
+}
+
+.xterm .xterm-scrollable-element > .shadow.top-left-corner {
+  display: block;
+  top: 0;
+  left: 0;
+  height: 3px;
+  width: 3px;
+}
+
+.xterm .xterm-scrollable-element > .shadow.top.left {
+  box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
 }

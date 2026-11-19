@@ -34,7 +34,6 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: stubs.Stub }));
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: stubs.Stub }));
 vi.mock("@xterm/addon-clipboard", () => ({ ClipboardAddon: stubs.Stub }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: stubs.Stub }));
-vi.mock("@xterm/addon-canvas", () => ({ CanvasAddon: stubs.Stub }));
 
 const messageMock = { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() };
 vi.mock("naive-ui", async (importOriginal) => ({

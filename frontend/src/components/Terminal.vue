@@ -6,7 +6,6 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { CanvasAddon } from '@xterm/addon-canvas'
 import { useMessage, NTooltip, NPopconfirm, NModal, NPopover } from 'naive-ui'
 import {
   PhCaretLeft,
@@ -147,11 +146,12 @@ const snapshotDotStyle = computed(() => {
   }
 })
 
+const SCROLL_BAR_WIDTH = 10
+
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let searchAddon: SearchAddon | null = null
 let webglAddon: WebglAddon | null = null
-let canvasAddon: CanvasAddon | null = null
 let websocket: WebSocket | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeTimeout: number | null = null
@@ -372,6 +372,15 @@ const TERMINAL_THEMES = {
     brightWhite: '#c0c1c7',
   }
 }
+
+// overviewRuler.width (set for the scroll bar's width) also makes xterm draw an overview
+// ruler. This terminal adds no decorations, so the ruler's only paint is a 1 px left
+// border, which would show as a line beside the scroll bar: make it transparent.
+type TerminalThemeName = keyof typeof TERMINAL_THEMES
+const xtermTheme = (name: TerminalThemeName) => ({
+  ...TERMINAL_THEMES[name],
+  overviewRulerBorder: 'rgba(0, 0, 0, 0)',
+})
 
 // Live working directory, learned from OSC escapes the shell emits on each
 // prompt (OSC 7 file://, ConEmu/Windows-Terminal OSC 9;9, iTerm2 OSC 1337
@@ -851,35 +860,24 @@ const toggleMouseMode = () => {
   )
 }
 
-const loadCanvasRenderer = () => {
-  if (!terminal || canvasAddon) return
-  try {
-    canvasAddon = new CanvasAddon()
-    terminal.loadAddon(canvasAddon)
-  } catch (err) {
-    console.warn('[Terminal] Canvas renderer failed; using DOM:', err)
-    canvasAddon = null
-  }
-}
-
-const loadAcceleratedRenderer = () => {
+// Disposing the WebGL addon hands rendering back to xterm's built-in DOM renderer.
+// The fallback happens once per terminal: a lost context is not retried.
+const loadWebglRenderer = () => {
   if (!terminal) return
-  // Try WebGL first.
+  const addon = new WebglAddon()
   try {
-    webglAddon = new WebglAddon()
-    webglAddon.onContextLoss(() => {
-      console.warn('[Terminal] WebGL context lost; falling back to canvas')
-      try { webglAddon?.dispose() } catch { /* noop */ }
-      webglAddon = null
-      loadCanvasRenderer()
-    })
-    terminal.loadAddon(webglAddon)
-    return
+    terminal.loadAddon(addon)
   } catch (err) {
-    console.warn('[Terminal] WebGL renderer unavailable, falling back to canvas:', err)
-    webglAddon = null
+    console.warn('[Terminal] WebGL renderer unavailable; using the DOM renderer:', err)
+    try { addon.dispose() } catch { /* noop */ }
+    return
   }
-  loadCanvasRenderer()
+  webglAddon = addon
+  addon.onContextLoss(() => {
+    console.warn('[Terminal] WebGL context lost; using the DOM renderer')
+    if (webglAddon === addon) webglAddon = null
+    try { addon.dispose() } catch { /* noop */ }
+  })
 }
 
 const createTerminal = () => {
@@ -887,7 +885,7 @@ const createTerminal = () => {
 
   // Auto-select light theme when app is in light mode (unless explicitly overridden)
   const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-  const theme = TERMINAL_THEMES[effectiveTheme]
+  const theme = xtermTheme(effectiveTheme)
   const isCyberpunk = effectiveTheme === 'cyberpunk'
 
   terminal = new Terminal({
@@ -901,6 +899,9 @@ const createTerminal = () => {
     cursorInactiveStyle: 'outline',
     allowTransparency: false,
     scrollback: appStore.terminalScrollback,
+    // xterm draws its own scroll bar this many px wide, and FitAddon reserves the same
+    // width; 10 px is the width of the thin native scroll bar this terminal had before.
+    overviewRuler: { width: SCROLL_BAR_WIDTH },
     smoothScrollDuration: isCyberpunk ? 150 : 100,
     rightClickSelectsWord: false,
     macOptionIsMeta: true,
@@ -1028,8 +1029,8 @@ const createTerminal = () => {
   terminal.open(terminalRef.value)
 
   // Renderer: WebGL is 5–10× faster than DOM for heavy output and large scrollback.
-  // Fall back to canvas (also GPU-accelerated, broader compat) on WebGL failure or context loss.
-  loadAcceleratedRenderer()
+  // Without WebGL (or after a lost context) xterm draws with its DOM renderer.
+  loadWebglRenderer()
 
   // Add event listeners
   terminalRef.value.addEventListener('contextmenu', handleContextMenu)
@@ -1685,8 +1686,6 @@ onUnmounted(() => {
 
   try { webglAddon?.dispose() } catch { /* noop */ }
   webglAddon = null
-  try { canvasAddon?.dispose() } catch { /* noop */ }
-  canvasAddon = null
 
   if (terminal) {
     terminal.dispose()
@@ -1704,7 +1703,7 @@ watch(() => props.boxName, () => {
 watch([() => props.theme, () => appStore.isDark], () => {
   if (terminal) {
     const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-    terminal.options.theme = TERMINAL_THEMES[effectiveTheme]
+    terminal.options.theme = xtermTheme(effectiveTheme)
   }
 })
 
@@ -2541,6 +2540,12 @@ defineExpose({
   width: 100% !important;
 }
 
+/* xterm paints the theme background on its scrollable element; filling the terminal
+   with it keeps the part-row below the last full row in the theme colour. */
+.terminal :deep(.xterm-scrollable-element) {
+  height: 100%;
+}
+
 /* Phosphor text glow - subtle CRT effect */
 .terminal :deep(.xterm-rows) {
   text-shadow: 0 0 1px currentColor;
@@ -2555,39 +2560,21 @@ defineExpose({
   background: rgba(83, 189, 250, 0.35) !important;
 }
 
-/* Styled scrollbars */
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 8px;
+/* Scroll bar: xterm draws it (SCROLL_BAR_WIDTH wide) on a transparent track. The thumb
+   is one flat colour inset 2px with round ends, and does not change on hover or drag.
+   The .xterm in the selector outranks the slider colours xterm injects from its theme. */
+.terminal {
+  --terminal-scrollbar-thumb: rgba(255, 255, 255, 0.1);
 }
 
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar-track {
-  background: transparent;
-  border-radius: 4px;
-}
-
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.12) 0%,
-    rgba(255, 255, 255, 0.08) 100%
-  );
-  border-radius: 4px;
+.terminal :deep(.xterm .xterm-scrollable-element > .scrollbar > .slider),
+.terminal :deep(.xterm .xterm-scrollable-element > .scrollbar > .slider:hover),
+.terminal :deep(.xterm .xterm-scrollable-element > .scrollbar > .slider.active) {
+  box-sizing: border-box;
   border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--terminal-scrollbar-thumb);
   background-clip: padding-box;
-}
-
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.2) 0%,
-    rgba(255, 255, 255, 0.15) 100%
-  );
-}
-
-/* Firefox scrollbars */
-.terminal :deep(.xterm-viewport) {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 /* =============================================================================
@@ -2746,12 +2733,8 @@ defineExpose({
   }
 
   /* Hide scrollbar on mobile to save space */
-  .terminal :deep(.xterm-viewport)::-webkit-scrollbar {
-    width: 0;
-  }
-
-  .terminal :deep(.xterm-viewport) {
-    scrollbar-width: none;
+  .terminal :deep(.xterm-scrollable-element > .scrollbar) {
+    display: none;
   }
 }
 
@@ -2979,15 +2962,7 @@ defineExpose({
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
-[data-theme="light"] .terminal .xterm-viewport {
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
-}
-
-[data-theme="light"] .terminal .xterm-viewport::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.08));
-}
-
-[data-theme="light"] .terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.15));
+[data-theme="light"] .terminal {
+  --terminal-scrollbar-thumb: rgba(0, 0, 0, 0.15);
 }
 </style>
