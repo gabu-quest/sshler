@@ -197,6 +197,9 @@ async def sftp_list_directory(
     entries: list[dict[str, object]] = []
     try:
         for filename in await sftp_client.listdir(path):
+            # An SFTP server lists the folder itself and its parent among the names.
+            if filename in (".", ".."):
+                continue
             try:
                 stats = await sftp_client.stat(f"{path.rstrip('/')}/{filename}")
                 permissions = stats.permissions or 0
