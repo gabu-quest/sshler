@@ -1076,8 +1076,15 @@ def test_temp_file_response_deletes_its_file_when_send_fails(tmp_path):
     zip_file.write_bytes(b"Z" * 10)
     response = files_api._TempFileResponse(str(zip_file), media_type="application/zip")
     scope = {"type": "http", "method": "GET", "headers": []}
+    request_given = False
 
     async def receive():
+        # As a server does: the request once, then nothing until the client is gone.
+        # Starlette 1.x listens here for a disconnect while it sends the file.
+        nonlocal request_given
+        if request_given:
+            await asyncio.Event().wait()
+        request_given = True
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message):

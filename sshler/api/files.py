@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 class _TempFileResponse(FileResponse):
     """A ``FileResponse`` that deletes its file once the response is over.
 
-    A ``background`` task is not enough: Starlette 0.48 answers a malformed or
+    A ``background`` task is not enough: Starlette answers a malformed or
     unsatisfiable ``Range`` with an early ``return`` that skips it, and a client
     disconnect raises out of ``send`` before it runs. ``finally`` covers every outcome.
     """
