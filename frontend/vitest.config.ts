@@ -9,7 +9,6 @@ export default defineConfig({
     root: fileURLToPath(new URL("./", import.meta.url)),
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
-    resolveSnapshotPath: undefined,
   },
   resolve: {
     alias: {

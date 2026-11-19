@@ -153,8 +153,8 @@ describe("TerminalView Properties", () => {
 
       await fc.assert(fc.asyncProperty(
         fc.record({
-          boxName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 20 }),
-          sessionName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 20 }),
+          boxName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 20 }),
+          sessionName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp", "/var"),
           cols: fc.integer({ min: 40, max: 200 }),
           rows: fc.integer({ min: 10, max: 60 }),

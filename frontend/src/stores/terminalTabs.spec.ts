@@ -8,8 +8,8 @@ import {
   scopeKey,
 } from "./terminalTabs";
 
-// vitest.setup.ts installs a real in-memory localStorage stub and clears it
-// in beforeEach, so localStorage.clear() here is belt-and-suspenders.
+// vitest.setup.ts clears localStorage in beforeEach, so localStorage.clear()
+// here is belt-and-suspenders.
 
 // Store methods take an opaque scope string; tests pass plain strings as scopes.
 const BOX = "mybox";

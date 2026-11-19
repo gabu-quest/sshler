@@ -73,10 +73,10 @@ describe("Files Store Properties", () => {
 
       await fc.assert(fc.asyncProperty(
         fc.record({
-          boxName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 20 }),
+          boxName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp", "/var/log", "/etc"),
           entries: fc.array(fc.record({
-            name: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+            name: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
             path: fc.string(),
             is_directory: fc.boolean(),
             size: fc.option(fc.nat()),
@@ -151,7 +151,7 @@ describe("Files Store Properties", () => {
         fc.record({
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp"),
-          filename: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          filename: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
         }),
         async ({ boxName, directory, filename }) => {
           const store = useFilesStore();
@@ -194,7 +194,7 @@ describe("Files Store Properties", () => {
         fc.record({
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           oldPath: fc.string({ minLength: 1, maxLength: 100 }),
-          newName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          newName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
         }),
         async ({ boxName, oldPath, newName }) => {
           const store = useFilesStore();
@@ -239,7 +239,7 @@ describe("Files Store Properties", () => {
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           sourcePath: fc.string({ minLength: 1, maxLength: 100 }),
           destinationDir: fc.string({ minLength: 1, maxLength: 100 }),
-          newName: fc.option(fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 })),
+          newName: fc.option(fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 })),
         }),
         async ({ boxName, sourcePath, destinationDir, newName }) => {
           const store = useFilesStore();
@@ -271,7 +271,7 @@ describe("Files Store Properties", () => {
         fc.record({
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp"),
-          fileName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          fileName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
           fileSize: fc.nat({ max: 1024 * 1024 }), // Up to 1MB
         }),
         async ({ boxName, directory, fileName, fileSize }) => {
@@ -421,7 +421,7 @@ describe("Files Store Properties", () => {
 
       fc.assert(fc.property(
         fc.array(fc.record({
-          name: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          name: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
           path: fc.string({ minLength: 1, maxLength: 100 }),
           is_directory: fc.boolean(),
         }), { minLength: 0, maxLength: 100 }),
