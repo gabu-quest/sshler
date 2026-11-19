@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from fastapi.websockets import WebSocketDisconnect
 
 from sshler import state
-from sshler.webapp import ServerSettings, make_app
+from sshler.webapp import Broadcaster, ServerSettings, make_app
 
 TEST_TOKEN = "api-token"
 
@@ -152,3 +153,146 @@ def test_bad_token_closes_connection(tmp_path, monkeypatch):
         assert exc_info.value.code == 4403
     finally:
         client.close()
+
+
+# --- Broadcaster: one stalled client never stalls the others -------------------------
+
+
+class FakeSocket:
+    """A socket double. ``stall`` makes every send wait on an event nobody sets."""
+
+    def __init__(self, stall: bool = False, fail: bool = False, delay: bool = False) -> None:
+        self.stall = stall
+        self.fail = fail
+        self.delay = delay
+        self.sent: list[dict] = []
+        self.closed = False
+        self.never = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def send_json(self, event: dict) -> None:
+        if self.stall:
+            await self.never.wait()
+        if self.delay:
+            await self.gate.wait()
+        if self.fail:
+            raise RuntimeError("socket gone")
+        self.sent.append(event)
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.closed = True
+
+
+async def _until(predicate, spins: int = 200) -> None:
+    for _ in range(spins):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition not reached")
+
+
+def test_a_client_that_never_reads_does_not_stall_the_others():
+    async def scenario() -> None:
+        hub = Broadcaster()
+        stuck, live = FakeSocket(stall=True), FakeSocket()
+        await hub.connect(stuck)
+        await hub.connect(live)
+
+        await asyncio.wait_for(hub.broadcast({"n": 0}), timeout=5)
+        await _until(lambda: live.sent == [{"n": 0}])
+
+        late = FakeSocket()
+        await asyncio.wait_for(hub.connect(late), timeout=5)
+        await asyncio.wait_for(hub.disconnect(late), timeout=5)
+
+        for n in range(1, 100):
+            await hub.broadcast({"n": n})
+        await _until(lambda: len(live.sent) == 100)
+        assert live.sent == [{"n": n} for n in range(100)]
+        assert stuck.sent == []
+        await hub.disconnect(stuck)
+        await hub.disconnect(live)
+
+    asyncio.run(scenario())
+
+
+def test_a_slow_client_is_dropped_and_closed_and_the_others_are_not():
+    async def scenario() -> None:
+        hub = Broadcaster()
+        slow, live = FakeSocket(delay=True), FakeSocket()
+        await hub.connect(slow)
+        await hub.connect(live)
+        for n in range(1000):
+            await hub.broadcast({"n": n})
+            await asyncio.sleep(0)
+        await _until(lambda: slow.closed)
+        await _until(lambda: len(live.sent) == 1000)
+        assert live.sent == [{"n": n} for n in range(1000)]
+        assert live.closed is False
+        await hub.broadcast({"n": 1000})
+        await _until(lambda: len(live.sent) == 1001)
+        assert slow.sent == []
+        await hub.disconnect(live)
+
+    asyncio.run(scenario())
+
+
+def test_a_client_whose_send_fails_is_dropped_and_closed():
+    async def scenario() -> None:
+        hub = Broadcaster()
+        broken, live = FakeSocket(fail=True), FakeSocket()
+        await hub.connect(broken)
+        await hub.connect(live)
+        await hub.broadcast({"n": 1})
+        await _until(lambda: broken.closed)
+        await hub.broadcast({"n": 2})
+        await _until(lambda: live.sent == [{"n": 1}, {"n": 2}])
+        assert broken.sent == []
+        await hub.disconnect(live)
+
+    asyncio.run(scenario())
+
+
+def test_a_client_that_disconnects_with_events_queued_is_forgotten():
+    async def scenario() -> None:
+        hub = Broadcaster()
+        leaving, live = FakeSocket(delay=True), FakeSocket()
+        await hub.connect(leaving)
+        await hub.connect(live)
+        await hub.broadcast({"n": 1})
+        await hub.disconnect(leaving)
+        await hub.broadcast({"n": 2})
+        await _until(lambda: live.sent == [{"n": 1}, {"n": 2}])
+        leaving.gate.set()
+        await asyncio.sleep(0)
+        assert leaving.sent == []
+        assert leaving.closed is False
+        await hub.disconnect(live)
+
+    asyncio.run(scenario())
+
+
+def test_a_broadcast_with_no_client_returns():
+    asyncio.run(asyncio.wait_for(Broadcaster().broadcast({"n": 1}), timeout=5))
+
+
+def test_the_first_message_comes_before_every_later_event():
+    async def scenario() -> None:
+        hub = Broadcaster()
+        sock = FakeSocket()
+
+        release = asyncio.Event()
+
+        async def first() -> dict:
+            await release.wait()
+            return {"type": "snapshot"}
+
+        await hub.connect(sock, first=first())
+        await hub.broadcast({"n": 1})
+        await hub.broadcast({"n": 2})
+        release.set()
+        await _until(lambda: len(sock.sent) == 3)
+        assert sock.sent == [{"type": "snapshot"}, {"n": 1}, {"n": 2}]
+        await hub.disconnect(sock)
+
+    asyncio.run(scenario())

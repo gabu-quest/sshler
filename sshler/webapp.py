@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import IO, Any, cast
@@ -688,66 +689,78 @@ async def _list_local_tmux_windows(session: str) -> list[dict[str, str | bool]] 
     return parse_window_list(stdout.decode("utf-8", errors="replace"))
 
 
-class ProgressBroadcaster:
-    """Fan-out hub for ``/ws/progress`` clients.
+class Broadcaster:
+    """Fan-out hub for ``/ws/progress`` and ``/ws/ping`` clients.
 
-    Per-app instance: one set of connections owned by a single FastAPI app, so
+    Per-app instance: one set of clients owned by a single FastAPI app, so
     multiple ``make_app`` calls (notably in tests) don't share state.
+
+    Each client has a bounded queue and one writer task. ``broadcast`` only puts
+    the event on every queue and never awaits a socket, so a client that stops
+    reading cannot delay the others. A client whose queue is full or whose send
+    fails is removed and its socket closed.
     """
 
-    def __init__(self) -> None:
-        self._connections: set[WebSocket] = set()
-        self._lock = asyncio.Lock()
+    def __init__(self, max_queue: int = 256) -> None:
+        self._max_queue = max_queue
+        self._clients: dict[WebSocket, tuple[asyncio.Queue, asyncio.Task]] = {}
+        self._closers: set[asyncio.Task] = set()
 
-    async def connect(self, ws: WebSocket) -> None:
-        async with self._lock:
-            self._connections.add(ws)
-
-    async def disconnect(self, ws: WebSocket) -> None:
-        async with self._lock:
-            self._connections.discard(ws)
-
-    async def broadcast(self, event: dict) -> None:
-        async with self._lock:
-            dead: list[WebSocket] = []
-            for ws in self._connections:
-                try:
-                    await ws.send_json(event)
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                self._connections.discard(ws)
-
-
-class PingBroadcaster:
-    """Fan-out hub for ``/ws/ping`` clients.
-
-    Same pattern as :class:`ProgressBroadcaster` but stateless — pings are
-    ephemeral; no snapshot is sent on connect.
-    """
-
-    def __init__(self) -> None:
-        self._connections: set[WebSocket] = set()
-        self._lock = asyncio.Lock()
-
-    async def connect(self, ws: WebSocket) -> None:
-        async with self._lock:
-            self._connections.add(ws)
+    async def connect(self, ws: WebSocket, first: Awaitable[dict] | None = None) -> None:
+        """Register *ws*. *first*, if given, resolves to the message sent before any event."""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=self._max_queue)
+        if first is not None:
+            queue.put_nowait(asyncio.ensure_future(first))
+        self._clients[ws] = (queue, asyncio.create_task(self._write(ws, queue)))
 
     async def disconnect(self, ws: WebSocket) -> None:
-        async with self._lock:
-            self._connections.discard(ws)
+        entry = self._clients.pop(ws, None)
+        if entry is not None:
+            self._stop(entry)
 
     async def broadcast(self, event: dict) -> None:
-        async with self._lock:
-            dead: list[WebSocket] = []
-            for ws in self._connections:
-                try:
-                    await ws.send_json(event)
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                self._connections.discard(ws)
+        for ws, (queue, _) in list(self._clients.items()):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                self._drop(ws)
+
+    @staticmethod
+    def _stop(entry: tuple[asyncio.Queue, asyncio.Task]) -> None:
+        queue, writer = entry
+        if writer is not asyncio.current_task():
+            writer.cancel()
+        while not queue.empty():
+            item = queue.get_nowait()
+            if isinstance(item, asyncio.Future):
+                item.cancel()
+
+    def _drop(self, ws: WebSocket) -> None:
+        entry = self._clients.pop(ws, None)
+        if entry is None:
+            return
+        self._stop(entry)
+        closer = asyncio.create_task(self._close(ws))
+        self._closers.add(closer)
+        closer.add_done_callback(self._closers.discard)
+
+    @staticmethod
+    async def _close(ws: WebSocket) -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(ws.close(), timeout=5)
+
+    async def _write(self, ws: WebSocket, queue: asyncio.Queue) -> None:
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, asyncio.Future):
+                    item = await item
+                await ws.send_json(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("broadcast client dropped: %s", exc)
+            self._drop(ws)
 
 
 def make_app(settings: ServerSettings | None = None) -> FastAPI:
@@ -772,11 +785,11 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
     # Progress-bar fan-out hub. Wired into deps so api/progress.py can
     # broadcast without importing webapp.py (no circular imports).
-    progress_broadcaster = ProgressBroadcaster()
+    progress_broadcaster = Broadcaster()
     deps.broadcast_progress = progress_broadcaster.broadcast
 
     # Ping fan-out hub. Same pattern — wired here to avoid circular imports.
-    ping_broadcaster = PingBroadcaster()
+    ping_broadcaster = Broadcaster()
     deps.broadcast_ping = ping_broadcaster.broadcast
 
     # Keeps native Windows ConPTY shells alive across websocket disconnects so
@@ -1701,10 +1714,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 return
 
         await websocket.accept()
-        await progress_broadcaster.connect(websocket)
-        try:
+        async def progress_snapshot() -> dict:
             bars = await state.list_progress_async()
-            snapshot = {
+            return {
                 "type": "snapshot",
                 "bars": [
                     {
@@ -1720,8 +1732,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     for b in bars
                 ],
             }
-            await websocket.send_json(snapshot)
 
+        await progress_broadcaster.connect(websocket, first=progress_snapshot())
+        try:
             # Disconnect sentinel — clients are not expected to send anything.
             while True:
                 await websocket.receive_text()
