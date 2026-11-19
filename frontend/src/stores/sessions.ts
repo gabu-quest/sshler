@@ -95,8 +95,8 @@ export const useSessionsStore = defineStore('sessions', () => {
   function getMostRecentSession(boxName: string): ApiSession | null {
     const sessions = sessionsByBox.value.get(boxName) || []
     if (sessions.length === 0) return null
-    
-    return sessions.reduce((latest, session) => 
+
+    return sessions.reduce((latest, session) =>
       session.last_accessed_at > latest.last_accessed_at ? session : latest
     )
   }

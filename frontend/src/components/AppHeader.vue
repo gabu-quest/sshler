@@ -369,9 +369,9 @@ onUnmounted(() => {
     </div>
 
     <!-- Mobile Navigation Drawer -->
-    <NDrawer 
-      v-model:show="isMobileMenuOpen" 
-      placement="right" 
+    <NDrawer
+      v-model:show="isMobileMenuOpen"
+      placement="right"
       :width="280"
       :trap-focus="false"
       :block-scroll="false"
@@ -763,7 +763,7 @@ onUnmounted(() => {
   .nav-link {
     border-color: var(--text);
   }
-  
+
   .nav-link.active {
     background: var(--accent);
     color: white;

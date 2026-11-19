@@ -1,6 +1,6 @@
 /**
  * Property-based tests for file browser functionality.
- * 
+ *
  * **Feature: vue3-migration-completion, Property 10: File browser directory navigation**
  * **Validates: Requirements 4.1**
  */
@@ -66,8 +66,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 10: File browser directory navigation**
        * **Validates: Requirements 4.1**
-       * 
-       * For any directory navigation action, the system should display files and 
+       *
+       * For any directory navigation action, the system should display files and
        * folders with appropriate metadata and icons.
        */
 
@@ -142,8 +142,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 13: File operation persistence**
        * **Validates: Requirements 4.4**
-       * 
-       * For any file operation (create, delete, rename, move, copy), the changes should be 
+       *
+       * For any file operation (create, delete, rename, move, copy), the changes should be
        * immediately reflected in the UI and persisted to the server.
        */
 
@@ -262,8 +262,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 12: File upload with progress tracking**
        * **Validates: Requirements 4.3**
-       * 
-       * For any file upload via drag and drop, the system should display upload progress 
+       *
+       * For any file upload via drag and drop, the system should display upload progress
        * and handle errors gracefully.
        */
 
@@ -364,8 +364,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 11: File selection and bulk operations**
        * **Validates: Requirements 4.2**
-       * 
-       * For any multi-file selection, the system should enable appropriate bulk operations 
+       *
+       * For any multi-file selection, the system should enable appropriate bulk operations
        * and display accurate selection count.
        */
 
@@ -414,8 +414,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 14: File search functionality**
        * **Validates: Requirements 4.5**
-       * 
-       * For any search query in the file browser, the system should return real-time 
+       *
+       * For any search query in the file browser, the system should return real-time
        * results from the current directory.
        */
 

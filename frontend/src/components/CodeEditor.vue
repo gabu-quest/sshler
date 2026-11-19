@@ -117,7 +117,7 @@ const createEditor = () => {
 
 const updateContent = (newValue: string) => {
   if (!editorView) return
-  
+
   const currentValue = editorView.state.doc.toString()
   if (currentValue !== newValue) {
     editorView.dispatch({

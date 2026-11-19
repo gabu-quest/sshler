@@ -224,7 +224,7 @@ For hot-reload development:
 # Terminal 1: Backend
 sshler serve --no-browser
 
-# Terminal 2: Frontend dev server  
+# Terminal 2: Frontend dev server
 cd frontend && pnpm dev -- --host --base /app/
 # Visit http://localhost:5173/app/
 ```

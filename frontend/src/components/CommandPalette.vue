@@ -222,14 +222,14 @@ const allActions = computed(() => [...actions.value, ...favoriteActions.value]);
 const fuzzyMatch = (text: string, query: string): { score: number; matches: number[] } => {
   const textLower = text.toLowerCase();
   const queryLower = query.toLowerCase();
-  
+
   if (!queryLower) return { score: 0, matches: [] };
-  
+
   let score = 0;
   let textIndex = 0;
   let queryIndex = 0;
   const matches: number[] = [];
-  
+
   while (textIndex < textLower.length && queryIndex < queryLower.length) {
     if (textLower[textIndex] === queryLower[queryIndex]) {
       matches.push(textIndex);
@@ -238,17 +238,17 @@ const fuzzyMatch = (text: string, query: string): { score: number; matches: numb
     }
     textIndex++;
   }
-  
+
   // Bonus for exact matches
   if (textLower.includes(queryLower)) {
     score += queryLower.length * 2;
   }
-  
+
   // Bonus for word boundary matches
   if (textLower.startsWith(queryLower)) {
     score += queryLower.length * 3;
   }
-  
+
   return queryIndex === queryLower.length ? { score, matches } : { score: 0, matches: [] };
 };
 
@@ -261,12 +261,12 @@ const filtered = computed(() => {
       // Search in label, description, and keywords
       const labelMatch = fuzzyMatch(action.label, q);
       const descMatch = action.description ? fuzzyMatch(action.description, q) : { score: 0, matches: [] };
-      const keywordMatch = action.keywords 
+      const keywordMatch = action.keywords
         ? Math.max(...action.keywords.map(k => fuzzyMatch(k, q).score))
         : 0;
-      
+
       const totalScore = labelMatch.score + descMatch.score * 0.5 + keywordMatch * 0.3;
-      
+
       return {
         ...action,
         score: totalScore,
@@ -275,20 +275,20 @@ const filtered = computed(() => {
     })
     .filter(action => action.score > 0)
     .sort((a, b) => b.score - a.score);
-  
+
   return results;
 });
 
 const groupedActions = computed(() => {
   const groups: Record<string, typeof filtered.value> = {};
-  
+
   filtered.value.forEach(action => {
     if (!groups[action.category]) {
       groups[action.category] = [];
     }
     groups[action.category]!.push(action);
   });
-  
+
   return groups;
 });
 
@@ -301,7 +301,7 @@ function activate(item: CommandAction) {
 
 function handleKeydown(e: KeyboardEvent) {
   if (!show.value) return;
-  
+
   const items = filtered.value;
   if (!items.length) return;
 
@@ -388,10 +388,10 @@ watch(
       <PhCommand weight="duotone" />
     </NIcon>
   </NButton>
-  
-  <NModal 
-    v-model:show="show" 
-    preset="card" 
+
+  <NModal
+    v-model:show="show"
+    preset="card"
     style="max-width: 600px; max-height: 70vh;"
     :trap-focus="true"
     :mask-closable="true"
@@ -408,7 +408,7 @@ watch(
         <span id="palette-title">{{ t('palette.title') }}</span>
       </div>
     </template>
-    
+
     <div class="palette">
       <div class="palette-search">
         <NInput
@@ -424,18 +424,18 @@ watch(
           {{ t('palette.nav_help') }}
         </div>
       </div>
-      
+
       <div class="palette-results" v-if="filtered.length > 0">
         <div v-for="(group, category) in groupedActions" :key="category" class="palette-group">
           <div class="palette-group-title">{{ category }}</div>
           <NList>
-            <NListItem 
-              v-for="item in group" 
+            <NListItem
+              v-for="item in group"
               :key="item.id"
-              @click="activate(item)" 
+              @click="activate(item)"
               class="palette-item"
-              :class="{ 
-                'palette-item-selected': filtered.indexOf(item) === selectedIndex 
+              :class="{
+                'palette-item-selected': filtered.indexOf(item) === selectedIndex
               }"
               :aria-selected="filtered.indexOf(item) === selectedIndex"
               role="option"
@@ -460,7 +460,7 @@ watch(
           </NList>
         </div>
       </div>
-      
+
       <div v-else-if="query && filtered.length === 0" class="palette-empty">
         <NIcon size="24" aria-hidden="true">
           <PhMagnifyingGlass weight="duotone" />
@@ -470,7 +470,7 @@ watch(
           <div class="text-muted">{{ t('palette.no_results_hint') }}</div>
         </div>
       </div>
-      
+
       <div v-else class="palette-help">
         <div class="palette-help-section">
           <strong>{{ t('palette.nav_label') }}</strong> {{ t('palette.nav_detail') }}
@@ -660,12 +660,12 @@ watch(
   .palette-item {
     border-color: currentColor;
   }
-  
+
   .palette-item-selected {
     background: var(--accent);
     color: white;
   }
-  
+
   .palette-item-shortcut {
     border-color: currentColor;
   }
@@ -676,15 +676,15 @@ watch(
   .palette {
     max-height: 70vh;
   }
-  
+
   .palette-item-content {
     padding: 12px;
   }
-  
+
   .palette-item-main {
     gap: 16px;
   }
-  
+
   .palette-item-shortcut {
     display: none; /* Hide shortcuts on mobile for cleaner UI */
   }

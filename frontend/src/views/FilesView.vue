@@ -1349,7 +1349,7 @@ const columns = computed(() => {
           </NSpace>
         </div>
       </div>
-      
+
       <NSpace vertical size="small">
         <!-- Bulk Actions -->
         <div v-if="selectedCount > 0" class="bulk-actions">
@@ -1737,7 +1737,7 @@ h1 {
   .file-browser :deep(.n-data-table-td) {
     min-height: 44px;
   }
-  
+
   .file-browser :deep(.n-button) {
     min-height: 44px;
     min-width: 44px;
@@ -1749,7 +1749,7 @@ h1 {
   .surface-card {
     border: 2px solid var(--stroke);
   }
-  
+
   .connection-indicator {
     border: 1px solid var(--text);
   }

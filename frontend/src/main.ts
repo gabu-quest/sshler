@@ -23,7 +23,7 @@ async function initApp() {
 
   // Initialize bootstrap to get token BEFORE mounting
   const bootstrapStore = useBootstrapStore();
-  
+
   // Clear any cached token that might be stale
   const cachedToken = bootstrapStore.token;
   if (cachedToken) {
@@ -39,7 +39,7 @@ async function initApp() {
       bootstrapStore.setToken(null);
     }
   }
-  
+
   await bootstrapStore.bootstrap();
 
   // Cleanup on app unmount

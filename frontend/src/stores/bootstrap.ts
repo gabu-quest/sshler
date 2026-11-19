@@ -55,7 +55,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
         token.value = payload.value.token;
         persistToken(token.value);
       }
-      
+
       // Set up periodic refresh (every 30 minutes)
       if (refreshInterval) {
         clearInterval(refreshInterval);
@@ -71,7 +71,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
           console.warn('Background token refresh failed:', err);
         });
       }, 30 * 60 * 1000); // 30 minutes
-      
+
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err);
     } finally {

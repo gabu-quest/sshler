@@ -1,6 +1,6 @@
 /**
  * Property-based tests for CommandPalette functionality.
- * 
+ *
  * **Feature: vue3-migration-completion, Property 7: Command palette search functionality**
  * **Validates: Requirements 3.2**
  */
@@ -15,16 +15,16 @@ vi.mock("naive-ui", () => {
   const StubInput = defineComponent({
     props: ['value', 'placeholder', 'autofocus', 'clearable', 'size'],
     emits: ["update:value"],
-    template: `<input 
-      :value="value" 
+    template: `<input
+      :value="value"
       :placeholder="placeholder"
-      @input="$emit('update:value', $event.target.value)" 
+      @input="$emit('update:value', $event.target.value)"
     />`,
   });
   const StubListItem = defineComponent({
     props: ['class'],
     emits: ["click"],
-    template: `<li 
+    template: `<li
       :class="$props.class"
       @click="$emit('click')"
       role="option"
@@ -91,8 +91,8 @@ describe("CommandPalette Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 7: Command palette search functionality**
        * **Validates: Requirements 3.2**
-       * 
-       * For any search term entered in the command palette, the results should be 
+       *
+       * For any search term entered in the command palette, the results should be
        * filtered using fuzzy matching and return relevant actions.
        */
 
@@ -196,8 +196,8 @@ describe("CommandPalette Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 8: Command palette action execution**
        * **Validates: Requirements 3.3**
-       * 
-       * For any action selected from the command palette, the action should execute 
+       *
+       * For any action selected from the command palette, the action should execute
        * correctly and the palette should close automatically.
        */
 
@@ -288,8 +288,8 @@ describe("CommandPalette Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 9: Command palette modal behavior**
        * **Validates: Requirements 3.4**
-       * 
-       * For any keyboard input while the command palette is open, the input should be 
+       *
+       * For any keyboard input while the command palette is open, the input should be
        * captured by the palette and not affect the underlying interface.
        */
 

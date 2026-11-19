@@ -889,7 +889,7 @@ const createTerminal = () => {
   const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
   const theme = TERMINAL_THEMES[effectiveTheme]
   const isCyberpunk = effectiveTheme === 'cyberpunk'
-  
+
   terminal = new Terminal({
     theme,
     fontSize: effectiveFontSize.value,
@@ -918,7 +918,7 @@ const createTerminal = () => {
 
   fitAddon = new FitAddon()
   searchAddon = new SearchAddon()
-  
+
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.loadAddon(searchAddon)
@@ -1154,11 +1154,11 @@ const createTerminal = () => {
 
   // Setup resize observer with throttling
   setupResizeObserver()
-  
+
   // Expose terminal globally for debugging
   ;(window as any).term = terminal
   ;(window as any).fitAddon = fitAddon
-  
+
   // Initial fit - MUST wait for fonts to load for correct cell measurements
   nextTick(async () => {
     // Wait for fonts (critical for Nerd Fonts)
@@ -1274,14 +1274,14 @@ const connect = async () => {
         ...(tokenValue.value ? { 'X-SSHLER-TOKEN': tokenValue.value } : {})
       }
     })
-    
+
     if (!handshakeResponse.ok) {
       throw new Error(`Handshake failed: ${handshakeResponse.status}`)
     }
-    
+
     const handshake = await handshakeResponse.json()
     let wsUrl = handshake.ws_url
-    
+
     // Add required query parameters
     const params = new URLSearchParams({
       host: props.boxName,
@@ -1290,7 +1290,7 @@ const connect = async () => {
       cols: '120',
       rows: '32'
     })
-    
+
     // Windows-only: pick which native shell the backend should spawn.
     if (props.shell) {
       params.set('shell', props.shell)
@@ -1302,10 +1302,10 @@ const connect = async () => {
     }
 
     wsUrl += '?' + params.toString()
-    
+
     websocket = new WebSocket(wsUrl)
     websocket.binaryType = 'arraybuffer' // Critical for binary terminal data!
-    
+
     websocket.onopen = () => {
       connecting.value = false
       connected.value = true
@@ -1345,7 +1345,7 @@ const connect = async () => {
         terminal?.focus()
       })
     }
-    
+
     websocket.onmessage = async (event) => {
       // Handle binary data (actual terminal output)
       if (event.data instanceof ArrayBuffer) {
@@ -1376,7 +1376,7 @@ const connect = async () => {
         }
       }
     }
-    
+
     websocket.onclose = (event) => {
       connected.value = false
       connecting.value = false
@@ -1418,7 +1418,7 @@ const connect = async () => {
         scheduleReconnect()
       }
     }
-    
+
     websocket.onerror = (error) => {
       console.error('[Connection] WebSocket error:', error)
       connected.value = false

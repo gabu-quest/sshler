@@ -53,11 +53,11 @@ const activePane = ref<string | null>(null)
 const layout = ref<'single' | 'horizontal' | 'vertical' | 'grid'>('single')
 const terminalRefs = ref<Record<string, InstanceType<typeof Terminal>>>({})
 
-const activePaneData = computed(() => 
+const activePaneData = computed(() =>
   panes.value.find(p => p.id === activePane.value)
 )
 
-const connectedPanes = computed(() => 
+const connectedPanes = computed(() =>
   panes.value.filter(p => p.connected).length
 )
 
@@ -71,24 +71,24 @@ const createPane = (sessionName?: string, directory?: string) => {
     active: false,
     connected: false
   }
-  
+
   panes.value.push(pane)
   setActivePane(id)
-  
+
   return pane
 }
 
 const removePane = (paneId: string) => {
   const index = panes.value.findIndex(p => p.id === paneId)
   if (index === -1) return
-  
+
   // Disconnect terminal
   const terminalRef = terminalRefs.value[paneId]
   if (terminalRef) {
     terminalRef.disconnect()
     delete terminalRefs.value[paneId]
   }
-  
+
   panes.value.splice(index, 1)
 
   // Set new active pane
@@ -106,7 +106,7 @@ const removePane = (paneId: string) => {
 const setActivePane = (paneId: string) => {
   panes.value.forEach(p => p.active = p.id === paneId)
   activePane.value = paneId
-  
+
   // Focus the terminal
   setTimeout(() => {
     const terminalRef = terminalRefs.value[paneId]
@@ -118,35 +118,35 @@ const setActivePane = (paneId: string) => {
 
 const splitHorizontal = () => {
   if (!activePaneData.value) return
-  
+
   createPane(
     `${activePaneData.value.sessionName}-h`,
     activePaneData.value.directory
   )
-  
+
   if (layout.value === 'single') {
     layout.value = 'horizontal'
   } else if (layout.value === 'vertical') {
     layout.value = 'grid'
   }
-  
+
   message.success('Split horizontally')
 }
 
 const splitVertical = () => {
   if (!activePaneData.value) return
-  
+
   createPane(
     `${activePaneData.value.sessionName}-v`,
     activePaneData.value.directory
   )
-  
+
   if (layout.value === 'single') {
     layout.value = 'vertical'
   } else if (layout.value === 'horizontal') {
     layout.value = 'grid'
   }
-  
+
   message.success('Split vertically')
 }
 
@@ -296,7 +296,7 @@ watch(
 const handleKeyDown = (event: KeyboardEvent) => {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
   const ctrlOrCmd = isMac ? event.metaKey : event.ctrlKey
-  
+
   if (ctrlOrCmd && event.shiftKey) {
     switch (event.key) {
       case 'T':
@@ -319,7 +319,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
         break
     }
   }
-  
+
   // Tab switching
   if (ctrlOrCmd && !event.shiftKey && event.key >= '1' && event.key <= '9') {
     event.preventDefault()
@@ -403,7 +403,7 @@ defineExpose({
           <span v-if="pane.connected" class="connection-dot" />
         </NTag>
       </div>
-      
+
       <NSpace size="small">
         <NButton size="tiny" @click="createPane()" title="New terminal (Ctrl+Shift+T)">
           <NIcon size="14">
@@ -449,7 +449,7 @@ defineExpose({
           @bell="handleBell(pane.id)"
           @notification="(data: any) => handleNotification(pane.id, data)"
         />
-        
+
         <!-- Pane header for single pane mode -->
         <div v-if="panes.length === 1" class="pane-header">
           <div class="pane-info">
@@ -460,7 +460,7 @@ defineExpose({
             <span v-if="pane.connected" class="connection-status connected">●</span>
             <span v-else class="connection-status disconnected">●</span>
           </div>
-          
+
           <NSpace size="small">
             <NButton size="tiny" @click="createPane()">
               <NIcon size="14">
@@ -489,7 +489,7 @@ defineExpose({
         <span>{{ connectedPanes }} connected</span>
         <span>{{ props.boxName }}</span>
       </div>
-      
+
       <div class="shortcuts-hint">
         <span class="shortcut">Ctrl+Shift+T</span> new
         <span class="shortcut">Ctrl+Shift+W</span> close
@@ -705,7 +705,7 @@ defineExpose({
   .terminal-pane {
     transition: none;
   }
-  
+
   @keyframes bell-flash {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }

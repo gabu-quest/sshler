@@ -348,13 +348,13 @@ const ensureData = async () => {
 const initializeFromRoute = () => {
   const boxFromRoute = route.query.box as string
   const dirFromRoute = route.query.dir as string
-  
+
   if (boxFromRoute && boxesStore.items.some(box => box.name === boxFromRoute)) {
     selectedBox.value = boxFromRoute
   } else if (!selectedBox.value && boxesStore.items.length > 0) {
     selectedBox.value = boxesStore.items[0]?.name || null
   }
-  
+
   if (dirFromRoute) {
     initialDirectory.value = dirFromRoute
   }

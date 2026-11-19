@@ -369,7 +369,7 @@ const handleBrowseServerFiles = (serverName: string) => {
         <NSpin size="large" />
         <p>{{ t('overview.loading_servers') }}</p>
       </div>
-      
+
       <NEmpty v-else-if="!hasServers" :description="t('overview.no_servers')">
         <template #extra>
           <NButton type="primary" @click="router.push('/boxes')">
@@ -380,14 +380,14 @@ const handleBrowseServerFiles = (serverName: string) => {
           </NButton>
         </template>
       </NEmpty>
-      
+
       <NGrid v-else :x-gap="16" :y-gap="16" cols="1 s:2 l:3" responsive="screen">
         <NGridItem v-for="box in boxesStore.items" :key="box.name">
           <NCard class="server-card" hoverable>
             <div class="server-header">
               <div class="server-status">
-                <NIcon 
-                  size="12" 
+                <NIcon
+                  size="12"
                   :color="getStatusColor(getServerStatus(box))"
                 >
                   <PhCircle weight="duotone" />
@@ -402,7 +402,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                 {{ t('overview.favorite_label') }}
               </NTag>
             </div>
-            
+
             <div class="server-info">
               <p class="server-host">{{ box.host }}</p>
 
@@ -473,7 +473,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                 {{ t('overview.last_used') }} {{ getBoxLastUsed(box.name) }}
               </p>
             </div>
-            
+
             <div class="server-actions">
               <NButton
                 type="primary"
