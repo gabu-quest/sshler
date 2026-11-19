@@ -51,6 +51,7 @@ from .config import (
     find_box,
     load_config,
 )
+from .ptyspawn import spawn_on_pty
 from .rate_limit import get_rate_limiter
 from .session import get_session_store
 from .settings import get_settings as get_app_settings
@@ -316,7 +317,6 @@ async def _convert_path_to_wsl(path: str) -> str | None:
 # PTY-related modules for local terminal resize (Unix-only)
 if sys.platform != "win32":
     import fcntl
-    import pty
     import termios
 
 
@@ -536,33 +536,12 @@ async def _open_local_pty_tmux(
     if working_directory:
         command.extend(["-c", working_directory])
 
-    def _spawn_pty() -> tuple[int, int]:
-        """Spawn the process in a PTY (runs in thread)."""
-        master_fd, slave_fd = pty.openpty()
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
 
-        winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-
-        pid = os.fork()
-        if pid == 0:
-            # Child process
-            os.close(master_fd)
-            os.setsid()
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-            os.dup2(slave_fd, 0)
-            os.dup2(slave_fd, 1)
-            os.dup2(slave_fd, 2)
-            if slave_fd > 2:
-                os.close(slave_fd)
-            env = os.environ.copy()
-            env["TERM"] = "xterm-256color"
-            os.execvpe(command[0], command, env)
-
-        # Parent process
-        os.close(slave_fd)
-        return master_fd, pid
-
-    master_fd, pid = await asyncio.to_thread(_spawn_pty)
+    master_fd, pid = await asyncio.to_thread(
+        spawn_on_pty, command, env=env, rows=rows, cols=cols
+    )
 
     stdin = os.fdopen(master_fd, 'wb', buffering=0, closefd=False)
     stdout = os.fdopen(master_fd, 'rb', buffering=0, closefd=False)

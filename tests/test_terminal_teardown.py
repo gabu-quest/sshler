@@ -10,7 +10,6 @@ import asyncio
 import contextlib
 import errno
 import os
-import pty
 import select
 import signal
 import threading
@@ -24,6 +23,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from sshler import tmux
+from sshler.ptyspawn import spawn_on_pty
 from sshler.webapp import LocalPTYProcess, ServerSettings, _list_local_tmux_windows, make_app
 
 TOKEN = "teardown-token"
@@ -97,19 +97,7 @@ def test_window_listing_times_out_and_kills_its_child(
 
 def _spawn_on_pty(argv: list[str]) -> LocalPTYProcess:
     """Start *argv* as a session leader on a fresh PTY, like _open_local_pty_tmux does."""
-    master_fd, slave_fd = pty.openpty()
-    pid = os.posix_spawnp(
-        argv[0],
-        argv,
-        dict(os.environ),
-        file_actions=[
-            (os.POSIX_SPAWN_DUP2, slave_fd, 0),
-            (os.POSIX_SPAWN_DUP2, slave_fd, 1),
-            (os.POSIX_SPAWN_DUP2, slave_fd, 2),
-        ],
-        setsid=True,
-    )
-    os.close(slave_fd)
+    master_fd, pid = spawn_on_pty(argv, env=dict(os.environ), rows=24, cols=80)
     stdin = os.fdopen(master_fd, "wb", buffering=0, closefd=False)
     stdout = os.fdopen(master_fd, "rb", buffering=0, closefd=False)
     return LocalPTYProcess(master_fd, pid, stdin, stdout)
