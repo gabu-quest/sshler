@@ -283,11 +283,11 @@ async def sftp_read_file(
 
     sftp_client = await connection.start_sftp_client()
     try:
-        async with await sftp_client.open(path, "r", encoding="utf-8") as remote_file:
-            data = await remote_file.read(max_bytes)
-        if isinstance(data, bytes):
-            return data.decode("utf-8", errors="replace")
-        return data
+        async with await sftp_client.open(
+            path, "r", encoding="utf-8", errors="replace"
+        ) as remote_file:
+            text = await remote_file.read(max_bytes)
+        return text
     finally:
         try:
             sftp_client.exit()

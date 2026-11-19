@@ -54,6 +54,7 @@ async def loopback(tmp_path: Path) -> AsyncIterator[LoopbackServer]:
     (root / "b.txt").write_text("hello\n", encoding="utf-8")
     (root / "b.txt").chmod(0o644)
     (root / "Z.txt").write_text("café\n", encoding="utf-8")
+    (root / "dir_a" / "latin1.txt").write_bytes(b"caf\xe9 au lait\n")
 
     host_key = asyncssh.generate_private_key("ssh-ed25519")
     other_key = asyncssh.generate_private_key("ssh-ed25519")
@@ -148,6 +149,22 @@ async def test_reads_a_text_file_up_to_the_limit(loopback: LoopbackServer):
     assert whole == "hello\n"
     assert cut == "he"
     assert accented == "café\n"
+
+
+@pytest.mark.asyncio
+async def test_bytes_that_are_not_utf8_are_read_as_replacement_characters(
+    loopback: LoopbackServer,
+):
+    connection = await _connect(loopback)
+    try:
+        text = await sftp_read_file(connection, "/dir_a/latin1.txt")
+        cut_inside_a_character = await sftp_read_file(connection, "/Z.txt", max_bytes=4)
+    finally:
+        connection.close()
+        await connection.wait_closed()
+
+    assert text == "caf\ufffd au lait\n"
+    assert cut_inside_a_character == "caf\ufffd"
 
 
 @pytest.mark.asyncio
