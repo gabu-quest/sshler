@@ -286,6 +286,31 @@ async def _local_create_file(path: str) -> None:
     await asyncio.to_thread(_worker)
 
 
+async def _local_batch_delete(path: str) -> None:
+    def _worker() -> None:
+        target = Path(path)
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
+    await asyncio.to_thread(_worker)
+
+
+async def _local_batch_move(source: str, target: str) -> None:
+    await asyncio.to_thread(shutil.move, source, target)
+
+
+async def _local_batch_copy(source: str, target: str) -> None:
+    def _worker() -> None:
+        if Path(source).is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+
+    await asyncio.to_thread(_worker)
+
+
 async def _local_delete_file(path: str) -> None:
     def _worker() -> None:
         Path(path).unlink()

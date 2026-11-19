@@ -1,5 +1,6 @@
 """Tests for batch file operations API."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -246,5 +247,103 @@ class TestBatchCopy:
             assert (dest / "mydir" / "inner.txt").read_text() == "inside"
             # Original still exists
             assert (subdir / "inner.txt").exists()
+        finally:
+            client.close()
+
+
+def _on_loop() -> bool:
+    """True when called on a thread that runs an event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+class TestLocalWorkLeavesTheEventLoop:
+    """Local delete, move, copy and listing run in a worker thread, not the loop thread."""
+
+    @pytest.mark.parametrize("op", ["delete", "move", "copy"])
+    def test_batch_op_filesystem_call_runs_off_the_loop_thread(self, tmp_path, monkeypatch, op):
+        import shutil
+
+        config_dir = setup_config(tmp_path)
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        (workdir / "a.txt").write_text("a")
+        (workdir / "d").mkdir()
+        (workdir / "d" / "f.txt").write_text("f")
+        seen: list[bool] = []
+        real = {"rmtree": shutil.rmtree, "move": shutil.move, "copy2": shutil.copy2}
+
+        def spy(name):
+            def wrapper(*args, **kwargs):
+                seen.append(_on_loop())
+                return real[name](*args, **kwargs)
+
+            return wrapper
+
+        monkeypatch.setattr(shutil, "rmtree", spy("rmtree"))
+        monkeypatch.setattr(shutil, "move", spy("move"))
+        monkeypatch.setattr(shutil, "copy2", spy("copy2"))
+        client = build_client(config_dir, monkeypatch)
+        try:
+            body: dict = {"paths": [str(workdir / ("d" if op == "delete" else "a.txt"))]}
+            if op != "delete":
+                body["destination"] = str(tmp_path / "dest")
+            resp = client.post(f"/api/v1/boxes/local/batch/{op}", json=body, headers=auth_headers())
+            assert resp.status_code == 200
+            assert resp.json()["succeeded"] == body["paths"]
+            assert len(seen) == 1
+            assert seen == [False]
+        finally:
+            client.close()
+
+    def test_batch_delete_of_a_vanished_path_is_reported_failed(self, tmp_path, monkeypatch):
+        config_dir = setup_config(tmp_path)
+        gone = str(tmp_path / "gone.txt")
+        client = build_client(config_dir, monkeypatch)
+        try:
+            resp = client.post(
+                "/api/v1/boxes/local/batch/delete", json={"paths": [gone]}, headers=auth_headers()
+            )
+            data = resp.json()
+            assert data["status"] == "partial"
+            assert data["succeeded"] == []
+            assert [f["path"] for f in data["failed"]] == [gone]
+        finally:
+            client.close()
+
+    def test_listing_keeps_order_and_a_broken_symlink_and_runs_off_the_loop(
+        self, tmp_path, monkeypatch
+    ):
+
+        config_dir = setup_config(tmp_path)
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        (workdir / "b.txt").write_text("bb")
+        (workdir / "A").mkdir()
+        (workdir / "dangling").symlink_to(workdir / "nowhere")
+        threads: list[bool] = []
+        real_iterdir = Path.iterdir
+
+        def spy_iterdir(self):
+            threads.append(_on_loop())
+            return real_iterdir(self)
+
+        monkeypatch.setattr(Path, "iterdir", spy_iterdir)
+        client = build_client(config_dir, monkeypatch)
+        try:
+            resp = client.get(
+                "/api/v1/boxes/local/ls", params={"directory": str(workdir)}, headers=auth_headers()
+            )
+            assert resp.status_code == 200
+            entries = resp.json()["entries"]
+            assert [(e["name"], e["is_directory"], e["size"]) for e in entries] == [
+                ("A", True, None),
+                ("b.txt", False, 2),
+            ]
+            assert len(threads) == 1
+            assert threads == [False]
         finally:
             client.close()

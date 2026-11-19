@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import shlex
-import shutil
 import stat as stat_mod
 from pathlib import Path, PurePosixPath
 
@@ -18,7 +17,12 @@ from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
 from .files import _remote_path
-from .helpers import _normalize_local_path
+from .helpers import (
+    _local_batch_copy,
+    _local_batch_delete,
+    _local_batch_move,
+    _normalize_local_path,
+)
 from .rate_limiting import rate_limit_delete, rate_limit_file_ops
 
 logger = logging.getLogger(__name__)
@@ -99,11 +103,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             for path in payload.paths:
                 try:
                     normalized = _normalize_local_path(path)
-                    target = Path(normalized)
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
+                    await _local_batch_delete(normalized)
                     succeeded.append(path)
                 except Exception as exc:
                     failed.append({"path": path, "error": str(exc)})
@@ -177,7 +177,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     normalized = _normalize_local_path(path)
                     source = Path(normalized)
                     target = dest_dir / source.name
-                    shutil.move(str(source), str(target))
+                    await _local_batch_move(str(source), str(target))
                     succeeded.append(path)
                 except Exception as exc:
                     failed.append({"path": path, "error": str(exc)})
@@ -250,10 +250,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     normalized = _normalize_local_path(path)
                     source = Path(normalized)
                     target = dest_dir / source.name
-                    if source.is_dir():
-                        shutil.copytree(str(source), str(target))
-                    else:
-                        shutil.copy2(str(source), str(target))
+                    await _local_batch_copy(str(source), str(target))
                     succeeded.append(path)
                 except Exception as exc:
                     failed.append({"path": path, "error": str(exc)})

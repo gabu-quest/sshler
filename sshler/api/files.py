@@ -284,6 +284,41 @@ async def _spool_remote_zip(connection, command: str, dest: str) -> None:
         raise HTTPException(status_code=500, detail=f"zip failed: {message}")
 
 
+def _local_children(target: Path) -> list[tuple[Path, bool]]:
+    """Children of a folder, folders first then by lowercase name (runs in a worker thread)."""
+    children = []
+    for child in target.iterdir():
+        try:
+            is_dir = child.is_dir()
+            children.append((child, is_dir))
+        except OSError:
+            continue  # broken symlink or deleted between iterdir and stat
+    children.sort(key=lambda item: (not item[1], item[0].name.lower()))
+    return children
+
+
+def _local_entry_stats(
+    children: list[tuple[Path, bool]],
+) -> list[tuple[Path, bool, int | None, float, int]]:
+    """Stat each child; one that vanished or cannot be read is left out (worker thread)."""
+    rows = []
+    for child, is_dir in children:
+        try:
+            stats = child.stat()
+        except OSError:
+            continue
+        rows.append(
+            (
+                child,
+                is_dir,
+                stats.st_size if child.is_file() else None,
+                stats.st_mtime,
+                stats.st_mode & 0o7777,
+            )
+        )
+    return rows
+
+
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
@@ -305,14 +340,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Directory not found")
             if not target.is_dir():
                 raise HTTPException(status_code=400, detail="Path is not a directory")
-            children = []
-            for child in target.iterdir():
-                try:
-                    is_dir = child.is_dir()
-                    children.append((child, is_dir))
-                except OSError:
-                    continue  # broken symlink or deleted between iterdir and stat
-            children.sort(key=lambda item: (not item[1], item[0].name.lower()))
+            children = await asyncio.to_thread(_local_children, target)
 
             # Check gitignored status for all entries in one batch
             ignored_names: set[str] = set()
@@ -321,19 +349,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     normalized, [c.name for c, _ in children]
                 )
 
-            for child, is_dir in children:
-                try:
-                    stats = child.stat()
-                except OSError:
-                    continue
+            for child, is_dir, size, modified, mode in await asyncio.to_thread(
+                _local_entry_stats, children
+            ):
                 entries.append(
                     APIDirectoryEntry(
                         name=child.name,
                         path=str(child),
                         is_directory=is_dir,
-                        size=stats.st_size if child.is_file() else None,
-                        modified=stats.st_mtime,
-                        mode=stats.st_mode & 0o7777,
+                        size=size,
+                        modified=modified,
+                        mode=mode,
                         gitignored=child.name in ignored_names,
                     )
                 )
