@@ -1164,7 +1164,7 @@ defineExpose({ updateContent });
   min-height: unset !important;
 }
 
-.preview-reader-modal .n-card__content {
+.preview-reader-modal .n-card-content {
   padding: 0 !important;
   overflow: hidden !important;
 }
