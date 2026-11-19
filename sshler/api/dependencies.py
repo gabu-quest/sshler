@@ -61,9 +61,7 @@ class APIDependencies:
 
         if not hmac.compare_digest(supplied or "", expected):
             logger.warning(
-                f"Token mismatch on {request.url.path}: "
-                f"supplied={supplied[:8] + '...' if supplied else 'None'}, "
-                f"expected={expected[:8] + '...' if expected else 'None'}"
+                "Token mismatch on %s: supplied=%s", request.url.path, "yes" if supplied else "no"
             )
             raise HTTPException(status_code=403, detail="Missing or invalid X-SSHLER-TOKEN header")
 
