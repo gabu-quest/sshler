@@ -56,7 +56,7 @@ async def test_sftp_list_directory_skips_entries_on_stat_failure():
                 raise OSError("boom")
             return SimpleNamespace(permissions=0o40000, size=123)
 
-        async def exit(self):
+        def exit(self):
             self.exit_called = True
 
     class FakeConnection:

@@ -346,7 +346,7 @@ async def _read_file_bytes(
             data = data_read if isinstance(data_read, bytes) else data_read.encode()
     finally:
         with contextlib.suppress(Exception):
-            await sftp_client.exit()  # type: ignore[func-returns-value]
+            sftp_client.exit()
     too_large = len(data) > limit
     if too_large:
         return b"", True

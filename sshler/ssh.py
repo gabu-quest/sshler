@@ -214,7 +214,7 @@ async def sftp_list_directory(
                 pass
     finally:
         try:
-            await sftp_client.exit()  # type: ignore[func-returns-value]
+            sftp_client.exit()
         except Exception:
             pass
     entries.sort(key=lambda entry: (not entry["is_directory"], str(entry["name"]).lower()))
@@ -245,7 +245,7 @@ async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str)
         return (permissions & 0o40000) == 0o40000
     finally:
         try:
-            await sftp_client.exit()  # type: ignore[func-returns-value]
+            sftp_client.exit()
         except Exception:
             pass
 
@@ -257,7 +257,7 @@ async def sftp_chmod(connection: asyncssh.SSHClientConnection, path: str, mode: 
         await sftp_client.chmod(path, mode)
     finally:
         try:
-            await sftp_client.exit()  # type: ignore[func-returns-value]
+            sftp_client.exit()
         except Exception:
             pass
 
@@ -287,7 +287,7 @@ async def sftp_read_file(
         return data
     finally:
         try:
-            await sftp_client.exit()  # type: ignore[func-returns-value]
+            sftp_client.exit()
         except Exception:
             pass
 

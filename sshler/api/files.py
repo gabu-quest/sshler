@@ -439,7 +439,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.rename(validated_path, target_path)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -489,7 +489,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await _remote_write_new(sftp_client, remote_path, b"", overwrite=False)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except SSHError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except HTTPException:
@@ -544,7 +544,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.mkdir(remote_path)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except SSHError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except HTTPException:
@@ -590,7 +590,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.remove(validated_path)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -644,7 +644,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await sftp_client.rename(remote_src, remote_target)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -716,7 +716,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         await dest_file.write(data)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Source not found") from exc
         except HTTPException:
@@ -875,7 +875,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         await remote_file.write(content)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1205,7 +1205,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     return {"exists": False, "is_directory": False, "is_file": False}
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1273,7 +1273,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     await _remote_write_new(sftp_client, remote_path, contents, overwrite=overwrite)
                 finally:
                     with contextlib.suppress(Exception):
-                        await sftp_client.exit()  # type: ignore[func-returns-value]
+                        sftp_client.exit()
         except HTTPException:
             raise
         except SSHError as exc:

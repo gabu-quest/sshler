@@ -165,7 +165,7 @@ class FakeSFTP:
     async def remove(self, path: str) -> None:
         self.calls.append(("remove", path))
 
-    async def exit(self) -> None:
+    def exit(self) -> None:
         return None
 
 

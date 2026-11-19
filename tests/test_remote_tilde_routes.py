@@ -73,7 +73,7 @@ class FakeSFTP:
         self.calls.append(("open", path, mode))
         return FakeFile(self, path)
 
-    async def exit(self) -> None:
+    def exit(self) -> None:
         return None
 
 

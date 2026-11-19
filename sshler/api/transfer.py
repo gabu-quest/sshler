@@ -191,7 +191,7 @@ def _sse_event(event: str, data: dict) -> str:
 
 async def _safe_exit_sftp(sftp_client) -> None:
     with contextlib.suppress(Exception):
-        await sftp_client.exit()
+        sftp_client.exit()
 
 
 async def _get_file_size(box, sftp_client, path: str) -> int:

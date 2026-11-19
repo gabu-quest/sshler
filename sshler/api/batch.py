@@ -144,7 +144,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                     failed.append({"path": orig, "error": str(exc)})
                         finally:
                             with contextlib.suppress(Exception):
-                                await sftp_client.exit()  # type: ignore[func-returns-value]
+                                sftp_client.exit()
                 except SSHError as exc:
                     # If connection failed entirely, mark remaining as failed
                     already = {f["path"] for f in failed} | set(succeeded)
@@ -216,7 +216,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                     failed.append({"path": orig, "error": str(exc)})
                         finally:
                             with contextlib.suppress(Exception):
-                                await sftp_client.exit()  # type: ignore[func-returns-value]
+                                sftp_client.exit()
                 except SSHError as exc:
                     already = {f["path"] for f in failed} | set(succeeded)
                     for orig, _ in validated:
