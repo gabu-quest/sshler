@@ -11,6 +11,7 @@ import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePdfExport } from "@/composables/usePdfExport";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { mermaidConfig } from "@/utils/mermaidConfig";
 
 const props = defineProps<{
   show: boolean;
@@ -159,11 +160,7 @@ const getMermaid = async () => {
   if (!mermaidPromise) {
     mermaidPromise = import("mermaid").then((mod) => {
       const m = mod.default;
-      m.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: props.theme === "dark" ? "dark" : "default",
-      });
+      m.initialize(mermaidConfig(props.theme));
       return m;
     });
   }

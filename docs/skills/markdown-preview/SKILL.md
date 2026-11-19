@@ -37,6 +37,7 @@ Mermaid rendering and image inlining run in parallel after the v-html commit. Th
 - Literal `\n` (backslash + n) in state-diagram descriptions and `classDef` strings is translated to `<br/>` — mermaid renders that as a line break wherever htmlLabels is on (the default).
 - SVG `width`/`height` attrs are stripped after render so CSS can scale via the viewBox. Without this, tall diagrams keep their literal pixel height in print and overflow onto extra pages.
 - Diagrams with aspect ratio > 1.4:1 are tagged `.mermaid-wide` and assigned `page: wide-landscape` so they get their own landscape page when printing.
+- The mermaid configuration has one owner, `frontend/src/utils/mermaidConfig.ts`, used by the preview and the print document. It pins the layout engine, the look and the minimum node width so diagrams keep their mermaid 11 shape.
 - Mermaid's own DOMPurify pass (via `securityLevel: "strict"` at init) is trusted; the rendered SVG is NOT re-sanitised. A second pass strips `<foreignObject>` HTML labels (XHTML namespace) and produces empty shapes.
 - Render errors become a visible `<pre class="mermaid-error">` containing the source — not a silent fail.
 

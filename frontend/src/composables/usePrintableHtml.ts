@@ -13,6 +13,7 @@
  */
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { mermaidConfig } from "@/utils/mermaidConfig";
 
 import { fetchFilePreview } from "@/api/http";
 
@@ -100,11 +101,7 @@ async function getMermaid(theme: PrintableTheme) {
   if (!mermaidPromise) {
     mermaidPromise = import("mermaid").then((mod) => {
       const m = mod.default;
-      m.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: theme === "dark" ? "dark" : "default",
-      });
+      m.initialize(mermaidConfig(theme));
       return m;
     });
   }
