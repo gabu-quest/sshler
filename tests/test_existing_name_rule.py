@@ -46,7 +46,6 @@ from fastapi.testclient import TestClient
 from sshler import ssh_pool, state
 from sshler.api import local_files as local_files_api
 from sshler.api import remote_files as remote_files_api
-from sshler.api import transfer as transfer_api
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
 
@@ -1418,7 +1417,7 @@ def test_a_client_that_disconnects_mid_transfer_leaves_no_partial_file(
     writes = [0]
 
     if dest == "local":
-        owner, real_write = transfer_api._ThreadedLanding, transfer_api._ThreadedLanding.write
+        owner, real_write = local_files_api._ThreadedLanding, local_files_api._ThreadedLanding.write
         real_abort = local_files_api._LocalLanding.abort
 
         def abort(self):

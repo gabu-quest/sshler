@@ -11,7 +11,7 @@ import posixpath
 import secrets
 import stat as stat_mod
 import tempfile
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path, PurePosixPath
 from types import TracebackType
 
@@ -24,7 +24,7 @@ from ..config import Box
 from ..ssh import SSHError, sftp_chmod, sftp_list_directory, sftp_read_file, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
-from .file_contract import BatchOutcome, FolderZip, PathKind
+from .file_contract import BatchOutcome, FolderZip, PathKind, ReadChunk, SourceFile
 from .helpers import _attachment_header
 from .models import APIDirectoryEntry
 from .placement import (
@@ -679,6 +679,22 @@ class RemoteFiles:
     def parent(self, path: str) -> str:
         return str(PurePosixPath(path).parent)
 
+    def check_path(self, path: str) -> str:
+        PathValidator.validate_remote_path(path)
+        return path
+
+    async def resolve(self, checked: str) -> str:
+        return await remote_path(await self._conn(), checked)
+
+    def name(self, path: str) -> str:
+        return PurePosixPath(path).name
+
+    def join(self, folder: str, name: str) -> str:
+        return str(PurePosixPath(folder) / name)
+
+    async def prepare(self) -> None:
+        await self._session()
+
     # --- reading ---------------------------------------------------------------------
 
     async def list_folder(self, directory: str) -> list[APIDirectoryEntry]:
@@ -796,6 +812,16 @@ class RemoteFiles:
             raise
         return FolderZip(path=tmp_path, name=dirname)
 
+    async def source(self, path: str) -> SourceFile:
+        attrs = await (await self._session()).stat(path)
+        return SourceFile(attrs.permissions or 0, attrs.size or 0, remote_fingerprint(attrs))
+
+    @contextlib.asynccontextmanager
+    async def open_read(self, path: str) -> AsyncIterator[ReadChunk]:
+        sftp_client = await self._session()
+        async with await sftp_client.open(path, "rb") as handle:
+            yield handle.read
+
     # --- writing ---------------------------------------------------------------------
 
     async def write_text(self, path: str, content: str) -> None:
@@ -820,6 +846,26 @@ class RemoteFiles:
         except Exception:
             pass
         await sftp_client.mkdir(path)
+
+    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> _RemoteLanding:
+        """The folder is made with one ``mkdir`` whose failure is ignored (it exists, or
+        the landing's own open says why not)."""
+        sftp_client = await self._session()
+        with contextlib.suppress(Exception):
+            await sftp_client.mkdir(str(PurePosixPath(path).parent))
+        return await _remote_landing(
+            sftp_client,
+            path,
+            overwrite=overwrite,
+            source_regular=stat_mod.S_ISREG(source_mode),
+            source_mode=source_mode,
+        )
+
+    async def remove_if_unchanged(self, path: str, fingerprint: tuple, target: str) -> None:
+        sftp_client = await self._session()
+        after = remote_fingerprint(await sftp_client.stat(path))
+        ensure_source_unchanged(fingerprint, after, target)
+        await sftp_client.remove(path)
 
     async def delete(self, path: str) -> None:
         await (await self._session()).remove(path)

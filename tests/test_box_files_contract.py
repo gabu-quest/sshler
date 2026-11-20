@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import shlex
 import threading
@@ -40,6 +41,7 @@ import sshler.api
 from sshler import ssh_pool, state
 from sshler.api import excel as excel_api
 from sshler.api import files as files_api
+from sshler.api import remote_files as remote_files_api
 from sshler.api.box_files import DEFAULT_ANSWERS, Answers, box_files
 from sshler.api.placement import DestinationRefused
 from sshler.config import Box
@@ -411,6 +413,111 @@ async def _delete(files, kind: Kind, rel: str):
     await files.delete(await files.path(kind.at(rel)))
 
 
+# --- the operations a transfer is built from -----------------------------------------
+
+CHUNK = 256 * 1024
+# Larger than two chunks, so a read in chunks gives two full ones and a short one.
+BIG = bytes(range(256)) * (2 * CHUNK // 256 + 100)
+
+
+async def _source(files, kind: Kind, rel: str):
+    found = await files.source(await files.path(kind.at(rel)))
+    return found.mode, found.size, found.fingerprint
+
+
+def _fingerprint(kind: Kind, rel: str) -> tuple:
+    """The fingerprint of a file of the tree, from ``os.stat`` and not from the box:
+    size, time in nanoseconds and inode on the local box; size and whole-second time
+    over SFTP version 3, which sends no finer time."""
+    st = (kind.root / rel).stat()
+    if kind.name == "local":
+        return (st.st_size, st.st_mtime_ns, st.st_ino)
+    return (st.st_size, int(st.st_mtime), None)
+
+
+async def _chunks(files, kind: Kind, rel: str, size: int) -> list[bytes]:
+    if rel == "big.bin":
+        (kind.root / rel).write_bytes(BIG)
+    chunks = []
+    async with files.open_read(await files.path(kind.at(rel))) as read:
+        while chunk := await read(size):
+            chunks.append(chunk)
+    return chunks
+
+
+def _folder_names(kind: Kind, rel: str = "") -> list[str]:
+    return sorted(p.name for p in (kind.root / rel).iterdir())
+
+
+async def _land_new(files, kind: Kind):
+    """Three writes into a free name in a folder that does not exist yet."""
+    folder = await files.path(kind.at("in"))
+    target = files.join(folder, ODD_NAME)
+    landing = await files.land(target, source_mode=0o100640, overwrite=False)
+    for part in (b"ab", b"", b"c"):
+        await landing.write(part)
+    await landing.commit()
+    found = (kind.root / "in" / ODD_NAME).stat()
+    return (
+        files.name(target),
+        (kind.root / "in" / ODD_NAME).read_bytes(),
+        found.st_mode & 0o777,
+        _folder_names(kind, "in"),
+    )
+
+
+async def _land_replacing(files, kind: Kind):
+    (kind.root / "taken.txt").chmod(0o660)
+    target = await files.path(kind.at("taken.txt"))
+    landing = await files.land(target, source_mode=0o100600, overwrite=True)
+    await landing.write(BIG)
+    await landing.commit()
+    return (
+        (kind.root / "taken.txt").read_bytes() == BIG,
+        (kind.root / "taken.txt").stat().st_mode & 0o777,
+        _folder_names(kind),
+    )
+
+
+async def _land_aborted(files, kind: Kind, rel: str, overwrite: bool):
+    target = await files.path(kind.at(rel))
+    landing = await files.land(target, source_mode=0o100644, overwrite=overwrite)
+    await landing.write(b"partial")
+    await landing.abort()
+    return _folder_names(kind), (kind.root / "taken.txt").read_bytes()
+
+
+async def _land(files, kind: Kind, rel: str, source_rel: str, overwrite: bool):
+    found = await files.source(await files.path(kind.at(source_rel)))
+    await files.land(await files.path(kind.at(rel)), source_mode=found.mode, overwrite=overwrite)
+
+
+async def _remove_if_unchanged(files, kind: Kind, changed: bool):
+    target = await files.path(kind.at("a.txt"))
+    found = await files.source(target)
+    if changed:
+        (kind.root / "a.txt").write_bytes(b"written meanwhile\n")
+    try:
+        await files.remove_if_unchanged(target, found.fingerprint, "elsewhere/a.txt")
+    except HTTPException as exc:
+        return exc.status_code, exc.detail, (kind.root / "a.txt").exists()
+    return "removed", (kind.root / "a.txt").exists()
+
+
+async def _checked_then_resolved(files, kind: Kind, path: str):
+    checked = await asyncio.to_thread(files.check_path, path)
+    return checked, await files.resolve(checked)
+
+
+async def _name_of_joined(files, kind: Kind):
+    return files.name(files.join(kind.at("sub"), ODD_NAME))
+
+
+async def _prepared(files, kind: Kind):
+    await files.prepare()
+    return await _source(files, kind, "a.txt")
+
+
 def _listed(folder_size: int | None) -> list[tuple[str, bool, int | None]]:
     return [
         ("sub", True, folder_size),
@@ -559,6 +666,94 @@ ROWS = [
             "local": lambda k: ("streamed from", Path(k.at("a.txt"))),
             "remote": lambda k: ("answered", 413, "File too large to download via API"),
         },
+    ),
+    Row(
+        "a source's mode, size and fingerprint",
+        lambda f, k: _source(f, k, "a.txt"),
+        same=lambda k: ((k.root / "a.txt").stat().st_mode, 6, _fingerprint(k, "a.txt")),
+    ),
+    Row(
+        "a link as a source is what it names",
+        lambda f, k: _source(f, k, "link_out"),
+        same=lambda k: ((k.outside / "secret.txt").stat().st_mode, 7, _fingerprint(k, "link_out")),
+    ),
+    Row(
+        "a box made ready still answers the same",
+        _prepared,
+        same=lambda k: ((k.root / "a.txt").stat().st_mode, 6, _fingerprint(k, "a.txt")),
+    ),
+    Row(
+        "a file read in chunks to its end is its bytes",
+        lambda f, k: _chunks(f, k, "a.txt", 4),
+        same=lambda k: [b"hell", b"o\n"],
+    ),
+    Row(
+        "a file larger than one chunk is read in full chunks and a short one",
+        lambda f, k: _chunks(f, k, "big.bin", CHUNK),
+        same=lambda k: [BIG[:CHUNK], BIG[CHUNK : 2 * CHUNK], BIG[2 * CHUNK :]],
+    ),
+    Row(
+        "a 0-byte file read in chunks gives none",
+        lambda f, k: _chunks(f, k, "empty.txt", CHUNK),
+        same=lambda k: [],
+    ),
+    Row(
+        "a committed landing is the file, with the source's bits, its folder made",
+        _land_new,
+        same=lambda k: (ODD_NAME, b"abc", 0o640, [ODD_NAME]),
+    ),
+    Row(
+        "a committed landing replaces a file and keeps its bits",
+        _land_replacing,
+        same=lambda k: (True, 0o660, ["a.txt", "empty.txt", "link_out", "sub", "taken.txt"]),
+    ),
+    Row(
+        "an aborted landing on a free name leaves nothing behind",
+        lambda f, k: _land_aborted(f, k, "new.txt", False),
+        same=lambda k: (["a.txt", "empty.txt", "link_out", "sub", "taken.txt"], b"old\n"),
+    ),
+    Row(
+        "an aborted replace leaves the old file and no temp name",
+        lambda f, k: _land_aborted(f, k, "taken.txt", True),
+        same=lambda k: (["a.txt", "empty.txt", "link_out", "sub", "taken.txt"], b"old\n"),
+    ),
+    Row(
+        "a landing on a name that exists is refused",
+        lambda f, k: _land(f, k, "taken.txt", "a.txt", False),
+        same=lambda k: ("refused", 409, "File already exists", "exists"),
+    ),
+    Row(
+        "a landing for a folder is refused",
+        lambda f, k: _land(f, k, "new/sub", "sub", False),
+        same=lambda k: ("answered", 400, "Only files can be transferred"),
+    ),
+    Row(
+        "an unchanged source is removed",
+        lambda f, k: _remove_if_unchanged(f, k, False),
+        same=lambda k: ("removed", False),
+    ),
+    Row(
+        "a source that changed since its fingerprint is kept",
+        lambda f, k: _remove_if_unchanged(f, k, True),
+        same=lambda k: (
+            500,
+            "Copied to elsewhere/a.txt, but the source changed during the copy and was kept",
+            True,
+        ),
+    ),
+    Row(
+        # A remote path is checked and kept as spelled; its `~` is resolved on the box.
+        "a path is checked before the box is reached and resolved after",
+        lambda f, k: _checked_then_resolved(f, k, "~/x"),
+        differs={
+            "local": lambda k: (f"{k.home}/x", f"{k.home}/x"),
+            "remote": lambda k: ("~/x", f"{k.home}/x"),
+        },
+    ),
+    Row(
+        "a name joined to a folder and taken back",
+        _name_of_joined,
+        same=lambda k: ODD_NAME,
     ),
     Row(
         "a batch delete removes a file and fails a missing path",
@@ -834,9 +1029,15 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
     api = Path(sshler.api.__file__).parent
     found = {
         name: (api / name).read_text(encoding="utf-8").count("box.transport")
-        for name in ("files.py", "batch.py", "excel.py")
+        for name in ("files.py", "batch.py", "excel.py", "transfer.py")
     }
-    assert found == {"files.py": 0, "batch.py": 0, "excel.py": 1}
+    assert found == {"files.py": 0, "batch.py": 0, "excel.py": 1, "transfer.py": 0}
+
+
+def test_a_transfer_holds_no_sftp_client():
+    """A transfer reads and writes through the files of each box only."""
+    text = (Path(sshler.api.__file__).parent / "transfer.py").read_text(encoding="utf-8")
+    assert text.lower().count("sftp") == 0
 
 
 # --- round trips of a remote listing, a rename and a preview -------------------------
@@ -870,7 +1071,9 @@ def counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Counted
         "keyfile": str(server.client_key),
         "known_hosts": str(server.known_hosts),
     }
-    (config_dir / "boxes.yaml").write_text(yaml.safe_dump({"boxes": [box]}), encoding="utf-8")
+    # A second name for the same server: a transfer between two boxes that are one.
+    twin = {**box, "name": "lb2"}
+    (config_dir / "boxes.yaml").write_text(yaml.safe_dump({"boxes": [box, twin]}), encoding="utf-8")
     ssh_config = tmp_path / "ssh_config"
     ssh_config.write_text("", encoding="utf-8")
     monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
@@ -958,3 +1161,132 @@ def test_a_remote_listing_records_the_visit_and_a_failed_one_does_not(counted):
     missing = _get(counted, "ls", directory="/nope")
     assert (listed.status_code, missing.status_code) == (200, 500)
     assert [path for path, _ in state.search_directories("lb", "")] == ["/home"]
+
+
+# --- round trips of a transfer, and where a box that cannot be reached fails ----------
+
+
+def _transfer(counted: Counted, src: str, dest: str, paths: list[str], destination: str):
+    resp = counted.client.post(
+        "/api/v1/transfer",
+        json={"src_box": src, "dest_box": dest, "paths": paths, "destination": destination},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    events = []
+    for block in resp.text.strip().split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in block.splitlines())
+        events.append((lines["event"], json.loads(lines["data"])))
+    return events
+
+
+def test_a_transfer_between_two_remote_boxes_takes_one_connection_and_one_session_each(counted):
+    """Two names for one server: each box has its own pooled connection and session."""
+    events = _transfer(counted, "lb", "lb2", ["/home/a.txt", "/home/dot.png"], "/home/in")
+    assert events[-1] == ("done", {"succeeded": ["/home/a.txt", "/home/dot.png"], "failed": []})
+    assert (counted.root / "home" / "in" / "a.txt").read_bytes() == b"hello\n"
+    assert (counted.root / "home" / "in" / "dot.png").read_bytes() == b"\x89PNG small"
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (2, 2)
+    assert counted.counts.commands == [HEALTH_CMD, HEALTH_CMD]
+
+
+def test_a_transfer_from_a_remote_box_to_the_local_box_takes_one_connection_and_session(
+    counted, tmp_path
+):
+    landing = tmp_path / "landing"
+    events = _transfer(counted, "lb", "local", ["/home/a.txt", "/home/dot.png"], str(landing))
+    assert events[-1] == ("done", {"succeeded": ["/home/a.txt", "/home/dot.png"], "failed": []})
+    assert sorted(p.name for p in landing.iterdir()) == ["a.txt", "dot.png"]
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (1, 1)
+    assert counted.counts.commands == [HEALTH_CMD]
+
+
+@pytest.mark.parametrize("remote_side", ["source", "destination"])
+def test_a_transfer_whose_sftp_session_cannot_open_is_one_error_before_any_item(
+    counted, tmp_path, monkeypatch, remote_side
+):
+    """The remote side's session is opened before the first item, so its failure is
+    the one event of the request and no item is tried."""
+    local = tmp_path / "local_side"
+    local.mkdir()
+    (local / "x.txt").write_bytes(b"x\n")
+
+    async def refuse(self):
+        raise asyncssh.ChannelOpenError(asyncssh.OPEN_ADMINISTRATIVELY_PROHIBITED, "no sftp")
+
+    monkeypatch.setattr(asyncssh.SSHClientConnection, "start_sftp_client", refuse)
+    if remote_side == "source":
+        events = _transfer(counted, "lb", "local", ["/home/a.txt", "/home/dot.png"], str(local))
+    else:
+        events = _transfer(counted, "local", "lb", [str(local / "x.txt")], "/home/in")
+    assert events == [("error", {"detail": "no sftp"})]
+    assert sorted(p.name for p in local.iterdir()) == ["x.txt"]
+    assert not (counted.root / "home" / "in").exists()
+
+
+@pytest.mark.parametrize(
+    ("src", "dest", "paths", "destination", "detail"),
+    [
+        (
+            "lb",
+            "local",
+            ["/home/a.txt", "/home/a\x00b"],
+            "",
+            "Invalid path /home/a\x00b: Path cannot contain null bytes",
+        ),
+        ("local", "lb", ["/tmp/x"], "", "Invalid destination: Path cannot be empty"),
+    ],
+)
+def test_a_bad_transfer_path_is_a_400_before_any_connection(
+    counted, src, dest, paths, destination, detail
+):
+    resp = counted.client.post(
+        "/api/v1/transfer",
+        json={"src_box": src, "dest_box": dest, "paths": paths, "destination": destination},
+        headers=HEADERS,
+    )
+    assert (resp.status_code, resp.json()) == (400, {"detail": detail})
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_a_remote_write_that_fails_half_way_leaves_no_file_and_no_temp_name(
+    counted, tmp_path, monkeypatch, overwrite
+):
+    local = tmp_path / "local_side"
+    local.mkdir()
+    (local / "big.bin").write_bytes(BIG)
+    (counted.root / "home" / "in").mkdir()
+    if overwrite:
+        (counted.root / "home" / "in" / "big.bin").write_bytes(b"old")
+    real_write = remote_files_api._RemoteLanding.write
+    writes = [0]
+
+    async def write(self, data):
+        writes[0] += 1
+        if writes[0] == 2:
+            raise OSError("disk full")
+        await real_write(self, data)
+
+    monkeypatch.setattr(remote_files_api._RemoteLanding, "write", write)
+    sent = str(local / "big.bin")
+    resp = counted.client.post(
+        "/api/v1/transfer",
+        json={
+            "src_box": "local",
+            "dest_box": "lb",
+            "paths": [sent],
+            "destination": "/home/in",
+            "overwrite": overwrite,
+        },
+        headers=HEADERS,
+    )
+    entry = {"path": sent, "error": "disk full", "reason": "failed"}
+    progress = {"file": sent, "bytes_done": CHUNK, "bytes_total": len(BIG), "index": 0, "total": 1}
+    assert resp.text == (
+        f"event: progress\ndata: {json.dumps(progress)}\n\n"
+        f"event: failed\ndata: {json.dumps(entry)}\n\n"
+        f"event: done\ndata: {json.dumps({'succeeded': [], 'failed': [entry]})}\n\n"
+    )
+    left = {p.name: p.read_bytes() for p in (counted.root / "home" / "in").iterdir()}
+    assert left == ({"big.bin": b"old"} if overwrite else {})

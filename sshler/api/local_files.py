@@ -12,7 +12,7 @@ import shutil
 import stat as stat_mod
 import tempfile
 import zipfile
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -20,7 +20,14 @@ from fastapi.responses import FileResponse, Response
 
 from ..proc import run_bounded
 from ..validation import PathValidator
-from .file_contract import BatchOutcome, FolderZip, NameRefusedError, PathKind
+from .file_contract import (
+    BatchOutcome,
+    FolderZip,
+    NameRefusedError,
+    PathKind,
+    ReadChunk,
+    SourceFile,
+)
 from .helpers import (
     LOCAL_IS_WINDOWS,
     _normalize_local_path,
@@ -37,6 +44,7 @@ from .placement import (
     failure_entry,
     kept_permission_bits,
     refuse_a_name_this_request_placed,
+    run_to_end,
 )
 
 # --- local transport (every function here runs in a worker thread) ---------------
@@ -133,6 +141,24 @@ def _local_landing(
         return _LocalLanding(target, replace=replace, mode=dest_mode if replace else source_mode)
     except FileExistsError:
         _taken_after_check(_local_lstat_mode(target), source_regular=source_regular)
+
+
+class _ThreadedLanding:
+    """The async face of a ``_LocalLanding``: each call runs in a worker thread."""
+
+    def __init__(self, landing: _LocalLanding) -> None:
+        self.landing = landing
+
+    async def write(self, data: bytes) -> None:
+        await asyncio.to_thread(self.landing.write, data)
+
+    async def commit(self) -> None:
+        await asyncio.to_thread(self.landing.commit)
+
+    async def abort(self) -> None:
+        """To the end even if the request is cancelled: a worker-thread job cancelled
+        before it starts never runs."""
+        await run_to_end(asyncio.to_thread(self.landing.abort))
 
 
 def _local_copy_file(source: str, target: str, *, replace_mode: int | None = None) -> None:
@@ -582,6 +608,21 @@ class LocalFiles:
     def parent(self, path: str) -> str:
         return str(Path(path).parent)
 
+    def check_path(self, path: str) -> str:
+        return _normalize_local_path(path)
+
+    async def resolve(self, checked: str) -> str:
+        return checked
+
+    def name(self, path: str) -> str:
+        return Path(path).name
+
+    def join(self, folder: str, name: str) -> str:
+        return str(Path(folder) / name)
+
+    async def prepare(self) -> None:
+        return None
+
     # --- reading ---------------------------------------------------------------------
 
     async def list_folder(self, directory: str) -> list[APIDirectoryEntry]:
@@ -683,6 +724,18 @@ class LocalFiles:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return FolderZip(path=tmp_path, name=base.name or "download")
 
+    async def source(self, path: str) -> SourceFile:
+        st = await asyncio.to_thread(os.stat, path)
+        return SourceFile(st.st_mode, st.st_size, local_fingerprint(st))
+
+    @contextlib.asynccontextmanager
+    async def open_read(self, path: str) -> AsyncIterator[ReadChunk]:
+        handle = await asyncio.to_thread(open, path, "rb")
+        try:
+            yield lambda n: asyncio.to_thread(handle.read, n)
+        finally:
+            await asyncio.to_thread(handle.close)
+
     # --- writing ---------------------------------------------------------------------
 
     async def write_text(self, path: str, content: str) -> None:
@@ -719,6 +772,24 @@ class LocalFiles:
             path_obj.mkdir(parents=False, exist_ok=False)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> _ThreadedLanding:
+        await asyncio.to_thread(os.makedirs, os.path.dirname(path), exist_ok=True)
+        landing = await asyncio.to_thread(
+            _local_landing,
+            path,
+            overwrite=overwrite,
+            source_regular=stat_mod.S_ISREG(source_mode),
+            source_mode=source_mode,
+        )
+        return _ThreadedLanding(landing)
+
+    async def remove_if_unchanged(self, path: str, fingerprint: tuple, target: str) -> None:
+        def _check_and_remove() -> None:
+            ensure_source_unchanged(fingerprint, local_fingerprint(os.stat(path)), target)
+            os.unlink(path)
+
+        await asyncio.to_thread(_check_and_remove)
 
     async def delete(self, path: str) -> None:
         try:

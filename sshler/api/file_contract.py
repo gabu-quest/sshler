@@ -9,7 +9,8 @@ Paths: ``path``, ``folder`` and ``child`` turn what a client sent into the path 
 kind of box acts on; every other method that takes a ``path`` takes one of those.
 ``rename``, ``place_into``, ``zip_folder`` and the two batch methods take paths as the
 client sent them, because each kind checks them in its own order before it resolves
-them.
+them. A transfer splits ``path`` in two: ``check_path`` before anything is opened,
+``resolve`` once the box is reached.
 
 Answers: an operation raises ``HTTPException`` for the answers it gives itself (a
 missing directory, a name the existing-name rule refuses, a file too large); any other
@@ -19,7 +20,8 @@ of box never answered it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import NamedTuple, Protocol
 
@@ -50,6 +52,29 @@ class FolderZip(NamedTuple):
 
     path: str
     name: str  # the folder's name, for the download's file name
+
+
+class SourceFile(NamedTuple):
+    """What a file to be copied is before its first byte is read, links followed."""
+
+    mode: int  # the type and permission bits; 0 when the box sent none
+    size: int
+    fingerprint: tuple  # what ``remove_if_unchanged`` compares
+
+
+class Landing(Protocol):
+    """A file being written beside its name: ``commit`` puts it in place, ``abort``
+    removes what was written (to the end, even when the request is being cancelled)."""
+
+    async def write(self, data: bytes) -> None: ...
+
+    async def commit(self) -> None: ...
+
+    async def abort(self) -> None: ...
+
+
+# ``read(n)``: up to ``n`` bytes of an open file, ``b""`` at its end.
+ReadChunk = Callable[[int], Awaitable[bytes]]
 
 
 @dataclass
@@ -84,6 +109,33 @@ class BoxFiles(Protocol):
         """The folder that holds ``path``."""
         ...
 
+    def check_path(self, path: str) -> str:
+        """``path`` checked without reaching the box (a blocking call: a transfer runs
+        it in a worker thread). A local path is normalised (``~`` expanded, links
+        resolved); a remote one is validated and kept as spelled, its ``~`` left for
+        ``resolve``. A bad path raises ``ValidationError`` or ``ValueError``."""
+        ...
+
+    async def resolve(self, checked: str) -> str:
+        """The path to act on, from one ``check_path`` gave: a remote ``~`` is resolved
+        to the home on the box's connection; a local path is already final."""
+        ...
+
+    def name(self, path: str) -> str:
+        """The last part of ``path``, as this kind of box spells paths."""
+        ...
+
+    def join(self, folder: str, name: str) -> str:
+        """``name`` in ``folder``, as this kind of box spells paths; nothing is checked."""
+        ...
+
+    async def prepare(self) -> None:
+        """Reach the box now rather than at the first operation that needs it. On a
+        remote box the pooled connection and the SFTP session are taken here, in that
+        order, so a box that cannot be reached fails at this call; the local box has
+        nothing to take."""
+        ...
+
     # --- reading ---------------------------------------------------------------------
 
     async def list_folder(self, directory: str) -> list[APIDirectoryEntry]:
@@ -114,6 +166,15 @@ class BoxFiles(Protocol):
         """A folder as a zip in a temp file."""
         ...
 
+    async def source(self, path: str) -> SourceFile:
+        """A file about to be copied: its mode, its size and its fingerprint."""
+        ...
+
+    def open_read(self, path: str) -> AbstractAsyncContextManager[ReadChunk]:
+        """The file open for reading in chunks for the block, never held whole in
+        memory; a local read runs in a worker thread."""
+        ...
+
     # --- writing ---------------------------------------------------------------------
 
     async def write_text(self, path: str, content: str) -> None: ...
@@ -128,6 +189,21 @@ class BoxFiles(Protocol):
         ...
 
     async def make_folder(self, path: str) -> None: ...
+
+    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> Landing:
+        """A landing for the bytes of a file at ``path``, its folder made if missing.
+
+        The name is decided by the existing-name rule (``DestinationRefused``), and a
+        source that is not a regular file is refused. A replaced file keeps its
+        permission bits; a free name gets ``source_mode``'s nine permission bits from
+        before the first byte (the box's default bits when it is 0 on a remote box).
+        A local landing writes in a worker thread."""
+        ...
+
+    async def remove_if_unchanged(self, path: str, fingerprint: tuple, target: str) -> None:
+        """Remove a moved source only if its fingerprint is still ``fingerprint``
+        (``ensure_source_unchanged``, which names ``target``); otherwise keep it."""
+        ...
 
     async def delete(self, path: str) -> None:
         """Delete one file."""
