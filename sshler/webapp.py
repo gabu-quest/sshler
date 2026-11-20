@@ -33,6 +33,7 @@ from fastapi.responses import RedirectResponse, Response
 from starlette.websockets import WebSocketState
 
 from . import state
+from .access import allowed_origins, origin_base, websocket_refusal
 from .api import APIDependencies, create_api_router
 from .api.auth import create_auth_router, get_client_ip
 from .api.helpers import (
@@ -1008,31 +1009,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             # Non-browser clients (curl, health checks, API clients) may not send Origin
             # Browser requests will always include Origin/Referer on state-changing requests
             if origin:
-                # Normalize origin (remove trailing slash, extract scheme://host:port)
-                from urllib.parse import urlparse
+                origin_value = origin_base(origin)
+                allowed_origins_list = allowed_origins(request.app.state.settings, app_settings)
 
-                parsed_origin = urlparse(origin)
-                origin_base = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
-
-                # Check if origin matches public_url or is in allowed_origins
-                # Include both env-based origins (SshlerSettings) and CLI-based origins
-                # (ServerSettings)
-                cli_settings: ServerSettings = request.app.state.settings
-                allowed_origins = (
-                    list(cli_settings.allow_origins) + app_settings.allowed_origins_list
-                )
-
-                # Add public_url-derived origin if set
-                if app_settings.public_url:
-                    parsed_public = urlparse(app_settings.public_url)
-                    expected_origin = f"{parsed_public.scheme}://{parsed_public.netloc}"
-                    if expected_origin not in allowed_origins:
-                        allowed_origins.append(expected_origin)
-
-                if origin_base not in allowed_origins:
+                if origin_value not in allowed_origins_list:
                     logging.warning(
-                        f"[Security] Blocked request with invalid Origin: {origin_base} "
-                        f"(expected one of: {allowed_origins})"
+                        f"[Security] Blocked request with invalid Origin: {origin_value} "
+                        f"(expected one of: {allowed_origins_list})"
                     )
                     return Response(
                         status_code=403,
@@ -1097,7 +1080,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             None: The coroutine completes when the websocket terminates.
         """
 
-        settings: ServerSettings = websocket.app.state.settings
         logger = logging.getLogger("sshler.webapp")
 
         # Pre-initialize variables used in the finally block so early returns
@@ -1124,6 +1106,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         background_tasks: set[asyncio.Task[None]] = set()
 
         try:
+            # Who may open the socket is decided before anything about the request is
+            # validated, so a caller without credentials learns nothing else.
+            refusal = websocket_refusal(websocket)
+            if refusal is not None:
+                await websocket.close(code=refusal[0], reason=refusal[1])
+                return
+
             # Sanitize session name to prevent command injection
             # Session names are passed to tmux/subprocess commands, so only allow safe characters
             try:
@@ -1131,37 +1120,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             except ValidationError as exc:
                 logger.warning(f"[Security] Invalid session name rejected: {exc}")
                 await websocket.close(code=4400, reason="Invalid session name")
-                return
-
-            # Authenticate WebSocket connection
-            if settings.auth_manager:
-                ws_authenticated = False
-
-                # Try Basic Auth header (works for API clients)
-                auth_header = websocket.headers.get("authorization")
-                if auth_header and settings.auth_manager.verify_basic_auth_header(auth_header):
-                    ws_authenticated = True
-
-                # Try session cookie (browsers send cookies with WebSocket upgrades,
-                # but may not send the Authorization header)
-                if not ws_authenticated:
-                    app_settings = get_app_settings()
-                    cookie_sid = websocket.cookies.get(app_settings.cookie_name)
-                    if cookie_sid:
-                        session_obj = get_session_store().get_session(cookie_sid)
-                        if session_obj:
-                            ws_authenticated = True
-
-                if not ws_authenticated:
-                    logger.warning("[Connection] WebSocket auth failed: no valid credentials")
-                    await websocket.close(code=4401, reason="Unauthorized")
-                    return
-
-            # Check CSRF token
-            token_param = websocket.query_params.get("token")
-            if settings.csrf_token and token_param != settings.csrf_token:
-                logger.warning("[Connection] WebSocket auth failed: invalid CSRF token")
-                await websocket.close(code=4403, reason="Invalid token")
                 return
 
             await websocket.accept()
@@ -1654,36 +1612,17 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     async def progress_socket(websocket: WebSocket) -> None:
         """Broadcast progress-bar upsert/delete events to all listeners.
 
-        Auth mirrors ``/ws/term``: Basic Auth header OR session cookie OR
-        ``token`` query param. On accept, sends a ``{"type": "snapshot"}``
-        event so the client sees current state without an extra GET.
+        Who may connect is decided by ``websocket_refusal``, as for ``/ws/term``.
+        On accept, sends a ``{"type": "snapshot"}`` event so the client sees current
+        state without an extra GET.
         Clients are not expected to send anything; the receive loop runs
         purely as a disconnect sentinel.
         """
 
-        settings: ServerSettings = websocket.app.state.settings
-
-        # Auth — same shape as /ws/term but trimmed (no per-box concerns).
-        if settings.auth_manager:
-            authenticated = False
-            auth_header = websocket.headers.get("authorization")
-            if auth_header and settings.auth_manager.verify_basic_auth_header(auth_header):
-                authenticated = True
-            if not authenticated:
-                cookie_sid = websocket.cookies.get(get_app_settings().cookie_name)
-                if cookie_sid and get_session_store().get_session(cookie_sid):
-                    authenticated = True
-            if not authenticated:
-                await websocket.close(code=4401, reason="Unauthorized")
-                return
-
-        if settings.csrf_token:
-            token_param = websocket.query_params.get("token") or websocket.headers.get(
-                "x-sshler-token"
-            )
-            if token_param != settings.csrf_token:
-                await websocket.close(code=4403, reason="Invalid token")
-                return
+        refusal = websocket_refusal(websocket)
+        if refusal is not None:
+            await websocket.close(code=refusal[0], reason=refusal[1])
+            return
 
         await websocket.accept()
 
@@ -1725,28 +1664,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         No snapshot on connect — pings are fire-and-forget. Clients are not
         expected to send anything; the receive loop is a disconnect sentinel.
         """
-        settings: ServerSettings = websocket.app.state.settings
-
-        if settings.auth_manager:
-            authenticated = False
-            auth_header = websocket.headers.get("authorization")
-            if auth_header and settings.auth_manager.verify_basic_auth_header(auth_header):
-                authenticated = True
-            if not authenticated:
-                cookie_sid = websocket.cookies.get(get_app_settings().cookie_name)
-                if cookie_sid and get_session_store().get_session(cookie_sid):
-                    authenticated = True
-            if not authenticated:
-                await websocket.close(code=4401, reason="Unauthorized")
-                return
-
-        if settings.csrf_token:
-            token_param = websocket.query_params.get("token") or websocket.headers.get(
-                "x-sshler-token"
-            )
-            if token_param != settings.csrf_token:
-                await websocket.close(code=4403, reason="Invalid token")
-                return
+        refusal = websocket_refusal(websocket)
+        if refusal is not None:
+            await websocket.close(code=refusal[0], reason=refusal[1])
+            return
 
         await websocket.accept()
         await ping_broadcaster.connect(websocket)

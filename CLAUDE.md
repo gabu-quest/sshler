@@ -72,8 +72,9 @@ FastAPI + uvicorn (Python 3.12+, async) · asyncssh (SFTP + remote tmux) · SQLi
 4. Binary data flows bidirectionally
 
 **Security layers:**
-- `X-SSHLER-TOKEN` header or `token` query param for auth
-- Origin header validation (CSRF protection)
+- `X-SSHLER-TOKEN` header or `token` query param for auth, compared in constant time by `access.token_matches` (REST and sockets share it)
+- Origin header validation (CSRF protection): `access.allowed_origins` is the one list; the HTTP middleware applies it to POST/PUT/PATCH/DELETE, and every socket applies it to its upgrade (a present, unlisted Origin, including `null`, is refused; no Origin is allowed; `SSHLER_ORIGIN_CHECK_ENABLED=false` turns both off)
+- `/ws/term`, `/ws/progress` and `/ws/ping` call one function, `access.websocket_refusal`, before accepting: credentials (close 4401), token (4403), Origin (4403); `/ws/term` validates the session name after that (4400)
 - Path traversal prevention in file operations
 - Rate limiting on auth endpoints
 
@@ -248,8 +249,8 @@ Sessions are revocable, simpler, and correct for single-backend browser apps. JW
 
 ## Known Gotchas
 
-### Origin Validation (403 on POST)
-The backend validates the `Origin` header on all state-changing requests. If you get 403 errors on POST/PUT/DELETE:
+### Origin Validation (403 on POST, a socket that will not open)
+The backend validates the `Origin` header on all state-changing requests and on every WebSocket upgrade. If you get 403 errors on POST/PUT/DELETE, or the terminal, progress strip or pings will not connect while the log says `WebSocket refused: origin ... is not allowed`:
 1. Check you're running with `--dev` flag when using Vite dev server
 2. Check `SSHLER_PUBLIC_URL` is set correctly if behind a proxy
 

@@ -641,7 +641,7 @@ sshler security works in layers:
 
 1. **Transport Security (HTTPS)** - Encrypts all traffic, protects session cookies
 2. **Application Auth (Session Cookies)** - Verifies user identity with httpOnly cookies
-3. **CSRF Protection** - Origin header validation on state-changing requests
+3. **CSRF Protection** - Origin header validation on state-changing requests and on every WebSocket upgrade
 4. **Network Isolation** (Optional) - Tailscale, VPN, or firewall rules
 
 **Recommendation:** Use HTTPS + session auth for most deployments. Add network isolation (Tailscale/VPN) for extra security when accessing over the internet.
@@ -1343,7 +1343,7 @@ sshler のセキュリティは多層構造です：
 
 1. **トランスポートセキュリティ（HTTPS）** - すべてのトラフィックを暗号化し、セッション Cookie を保護
 2. **アプリケーション認証（セッション Cookie）** - httpOnly Cookie でユーザー ID を検証
-3. **CSRF 保護** - 状態変更リクエストに対する Origin ヘッダー検証
+3. **CSRF 保護** - 状態変更リクエストと全 WebSocket 接続に対する Origin ヘッダー検証
 4. **ネットワーク分離**（オプション） - Tailscale、VPN、またはファイアウォールルール
 
 **推奨:** ほとんどのデプロイでは HTTPS + セッション認証を使用してください。インターネット経由でアクセスする場合は、ネットワーク分離（Tailscale/VPN）を追加してセキュリティを強化してください。

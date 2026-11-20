@@ -37,7 +37,7 @@ Name regex: `^[A-Za-z0-9._:-]{1,64}$`. Status closed-enum: `{running, done, fail
 
 ## WebSocket protocol
 
-`/ws/progress` — auth mirrors `/ws/term` (`?token=…` query param).
+`/ws/progress` — who may connect is decided by `sshler/access.py` `websocket_refusal`, the same function as `/ws/term` and `/ws/ping`: credentials (close 4401), then the token from `?token=…` or the `X-SSHLER-TOKEN` header (close 4403), then an Origin header that is present and not allowed (close 4403). All refusals happen before the socket is accepted.
 
 On connect, the broadcaster sends one **snapshot** event:
 

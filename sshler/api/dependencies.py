@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import os
 import time
@@ -10,6 +9,7 @@ from typing import Any, TypeVar
 
 from fastapi import HTTPException, Request
 
+from ..access import token_matches
 from ..config import AppConfig, Box, find_box, get_config_path, load_config
 from ..config_cache import get_cache
 from ..ssh import SSHError, connect
@@ -59,7 +59,7 @@ class APIDependencies:
         supplied = request.headers.get("x-sshler-token") or request.query_params.get("token")
         expected = self.settings.csrf_token
 
-        if not hmac.compare_digest(supplied or "", expected):
+        if not token_matches(supplied, expected):
             logger.warning(
                 "Token mismatch on %s: supplied=%s", request.url.path, "yes" if supplied else "no"
             )
