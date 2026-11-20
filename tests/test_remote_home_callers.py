@@ -318,12 +318,21 @@ def test_git_diff_files_on_a_remote_home_folder_changes_into_the_resolved_folder
 
 
 @pytest.mark.parametrize("route", ["show", "blame"])
-def test_git_show_and_blame_on_a_remote_home_folder_look_for_the_file_under_the_resolved_folder(
+def test_git_show_and_blame_on_a_remote_home_folder_ask_for_the_root_in_the_resolved_folder(
     git_box, route
 ):
+    """The file's path under the root is then worked out from the resolved folder
+    (`test_box_runner_contract.py` shows `~/x` with `../h.txt`)."""
     _git(git_box, route, directory="~/proj", path="a.txt")
-    words = shlex.split(git_box.connection.commands[0])
-    assert (words[:3], "DIR=/home/ann/proj" in words) == (["cd", "/home/ann/proj", "&&"], True)
+    assert _first_words(git_box, 7) == [
+        "cd",
+        "/home/ann/proj",
+        "&&",
+        "git",
+        "rev-parse",
+        "--show-toplevel",
+        "2>/dev/null",
+    ]
 
 
 def test_a_git_route_with_a_failed_home_lookup_answers_502(boxes, monkeypatch):

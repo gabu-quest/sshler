@@ -43,7 +43,8 @@ EMPTY_POOL = {BOX: {"active_connections": 0, "total_uses": 0, "oldest_connection
 # What a polled route reports when the command hangs past a 0.05 s probe limit.
 HUNG_COMMAND_ERROR = "command on remote1 timed out (0.05 s limit for connect plus command)"
 
-# Hand-computed stats for the canned /proc output in ``Ledger.reply``:
+# Hand-computed stats for the canned /proc output in ``Ledger.reply`` (the two
+# lines of PROC_STAT are the two reads of /proc/stat):
 # cpu deltas total 1200-1000=200, active 300-200=100 -> 50.0 %;
 # MemTotal 2048000 kB = 2000.0 MB, MemAvailable 1024000 kB = 1000.0 MB used.
 PROC_STAT = "cpu  100 0 100 800 0\ncpu  150 0 150 900 0\n"
@@ -62,7 +63,7 @@ class FakeConnection:
         self._closed_event = asyncio.Event()
         self.forward_error: Exception | None = None
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         if self.closed:
             raise ConnectionError("connection is closed")
         self.ledger.commands.append(command)
@@ -119,15 +120,15 @@ class Ledger:
 
     @staticmethod
     def reply(command: str) -> SimpleNamespace:
-        if command.startswith("cat /proc/stat"):
-            return _result(0, PROC_STAT)
-        if command.startswith("cat /proc/meminfo"):
-            return _result(0, PROC_MEMINFO)
-        if command == "cat /proc/uptime":
-            return _result(0, PROC_UPTIME)
+        # The stats read /proc/stat, then the uptime, the memory and /proc/stat again.
+        first_sample, second_sample = PROC_STAT.splitlines(keepends=True)
+        if command.startswith("cat /proc/stat "):
+            return _result(0, first_sample)
+        if command.startswith("cat /proc/uptime /proc/meminfo /proc/stat "):
+            return _result(0, PROC_UPTIME + PROC_MEMINFO + second_sample)
         if command.startswith("tmux list-sessions"):
             return _result(0, "alpha\n")
-        if command == "true":
+        if command.startswith("true "):
             return _result(0)
         if "rev-parse --git-dir --abbrev-ref" in command:
             return _result(0, ".git\nmain\n")
@@ -561,7 +562,7 @@ class ReleaseGateConnection:
         self.gate = asyncio.Event()
         self.checking = asyncio.Event()
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         if command == "echo test":
             self.checking.set()
             await self.gate.wait()
@@ -646,7 +647,7 @@ class GateConnection:
         self.gate = asyncio.Event()
         self.checking = asyncio.Event()
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         self.checking.set()
         await self.gate.wait()
         return _result(0, "test\n")

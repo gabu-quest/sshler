@@ -798,7 +798,7 @@ class RecordingConnection:
         self.sftp = sftp
         self.sftp_opened = 0
 
-    async def run(self, cmd: str, check: bool = False) -> _Result:
+    async def run(self, cmd: str, check: bool = False, encoding: str | None = "utf-8") -> _Result:
         self.commands.append(cmd)
         if cmd == HEALTH_CMD:
             return _Result(stdout="test\n", stderr="", exit_status=0)
@@ -1026,13 +1026,18 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
     """Only ``box_files`` tells the kinds apart. The Excel preview keeps its one local
     branch: its local path rule (``validate_local_path``, no ``~``, no link resolved)
     is not the one every other local route has. The command routes run through
-    ``box_runner``: git.py keeps one test in each of the log, show, blame and branches
-    routes and grep.py one for the in-process search of a Windows local box (each named
-    in its module's docstring); boxes.py keeps the two of its status and stats routes,
-    and names the field once more when it lists a box."""
+    ``box_runner``, and git.py and the stats stream hold no test; grep.py keeps one for
+    the in-process search of a Windows local box (named in its module's docstring);
+    boxes.py keeps one in ``box_stats`` (psutil on this machine, ``/proc`` through the
+    runner on a remote box), and names the field once more when it lists a box."""
     api = Path(sshler.api.__file__).parent
+
+    def tests_of_the_kind(name: str) -> int:
+        text = (api / name).read_text(encoding="utf-8")
+        return text.count("box.transport") + text.count("is_local(")
+
     found = {
-        name: (api / name).read_text(encoding="utf-8").count("box.transport")
+        name: tests_of_the_kind(name)
         for name in (
             "files.py",
             "batch.py",
@@ -1041,6 +1046,7 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
             "git.py",
             "grep.py",
             "boxes.py",
+            "stats_stream.py",
         )
     }
     assert found == {
@@ -1048,9 +1054,10 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
         "batch.py": 0,
         "excel.py": 1,
         "transfer.py": 0,
-        "git.py": 4,
+        "git.py": 0,
         "grep.py": 1,
-        "boxes.py": 3,
+        "boxes.py": 2,
+        "stats_stream.py": 0,
     }
 
 

@@ -22,14 +22,7 @@ from fastapi import HTTPException
 from sshler.api import remote
 from sshler.api.archive import archive_create_command, archive_extract_command
 from sshler.api.boxes import remote_git_info_commands
-from sshler.api.git import (
-    _build_remote_repo_path_command,
-    remote_git_blame_command,
-    remote_git_branches_command,
-    remote_git_diff_files_command,
-    remote_git_log_command,
-    remote_git_show_command,
-)
+from sshler.api.git import remote_git_diff_files_command, remote_git_log_command
 from sshler.api.grep import remote_grep_command
 from sshler.api.remote_files import (
     directory_test_command,
@@ -54,7 +47,7 @@ class HomeConnection:
         self.answers = list(answers)
         self.commands: list[str] = []
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         self.commands.append(command)
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
@@ -427,26 +420,6 @@ BUILDERS = {
             "2>/dev/null",
         ],
     ),
-    "git branches": (
-        lambda n: remote_git_branches_command(n, "%(refname:short)"),
-        lambda n, p: [
-            "cd",
-            p,
-            "&&",
-            "git",
-            "branch",
-            "--format=%(refname:short)",
-            "2>/dev/null",
-            "&&",
-            "echo",
-            "---ROOT---",
-            "&&",
-            "git",
-            "rev-parse",
-            "--show-toplevel",
-            "2>/dev/null",
-        ],
-    ),
     "git diff files": (
         lambda n: remote_git_diff_files_command(n, "main", "dev"),
         lambda n, p: [
@@ -472,24 +445,6 @@ def test_every_dynamic_word_comes_back_as_one_word(builder, name):
     path starting with a dash as it came); the parsed words differ."""
     build, expected = BUILDERS[builder]
     assert shlex.split(build(name)) == expected(name, _as_path(name))
-
-
-@pytest.mark.parametrize("name", HOSTILE, ids=lambda n: repr(n)[:24])
-def test_the_repo_path_commands_carry_folder_path_and_ref_as_one_word_each(name):
-    """``git show`` and ``git blame`` pass the folder, the path and the ref through
-    shell variables; each value is one quoted word of its assignment."""
-    for line in (
-        _build_remote_repo_path_command(name, name),
-        remote_git_blame_command(name, name),
-        remote_git_show_command(name, name, "main", 1024),
-    ):
-        words = shlex.split(line)
-        assert words[:3] == ["cd", _as_path(name), "&&"]
-        assert words.count(f"DIR={name}") == 1
-        assert words.count(f"TARGET={name}") == 1
-    show = shlex.split(remote_git_show_command("/r", name, name, 1024))
-    assert show.count(f"REF={name}") == 1
-    assert show[-3:] == ["head", "-c", "1024"]
 
 
 def test_a_folder_zip_of_root_zips_its_contents_as_root():

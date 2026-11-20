@@ -171,7 +171,7 @@ class _RecordingConnection:
         self.commands.append(command)
         return object()
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         self.commands.append(command)
 
 

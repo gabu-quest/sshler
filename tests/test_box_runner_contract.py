@@ -1,15 +1,16 @@
 """A command on a box: one runner per kind of box, and the routes that use it.
 
 The first part runs one table against the local runner and against the remote one on a
-loopback asyncssh server. The second part sends the git routes, grep and the git badge
-to a box of each kind and checks what each answers, how many connections and commands a
-remote request costs, and the words a remote command line carries.
+loopback asyncssh server. The second part sends the git routes, grep, the git badge and
+a box's stats and status to a box of each kind and checks what each answers, how many
+connections and commands a remote request costs, and the words a remote command line
+carries.
 
 The loopback server never hands a command line to a shell. It splits each line with
 ``shlex`` and reads it as ``[cd FOLDER [2>/dev/null] &&] WORDS 2>/dev/null [| head ...]``.
-It also reads the branch list's ``cd FOLDER && STEP && echo WORD && STEP``. It
-answers the pool's health check and the home lookup; it emulates in Python the few
-test programs of the table (``python -c SCRIPT``, by the exact script); and it runs
+It answers the pool's health check and the home lookup; it emulates in Python the few
+test programs of the table (``python -c SCRIPT``, by the exact script), ``true``, and
+``cat`` of files under ``/proc`` (from canned text, ``Counts.proc``); and it runs
 ``git`` only when every word is plain (letters, digits and ``_./%:=()|,+-`` and the
 log's field separator), never a word from a hostile input. Any other line is recorded
 and refused with status 127.
@@ -66,10 +67,38 @@ _PLAIN_WORD = re.compile(r"[A-Za-z0-9_./%:=()|,+\x1f-]*")
 # --- the loopback server --------------------------------------------------------------
 
 
+# What the loopback server's /proc holds: each read of /proc/stat takes the next
+# sample (the last one stays). The stats these give, by hand: CPU deltas total
+# 1200 - 1000 = 200, active 300 - 200 = 100, so 50.0 %; MemTotal 2048000 kB is
+# 2000.0 MB with MemAvailable 1024000 kB, so 1000.0 MB used, 50.0 %; up 3600 s.
+PROC_STAT_FIRST = "cpu  100 0 100 800 0\ncpu0 100 0 100 800 0\nintr 7 1 2\nbtime 1700000000\n"
+PROC_STAT_SECOND = "cpu  150 0 150 900 0\ncpu0 150 0 150 900 0\nintr 9 1 2\nbtime 1700000000\n"
+PROC_MEMINFO = (
+    "MemTotal:        2048000 kB\nMemFree:          512000 kB\n"
+    "MemAvailable:    1024000 kB\nBuffers:           10000 kB\n"
+)
+PROC_UPTIME = "3600.50 100.00\n"
+
+
+def _proc() -> dict[str, list[str]]:
+    return {
+        "/proc/stat": [PROC_STAT_FIRST, PROC_STAT_SECOND],
+        "/proc/meminfo": [PROC_MEMINFO],
+        "/proc/uptime": [PROC_UPTIME],
+    }
+
+
 @dataclass
 class Counts:
     commands: list[str] = field(default_factory=list)
     connections: int = 0
+    proc: dict[str, list[str]] = field(default_factory=_proc)
+
+    def read_proc(self, name: str) -> str | None:
+        texts = self.proc.get(name)
+        if not texts:
+            return None
+        return texts.pop(0) if len(texts) > 1 else texts[0]
 
 
 def _parse(line: str) -> tuple[str | None, list[str], int | None] | None:
@@ -100,29 +129,7 @@ def _parse(line: str) -> tuple[str | None, list[str], int | None] | None:
     return folder, words, cut
 
 
-def _chain(line: str) -> tuple[str, list[list[str]]] | None:
-    """The folder and the steps of the remote branch list: ``cd FOLDER && STEP && ...``,
-    each step a plain command with its error output dropped, or ``echo WORD``."""
-    try:
-        tokens = shlex.split(line)
-    except ValueError:
-        return None
-    if tokens[:1] != ["cd"] or tokens[2:3] != ["&&"]:
-        return None
-    steps: list[list[str]] = [[]]
-    for token in tokens[3:]:
-        if token == "&&":
-            steps.append([])
-        else:
-            steps[-1].append(token)
-    for step in steps:
-        plain = len(step) >= 2 and step[-1] == "2>/dev/null"
-        if not (plain or (len(step) == 2 and step[0] == "echo")):
-            return None
-    return tokens[1], [step[:-1] if step[0] != "echo" else step for step in steps]
-
-
-async def _git(words: list[str], folder: str) -> tuple[int, str]:
+async def _git(words: list[str], folder: str) -> tuple[int, bytes]:
     process = await asyncio.create_subprocess_exec(
         *words,
         cwd=folder,
@@ -131,7 +138,7 @@ async def _git(words: list[str], folder: str) -> tuple[int, str]:
         stderr=asyncio.subprocess.DEVNULL,
     )
     out, _ = await process.communicate()
-    return process.returncode or 0, out.decode()
+    return process.returncode or 0, out  # bytes: a file git shows need not be UTF-8
 
 
 async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str) -> None:
@@ -146,22 +153,6 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         process.exit(0)
         return
     parsed = _parse(line)
-    chain = _chain(line) if parsed is None else None
-    if chain is not None and os.path.isdir(chain[0]):
-        out, status = "", 0
-        for step in chain[1]:
-            if step[0] == "echo":
-                out += step[1] + "\n"
-            elif step[0] == "git" and all(_PLAIN_WORD.fullmatch(word) for word in step):
-                status, step_out = await _git(step, chain[0])
-                out += step_out
-            else:
-                status = 127
-            if status != 0:
-                break
-        process.stdout.write(out.encode())
-        process.exit(status)
-        return
     if parsed is None:
         process.exit(127)
         return
@@ -176,6 +167,12 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         await asyncio.sleep(60)  # a repository whose status never comes
     if words[0] == "git" and all(_PLAIN_WORD.fullmatch(word) for word in words):
         status, out = await _git(words, cwd)
+    elif words == ["true"]:
+        status, out = 0, ""
+    elif words[0] == "cat" and len(words) > 1 and all(w.startswith("/proc/") for w in words[1:]):
+        texts = [counts.read_proc(name) for name in words[1:]]
+        status = 0 if all(text is not None for text in texts) else 1  # what cat gives
+        out = "".join(text for text in texts if text is not None)
     elif words[:2] == [PY, "-c"] and words[2] == ECHO:
         status, out = 0, json.dumps([cwd, words[3:]]) + "\n"
     elif words[:3] == [PY, "-c", FAIL]:
@@ -188,7 +185,7 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
     else:
         process.exit(127)
         return
-    data = out.encode()
+    data = out if isinstance(out, bytes) else out.encode()
     if cut == -1:
         data, status = b"".join(data.splitlines(keepends=True)[:1]), 0
     elif cut is not None:
@@ -405,6 +402,16 @@ def repos(tmp_path: Path) -> Repos:
     _git_setup(root / "empty", "init", "-q", "-b", "main")
     (root / "plain").mkdir()
     (root / "stuck").mkdir()
+    nested = root / "nested"
+    (nested / "sub" / "deeper").mkdir(parents=True)
+    _git_setup(nested, "init", "-q", "-b", "main")
+    (nested / "top.txt").write_text("top\n", encoding="utf-8")
+    (nested / "sub" / "b.txt").write_text("bee\n", encoding="utf-8")
+    (nested / "sub" / "deeper" / "c.txt").write_text("sea\n", encoding="utf-8")
+    _git_setup(nested, "add", ".")
+    _git_setup(nested, "commit", "-q", "-m", "first")
+    (nested / "untracked.txt").write_text("new\n", encoding="utf-8")
+    (root / "link").symlink_to(nested, target_is_directory=True)
     return Repos(root=root, commits=commits)
 
 
@@ -568,9 +575,13 @@ def test_a_remote_badge_command_past_its_limit_does_not_hand_its_connection_on(
         ("git", {"directory": "empty"}, 3),
         ("git", {"directory": "plain"}, 1),
         ("git/log", {"directory": "clean"}, 1),
-        ("git/show", {"directory": "clean", "path": "a.txt"}, 1),
-        ("git/blame", {"directory": "clean", "path": "a.txt"}, 1),
-        ("git/branches", {"directory": "clean"}, 1),
+        ("git/log", {"directory": "empty"}, 2),
+        ("git/log", {"directory": "plain"}, 2),
+        ("git/show", {"directory": "clean", "path": "a.txt"}, 2),
+        ("git/show", {"directory": "clean", "path": "missing.txt"}, 3),
+        ("git/blame", {"directory": "clean", "path": "a.txt"}, 2),
+        ("git/branches", {"directory": "clean"}, 2),
+        ("git/branches", {"directory": "plain"}, 1),
         ("git/diff-files", {"directory": "clean", "ref_a": "HEAD", "ref_b": "HEAD"}, 1),
         ("grep", {"directory": "clean", "pattern": "one"}, 1),
     ],
@@ -581,10 +592,16 @@ def test_a_remote_request_takes_one_connection_and_no_more_commands_than_before(
     """Counted on the code before the runner: one connection for each request; three
     commands for the badge of a repository and one outside a repository; one for each
     git route and for grep. A repository with no commit took one, as the badge stopped
-    at its failed branch command; it now takes the badge's three, as a repository does."""
+    at its failed branch command; it now takes the badge's three, as a repository does.
+
+    Show, blame and branches sent one compound line, which ran python3 on the box for
+    show and blame; each now asks git for the root first and works the path out here,
+    so each takes two (show three for a file not at the ref, to tell it from an empty
+    file). A log that fails asks for the root once more, on both kinds, to tell a
+    repository with no commit from a folder outside any repository."""
     asked = {**params, "directory": repos.at(params["directory"])}
     resp = served.get("lb", route, **asked)
-    assert resp.status_code in {200, 404}
+    assert resp.status_code == (404 if params.get("path") == "missing.txt" else 200)
     assert (served.counts.connections, len(served.remote_commands())) == (1, commands)
 
 
@@ -625,20 +642,6 @@ def test_a_remote_git_log_lists_the_commits_of_the_repository(served, repos):
     assert (body["commits"][0]["short_hash"], body["commits"][0]["message"]) == (
         repos.commits["clean"],
         "first",
-    )
-
-
-@pytest.mark.parametrize(("box", "is_repo"), [("local", True), ("lb", False)])
-def test_a_git_log_of_a_repository_with_no_commit_answers_as_each_kind_did(
-    served, repos, box, is_repo
-):
-    """Kept as it was: the local box finds the repository first, the remote box reads
-    it off the log alone, in one command."""
-    resp = served.get(box, "git/log", directory=repos.at("empty"))
-    assert (resp.status_code, resp.json()["is_repo"], resp.json()["commits"]) == (
-        200,
-        is_repo,
-        [],
     )
 
 
@@ -783,21 +786,22 @@ def test_git_diff_files_outside_a_repository_lists_nothing_for_two_files_named_a
 
 
 @pytest.mark.parametrize(
-    ("route", "params", "folder_word"),
+    ("route", "params", "folder_word", "commands"),
     [
-        ("grep", {"pattern": "x"}, 7),  # grep -rn -i -m 100 -- x <folder>
-        ("git/log", {}, 1),  # cd <folder> && git log ...
+        ("grep", {"pattern": "x"}, 7, 2),  # grep -rn -i -m 100 -- x <folder>
+        # cd <folder> && git log ...; the folder is no repository, so the root is asked
+        ("git/log", {}, 1, 3),
     ],
 )
 def test_a_remote_folder_above_the_home_is_the_same_folder_for_grep_and_git(
-    served, route, params, folder_word
+    served, route, params, folder_word, commands
 ):
     """`~` is the home before `..` is applied, so `~/..` is the folder above the home on
     every route (`remote.resolve_tilde` owns the rule)."""
     served.get("lb", route, directory="~/..", **params)
     lines = [shlex.split(line) for line in served.remote_commands()]
     assert (len(lines), lines[0], lines[1][folder_word]) == (
-        2,
+        commands,
         shlex.split(HOME_CMD),
         str(served.home.parent),
     )
@@ -848,3 +852,386 @@ def test_a_local_badge_whose_status_never_comes_is_an_error(tmp_path, monkeypatc
         "error": f"git in {tmp_path} timed out after 0.5 s",
     }
     assert time.monotonic() - started < 4.0
+
+
+# --- show and blame: the root asked of the runner, the path worked out here -------------
+
+
+def test_a_remote_show_needs_no_python_on_the_box(served, repos):
+    """The loopback box runs git and nothing else, as a box with no python3 does."""
+    resp = served.get("lb", "git/show", directory=repos.at("clean"), path="a.txt")
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {"content": "one", "ref": "HEAD", "path": "a.txt"},
+    )
+
+
+def test_a_remote_blame_needs_no_python_on_the_box(served, repos):
+    resp = served.get("lb", "git/blame", directory=repos.at("clean"), path="a.txt")
+    body = resp.json()
+    assert (resp.status_code, body["error"], len(body["lines"])) == (200, None, 1)
+    assert (body["lines"][0]["content"], body["lines"][0]["author"]) == ("one", "t")
+
+
+SHOW_ANSWERS = [
+    # (directory, path, ref, status, detail); a directory or path in braces is under
+    # the repos fixture's root.
+    ("plain", "a.txt", "HEAD", 404, "Not a git repository"),
+    ("clean", "{plain}/a.txt", "HEAD", 400, "Path is outside the git repository"),
+    ("clean", "../plain/a.txt", "HEAD", 400, "Path is outside the git repository"),
+    ("clean", "{clean}", "HEAD", 400, "Path must point to a file inside the repository"),
+    ("clean", ".", "HEAD", 400, "Path must point to a file inside the repository"),
+    ("clean", "missing.txt", "HEAD", 404, "File not found at ref HEAD"),
+    ("clean", "a.txt", "nope", 404, "File not found at ref nope"),
+    ("clean", "   ", "HEAD", 400, "Path is required"),
+]
+
+
+def _under(repos: Repos, text: str) -> str:
+    return text.replace("{plain}", repos.at("plain")).replace("{clean}", repos.at("clean"))
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+@pytest.mark.parametrize(("directory", "path", "ref", "status", "detail"), SHOW_ANSWERS)
+def test_a_git_show_gives_one_answer_on_both_kinds(
+    served, repos, box, directory, path, ref, status, detail
+):
+    resp = served.get(
+        box, "git/show", directory=repos.at(directory), path=_under(repos, path), ref=ref
+    )
+    assert (resp.status_code, resp.json()) == (status, {"detail": detail})
+
+
+BLAME_ANSWERS = [
+    ("plain", "a.txt", 404, {"detail": "Not a git repository"}),
+    ("clean", "{plain}/a.txt", 400, {"detail": "Path is outside the git repository"}),
+    ("clean", "{clean}", 400, {"detail": "Path must point to a file inside the repository"}),
+    (
+        "nested",
+        "untracked.txt",
+        200,
+        {
+            "box": "{box}",
+            "path": "untracked.txt",
+            "lines": [],
+            "truncated": False,
+            "error": "Not a git repository or file not tracked",
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+@pytest.mark.parametrize(("directory", "path", "status", "body"), BLAME_ANSWERS)
+def test_a_git_blame_gives_one_answer_on_both_kinds(
+    served, repos, box, directory, path, status, body
+):
+    resp = served.get(box, "git/blame", directory=repos.at(directory), path=_under(repos, path))
+    expected = {k: (box if v == "{box}" else v) for k, v in body.items()}
+    assert (resp.status_code, resp.json()) == (status, expected)
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+@pytest.mark.parametrize(
+    ("directory", "path", "content"),
+    [
+        ("nested", "top.txt", "top"),
+        ("nested", "sub/b.txt", "bee"),
+        ("nested", "{nested}/sub/b.txt", "bee"),
+        ("nested/sub", "b.txt", "bee"),
+        ("nested/sub", "{nested}/top.txt", "top"),
+        ("nested/sub", "../top.txt", "top"),
+        ("nested/sub/deeper", "../../top.txt", "top"),
+        ("nested/sub", "deeper/../b.txt", "bee"),
+    ],
+)
+def test_a_git_show_takes_a_path_absolute_or_relative_from_any_folder_on_both_kinds(
+    served, repos, box, directory, path, content
+):
+    asked = path.replace("{nested}", repos.at("nested"))
+    resp = served.get(box, "git/show", directory=repos.at(directory), path=asked)
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {"content": content, "ref": "HEAD", "path": asked},
+    )
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+@pytest.mark.parametrize(
+    ("path", "status", "body"),
+    [
+        ("b.txt", 200, {"content": "bee", "ref": "HEAD", "path": "b.txt"}),
+        ("{link}/sub/b.txt", 200, {"content": "bee", "ref": "HEAD", "path": "{link}/sub/b.txt"}),
+        ("../top.txt", 200, {"content": "top", "ref": "HEAD", "path": "../top.txt"}),
+        ("..", 400, {"detail": "Path must point to a file inside the repository"}),
+        ("../../plain/a", 400, {"detail": "Path is outside the git repository"}),
+    ],
+)
+def test_a_git_show_in_a_folder_reached_through_a_link_names_the_file_on_both_kinds(
+    served, repos, box, path, status, body
+):
+    """git names the root by its real path, so the text of a path through a link is not
+    under it; the file is named by where git says the folder is in the repository."""
+    link = repos.at("link")
+    asked = path.replace("{link}", link)
+    expected = {key: value.replace("{link}", link) for key, value in body.items()}
+    resp = served.get(box, "git/show", directory=f"{link}/sub", path=asked)
+    assert (resp.status_code, resp.json()) == (status, expected)
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_git_show_of_a_file_that_is_not_utf8_gives_its_text_with_the_bad_byte_marked(
+    served, repos, box
+):
+    folder = repos.root / "nested"
+    (folder / "latin.txt").write_bytes(b"caf\xe9 au lait\n")
+    _git_setup(folder, "add", "latin.txt")
+    _git_setup(folder, "commit", "-q", "-m", "latin")
+    resp = served.get(box, "git/show", directory=str(folder), path="latin.txt")
+    assert (resp.status_code, resp.json()["content"]) == (200, "caf\ufffd au lait")
+
+
+def test_a_git_show_of_an_empty_file_is_the_empty_content_on_both_kinds(served, repos):
+    folder = repos.root / "nested"
+    (folder / "empty.txt").write_text("", encoding="utf-8")
+    _git_setup(folder, "add", "empty.txt")
+    _git_setup(folder, "commit", "-q", "-m", "empty")
+    answers = [
+        served.get(box, "git/show", directory=str(folder), path="empty.txt")
+        for box in ("local", "lb")
+    ]
+    assert [(r.status_code, r.json()) for r in answers] == [
+        (200, {"content": "", "ref": "HEAD", "path": "empty.txt"})
+    ] * 2
+
+
+def test_a_remote_git_show_cuts_its_output_on_the_box(served, repos):
+    served.get("lb", "git/show", directory=repos.at("clean"), path="a.txt")
+    lines = served.remote_commands()
+    assert [_parse(line) for line in lines] == [
+        (repos.at("clean"), ["git", "rev-parse", "--show-toplevel"], None),
+        (repos.at("clean"), ["git", "show", "HEAD:a.txt"], 1_048_576),
+    ]
+
+
+def _home_repo(served: Served) -> None:
+    """The remote home is a repository with `h.txt` at its root and a folder `x`."""
+    (served.home / "x").mkdir()
+    _git_setup(served.home, "init", "-q", "-b", "main")
+    (served.home / "h.txt").write_text("home\n", encoding="utf-8")
+    _git_setup(served.home, "add", "h.txt")
+    _git_setup(served.home, "commit", "-q", "-m", "first")
+
+
+@pytest.mark.parametrize(
+    ("directory", "path", "status", "body", "home_lookups"),
+    [
+        ("~", "h.txt", 200, {"content": "home", "ref": "HEAD", "path": "h.txt"}, 1),
+        ("~/x", "../h.txt", 200, {"content": "home", "ref": "HEAD", "path": "../h.txt"}, 1),
+        ("~", "~/h.txt", 200, {"content": "home", "ref": "HEAD", "path": "~/h.txt"}, 1),
+        ("~", "~//h.txt", 200, {"content": "home", "ref": "HEAD", "path": "~//h.txt"}, 1),
+        ("~", "~/../h.txt", 400, {"detail": "Path is outside the git repository"}, 1),
+        ("~", "~root/h.txt", 404, {"detail": "File not found at ref HEAD"}, 1),
+        ("~/..", "h.txt", 404, {"detail": "Not a git repository"}, 1),
+        ("/", "~/h.txt", 404, {"detail": "Not a git repository"}, 0),
+    ],
+)
+def test_a_remote_git_show_reads_a_tilde_as_the_home_of_the_box(
+    served, directory, path, status, body, home_lookups
+):
+    _home_repo(served)
+    resp = served.get("lb", "git/show", directory=directory, path=path)
+    assert (resp.status_code, resp.json()) == (status, body)
+    assert served.remote_commands().count(HOME_CMD) == home_lookups
+
+
+# --- a hostile name reaches git as one word on both kinds -----------------------------
+
+NAMES = [
+    "$(touch x)",
+    "`touch x`",
+    "a b",
+    "a'b",
+    'a"b',
+    "-rf",
+    "--help",
+    "a;b",
+    "a\nb",
+    "~",
+    "~root",
+    "   x",
+    "n" * 200,
+]
+
+
+def _hostile_repo(tmp_path: Path, name: str) -> Path:
+    """A repository in a folder named ``name`` holding one file named ``name``; a test
+    gives the file's path absolute, so ``~`` is a name and not the home."""
+    folder = (tmp_path / "hostile" / name).resolve()
+    folder.mkdir(parents=True)
+    _git_setup(folder, "init", "-q", "-b", "main")
+    (folder / name).write_text("said\n", encoding="utf-8")
+    _git_setup(folder, "add", "--", name)
+    _git_setup(folder, "commit", "-q", "-m", "first")
+    return folder
+
+
+@pytest.mark.parametrize("name", NAMES, ids=lambda n: repr(n)[:24])
+def test_a_local_show_and_blame_of_a_hostile_name_reach_git_as_one_word(served, tmp_path, name):
+    folder = _hostile_repo(tmp_path, name)
+    path = f"{folder}/{name}"
+    show = served.get("local", "git/show", directory=str(folder), path=path)
+    blame = served.get("local", "git/blame", directory=str(folder), path=path)
+    assert (show.status_code, show.json()) == (
+        200,
+        {"content": "said", "ref": "HEAD", "path": path},
+    )
+    assert (blame.status_code, [line["content"] for line in blame.json()["lines"]]) == (
+        200,
+        ["said"],
+    )
+
+
+@pytest.mark.parametrize("name", NAMES, ids=lambda n: repr(n)[:24])
+def test_a_remote_show_and_blame_of_a_hostile_name_reach_git_as_one_word(served, tmp_path, name):
+    """The loopback box runs git only for plain words, so a hostile one is refused there;
+    what is proved is the words it received."""
+    folder = str(_hostile_repo(tmp_path, name))
+    served.get("lb", "git/show", directory=folder, path=f"{folder}/{name}")
+    served.get("lb", "git/blame", directory=folder, path=f"{folder}/{name}")
+    shown = f"HEAD:{name}"
+    expected = [
+        (folder, ["git", "rev-parse", "--show-toplevel"], None),
+        (folder, ["git", "show", shown], 1_048_576),
+    ]
+    if not _PLAIN_WORD.fullmatch(shown):
+        expected.append((folder, ["git", "cat-file", "-e", shown], None))
+    expected += [
+        (folder, ["git", "rev-parse", "--show-toplevel"], None),
+        (folder, ["git", "blame", "--porcelain", "--", name], None),
+    ]
+    assert [_parse(line) for line in served.remote_commands()] == expected
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+@pytest.mark.parametrize("name", NAMES, ids=lambda n: repr(n)[:24])
+def test_git_branches_in_a_folder_with_a_hostile_name_answers_on_both_kinds(
+    served, tmp_path, box, name
+):
+    folder = _hostile_repo(tmp_path, name)
+    resp = served.get(box, "git/branches", directory=str(folder))
+    body = resp.json()
+    assert (resp.status_code, body["is_repo"], body["root"]) == (200, True, str(folder))
+    assert [(b["name"], b["is_current"]) for b in body["branches"]] == [("main", True)]
+
+
+# --- a remote git that hangs ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("route", "params"),
+    [
+        ("git/show", {"path": "a.txt"}),
+        ("git/blame", {"path": "a.txt"}),
+        ("git/branches", {}),
+    ],
+)
+def test_a_remote_git_that_hangs_is_the_504_and_its_connection_is_not_handed_on(
+    served, repos, monkeypatch, route, params
+):
+    from sshler.api import git as git_api
+
+    monkeypatch.setattr(git_api, "GIT_TIMEOUT", 0.3)
+    monkeypatch.setattr(git_api, "BLAME_TIMEOUT", 0.3)
+    with served.client:  # one event loop for every request, so the pool can reuse
+        stuck = served.get("lb", route, directory=repos.at("stuck"), **params)
+        again = served.get("lb", "git/log", directory=repos.at("clean"))
+    assert (stuck.status_code, stuck.json(), again.status_code) == (
+        504,
+        {"detail": "Git command timed out"},
+        200,
+    )
+    assert served.counts.connections == 2
+
+
+# --- the log of a repository with no commit --------------------------------------------
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_git_log_of_a_repository_with_no_commit_is_a_repository_on_both_kinds(served, repos, box):
+    resp = served.get(box, "git/log", directory=repos.at("empty"))
+    assert (resp.status_code, resp.json()["is_repo"], resp.json()["commits"]) == (200, True, [])
+
+
+# --- a box's stats and status ----------------------------------------------------------
+
+STATS = {
+    "name": "lb",
+    "cpu_percent": 50.0,
+    "memory_used_mb": 1000.0,
+    "memory_total_mb": 2000.0,
+    "memory_percent": 50.0,
+    "uptime_seconds": 3600,
+    "error": None,
+}
+
+
+def test_a_remote_box_s_stats_are_read_from_proc_in_two_commands(served):
+    resp = served.get("lb", "stats")
+    assert (resp.status_code, resp.json()) == (200, STATS)
+    assert served.counts.connections == 1
+    assert [_parse(line) for line in served.remote_commands()] == [
+        (None, ["cat", "/proc/stat"], 16_384),
+        (None, ["cat", "/proc/uptime", "/proc/meminfo", "/proc/stat"], 16_384),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("proc", "changed"),
+    [
+        (
+            {"/proc/stat": [PROC_STAT_FIRST, "intr 9 1 2\n"]},
+            {"cpu_percent": None},
+        ),
+        (
+            {"/proc/meminfo": ["MemTotal:        2048000 kB\nMemFree:          512000 kB\n"]},
+            {"memory_used_mb": None, "memory_percent": None},
+        ),
+        (
+            {"/proc/meminfo": ["MemFree:          512000 kB\n"]},
+            {"memory_used_mb": None, "memory_total_mb": None, "memory_percent": None},
+        ),
+        ({"/proc/uptime": []}, {"uptime_seconds": None}),
+    ],
+    ids=["no-cpu-line", "no-available", "no-memory-lines", "no-uptime"],
+)
+def test_a_remote_box_s_stats_with_a_line_missing_give_the_rest(served, proc, changed):
+    served.counts.proc.update(proc)
+    resp = served.get("lb", "stats")
+    assert (resp.status_code, resp.json()) == (200, {**STATS, **changed})
+
+
+def test_a_remote_box_with_no_proc_says_its_stats_could_not_be_read(served):
+    served.counts.proc.clear()
+    resp = served.get("lb", "stats")
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {
+            "name": "lb",
+            "cpu_percent": None,
+            "memory_used_mb": None,
+            "memory_total_mb": None,
+            "memory_percent": None,
+            "uptime_seconds": None,
+            "error": "could not read /proc on lb",
+        },
+    )
+
+
+def test_a_remote_box_s_status_runs_true_once(served):
+    resp = served.get("lb", "status")
+    body = resp.json()
+    assert (resp.status_code, body["name"], body["status"]) == (200, "lb", "online")
+    assert 0 < body["latency_ms"] < 15_000
+    assert served.counts.connections == 1
+    assert [_parse(line) for line in served.remote_commands()] == [(None, ["true"], None)]

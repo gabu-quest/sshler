@@ -32,6 +32,13 @@ Where the kinds differ, each as the routes had it before:
 * ``folder(path)``: on the local box ``~`` is this user's home and the path is made
   absolute with links resolved; on a remote box the path is checked (a bad one raises
   ``ValidationError``), ``~`` is the box's home, asked once per connection.
+* ``file(path, folder)``: a path given absolute or relative to ``folder``, made
+  absolute. The local box resolves links (and ``~user``); a remote box can only
+  normalise the text (``..`` is applied to the words, a link is not followed), with
+  ``~`` and ``~/x`` under the box's home, and a path with a null byte raises
+  ``ValidationError``. Nothing is run on the box for it.
+* ``reach(timeout)``: the local box is this machine and answers at once (0 s, nothing
+  is run: Windows has no ``true``); a remote box runs ``true`` once.
 
 A remote runner takes its box's pooled connection at the first call that needs it and
 gives it back when the block ends.
@@ -41,10 +48,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import posixpath
 import shutil
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Protocol
 
 from ..config import AppConfig, Box
@@ -54,7 +64,7 @@ from ..validation import PathValidator
 from .box_files import is_local
 from .dependencies import APIDependencies, ProbeTimeoutError
 from .helpers import _normalize_local_path
-from .remote import command, in_directory, pipe, quiet, remote_path
+from .remote import command, in_directory, pipe, quiet, remote_path, resolve_tilde
 
 # The status of a run whose folder could not be entered (the status `cd` gives).
 FOLDER_NOT_ENTERED = 1
@@ -82,6 +92,15 @@ class BoxRunner(Protocol):
         """``path`` as a folder of this box, for ``run``."""
         ...
 
+    async def file(self, path: str, folder: str) -> PurePath:
+        """``path`` (absolute, or relative to ``folder``) as an absolute path of this
+        box, in the box's own form."""
+        ...
+
+    async def reach(self, *, timeout: float) -> float | None:
+        """Seconds the box took to answer, or None when it did not run the probe."""
+        ...
+
     async def run(
         self,
         words: Sequence[str],
@@ -97,6 +116,14 @@ class LocalRunner:
 
     async def folder(self, path: str) -> str:
         return _normalize_local_path(path)
+
+    async def file(self, path: str, folder: str) -> PurePath:
+        requested = Path(path).expanduser()
+        candidate = requested if requested.is_absolute() else Path(folder) / requested
+        return candidate.resolve(strict=False)
+
+    async def reach(self, *, timeout: float) -> float | None:
+        return 0.0
 
     async def run(
         self,
@@ -148,6 +175,17 @@ class RemoteRunner:
         PathValidator.validate_remote_path(path)
         return await remote_path(await self._connection(), path)
 
+    async def file(self, path: str, folder: str) -> PurePath:
+        resolved = await resolve_tilde(await self._connection(), path)
+        joined = posixpath.join(folder, resolved)  # an absolute path stays as it is
+        return PurePosixPath(PathValidator.validate_remote_path(joined))
+
+    async def reach(self, *, timeout: float) -> float | None:
+        # Timed from the first call of the block, so a new connection is counted.
+        started = time.monotonic()
+        ran = await self.run(["true"], folder=None, timeout=timeout)
+        return time.monotonic() - started if ran.ok else None
+
     async def run(
         self,
         words: Sequence[str],
@@ -159,7 +197,11 @@ class RemoteRunner:
         connection = await self._connection()
         line = remote_command_line(words, folder, output_limit)
         try:
-            result = await asyncio.wait_for(connection.run(line, check=False), timeout=timeout)
+            # Bytes, decoded here: a byte that is not UTF-8 is marked, as on the local
+            # box, where a strict decode on the channel would close the connection.
+            result = await asyncio.wait_for(
+                connection.run(line, check=False, encoding=None), timeout=timeout
+            )
         except (TimeoutError, asyncio.CancelledError):
             self.timed_out = True
             raise

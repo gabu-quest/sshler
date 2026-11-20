@@ -25,7 +25,7 @@ class RecordingConnection:
         self.replies = replies
         self.commands: list[str] = []
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         self.commands.append(command)
         return self.replies[len(self.commands) - 1]
 

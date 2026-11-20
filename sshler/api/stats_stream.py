@@ -6,9 +6,10 @@ left its in-flight probes running. Now:
 
 - ``SharedStatsProbes`` keeps at most one probe in flight per box, shared by
   every open stream, so tabs do not multiply connections;
-- each probe runs on a pooled connection (``APIDependencies.run_pooled``) and
-  is bounded by ``PROBE_TIMEOUT_SECONDS``; a timed-out probe's connection is
-  closed, not reused;
+- each probe is ``boxes.box_stats``, the one owner of a box's stats: on a
+  remote box it runs on a pooled connection and is bounded by
+  ``PROBE_TIMEOUT_SECONDS``; a timed-out probe's connection is closed, not
+  reused;
 - a box named twice in ``?boxes=`` is probed once;
 - when the last stream waiting on a probe goes away, the probe is cancelled
   and its connection closed, so a reload never strands one.
@@ -25,8 +26,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from ..config import AppConfig, Box, find_box
-from .boxes import _get_local_stats, _get_remote_stats
-from .dependencies import APIDependencies, ProbeTimeoutError
+from .boxes import box_stats
+from .dependencies import APIDependencies
 from .models import APIBoxStats
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class SharedStatsProbes:
     def acquire(self, box: Box, application_config: AppConfig) -> asyncio.Task[APIBoxStats]:
         entry = self._inflight.get(box.name)
         if entry is None or entry.task.done():
-            task = asyncio.create_task(_probe_box(self._deps, box, application_config))
+            task = asyncio.create_task(box_stats(self._deps, box, application_config))
             entry = _Inflight(task=task)
             self._inflight[box.name] = entry
         entry.subscribers += 1
@@ -158,19 +159,3 @@ def get_router(deps: APIDependencies) -> APIRouter:
         )
 
     return router
-
-
-async def _probe_box(deps: APIDependencies, box: Box, application_config: AppConfig) -> APIBoxStats:
-    """Get stats for a single box. Handles local vs remote."""
-    if box.transport == "local":
-        return await _get_local_stats(box.name)
-
-    try:
-        return await deps.run_pooled(
-            box, application_config, lambda conn: _get_remote_stats(box.name, conn)
-        )
-    except ProbeTimeoutError as e:
-        logger.warning(f"Stats probe: {e}")
-        return APIBoxStats(name=box.name, error=str(e))
-    except Exception as e:
-        return APIBoxStats(name=box.name, error=str(e))

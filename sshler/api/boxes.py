@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
@@ -12,6 +12,7 @@ from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
 from ..ssh_pool import get_pool
 from ..validation import ValidationError
 from . import dependencies
+from .box_files import is_local
 from .box_runner import BoxRunner, ProgramNotFoundError, Ran, box_runner, remote_command_line
 from .dependencies import APIDependencies
 from .models import (
@@ -88,18 +89,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APIBoxStatus:
         box = deps.get_box_or_404(application_config, name)
-        if box.transport == "local":
-            return APIBoxStatus(name=box.name, status="online", latency_ms=0)
-
-        start = time.time()
+        # Bounded as every polled route is; the local box answers at once.
+        limit = dependencies.PROBE_TIMEOUT_SECONDS
         try:
-            await deps.run_pooled(
-                box, application_config, lambda conn: conn.run("true", check=True)
-            )
-            latency = (time.time() - start) * 1000
-            return APIBoxStatus(name=box.name, status="online", latency_ms=latency)
+            async with box_runner(deps, box, application_config, deadline=limit) as runner:
+                seconds = await runner.reach(timeout=limit)
         except Exception:
+            seconds = None
+        if seconds is None:
             return APIBoxStatus(name=box.name, status="offline", latency_ms=None)
+        return APIBoxStatus(name=box.name, status="online", latency_ms=seconds * 1000)
 
     @router.post("/boxes/{name}/pin", response_model=APIPinToggle)
     async def api_toggle_pin(
@@ -181,20 +180,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APIBoxStats:
         """Get system statistics (CPU, memory, uptime) for a box."""
-        box = deps.get_box_or_404(application_config, name)
-
-        if box.transport == "local":
-            # Local box: use psutil
-            return await _get_local_stats(name)
-
-        # Remote box: use SSH commands on a pooled connection
-        try:
-            return await deps.run_pooled(
-                box, application_config, lambda conn: _get_remote_stats(name, conn)
-            )
-        except Exception as e:
-            logger.warning(f"Failed to get stats for {name}: {e}")
-            return APIBoxStats(name=name, error=str(e))
+        return await box_stats(
+            deps, deps.get_box_or_404(application_config, name), application_config
+        )
 
     @router.get("/boxes/{name}/git", response_model=APIGitInfo)
     async def api_git_info(
@@ -270,38 +258,73 @@ async def _get_local_stats(name: str) -> APIBoxStats:
         return APIBoxStats(name=name, error=str(e))
 
 
-async def _get_remote_stats(name: str, conn) -> APIBoxStats:
-    """Get system stats for remote machine via SSH commands."""
+async def box_stats(deps: APIDependencies, box: Box, application_config: AppConfig) -> APIBoxStats:
+    """The CPU, memory and uptime of ``box``, or its error; the stats route and the stats
+    stream both answer with this.
+
+    The local box reads them with psutil. A remote box reads ``/proc`` through its
+    runner, bounded by ``PROBE_TIMEOUT_SECONDS`` for the connect and every command; past
+    it the error names the step and the connection is closed, not handed on."""
+    if is_local(box):
+        return await _get_local_stats(box.name)
+    limit = dependencies.PROBE_TIMEOUT_SECONDS
     try:
-        # Get CPU usage from /proc/stat (two samples for delta)
-        cpu_result = await conn.run(
-            "cat /proc/stat | head -1; sleep 0.2; cat /proc/stat | head -1",
-            check=True,
-        )
-        cpu_percent = _parse_cpu_usage(cpu_result.stdout or "")
-
-        # Get memory from /proc/meminfo
-        mem_result = await conn.run(
-            "cat /proc/meminfo | grep -E '^(MemTotal|MemAvailable):'",
-            check=True,
-        )
-        memory_info = _parse_memory_info(mem_result.stdout or "")
-
-        # Get uptime
-        uptime_result = await conn.run("cat /proc/uptime", check=True)
-        uptime_seconds = _parse_uptime(uptime_result.stdout or "")
-
-        return APIBoxStats(
-            name=name,
-            cpu_percent=cpu_percent,
-            memory_used_mb=memory_info.get("used_mb"),
-            memory_total_mb=memory_info.get("total_mb"),
-            memory_percent=memory_info.get("percent"),
-            uptime_seconds=uptime_seconds,
-        )
+        async with box_runner(deps, box, application_config, deadline=limit) as runner:
+            return await _proc_stats(box.name, runner, limit)
     except Exception as e:
-        logger.warning(f"Failed to get remote stats for {name}: {e}")
-        return APIBoxStats(name=name, error=str(e))
+        logger.warning(f"Failed to get stats for {box.name}: {e}")
+        return APIBoxStats(name=box.name, error=str(e))
+
+
+# Two reads of /proc/stat this far apart give the CPU's use between them.
+CPU_SAMPLE_GAP = 0.2
+# The most a /proc read sends back: the uptime, the memory and the first line of
+# /proc/stat fit many times over; the rest of /proc/stat (one line per CPU and the
+# interrupt counts) is not needed.
+PROC_READ_BYTES = 16_384
+
+
+async def _proc_stats(name: str, runner: BoxRunner, timeout: float) -> APIBoxStats:
+    """The stats of a box with Linux's ``/proc``, in two commands: ``/proc/stat``, then
+    after ``CPU_SAMPLE_GAP`` the uptime, the memory and ``/proc/stat`` again. Each
+    reading is picked from the output by the shape of its line, so a file or a line
+    that is missing leaves only its own figure empty."""
+
+    async def read(*files: str) -> str:
+        ran = await runner.run(
+            ["cat", *files], folder=None, timeout=timeout, output_limit=PROC_READ_BYTES
+        )
+        return ran.output
+
+    first = await read("/proc/stat")
+    await asyncio.sleep(CPU_SAMPLE_GAP)
+    second = await read("/proc/uptime", "/proc/meminfo", "/proc/stat")
+
+    samples = [line for line in (_cpu_line(first), _cpu_line(second)) if line is not None]
+    cpu_percent = _parse_cpu_usage("\n".join(samples))
+    memory_info = _parse_memory_info(second)
+    uptime_seconds = _parse_uptime(_uptime_line(second))
+    if cpu_percent is None and "total_mb" not in memory_info and uptime_seconds is None:
+        return APIBoxStats(name=name, error=f"could not read /proc on {name}")
+    return APIBoxStats(
+        name=name,
+        cpu_percent=cpu_percent,
+        memory_used_mb=memory_info.get("used_mb"),
+        memory_total_mb=memory_info.get("total_mb"),
+        memory_percent=memory_info.get("percent"),
+        uptime_seconds=uptime_seconds,
+    )
+
+
+def _cpu_line(output: str) -> str | None:
+    """The first ``cpu `` line (all CPUs together) of ``/proc/stat`` output."""
+    return next((line for line in output.splitlines() if line.startswith("cpu ")), None)
+
+
+def _uptime_line(output: str) -> str:
+    """The ``/proc/uptime`` line: the one line that starts with a digit (every line of
+    ``/proc/meminfo`` and ``/proc/stat`` starts with its name)."""
+    return next((line for line in output.splitlines() if line[:1].isdigit()), "")
 
 
 def _parse_cpu_usage(output: str) -> float | None:
