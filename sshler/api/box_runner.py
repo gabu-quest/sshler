@@ -16,9 +16,10 @@ What both kinds promise:
 * ``folder`` None runs the program where the box starts it (this process's folder on
   the local box, the login folder on a remote one). A folder that cannot be entered
   runs nothing and gives a non-zero status and no output.
-* The output is what the program wrote on its standard output, read as UTF-8; its
-  error output is dropped. With ``output_limit`` only the first that many bytes come
-  back (on a remote box no more is sent), and the status is then not read: it is None.
+* The output is what the program wrote on its standard output, read as UTF-8 with
+  U+FFFD for each byte that is not; its error output is dropped. With ``output_limit``
+  only the first that many bytes come back (on a remote box no more is sent), and the
+  status is then not read: it is None.
 * Past ``timeout`` seconds the call raises ``TimeoutError``. On the local box the
   program is killed and reaped first; on a remote box the connection is not handed to
   another request afterwards, as a command may still run on it.
@@ -27,8 +28,6 @@ Where the kinds differ, each as the routes had it before:
 
 * A program that is not there: the local runner raises ``ProgramNotFoundError``
   before it starts anything; on a remote box the shell answers status 127.
-* Output that is not UTF-8: the local runner puts U+FFFD for each bad byte; on a
-  remote box the read fails (``UnicodeDecodeError``), as asyncssh decodes strictly.
 * ``folder(path)``: on the local box ``~`` is this user's home and the path is made
   absolute with links resolved; on a remote box the path is checked (a bad one raises
   ``ValidationError``), ``~`` is the box's home, asked once per connection.
