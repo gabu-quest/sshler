@@ -10,6 +10,7 @@ import mimetypes
 import os
 import shutil
 import stat as stat_mod
+import tarfile
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator, Sequence
@@ -21,12 +22,14 @@ from fastapi.responses import FileResponse, Response
 from ..proc import run_bounded
 from ..validation import PathValidator
 from .file_contract import (
+    TAR_SUFFIXES,
     BatchOutcome,
     FolderZip,
     NameRefusedError,
     PathKind,
     ReadChunk,
     SourceFile,
+    is_archive_name,
 )
 from .helpers import (
     LOCAL_IS_WINDOWS,
@@ -567,6 +570,61 @@ async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
         return set()
 
 
+def _safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
+    """Extract zip safely, preventing path traversal (zip-slip).
+
+    Validates every entry's resolved path stays within dest_dir before extracting.
+    Handles backslash paths, encoded sequences, and parent references.
+    """
+    dest_resolved = dest_dir.resolve()
+    for info in zf.infolist():
+        # Normalize: replace backslashes, strip leading slashes
+        safe_name = info.filename.replace("\\", "/").lstrip("/")
+        # Check for parent traversal after normalization
+        target = (dest_resolved / safe_name).resolve()
+        # Target must be inside dest_dir
+        if not (target == dest_resolved or str(target).startswith(str(dest_resolved) + os.sep)):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Archive contains unsafe path: {info.filename}",
+            )
+        # Rewrite the filename to the safe version before extracting
+        info.filename = safe_name
+        zf.extract(info, dest_dir)
+
+
+def _local_create_archive(paths: Sequence[str], archive_path: Path, fmt: str) -> None:
+    """Pack each path under its own name; a folder in a zip is packed file by file."""
+    if fmt in ("tar.gz", "tgz"):
+        with tarfile.open(str(archive_path), "w:gz") as tf:
+            for p in paths:
+                source = Path(_normalize_local_path(p))
+                tf.add(str(source), arcname=source.name)
+        return
+    with zipfile.ZipFile(str(archive_path), "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in paths:
+            source = Path(_normalize_local_path(p))
+            if source.is_dir():
+                for child in source.rglob("*"):
+                    if child.is_file():
+                        arcname = str(source.name / child.relative_to(source))
+                        zf.write(str(child), arcname)
+            else:
+                zf.write(str(source), source.name)
+
+
+def _local_extract_archive(archive: Path, dest_dir: Path) -> None:
+    """A tar is unpacked with tarfile's ``data`` filter (no entry outside ``dest_dir``,
+    no link that leaves it, no device file); a zip entry that would leave ``dest_dir``
+    refuses the whole zip with a 400."""
+    if archive.name.lower().endswith(TAR_SUFFIXES):
+        with tarfile.open(str(archive), "r:gz") as tf:
+            tf.extractall(path=str(dest_dir), filter="data")
+    else:
+        with zipfile.ZipFile(str(archive), "r") as zf:
+            _safe_extract_zip(zf, dest_dir)
+
+
 def _local_batch_item(
     path: str, dest_dir: Path, landed: set[str], *, move: bool, overwrite: bool
 ) -> str:
@@ -854,6 +912,34 @@ class LocalFiles:
             raise HTTPException(status_code=404, detail="Source not found") from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def create_archive(
+        self, paths: Sequence[str], destination: str, name: str, fmt: str
+    ) -> str:
+        """Any failure is a 500 with its text."""
+        archive_path = Path(_normalize_local_path(destination)) / name
+        try:
+            await asyncio.to_thread(_local_create_archive, paths, archive_path, fmt)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return str(archive_path)
+
+    async def extract_archive(self, archive: str, destination: str) -> str:
+        """A missing archive is a 404, then a name that is no archive a 400; any other
+        failure (a tar entry the filter refuses among them) is a 500 with its text."""
+        archive_path = Path(_normalize_local_path(archive))
+        dest_dir = Path(_normalize_local_path(destination))
+        if not archive_path.exists():
+            raise HTTPException(status_code=404, detail="Archive not found")
+        if not is_archive_name(archive_path.name):
+            raise HTTPException(status_code=400, detail="Unsupported archive format")
+        try:
+            await asyncio.to_thread(_local_extract_archive, archive_path, dest_dir)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return str(dest_dir)
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
         outcome = BatchOutcome()

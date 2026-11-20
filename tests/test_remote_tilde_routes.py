@@ -224,6 +224,61 @@ def test_excel_preview_opens_the_resolved_home_path(remote):
     assert remote.sftp.calls == [("open", f"{HOME}/book.xlsx", "rb")]
 
 
+@pytest.fixture
+def local_excel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The local box with its home in a temp folder: ``home/book.xlsx`` (one sheet, one
+    cell), ``home/sub``, and ``home/link.xlsx``, a link to the book."""
+    home = (tmp_path / "home").resolve()
+    (home / "sub").mkdir(parents=True)
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "S"
+    workbook.active["A1"] = "cell"
+    workbook.save(home / "book.xlsx")
+    (home / "link.xlsx").symlink_to(home / "book.xlsx")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "boxes.yaml").write_text(yaml.safe_dump({"boxes": []}), encoding="utf-8")
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(home / "sub")
+    client = TestClient(make_app(ServerSettings(csrf_token=TOKEN)), raise_server_exceptions=False)
+    try:
+        yield home, client
+    finally:
+        client.close()
+
+
+BOOK = {
+    "sheets": [{"name": "S", "rows": [["cell"]], "truncated_rows": False, "truncated_cols": False}],
+    "active_sheet": "S",
+    "file_too_large": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("sent", "status", "body"),
+    [
+        ("{home}/book.xlsx", 200, BOOK),
+        ("~/book.xlsx", 200, BOOK),
+        ("../book.xlsx", 200, BOOK),
+        ("{home}/link.xlsx", 200, BOOK),
+        ("{home}/sub/../book.xlsx", 200, BOOK),
+        ("{home}/nope.xlsx", 500, "Internal Server Error"),
+        ("{home}/bo\x00ok.xlsx", 500, "Internal Server Error"),
+    ],
+    ids=["absolute", "home", "relative", "link", "parent", "missing", "null byte"],
+)
+def test_a_local_excel_preview_takes_the_path_as_the_file_route_does(
+    local_excel, sent, status, body
+):
+    """A relative path is taken from the server's working folder (``home/sub`` here)."""
+    home, client = local_excel
+    path = sent.replace("{home}", str(home))
+    resp = client.get("/api/v1/boxes/local/excel", params={"path": path}, headers=HEADERS)
+    found = resp.json() if resp.status_code == 200 else resp.text
+    assert (resp.status_code, found) == (status, body)
+
+
 def test_grep_searches_the_resolved_home_directory(remote):
     """Mutation: skip `_remote_path` in grep; the command searches `'~/proj'`, which
     the shell never expands, and the response names `~/proj`."""

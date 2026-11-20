@@ -7,10 +7,10 @@ the right one from ``box_files`` (``box_files.py``) and never asks which it hold
 
 Paths: ``path``, ``folder`` and ``child`` turn what a client sent into the path that
 kind of box acts on; every other method that takes a ``path`` takes one of those.
-``rename``, ``place_into``, ``zip_folder`` and the two batch methods take paths as the
-client sent them, because each kind checks them in its own order before it resolves
-them. A transfer splits ``path`` in two: ``check_path`` before anything is opened,
-``resolve`` once the box is reached.
+``rename``, ``place_into``, ``zip_folder``, the two archive methods and the two batch
+methods take paths as the client sent them, because each kind checks them in its own
+order before it resolves them. A transfer splits ``path`` in two: ``check_path``
+before anything is opened, ``resolve`` once the box is reached.
 
 Answers: an operation raises ``HTTPException`` for the answers it gives itself (a
 missing directory, a name the existing-name rule refuses, a file too large); any other
@@ -37,6 +37,17 @@ class NameRefusedError(ValueError):
     not at all), so it is raised for the route; a remote box refuses the name with a
     ``ValidationError``, which ``box_files`` answers.
     """
+
+
+# The archive names both kinds pack and unpack; a tar is gzipped.
+TAR_SUFFIXES = (".tar.gz", ".tgz")
+ARCHIVE_SUFFIXES = (*TAR_SUFFIXES, ".zip")
+
+
+def is_archive_name(name: str) -> bool:
+    """Whether ``name`` (a file name, not a path) ends in a suffix of ``ARCHIVE_SUFFIXES``,
+    without regard to case."""
+    return name.lower().endswith(ARCHIVE_SUFFIXES)
 
 
 class PathKind(NamedTuple):
@@ -228,6 +239,21 @@ class BoxFiles(Protocol):
     ) -> str:
         """Move or copy ``source`` into folder ``destination`` as ``new_name`` (its own
         name when None) under the existing-name rule; returns the new path."""
+        ...
+
+    async def create_archive(
+        self, paths: Sequence[str], destination: str, name: str, fmt: str
+    ) -> str:
+        """Pack ``paths`` into a new archive ``name`` in folder ``destination``; ``fmt``
+        (``tar.gz``, ``tgz`` or ``zip``) and ``name`` are checked by the route. Returns
+        the archive's path. A folder is packed with everything in it, under its own
+        name."""
+        ...
+
+    async def extract_archive(self, archive: str, destination: str) -> str:
+        """Unpack ``archive`` (a ``.tar.gz``, ``.tgz`` or ``.zip`` by its name; any other
+        name is a 400) into folder ``destination``; returns the destination's path. On
+        the local box no entry is written outside ``destination``."""
         ...
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:

@@ -24,7 +24,15 @@ from ..config import Box
 from ..ssh import SSHError, sftp_chmod, sftp_list_directory, sftp_read_file, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
-from .file_contract import BatchOutcome, FolderZip, PathKind, ReadChunk, SourceFile
+from .file_contract import (
+    TAR_SUFFIXES,
+    BatchOutcome,
+    FolderZip,
+    PathKind,
+    ReadChunk,
+    SourceFile,
+    is_archive_name,
+)
 from .helpers import _attachment_header
 from .models import APIDirectoryEntry
 from .placement import (
@@ -42,6 +50,7 @@ from .placement import (
     run_to_end,
 )
 from .remote import (
+    and_then,
     command,
     compose_remote_child,
     in_directory,
@@ -484,6 +493,27 @@ def folder_zip_command(path: str) -> tuple[str, str]:
     return dirname, in_directory(parent, command("zip", "-r", "-q", "-", path_word(target)))
 
 
+# An archive made or unpacked on a remote box runs at most this long.
+ARCHIVE_TIMEOUT = 120
+
+
+def archive_create_command(fmt: str, archive_target: str, paths: list[str]) -> str:
+    """The remote command that packs ``paths`` into ``archive_target`` (``fmt`` is
+    ``tar.gz``, ``tgz`` or ``zip``); relative paths are taken from ``/``."""
+    sources = [path_word(p) for p in paths]
+    if fmt in ("tar.gz", "tgz"):
+        return command("tar", "czf", path_word(archive_target), "-C", "/", *sources)
+    return and_then(command("cd", "/"), command("zip", "-r", path_word(archive_target), *sources))
+
+
+def archive_extract_command(archive: str, destination: str) -> str:
+    """The remote command that unpacks ``archive`` (by its name, a tar.gz, .tgz or
+    .zip) into ``destination``."""
+    if PurePosixPath(archive).name.lower().endswith(TAR_SUFFIXES):
+        return command("tar", "xzf", path_word(archive), "-C", path_word(destination))
+    return command("unzip", "-o", path_word(archive), "-d", path_word(destination))
+
+
 async def _du_bytes(connection, du_line: str, multiplier: int) -> int | None:
     """Run a ``du`` command and return its total times ``multiplier``, or None.
 
@@ -920,6 +950,49 @@ class RemoteFiles:
         except (FileNotFoundError, asyncssh.SFTPNoSuchFile) as exc:
             raise HTTPException(status_code=404, detail="Source not found") from exc
         return target
+
+    async def create_archive(
+        self, paths: Sequence[str], destination: str, name: str, fmt: str
+    ) -> str:
+        """Every path is checked before the connection is taken (a bad source is a 400
+        that names it); ``tar`` or ``zip`` runs on the box, a 504 past
+        ``ARCHIVE_TIMEOUT``."""
+        dest_validated = PathValidator.validate_remote_path(destination)
+        validated_paths: list[str] = []
+        for p in paths:
+            try:
+                validated_paths.append(PathValidator.validate_remote_path(p))
+            except ValidationError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid path {p}: {exc}") from exc
+        connection = await self._conn()
+        # The quoted command does not expand `~`: it is resolved here.
+        dest_resolved = await remote_path(connection, dest_validated)
+        resolved_paths = [await remote_path(connection, p) for p in validated_paths]
+        archive_target = str(PurePosixPath(dest_resolved) / name)
+        cmd = archive_create_command(fmt, archive_target, resolved_paths)
+        try:
+            await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Archive creation timed out") from exc
+        return archive_target
+
+    async def extract_archive(self, archive: str, destination: str) -> str:
+        """Both paths are checked, then the name, before the connection is taken;
+        ``tar`` or ``unzip`` runs on the box, a 504 past ``ARCHIVE_TIMEOUT``."""
+        validated_archive = PathValidator.validate_remote_path(archive)
+        validated_dest = PathValidator.validate_remote_path(destination)
+        if not is_archive_name(PurePosixPath(validated_archive).name):
+            raise HTTPException(status_code=400, detail="Unsupported archive format")
+        connection = await self._conn()
+        # The quoted command does not expand `~`: it is resolved here.
+        archive_resolved = await remote_path(connection, validated_archive)
+        dest_resolved = await remote_path(connection, validated_dest)
+        cmd = archive_extract_command(archive_resolved, dest_resolved)
+        try:
+            await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Extraction timed out") from exc
+        return dest_resolved
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
         """Every path is checked before the connection is taken; a folder is removed

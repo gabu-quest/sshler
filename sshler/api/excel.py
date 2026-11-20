@@ -15,10 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
-from ..validation import PathValidator, ValidationError
 from .box_files import Answers, box_files
 from .dependencies import APIDependencies
-from .local_files import LocalFiles
 
 MAX_ROWS = 2000
 MAX_COLS = 200
@@ -105,20 +103,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> Any:
         box = deps.get_box_or_404(application_config, name)
 
-        # The local box checks the path with `validate_local_path` and reads it as
-        # given (no `~`, no link resolved), unlike the local paths of every file route,
-        # so this route keeps its own local branch.
-        if box.transport == "local":
-            try:
-                validated = PathValidator.validate_local_path(path)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            data, too_large = await LocalFiles().read_bytes(validated, MAX_FILE_BYTES)
-        else:
-            async with box_files(deps, box, application_config, _REMOTE_READ) as files:
-                # Checked, then `~` resolved the way /file does: SFTP does not expand it.
-                target = await files.path(PathValidator.validate_remote_path(path))
-                data, too_large = await files.read_bytes(target, MAX_FILE_BYTES)
+        # The path is taken as /file takes it: a local one normalised (`~` expanded,
+        # links resolved), a remote one checked, then its `~` resolved.
+        async with box_files(deps, box, application_config, _REMOTE_READ) as files:
+            target = await files.path(path)
+            data, too_large = await files.read_bytes(target, MAX_FILE_BYTES)
 
         if too_large:
             return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)

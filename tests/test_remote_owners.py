@@ -20,11 +20,12 @@ import pytest
 from fastapi import HTTPException
 
 from sshler.api import remote
-from sshler.api.archive import archive_create_command, archive_extract_command
 from sshler.api.boxes import remote_git_info_commands
 from sshler.api.git import remote_git_diff_files_command, remote_git_log_command
 from sshler.api.grep import remote_grep_command
 from sshler.api.remote_files import (
+    archive_create_command,
+    archive_extract_command,
     directory_test_command,
     du_command,
     folder_zip_command,

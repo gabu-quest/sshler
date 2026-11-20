@@ -737,3 +737,133 @@ class TestRemoteRootNamedLikeAnOption:
         assert commands == [
             "find ./-delete -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
         ]
+
+
+class _FindBox:
+    """A remote box whose connection answers the pool's health check and the home
+    lookup, records every other command line and answers it with ``stdout``; nothing
+    is run."""
+
+    def __init__(self, stdout: str = "") -> None:
+        self.stdout = stdout
+        self.commands: list[str] = []
+        self.refuse = False
+
+    async def connect(self, box, application_config):
+        from sshler.ssh import SSHError
+
+        if self.refuse:
+            raise SSHError("unreachable")
+        return self
+
+    async def run(self, command, check=False, encoding="utf-8"):
+        from types import SimpleNamespace
+
+        if command == "echo test":
+            return SimpleNamespace(stdout="test\n", exit_status=0)
+        if command == 'printf %s "$HOME"':
+            return SimpleNamespace(stdout="/home/u", exit_status=0)
+        self.commands.append(command)
+        return SimpleNamespace(stdout=self.stdout, exit_status=0)
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.fixture
+def remote_search(tmp_path, monkeypatch):
+    from sshler import ssh_pool
+    from sshler.api.dependencies import APIDependencies
+    from sshler.ssh_pool import SSHConnectionPool
+
+    config_dir = setup_config(tmp_path)
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text("Host rbox\n  HostName example.invalid\n  User u\n", encoding="utf-8")
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+    state.initialize(config_dir)
+    state.record_directory_visit("rbox", "/srv/proj-a")
+    box = _FindBox(stdout="/home/u/proj-b\n/srv/proj-a\n")
+
+    async def connect_for_box(deps_self, target, application_config):
+        return await box.connect(target, application_config)
+
+    monkeypatch.setattr(APIDependencies, "connect_for_box", connect_for_box)
+    monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
+    client = build_client(config_dir, monkeypatch)
+    try:
+        yield box, client
+    finally:
+        client.close()
+        state.reset_state()
+
+
+def _search_rbox(client, **params):
+    return client.get("/api/v1/boxes/rbox/search", params=params, headers=auth_headers())
+
+
+class TestRemoteSearchRoute:
+    def test_frecency_first_then_discovery_without_the_path_seen_twice(self, remote_search):
+        box, client = remote_search
+        resp = _search_rbox(client, q="proj")
+        assert resp.status_code == 200
+        results = [(r["path"], r["source"], r["is_directory"]) for r in resp.json()["results"]]
+        assert results == [
+            ("/srv/proj-a", "frecency", True),
+            ("/home/u/proj-b", "discovery", True),
+        ]
+        assert resp.json()["results"][1]["score"] == 0.1
+        assert box.commands == [
+            "find /home/u -maxdepth 4 -type d -iname '*proj*' 2>/dev/null | head -n 20"
+        ]
+
+    def test_a_box_that_cannot_be_reached_gives_the_frecency_results(self, remote_search):
+        box, client = remote_search
+        box.refuse = True
+        resp = _search_rbox(client, q="proj")
+        assert resp.status_code == 200
+        assert [r["path"] for r in resp.json()["results"]] == ["/srv/proj-a"]
+        assert box.commands == []
+
+    def test_a_bad_root_is_400_before_the_box_is_reached(self, remote_search):
+        box, client = remote_search
+        resp = _search_rbox(client, q="proj", root="/srv/a\x00b")
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": "Path cannot contain null bytes"},
+        )
+        assert box.commands == []
+
+    @pytest.mark.parametrize(
+        ("q", "root"),
+        [
+            ("*a?b*", "/srv/a b"),
+            ("it's", "/srv/it's"),
+            ("$HOME", "/srv/$(x)"),
+            ("-delete", "-delete"),
+            ("a`b`;c", "/srv/a;b`c`"),
+        ],
+    )
+    def test_a_hostile_query_and_root_each_reach_find_as_one_word(self, remote_search, q, root):
+        import shlex
+
+        box, client = remote_search
+        assert _search_rbox(client, q=q, root=root).status_code == 200
+        pattern = q if ("*" in q or "?" in q) else f"*{q}*"
+        sent_root = f"./{root}" if root.startswith("-") else root
+        assert len(box.commands) == 1
+        words = shlex.split(box.commands[0])
+        assert words == [
+            "find",
+            sent_root,
+            "-maxdepth",
+            "4",
+            "-type",
+            "d",
+            "-iname",
+            pattern,
+            "2>/dev/null",
+            "|",
+            "head",
+            "-n",
+            "20",
+        ]

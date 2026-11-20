@@ -518,6 +518,10 @@ async def _prepared(files, kind: Kind):
     return await _source(files, kind, "a.txt")
 
 
+async def _archive_of(files, kind: Kind, sources: list[str]):
+    return await files.create_archive(sources, kind.at(""), "o.zip", "zip")
+
+
 def _listed(folder_size: int | None) -> list[tuple[str, bool, int | None]]:
     return [
         ("sub", True, folder_size),
@@ -756,6 +760,33 @@ ROWS = [
         same=lambda k: ODD_NAME,
     ),
     Row(
+        "a name that is no archive is not unpacked",
+        lambda f, k: f.extract_archive(k.at("a.txt"), k.at("sub")),
+        same=lambda k: ("answered", 400, "Unsupported archive format"),
+    ),
+    Row(
+        # A remote box checks every source before it is reached and names the bad one;
+        # the local box finds it while packing and answers 500 with the failure's text.
+        "an archive with a source path holding a null byte",
+        lambda f, k: _archive_of(f, k, [k.at("a.txt"), "/x\x00y"]),
+        differs={
+            "local": lambda k: ("answered", 500, "stat: embedded null character in path"),
+            "remote": lambda k: (
+                "answered",
+                400,
+                "Invalid path /x\x00y: Path cannot contain null bytes",
+            ),
+        },
+    ),
+    Row(
+        "an archive into a destination holding a null byte",
+        lambda f, k: f.create_archive([k.at("a.txt")], "/x\x00y", "o.zip", "zip"),
+        differs={
+            "local": lambda k: ("answered", 500, "embedded null byte"),
+            "remote": lambda k: ("answered", 400, "Path cannot contain null bytes"),
+        },
+    ),
+    Row(
         "a batch delete removes a file and fails a missing path",
         _delete_many,
         same=lambda k: (
@@ -944,6 +975,110 @@ async def test_a_local_folder_zip_holds_each_file_under_its_relative_name(tmp_pa
     )
 
 
+# --- archives: a remote command recorded, never run; a local one made and unpacked ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fmt", "name", "words"),
+    [
+        (
+            "tar.gz",
+            "o.tar.gz",
+            ["tar", "czf", "/home/out/o.tar.gz", "-C", "/", f"/srv/{ODD_NAME}", "/home/x"],
+        ),
+        (
+            "zip",
+            "o.zip",
+            ["cd", "/", "&&", "zip", "-r", "/home/out/o.zip", f"/srv/{ODD_NAME}", "/home/x"],
+        ),
+    ],
+)
+async def test_a_remote_archive_is_made_by_one_command_on_the_quoted_paths(
+    monkeypatch, fmt, name, words
+):
+    home = 'printf %s "$HOME"'
+    connection = RecordingConnection({home: _Result(stdout="/home", exit_status=0)})
+    # The zip runs after a `cd /`: its `&&` is the one word left unquoted.
+    made = shlex.join(words) if fmt == "tar.gz" else "cd / && " + shlex.join(words[3:])
+    connection.replies[made] = _Result(stdout="", exit_status=0)
+    deps = _recording(monkeypatch, connection)
+    async with box_files(deps, _remote_box(), CONFIG) as files:
+        target = await files.create_archive([f"/srv/{ODD_NAME}", "~/x"], "~/out", name, fmt)
+    assert target == f"/home/out/{name}"
+    assert connection.commands == [home, made, HEALTH_CMD]
+    assert shlex.split(made) == words
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("archive", "words"),
+    [
+        (f"/srv/{ODD_NAME}.TGZ", ["tar", "xzf", f"/srv/{ODD_NAME}.TGZ", "-C", "/home/d"]),
+        ("-a.zip", ["unzip", "-o", "./-a.zip", "-d", "/home/d"]),
+    ],
+)
+async def test_a_remote_archive_is_unpacked_by_one_command_on_the_quoted_paths(
+    monkeypatch, archive, words
+):
+    home = 'printf %s "$HOME"'
+    unpack = shlex.join(words)
+    connection = RecordingConnection(
+        {home: _Result(stdout="/home", exit_status=0), unpack: _Result(stdout="", exit_status=0)}
+    )
+    deps = _recording(monkeypatch, connection)
+    async with box_files(deps, _remote_box(), CONFIG) as files:
+        destination = await files.extract_archive(archive, "~/d")
+    assert destination == "/home/d"
+    assert connection.commands == [home, unpack, HEALTH_CMD]
+
+
+@pytest.mark.asyncio
+async def test_a_remote_archive_past_its_limit_is_504(monkeypatch):
+    class Slow(RecordingConnection):
+        async def run(self, cmd: str, check: bool = False, encoding: str | None = "utf-8"):
+            if cmd.startswith("tar "):
+                await asyncio.sleep(5)
+            return await super().run(cmd, check, encoding)
+
+    connection = Slow({})
+    monkeypatch.setattr(remote_files_api, "ARCHIVE_TIMEOUT", 0.05)
+    deps = _recording(monkeypatch, connection)
+    with pytest.raises(HTTPException) as answered:
+        async with box_files(deps, _remote_box(), CONFIG) as files:
+            await files.create_archive(["/srv/a"], "/srv", "o.tgz", "tgz")
+    assert (answered.value.status_code, answered.value.detail) == (
+        504,
+        "Archive creation timed out",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
+async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp_path, fmt, name):
+    root = tmp_path / "tree"
+    _build_tree(root, tmp_path / "outside")
+    out = tmp_path / "out"
+    out.mkdir()
+    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
+        made = await files.create_archive(
+            [str(root / "a.txt"), str(root / "sub")], str(out), name, fmt
+        )
+        unpacked = await files.extract_archive(made, str(out / "x"))
+    assert (made, unpacked) == (str(out.resolve() / name), str(out.resolve() / "x"))
+    found = sorted(str(p.relative_to(out / "x")) for p in (out / "x").rglob("*"))
+    assert found == ["a.txt", "sub", "sub/inner.txt"]
+    assert (out / "x" / "sub" / "inner.txt").read_bytes() == b"in\n"
+
+
+@pytest.mark.asyncio
+async def test_a_local_archive_that_does_not_exist_is_404(tmp_path):
+    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
+        with pytest.raises(HTTPException) as answered:
+            await files.extract_archive(str(tmp_path / "nope.zip"), str(tmp_path))
+    assert (answered.value.status_code, answered.value.detail) == (404, "Archive not found")
+
+
 # --- remote only: a connection that drops, an SFTP session that will not open --------
 
 
@@ -1023,9 +1158,10 @@ def test_a_remote_failure_gets_the_answer_its_route_gave_before(answers, failure
 
 
 def test_the_file_routes_hold_no_test_of_the_kind_of_box():
-    """Only ``box_files`` tells the kinds apart. The Excel preview keeps its one local
-    branch: its local path rule (``validate_local_path``, no ``~``, no link resolved)
-    is not the one every other local route has. The command routes run through
+    """Only ``box_files`` tells the kinds apart; the Excel preview and the archives
+    read and write through it too. search.py keeps one in ``search_box`` (zoxide and a
+    local walk on this machine, the frecency table and ``find`` over SSH on a remote
+    box). The command routes run through
     ``box_runner``, and git.py and the stats stream hold no test; grep.py keeps one for
     the in-process search of a Windows local box (named in its module's docstring);
     boxes.py keeps one in ``box_stats`` (psutil on this machine, ``/proc`` through the
@@ -1045,6 +1181,8 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
             "files.py",
             "batch.py",
             "excel.py",
+            "archive.py",
+            "search.py",
             "transfer.py",
             "git.py",
             "grep.py",
@@ -1056,7 +1194,9 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
     assert found == {
         "files.py": 0,
         "batch.py": 0,
-        "excel.py": 1,
+        "excel.py": 0,
+        "archive.py": 0,
+        "search.py": 1,
         "transfer.py": 0,
         "git.py": 0,
         "grep.py": 1,

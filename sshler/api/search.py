@@ -8,23 +8,21 @@ import logging
 import os
 import shutil
 import time
-from typing import TYPE_CHECKING
+from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from .. import state
-from ..config import AppConfig
+from ..config import AppConfig, Box
 from ..proc import run_bounded
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from . import helpers
+from .box_files import is_local
 from .dependencies import APIDependencies
 from .remote import command, path_word, pipe, quiet, remote_path, then
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +320,102 @@ async def _discover_remote_directories(
         return []
 
 
+# One result before the merge: (path, score, source, is_directory).
+Found = tuple[str, float, str, bool]
+
+# A discovered entry that was never visited ranks below every frecency result.
+DISCOVERY_SCORE = 0.1
+
+
+def _checked_root(root: str | None, validate: Callable[[str], str]) -> str | None:
+    """``root`` checked by ``validate``; a bad one is a 400 with its text."""
+    if root is None:
+        return None
+    try:
+        return validate(root)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _search_local(
+    q: str, pattern: str, limit: int, root: str | None, include_files: bool
+) -> list[Found]:
+    """zoxide's folders first (not for a wildcard query: zoxide matches substrings
+    itself), then a walk under ``root`` (the home when none)."""
+    root = _checked_root(root, PathValidator.validate_local_path)
+    found: list[Found] = []
+    if "*" not in q and "?" not in q:
+        for path, score in (await _query_zoxide(q))[:limit]:
+            found.append((path, score, "frecency", True))
+    local_root = os.path.expanduser(root or "~")
+    if os.path.isdir(local_root):
+        discovered = await _discover_local(
+            local_root, pattern, limit=limit, include_files=include_files
+        )
+        for path, is_directory in discovered:
+            found.append((path, DISCOVERY_SCORE, "discovery", is_directory))
+    return found
+
+
+async def _search_remote(
+    deps: APIDependencies,
+    box: Box,
+    application_config: AppConfig,
+    q: str,
+    pattern: str,
+    limit: int,
+    root: str | None,
+    include_files: bool,
+) -> list[Found]:
+    """The folders visited before (the SQLite frecency table), then ``find`` on the
+    box over one pooled connection. A box that cannot be reached gives the frecency
+    results alone."""
+    root = _checked_root(root, PathValidator.validate_remote_path)
+    found: list[Found] = [
+        (path, score, "frecency", True)
+        for path, score in await state.search_directories_async(box.name, q, limit)
+    ]
+    ssh_pool = get_pool()
+    try:
+        async with ssh_pool.connection(
+            box, lambda: deps.connect_for_box(box, application_config)
+        ) as connection:
+            discovered = await _discover_remote_directories(
+                connection,
+                pattern,
+                max_depth=4,
+                limit=limit,
+                root=root,
+                include_files=include_files,
+            )
+            for path, is_directory in discovered:
+                found.append((path, DISCOVERY_SCORE, "discovery", is_directory))
+    except SSHError as exc:
+        logger.warning(f"SSH error during directory discovery: {exc}")
+    except Exception as exc:
+        logger.warning(f"Error during directory discovery: {exc}")
+    return found
+
+
+async def search_box(
+    deps: APIDependencies,
+    box: Box,
+    application_config: AppConfig,
+    q: str,
+    limit: int,
+    root: str | None,
+    include_files: bool,
+) -> list[Found]:
+    """The one place a search tells the kinds apart: each kind gathers its frecency
+    results, then what it discovers, in the same shape; a bad ``root`` is a 400."""
+    pattern = _find_pattern(q)
+    if is_local(box):
+        return await _search_local(q, pattern, limit, root, include_files)
+    return await _search_remote(
+        deps, box, application_config, q, pattern, limit, root, include_files
+    )
+
+
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
@@ -342,71 +436,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
         the rest, scoped under ``root``.
         """
         box = deps.get_box_or_404(application_config, name)
+        found = await search_box(deps, box, application_config, q, limit, root, files)
 
-        if root is not None:
-            try:
-                if box.transport == "local":
-                    root = PathValidator.validate_local_path(root)
-                else:
-                    root = PathValidator.validate_remote_path(root)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        pattern = _find_pattern(q)
         results: list[SearchResult] = []
         seen_paths: set[str] = set()
-
-        def add(path: str, score: float, source: str, is_directory: bool) -> None:
+        for path, score, source, is_directory in found:
             if path not in seen_paths:
                 results.append(
                     SearchResult(path=path, score=score, source=source, is_directory=is_directory)
                 )
                 seen_paths.add(path)
-
-        if box.transport == "local":
-            # Frecency-ranked directories from zoxide (skip when a wildcard
-            # query is used — zoxide does its own substring matching)
-            if "*" not in q and "?" not in q:
-                for path, score in (await _query_zoxide(q))[:limit]:
-                    add(path, score, "frecency", True)
-
-            # Filesystem discovery under root (default: home)
-            local_root = os.path.expanduser(root or "~")
-            if os.path.isdir(local_root):
-                discovered = await _discover_local(
-                    local_root, pattern, limit=limit, include_files=files
-                )
-                for path, is_directory in discovered:
-                    add(path, 0.1, "discovery", is_directory)
-        else:
-            # For remote boxes: combine frecency + discovery
-            # 1. Get frecency-ranked results from SQLite
-            frecency_results = await state.search_directories_async(box.name, q, limit)
-            for path, score in frecency_results:
-                add(path, score, "frecency", True)
-
-            # 2. Discover directories/files via SSH find
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as connection:
-                    discovered_remote = await _discover_remote_directories(
-                        connection,
-                        pattern,
-                        max_depth=4,
-                        limit=limit,
-                        root=root,
-                        include_files=files,
-                    )
-                    for path, is_directory in discovered_remote:
-                        # Give discovered (but not yet visited) entries a lower score
-                        add(path, 0.1, "discovery", is_directory)
-            except SSHError as exc:
-                logger.warning(f"SSH error during directory discovery: {exc}")
-                # Continue with frecency-only results
-            except Exception as exc:
-                logger.warning(f"Error during directory discovery: {exc}")
 
         # Frecency first, then discovery; shallower paths win ties
         results.sort(key=lambda r: (-r.score, len(r.path), r.path))
