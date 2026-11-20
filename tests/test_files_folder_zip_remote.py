@@ -507,7 +507,7 @@ def test_remote_file_download_header_is_exact_for_a_japanese_name(remote, monkey
         assert path == "/srv/日本語.txt"
         return b"hi", False
 
-    monkeypatch.setattr("sshler.api.files._read_file_bytes", fake_read)
+    monkeypatch.setattr("sshler.api.remote_files._read_file_bytes", fake_read)
     resp = client.get(
         f"/api/v1/boxes/{BOX}/download", params={"path": "/srv/日本語.txt"}, headers=HEADERS
     )
@@ -669,7 +669,7 @@ def listed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         paths.append(path)
         return [{"name": "a.txt", "is_directory": False, "size": 3, "modified": 1.0, "mode": 420}]
 
-    monkeypatch.setattr(files_api, "sftp_list_directory", fake_list)
+    monkeypatch.setattr(remote_files_api, "sftp_list_directory", fake_list)
     return paths
 
 
@@ -717,7 +717,7 @@ def test_file_routes_resolve_tilde_like_the_folder_zip(remote, monkeypatch, rout
         read_paths.append(path)
         return b"hello", False
 
-    monkeypatch.setattr(files_api, "_read_file_bytes", fake_read)
+    monkeypatch.setattr(remote_files_api, "_read_file_bytes", fake_read)
     resp = client.get(
         f"/api/v1/boxes/{BOX}/{route}", params={"path": "~/notes.txt"}, headers=HEADERS
     )
@@ -742,7 +742,7 @@ def test_file_routes_too_large_is_413_not_500(remote, monkeypatch, route, detail
     async def too_big(connection, path, limit):
         return b"", True
 
-    monkeypatch.setattr(files_api, "_read_file_bytes", too_big)
+    monkeypatch.setattr(remote_files_api, "_read_file_bytes", too_big)
     resp = client.get(f"/api/v1/boxes/{BOX}/{route}", params={"path": "/srv/x"}, headers=HEADERS)
     assert (resp.status_code, resp.json()) == (413, {"detail": detail})
 
@@ -878,7 +878,7 @@ def test_chmod_at_tilde_changes_the_file_in_the_remote_home(remote, monkeypatch)
     async def fake_chmod(connection, path, mode):
         seen.append((path, mode))
 
-    monkeypatch.setattr(files_api, "sftp_chmod", fake_chmod)
+    monkeypatch.setattr(remote_files_api, "sftp_chmod", fake_chmod)
     resp = _post(remote, "chmod", {"path": "~/run.sh", "mode": "755"})
     assert (resp.status_code, resp.json()["path"]) == (200, f"{HOME}/run.sh")
     assert seen == [(f"{HOME}/run.sh", 0o755)]
@@ -911,7 +911,7 @@ def test_file_preview_at_tilde_reads_the_remote_home(remote, monkeypatch):
         read.append(path)
         return "# hi"
 
-    monkeypatch.setattr(files_api, "_read_remote_text", fake_text)
+    monkeypatch.setattr(remote_files_api, "_read_remote_text", fake_text)
     resp = remote.client.get(
         f"/api/v1/boxes/{BOX}/file", params={"path": "~/a.md"}, headers=HEADERS
     )
@@ -1120,7 +1120,7 @@ def test_a_megabyte_of_stderr_does_not_stall_the_zip(remote, small_cap, monkeypa
 
     Mutation: read stderr after the stdout loop again; stdout never reaches EOF and the
     route times out (504 at the lowered 2 s limit)."""
-    monkeypatch.setattr(files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
     proc = _windowed_process(b"PKDATA", b"w" * (1024 * 1024), 0)
     remote.processes[ZIP_SRV] = proc
     resp = download(remote.client, "/srv/big")
@@ -1132,7 +1132,7 @@ def test_a_megabyte_of_stderr_does_not_stall_the_zip(remote, small_cap, monkeypa
 def test_a_failed_zip_reports_the_tail_of_a_long_stderr(remote, small_cap, monkeypatch):
     """Mutations: keep the head of stderr (the message is all `w`); keep all of it
     (the detail is a megabyte long); read stderr after stdout (504 at the 2 s limit)."""
-    monkeypatch.setattr(files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
     last = b"zip error: Nothing to do!"
     proc = _windowed_process(b"", b"w" * (1024 * 1024) + last, 12)
     remote.processes[ZIP_SRV] = proc

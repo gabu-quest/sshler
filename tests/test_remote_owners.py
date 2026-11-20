@@ -21,7 +21,6 @@ from fastapi import HTTPException
 
 from sshler.api import remote
 from sshler.api.archive import archive_create_command, archive_extract_command
-from sshler.api.batch import remove_tree_command
 from sshler.api.boxes import remote_git_info_commands
 from sshler.api.git import (
     _build_remote_repo_path_command,
@@ -32,7 +31,12 @@ from sshler.api.git import (
     remote_git_show_command,
 )
 from sshler.api.grep import remote_grep_command
-from sshler.api.remote_files import directory_test_command, du_command, folder_zip_command
+from sshler.api.remote_files import (
+    directory_test_command,
+    du_command,
+    folder_zip_command,
+    remove_tree_command,
+)
 from sshler.api.search import DISCOVERY_SEPARATOR, remote_discovery_command, remote_find_command
 from sshler.ssh import sftp_session
 

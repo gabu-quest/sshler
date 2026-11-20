@@ -1,24 +1,31 @@
-"""Placing and listing files on the local file system; every function here runs in a
-worker thread or is called from one.
-"""
+"""The files of the local box: ``LocalFiles``, and the placing, listing, reading and
+writing it is built from."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import errno
+import mimetypes
 import os
 import shutil
 import stat as stat_mod
 import tempfile
+import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from fastapi import HTTPException
+from fastapi.responses import FileResponse, Response
 
+from ..proc import run_bounded
+from ..validation import PathValidator
+from .file_contract import BatchOutcome, FolderZip, NameRefusedError, PathKind
 from .helpers import (
     LOCAL_IS_WINDOWS,
     _normalize_local_path,
 )
+from .models import APIDirectoryEntry
 from .placement import (
     _NO_FOLDER_COPY,
     _ONLY_FILES,
@@ -27,7 +34,9 @@ from .placement import (
     _refuse_or_replace,
     _taken_after_check,
     ensure_source_unchanged,
+    failure_entry,
     kept_permission_bits,
+    refuse_a_name_this_request_placed,
 )
 
 # --- local transport (every function here runs in a worker thread) ---------------
@@ -451,3 +460,358 @@ def _local_entry_stats(
             )
         )
     return rows
+
+
+def _compose_local_child_path(directory: str, filename: str) -> str:
+    cleaned = (filename or "").strip()
+    if not cleaned:
+        raise ValueError("Filename is required")
+    if cleaned in {".", ".."} or any(sep in cleaned for sep in ("/", "\\")):
+        raise ValueError("Filename cannot contain path separators")
+    parent = Path(directory or Path.home())
+    target = parent / cleaned
+    if LOCAL_IS_WINDOWS:
+        return target.expanduser().as_posix()
+    return str(target.expanduser())
+
+
+async def _local_read_text(path: str, max_bytes: int) -> str:
+    def _worker() -> str:
+        with open(Path(path), "rb") as handle:
+            data = handle.read(max_bytes)
+        return data.decode("utf-8", errors="replace")
+
+    return await asyncio.to_thread(_worker)
+
+
+async def _local_write_text(path: str, content: str) -> None:
+    def _worker() -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(Path(path), "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+    await asyncio.to_thread(_worker)
+
+
+async def _local_read_bytes(path: str, limit: int) -> tuple[bytes, bool]:
+    def _worker() -> tuple[bytes, bool]:
+        with open(Path(path), "rb") as handle:
+            data = handle.read(limit + 1)
+        return (data[:limit], len(data) > limit)
+
+    return await asyncio.to_thread(_worker)
+
+
+async def _local_batch_delete(path: str) -> None:
+    def _worker() -> None:
+        target = Path(path)
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
+    await asyncio.to_thread(_worker)
+
+
+async def _local_delete_file(path: str) -> None:
+    def _worker() -> None:
+        Path(path).unlink()
+
+    await asyncio.to_thread(_worker)
+
+
+# The gitignore marks of a listing are a nicety: a git that does not answer in
+# this time is given up on and the listing goes out without them.
+GITIGNORE_TIMEOUT = 5.0
+
+
+async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
+    """Check which filenames in a directory are gitignored. Returns set of ignored names."""
+    try:
+        returncode, stdout, _ = await run_bounded(
+            ["git", "check-ignore", "--stdin"],
+            GITIGNORE_TIMEOUT,
+            cwd=directory,
+            stdin_data="\n".join(names).encode(),
+        )
+        if returncode not in (0, 1):  # 1 means none matched, 128 means not a git repo
+            return set()
+        return set(line.strip() for line in stdout.decode().splitlines() if line.strip())
+    except Exception:
+        return set()
+
+
+def _local_batch_item(
+    path: str, dest_dir: Path, landed: set[str], *, move: bool, overwrite: bool
+) -> str:
+    """Move or copy one local item into ``dest_dir`` (call from a worker thread)."""
+    source = _normalize_local_path(path)
+    if not os.path.lexists(source):
+        raise FileNotFoundError(f"No such file or directory: {path}")
+    _local_refuse_a_folder_into_itself(source, dest_dir, move=move)
+    target = str(_local_make_folder(dest_dir) / Path(source).name)
+    refuse_a_name_this_request_placed(target, landed)
+    _local_place(source, target, move=move, overwrite=overwrite)
+    return target
+
+
+class LocalFiles:
+    """The files of the local box, on ``pathlib`` and the helpers above.
+
+    A path is normalised and nothing is checked before that. A failure an operation
+    does not answer itself (a folder that cannot be read) goes on unanswered. A
+    download streams from disk and is never read into memory.
+    """
+
+    # --- paths -----------------------------------------------------------------------
+
+    async def path(self, path: str) -> str:
+        return _normalize_local_path(path)
+
+    async def folder(self, directory: str) -> str:
+        return _normalize_local_path(directory)
+
+    async def child(self, directory: str, name: str) -> str:
+        """Raises ``NameRefusedError`` for a name that is not one name."""
+        folder = _normalize_local_path(directory)
+        try:
+            return _compose_local_child_path(folder, name)
+        except ValueError as exc:
+            raise NameRefusedError(str(exc)) from exc
+
+    def parent(self, path: str) -> str:
+        return str(Path(path).parent)
+
+    # --- reading ---------------------------------------------------------------------
+
+    async def list_folder(self, directory: str) -> list[APIDirectoryEntry]:
+        """Each entry says whether git ignores it."""
+        target = Path(directory)
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Directory not found")
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+        children = await asyncio.to_thread(_local_children, target)
+
+        # Check gitignored status for all entries in one batch
+        ignored_names: set[str] = set()
+        if children:
+            ignored_names = await _get_gitignored_names(directory, [c.name for c, _ in children])
+
+        return [
+            APIDirectoryEntry(
+                name=child.name,
+                path=str(child),
+                is_directory=is_dir,
+                size=size,
+                modified=modified,
+                mode=mode,
+                gitignored=child.name in ignored_names,
+            )
+            for child, is_dir, size, modified, mode in await asyncio.to_thread(
+                _local_entry_stats, children
+            )
+        ]
+
+    async def stat(self, path: str) -> PathKind:
+        p = Path(path)
+        if not p.exists():
+            return PathKind(exists=False, is_directory=False, is_file=False)
+        return PathKind(exists=True, is_directory=p.is_dir(), is_file=p.is_file())
+
+    async def read_bytes(self, path: str, limit: int) -> tuple[bytes, bool]:
+        return await _local_read_bytes(path, limit)
+
+    async def read_text(self, path: str, limit: int) -> str:
+        return await _local_read_text(path, limit)
+
+    async def serve(self, path: str, *, inline: bool, limit: int) -> Response:
+        """Streamed from disk, whatever its size: ``limit`` does not apply."""
+        file_path = Path(path)
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not inline:
+            return FileResponse(file_path)
+        mime, _ = mimetypes.guess_type(path)
+        return FileResponse(
+            file_path,
+            media_type=mime or "application/octet-stream",
+            content_disposition_type="inline",
+        )
+
+    async def folder_size(self, path: str) -> int | None:
+        def _calc_size() -> int:
+            total = 0
+            base = Path(path)
+            if not base.is_dir():
+                raise ValueError("Not a directory")
+            for child in base.rglob("*"):
+                if child.is_file():
+                    try:
+                        total += child.stat().st_size
+                    except OSError:
+                        pass
+            return total
+
+        try:
+            return await asyncio.to_thread(_calc_size)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def zip_folder(self, path: str) -> FolderZip:
+        base = Path(_normalize_local_path(path))
+        if not base.is_dir():
+            raise HTTPException(status_code=400, detail="Not a directory")
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
+        def _create_zip():
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for child in base.rglob("*"):
+                    if child.is_file():
+                        arcname = str(child.relative_to(base))
+                        zf.write(str(child), arcname)
+
+        try:
+            await asyncio.to_thread(_create_zip)
+        except Exception as exc:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return FolderZip(path=tmp_path, name=base.name or "download")
+
+    # --- writing ---------------------------------------------------------------------
+
+    async def write_text(self, path: str, content: str) -> None:
+        try:
+            await _local_write_text(path, content)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def touch(self, path: str) -> None:
+        """A name that exists is a 400."""
+        await self._write_new(path, b"", overwrite=False, exists_status=400)
+
+    async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
+        """A name that exists is a 409."""
+        await self._write_new(path, data, overwrite=overwrite, exists_status=409)
+
+    async def _write_new(
+        self, path: str, data: bytes, *, overwrite: bool, exists_status: int
+    ) -> None:
+        try:
+            await _local_write_new(path, data, overwrite=overwrite, exists_status=exists_status)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def make_folder(self, path: str) -> None:
+        path_obj = Path(path)
+        if path_obj.exists():
+            raise HTTPException(status_code=400, detail="Directory already exists")
+        try:
+            path_obj.mkdir(parents=False, exist_ok=False)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def delete(self, path: str) -> None:
+        try:
+            await _local_delete_file(path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def chmod(self, path: str, mode: int) -> None:
+        target = Path(path)
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        try:
+            target.chmod(mode)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
+        new_name = PathValidator.validate_filename(new_name)
+
+        def _rename() -> str:
+            source = Path(_normalize_local_path(path))
+            target = str(source.parent / new_name)
+            _local_place(str(source), target, move=True, overwrite=overwrite)
+            return target
+
+        try:
+            return await asyncio.to_thread(_rename)
+        except HTTPException:
+            raise
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def place_into(
+        self,
+        source: str,
+        destination: str,
+        new_name: str | None,
+        *,
+        move: bool,
+        overwrite: bool,
+        allow_dirs: bool,
+    ) -> str:
+        if new_name:
+            PathValidator.validate_filename(new_name)
+        try:
+            return await asyncio.to_thread(
+                _local_place_into,
+                source,
+                destination,
+                new_name,
+                move=move,
+                overwrite=overwrite,
+                allow_dirs=allow_dirs,
+            )
+        except HTTPException:
+            raise
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Source not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
+        outcome = BatchOutcome()
+        for path in paths:
+            try:
+                normalized = await asyncio.to_thread(_normalize_local_path, path)
+                await _local_batch_delete(normalized)
+                outcome.succeeded.append(path)
+            except Exception as exc:
+                outcome.failed.append({"path": path, "error": str(exc)})
+        return outcome
+
+    async def place_many(
+        self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
+    ) -> BatchOutcome:
+        outcome = BatchOutcome()
+        landed: set[str] = set()
+        try:
+            dest_dir = await asyncio.to_thread(_local_destination, destination)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        for path in paths:
+            try:
+                target = await asyncio.to_thread(
+                    _local_batch_item, path, dest_dir, landed, move=move, overwrite=overwrite
+                )
+            except Exception as exc:
+                outcome.failed.append(failure_entry(path, exc))
+            else:
+                landed.add(target)
+                outcome.succeeded.append(path)
+        return outcome

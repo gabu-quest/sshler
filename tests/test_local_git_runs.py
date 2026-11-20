@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from sshler.api import boxes, files
+from sshler.api import boxes, local_files
 from sshler.api.git import _run_local_git
 from sshler.api.models import APIGitInfo
 
@@ -32,10 +32,10 @@ def test_a_stuck_gitignore_check_gives_up_and_marks_nothing(tmp_path, monkeypatc
     """Mutation killed: communicate() with no limit, which held the directory listing for as
     long as git ran."""
     gone = stalled_program("git")
-    monkeypatch.setattr(files, "GITIGNORE_TIMEOUT", 0.5)
+    monkeypatch.setattr(local_files, "GITIGNORE_TIMEOUT", 0.5)
 
     started = time.monotonic()
-    ignored = asyncio.run(files._get_gitignored_names(str(tmp_path), ["a.txt", "b.txt"]))
+    ignored = asyncio.run(local_files._get_gitignored_names(str(tmp_path), ["a.txt", "b.txt"]))
 
     assert ignored == set()
     assert time.monotonic() - started < 10
@@ -66,7 +66,7 @@ def test_the_gitignore_check_gives_git_the_names_on_its_input(tmp_path, monkeypa
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
     names = ["keep.txt", "out.log", "tmp"]
-    ignored = asyncio.run(files._get_gitignored_names(str(tmp_path), names))
+    ignored = asyncio.run(local_files._get_gitignored_names(str(tmp_path), names))
 
     assert ignored == {"out.log", "tmp"}
 

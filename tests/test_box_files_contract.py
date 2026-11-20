@@ -1,0 +1,960 @@
+"""The files of a box: one interface, one implementation per kind of box.
+
+The table of operations runs against ``LocalFiles`` on a temp folder and against
+``RemoteFiles`` on the same tree through a loopback asyncssh SFTP server; each row
+asserts the one visible result. Where the two kinds answer differently on purpose, the
+row names the difference as its expectation. A third kind of box joins by adding an
+opener to ``OPENERS``.
+
+The loopback server only serves SFTP on the temp folder, the pool's health check and
+the home lookup; it never runs a command built from a path. The folder size and the
+folder zip run commands, so their rows use a fake connection that records each command
+line and never runs it; a command line is checked by splitting it with ``shlex``.
+
+The last part counts, per request, the commands run and the SFTP sessions opened by a
+remote listing, a rename and a preview.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import shlex
+import threading
+import zipfile
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+
+import asyncssh
+import pytest
+import pytest_asyncio
+import yaml
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
+from fastapi.testclient import TestClient
+
+import sshler.api
+from sshler import ssh_pool, state
+from sshler.api import excel as excel_api
+from sshler.api import files as files_api
+from sshler.api.box_files import DEFAULT_ANSWERS, Answers, box_files
+from sshler.api.placement import DestinationRefused
+from sshler.config import Box
+from sshler.ssh import SSHError, connect
+from sshler.ssh_pool import SSHConnectionPool
+from sshler.validation import ValidationError
+from sshler.webapp import ServerSettings, make_app
+
+pytestmark = pytest.mark.posix_only("an SFTP server rooted in a temp folder with POSIX file modes")
+
+TOKEN = "contract-token"
+HEADERS = {"X-SSHLER-TOKEN": TOKEN}
+HOME_CMD = 'printf %s "$HOME"'
+HEALTH_CMD = "echo test"
+
+
+# --- a loopback server that counts ---------------------------------------------------
+
+
+@dataclass
+class Counts:
+    """What the server saw: each command line it was asked to run, each SFTP session."""
+
+    commands: list[str] = field(default_factory=list)
+    sftp_sessions: int = 0
+    connections: int = 0
+
+
+def _answer_factory(counts: Counts, home: str) -> Callable[[asyncssh.SSHServerProcess], None]:
+    def answer(process: asyncssh.SSHServerProcess) -> None:
+        """Only the pool's health check and the home lookup are answered; any other
+        command line is recorded and refused, never run."""
+        counts.commands.append(str(process.command))
+        if process.command == HEALTH_CMD:
+            process.stdout.write("test\n")
+            process.exit(0)
+        elif process.command == HOME_CMD:
+            process.stdout.write(home)
+            process.exit(0)
+        else:
+            process.stderr.write("not run\n")
+            process.exit(127)
+
+    return answer
+
+
+class ServerThread:
+    """An asyncssh server on its own event loop, so the sync test client can reach it."""
+
+    def __init__(self, root: Path, keys: Path, counts: Counts, home: str) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
+        host_key = asyncssh.generate_private_key("ssh-ed25519")
+        client_key = asyncssh.generate_private_key("ssh-ed25519")
+        self.client_key = keys / "id_client"
+        client_key.write_private_key(str(self.client_key))
+        self.client_key.chmod(0o600)
+        authorized = keys / "authorized_keys"
+        client_key.write_public_key(str(authorized))
+        self.connections: list[asyncssh.SSHServerConnection] = []
+        connections = self.connections
+
+        class Tracked(asyncssh.SSHServer):
+            def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
+                counts.connections += 1
+                connections.append(conn)
+
+        def sftp_factory(chan: asyncssh.SSHServerChannel) -> asyncssh.SFTPServer:
+            counts.sftp_sessions += 1
+            return asyncssh.SFTPServer(chan, chroot=os.fsencode(root))
+
+        self.server = self._run(
+            asyncssh.listen(
+                "127.0.0.1",
+                0,
+                server_factory=Tracked,
+                server_host_keys=[host_key],
+                authorized_client_keys=str(authorized),
+                sftp_factory=sftp_factory,
+                process_factory=_answer_factory(counts, home),
+            )
+        )
+        self.port = self.server.get_port()
+        self.known_hosts = keys / "known_hosts"
+        public = host_key.export_public_key("openssh").decode().strip()
+        self.known_hosts.write_text(f"[127.0.0.1]:{self.port} {public}\n", encoding="utf-8")
+
+    def _run(self, awaitable):
+        async def _await():
+            return await awaitable
+
+        return asyncio.run_coroutine_threadsafe(_await(), self.loop).result(timeout=30)
+
+    def close(self) -> None:
+        async def _close() -> None:
+            for conn in self.connections:
+                conn.close()
+            self.server.close()
+            await self.server.wait_closed()
+
+        self._run(_close())
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(timeout=30)
+        self.loop.close()
+
+
+# --- one table of operations, run against each kind of box ---------------------------
+
+CONFIG = SimpleNamespace()  # `box_files` only hands it to `connect_for_box`
+SERVER_HOME = "/home"
+# A name with a space, a quote and a newline.
+ODD_NAME = "it's a\nname.txt"
+
+
+def _build_tree(root: Path, outside: Path) -> None:
+    """The same tree for every kind: six bytes, an empty file, a folder with a file, a
+    file the rule finds taken, and a link that leaves the tree."""
+    root.mkdir(parents=True)
+    (root / "a.txt").write_bytes(b"hello\n")
+    (root / "empty.txt").write_bytes(b"")
+    (root / "sub").mkdir()
+    (root / "sub" / "inner.txt").write_bytes(b"in\n")
+    (root / "taken.txt").write_bytes(b"old\n")
+    outside.mkdir()
+    (outside / "secret.txt").write_bytes(b"secret\n")
+    (root / "link_out").symlink_to(outside / "secret.txt")
+
+
+@dataclass
+class Kind:
+    """One kind of box, opened on the tree: ``at(rel)`` is how that box names a path
+    of the tree; ``home`` is what ``~`` resolves to on it."""
+
+    name: str
+    box: Box
+    deps: object
+    root: Path
+    outside: Path
+    home: str
+    at: Callable[[str], str]
+
+
+async def _open_local(tmp_path: Path) -> AsyncIterator[Kind]:
+    root = (tmp_path / "tree").resolve()
+    outside = (tmp_path / "outside").resolve()
+    _build_tree(root, outside)
+    box = Box(name="local", connect_host="localhost", display_host="localhost", user="me")
+    box.transport = "local"
+    yield Kind(
+        name="local",
+        box=box,
+        deps=SimpleNamespace(),
+        root=root,
+        outside=outside,
+        home=str(Path.home().resolve()),
+        at=lambda rel: str(root / rel) if rel else str(root),
+    )
+
+
+async def _open_remote(tmp_path: Path) -> AsyncIterator[Kind]:
+    root = tmp_path / "tree"
+    outside = tmp_path / "outside"
+    _build_tree(root, outside)
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    client_key = asyncssh.generate_private_key("ssh-ed25519")
+    client_key.write_private_key(str(keys / "id_client"))
+    (keys / "id_client").chmod(0o600)
+    client_key.write_public_key(str(keys / "authorized_keys"))
+    counts = Counts()
+    server = await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_host_keys=[host_key],
+        authorized_client_keys=str(keys / "authorized_keys"),
+        sftp_factory=lambda chan: asyncssh.SFTPServer(chan, chroot=os.fsencode(root)),
+        process_factory=_answer_factory(counts, SERVER_HOME),
+    )
+    port = server.get_port()
+    public = host_key.export_public_key("openssh").decode().strip()
+    (keys / "known_hosts").write_text(f"[127.0.0.1]:{port} {public}\n", encoding="utf-8")
+
+    async def connect_for_box(box: Box, application_config: object):
+        return await connect(
+            "127.0.0.1",
+            "tester",
+            port=port,
+            keyfile=str(keys / "id_client"),
+            known_hosts=str(keys / "known_hosts"),
+            allow_alias=False,
+        )
+
+    pool = SSHConnectionPool()
+    previous, ssh_pool._global_pool = ssh_pool._global_pool, pool
+    # A remote listing records the folder visit.
+    (tmp_path / "config").mkdir()
+    state.initialize(tmp_path / "config")
+    box = Box(name="lb", connect_host="127.0.0.1", display_host="127.0.0.1", user="tester")
+    try:
+        yield Kind(
+            name="remote",
+            box=box,
+            deps=SimpleNamespace(connect_for_box=connect_for_box),
+            root=root,
+            outside=outside,
+            home=SERVER_HOME,
+            at=lambda rel: f"/{rel}",
+        )
+        # Only the health check and the home lookup ever reach the server.
+        assert set(counts.commands) <= {HEALTH_CMD, HOME_CMD}
+    finally:
+        await pool.close_all()
+        ssh_pool._global_pool = previous
+        state.reset_state()
+        server.close()
+        await server.wait_closed()
+
+
+OPENERS = {"local": _open_local, "remote": _open_remote}
+
+
+@pytest_asyncio.fixture(params=list(OPENERS))
+async def kind(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Kind]:
+    opened = OPENERS[request.param](tmp_path)
+    yield await anext(opened)
+    with contextlib.suppress(StopAsyncIteration):
+        await anext(opened)
+
+
+async def _outcome(kind: Kind, operation, answers: Answers | None = DEFAULT_ANSWERS) -> object:
+    """What ``operation(files, kind)`` gives inside a ``box_files`` block: its value, a
+    refusal (status, text, reason), an answer (status, text), or the type of a failure
+    that goes on unanswered."""
+    try:
+        async with box_files(kind.deps, kind.box, CONFIG, answers) as files:
+            return await operation(files, kind)
+    except DestinationRefused as exc:
+        return ("refused", exc.status_code, exc.detail, exc.reason)
+    except HTTPException as exc:
+        return ("answered", exc.status_code, exc.detail)
+    except Exception as exc:
+        return ("unanswered", type(exc).__name__)
+
+
+@dataclass(frozen=True)
+class Row:
+    """One operation and its one expected result: ``same(kind)`` on every kind, or
+    ``differs[kind.name](kind)`` where the kinds answer differently on purpose."""
+
+    name: str
+    operation: Callable
+    same: Callable[[Kind], object] | None = None
+    differs: dict[str, Callable[[Kind], object]] = field(default_factory=dict)
+
+    def expected(self, kind: Kind) -> object:
+        return self.same(kind) if self.same is not None else self.differs[kind.name](kind)
+
+
+async def _names(files, kind: Kind, rel: str = "") -> list[tuple[str, bool, int | None]]:
+    folder = await files.folder(kind.at(rel))
+    return [(e.name, e.is_directory, e.size) for e in await files.list_folder(folder)]
+
+
+async def _rename_taken(files, kind: Kind):
+    return await files.rename(kind.at("a.txt"), "taken.txt", overwrite=False)
+
+
+async def _rename_replacing(files, kind: Kind):
+    target = await files.rename(kind.at("a.txt"), "taken.txt", overwrite=True)
+    return target, (kind.root / "taken.txt").read_bytes(), (kind.root / "a.txt").exists()
+
+
+async def _folder_into_itself(files, kind: Kind):
+    return await files.place_into(
+        kind.at("sub"), kind.at("sub"), None, move=True, overwrite=False, allow_dirs=True
+    )
+
+
+async def _gone_before_the_read(files, kind: Kind):
+    target = await files.path(kind.at("a.txt"))
+    found = await files.stat(target)
+    (kind.root / "a.txt").unlink()
+    return found, await files.read_text(target, 100)
+
+
+async def _odd_name(files, kind: Kind):
+    target = await files.child(kind.at(""), ODD_NAME)
+    await files.touch(target)
+    return target, await files.stat(target), (kind.root / ODD_NAME).read_bytes()
+
+
+async def _upload_replacing(files, kind: Kind):
+    target = await files.child(kind.at(""), "taken.txt")
+    await files.upload(target, b"new", overwrite=True)
+    return (kind.root / "taken.txt").read_bytes()
+
+
+async def _chmod(files, kind: Kind):
+    await files.chmod(await files.path(kind.at("a.txt")), 0o600)
+    return (kind.root / "a.txt").stat().st_mode & 0o7777
+
+
+async def _write_and_read(files, kind: Kind):
+    target = await files.path(kind.at("new.md"))
+    await files.write_text(target, "# hi\n")
+    return await files.read_text(target, 100)
+
+
+async def _serve(files, kind: Kind, limit: int):
+    response = await files.serve(await files.path(kind.at("a.txt")), inline=False, limit=limit)
+    if isinstance(response, FileResponse):
+        return ("streamed from", response.path)
+    return ("in memory", response.body, response.headers["content-disposition"])
+
+
+async def _delete_many(files, kind: Kind):
+    # A folder is removed with a command on a remote box: see the recorded test below.
+    outcome = await files.delete_many([kind.at("a.txt"), kind.at("nope")])
+    left = sorted(p.name for p in kind.root.iterdir())
+    return outcome.succeeded, [f["path"] for f in outcome.failed], left
+
+
+async def _copy_many(files, kind: Kind):
+    (kind.root / "sub" / "taken.txt").write_bytes(b"inner old\n")
+    outcome = await files.place_many(
+        [kind.at("a.txt"), kind.at("taken.txt")], kind.at("sub"), move=False, overwrite=False
+    )
+    return outcome.succeeded, outcome.failed
+
+
+async def _read_both(files, kind: Kind, rel: str, limit: int):
+    target = await files.path(kind.at(rel))
+    return await files.read_bytes(target, limit), await files.read_text(target, limit)
+
+
+async def _read_bytes(files, kind: Kind, rel: str, limit: int):
+    return await files.read_bytes(await files.path(kind.at(rel)), limit)
+
+
+async def _read_empty(files, kind: Kind):
+    target = await files.path(kind.at("empty.txt"))
+    return (
+        await files.read_bytes(target, 10),
+        await files.read_text(target, 10),
+        await files.stat(target),
+    )
+
+
+async def _stat(files, kind: Kind, rel: str):
+    return await files.stat(await files.path(kind.at(rel)))
+
+
+async def _link_out(files, kind: Kind):
+    target = await files.path(kind.at("link_out"))
+    return target, await files.read_text(target, 100)
+
+
+async def _touch(files, kind: Kind, rel: str):
+    await files.touch(await files.child(kind.at(""), rel))
+
+
+async def _make_folder(files, kind: Kind, rel: str):
+    await files.make_folder(await files.child(kind.at(""), rel))
+
+
+async def _delete(files, kind: Kind, rel: str):
+    await files.delete(await files.path(kind.at(rel)))
+
+
+def _listed(folder_size: int | None) -> list[tuple[str, bool, int | None]]:
+    return [
+        ("sub", True, folder_size),
+        ("a.txt", False, 6),
+        ("empty.txt", False, 0),
+        ("link_out", False, 7),
+        ("taken.txt", False, 4),
+    ]
+
+
+ATTACHMENT = "attachment; filename=\"a.txt\"; filename*=UTF-8''a.txt"
+
+ROWS = [
+    Row(
+        # A local listing gives a folder no size; a remote one gives the size SFTP
+        # reports for it.
+        "a folder is listed folders first, then by name; a link is listed as what it names",
+        _names,
+        differs={
+            "local": lambda k: _listed(None),
+            "remote": lambda k: _listed((k.root / "sub").stat().st_size),
+        },
+    ),
+    Row(
+        "a file is read as bytes and as text",
+        lambda f, k: _read_both(f, k, "a.txt", 100),
+        same=lambda k: ((b"hello\n", False), "hello\n"),
+    ),
+    Row(
+        "a 0-byte file reads as nothing and is a file",
+        _read_empty,
+        same=lambda k: ((b"", False), "", (True, False, True)),
+    ),
+    Row(
+        # The bytes of a read past the limit are never used; only the flag is.
+        "a file past the limit is flagged too large",
+        lambda f, k: _read_bytes(f, k, "a.txt", 3),
+        differs={"local": lambda k: (b"hel", True), "remote": lambda k: (b"", True)},
+    ),
+    Row(
+        "a folder is a folder",
+        lambda f, k: _stat(f, k, "sub"),
+        same=lambda k: (True, True, False),
+    ),
+    Row(
+        # The remote side answers an SFTP "no such file" with the catch-all 500, as the
+        # /stat route did before the interface.
+        "a missing path",
+        lambda f, k: _stat(f, k, "nope"),
+        differs={
+            "local": lambda k: (False, False, False),
+            "remote": lambda k: ("answered", 500, "No such file or directory"),
+        },
+    ),
+    Row(
+        "a name that exists is refused",
+        _rename_taken,
+        same=lambda k: ("refused", 409, "File already exists", "exists"),
+    ),
+    Row(
+        "a name that exists is replaced when told to",
+        _rename_replacing,
+        same=lambda k: (k.at("taken.txt"), b"hello\n", False),
+    ),
+    Row(
+        "a folder moved into itself is refused",
+        _folder_into_itself,
+        same=lambda k: (
+            "refused",
+            400,
+            "A folder cannot be placed inside itself",
+            "cannot_replace",
+        ),
+    ),
+    Row(
+        "a path with .. is normalised",
+        lambda f, k: f.path(k.at("sub/../a.txt")),
+        same=lambda k: k.at("a.txt"),
+    ),
+    Row(
+        # A local path is resolved through its links; a remote one is kept as given.
+        "a link that leaves the folder",
+        lambda f, k: _link_out(f, k),
+        differs={
+            "local": lambda k: (str(k.outside / "secret.txt"), "secret\n"),
+            "remote": lambda k: ("/link_out", "secret\n"),
+        },
+    ),
+    Row(
+        # The local route leaves this failure unanswered; the remote one answers 500.
+        "a file gone between the stat and the read",
+        _gone_before_the_read,
+        differs={
+            "local": lambda k: ("unanswered", "FileNotFoundError"),
+            "remote": lambda k: ("answered", 500, "No such file or directory"),
+        },
+    ),
+    Row(
+        "a name with a space, a quote and a newline",
+        _odd_name,
+        same=lambda k: (k.at(ODD_NAME), (True, False, True), b""),
+    ),
+    Row("~ is the home", lambda f, k: f.path("~"), same=lambda k: k.home),
+    Row("~/x is in the home", lambda f, k: f.path("~/x"), same=lambda k: f"{k.home}/x"),
+    Row(
+        # A new file on a taken name: the local /touch answers 400, the remote one 409.
+        "a new file on a name that exists is refused",
+        lambda f, k: _touch(f, k, "taken.txt"),
+        differs={
+            "local": lambda k: ("refused", 400, "File already exists", "exists"),
+            "remote": lambda k: ("refused", 409, "File already exists", "exists"),
+        },
+    ),
+    Row("an upload replaces when told to", _upload_replacing, same=lambda k: b"new"),
+    Row(
+        "a folder that exists is not made again",
+        lambda f, k: _make_folder(f, k, "sub"),
+        same=lambda k: ("answered", 400, "Directory already exists"),
+    ),
+    Row(
+        # The local route answers 404; the remote one answers SFTP's "no such file"
+        # with the catch-all 500, as the /delete route did before the interface.
+        "a missing file is not deleted",
+        lambda f, k: _delete(f, k, "nope"),
+        differs={
+            "local": lambda k: ("answered", 404, "File not found"),
+            "remote": lambda k: ("answered", 500, "No such file or directory"),
+        },
+    ),
+    Row("a mode is set", _chmod, same=lambda k: 0o600),
+    Row("text is written and read back", _write_and_read, same=lambda k: "# hi\n"),
+    Row(
+        # A local download streams from disk; a remote one is read into memory.
+        "a download",
+        lambda f, k: _serve(f, k, 100),
+        differs={
+            "local": lambda k: ("streamed from", Path(k.at("a.txt"))),
+            "remote": lambda k: ("in memory", b"hello\n", ATTACHMENT),
+        },
+    ),
+    Row(
+        # Streamed from disk, a local download has no limit.
+        "a download past the limit",
+        lambda f, k: _serve(f, k, 3),
+        differs={
+            "local": lambda k: ("streamed from", Path(k.at("a.txt"))),
+            "remote": lambda k: ("answered", 413, "File too large to download via API"),
+        },
+    ),
+    Row(
+        "a batch delete removes a file and fails a missing path",
+        _delete_many,
+        same=lambda k: (
+            [k.at("a.txt")],
+            [k.at("nope")],
+            ["empty.txt", "link_out", "sub", "taken.txt"],
+        ),
+    ),
+    Row(
+        "a batch copy places a free name and refuses a taken one",
+        _copy_many,
+        same=lambda k: (
+            [k.at("a.txt")],
+            [{"path": k.at("taken.txt"), "error": "File already exists", "reason": "exists"}],
+        ),
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", ROWS, ids=[row.name for row in ROWS])
+async def test_every_kind_of_box_keeps_the_contract(kind: Kind, row: Row) -> None:
+    assert await _outcome(kind, row.operation) == row.expected(kind)
+
+
+# --- the folder size and the folder zip: commands recorded, never run ----------------
+
+
+class _Result(SimpleNamespace):
+    pass
+
+
+class RecordingConnection:
+    """A connection whose commands are recorded and answered from ``replies``; nothing
+    is run. Its SFTP client is ``sftp``."""
+
+    def __init__(self, replies: dict[str, _Result], sftp: object = None) -> None:
+        self.replies = replies
+        self.commands: list[str] = []
+        self.sftp = sftp
+        self.sftp_opened = 0
+
+    async def run(self, cmd: str, check: bool = False) -> _Result:
+        self.commands.append(cmd)
+        if cmd == HEALTH_CMD:
+            return _Result(stdout="test\n", stderr="", exit_status=0)
+        return self.replies[cmd]
+
+    async def start_sftp_client(self):
+        self.sftp_opened += 1
+        if isinstance(self.sftp, BaseException):
+            raise self.sftp
+        return self.sftp
+
+    def close(self) -> None:
+        pass
+
+
+def _remote_box() -> Box:
+    return Box(name="rec", connect_host="example.invalid", display_host="rec", user="tester")
+
+
+def _recording(monkeypatch: pytest.MonkeyPatch, connection: RecordingConnection) -> object:
+    monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
+
+    async def connect_for_box(box: Box, application_config: object):
+        return connection
+
+    return SimpleNamespace(connect_for_box=connect_for_box)
+
+
+@pytest.mark.asyncio
+async def test_a_remote_folder_size_runs_du_on_the_quoted_path(monkeypatch):
+    path = f"/srv/{ODD_NAME}"
+    du = shlex.join(["du", "-sb", path])
+    connection = RecordingConnection({du: _Result(stdout=f"4096\t{path}\n", exit_status=0)})
+    deps = _recording(monkeypatch, connection)
+    async with box_files(deps, _remote_box(), CONFIG) as files:
+        size = await files.folder_size(await files.path(path))
+    assert size == 4096
+    assert shlex.split(connection.commands[0]) == ["du", "-sb", path]
+    assert connection.commands[1:] == [HEALTH_CMD]
+    assert connection.sftp_opened == 0
+
+
+@pytest.mark.asyncio
+async def test_a_local_folder_size_counts_the_bytes_of_its_files(tmp_path):
+    root = tmp_path / "tree"
+    _build_tree(root, tmp_path / "outside")
+    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
+        size = await files.folder_size(await files.path(str(root)))
+    # 6 + 0 + 3 + 4 bytes, and the 7 of the file the link names (a link to a file is
+    # counted as the file).
+    assert size == 20
+
+
+class _Stream:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = list(chunks)
+
+    async def read(self, n: int) -> bytes:
+        return self.chunks.pop(0) if self.chunks else b""
+
+
+class _Process:
+    def __init__(self, stdout: bytes) -> None:
+        self.stdout = _Stream([stdout])
+        self.stderr = _Stream([])
+
+    async def wait(self) -> _Result:
+        return _Result(exit_status=0)
+
+    def kill(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_remote_folder_zip_runs_zip_in_the_parent_on_the_quoted_name(monkeypatch):
+    connection = RecordingConnection({})
+    started: list[str] = []
+
+    async def create_process(cmd: str, encoding=None) -> _Process:
+        started.append(cmd)
+        return _Process(b"PK-zip-bytes")
+
+    connection.create_process = create_process  # type: ignore[attr-defined]
+    deps = _recording(monkeypatch, connection)
+    async with box_files(deps, _remote_box(), CONFIG) as files:
+        zipped = await files.zip_folder(f"/srv/{ODD_NAME}")
+    try:
+        assert zipped.name == ODD_NAME
+        assert Path(zipped.path).read_bytes() == b"PK-zip-bytes"
+    finally:
+        Path(zipped.path).unlink()
+    words = shlex.split(started[0])
+    assert words == ["cd", "/srv", "&&", "zip", "-r", "-q", "-", ODD_NAME]
+    assert connection.commands == [HEALTH_CMD]
+
+
+class _FolderSFTP:
+    """An SFTP client that finds a folder at every path."""
+
+    async def stat(self, path: str) -> SimpleNamespace:
+        return SimpleNamespace(permissions=0o040755)
+
+    def exit(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_remote_batch_delete_removes_a_folder_with_rm_on_the_quoted_path(monkeypatch):
+    path = f"/srv/{ODD_NAME}"
+    rm = shlex.join(["rm", "-rf", path])
+    connection = RecordingConnection({rm: _Result(stdout="", exit_status=0)}, _FolderSFTP())
+    deps = _recording(monkeypatch, connection)
+    async with box_files(deps, _remote_box(), CONFIG, answers=None) as files:
+        outcome = await files.delete_many([path])
+    assert (outcome.succeeded, outcome.failed) == ([path], [])
+    assert shlex.split(connection.commands[0]) == ["rm", "-rf", path]
+    assert connection.commands[1:] == [HEALTH_CMD]
+
+
+def _local_box() -> Box:
+    box = Box(name="local", connect_host="localhost", display_host="localhost", user="me")
+    box.transport = "local"
+    return box
+
+
+@pytest.mark.asyncio
+async def test_a_local_folder_zip_holds_each_file_under_its_relative_name(tmp_path):
+    root = tmp_path / "tree"
+    _build_tree(root, tmp_path / "outside")
+    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
+        zipped = await files.zip_folder(str(root))
+    try:
+        with zipfile.ZipFile(zipped.path) as archive:
+            names = sorted(archive.namelist())
+    finally:
+        Path(zipped.path).unlink()
+    assert (zipped.name, names) == (
+        "tree",
+        ["a.txt", "empty.txt", "link_out", "sub/inner.txt", "taken.txt"],
+    )
+
+
+# --- remote only: a connection that drops, an SFTP session that will not open --------
+
+
+class _DroppingSFTP:
+    """An SFTP client whose connection drops at the first request."""
+
+    def __init__(self) -> None:
+        self.exits = 0
+
+    async def remove(self, path: str) -> None:
+        raise SSHError("connection lost")
+
+    def exit(self) -> None:
+        self.exits += 1
+
+
+@pytest.mark.asyncio
+async def test_a_connection_that_drops_in_the_block_is_502_and_the_session_closes_once(
+    monkeypatch,
+):
+    sftp = _DroppingSFTP()
+    connection = RecordingConnection({}, sftp)
+    deps = _recording(monkeypatch, connection)
+    with pytest.raises(HTTPException) as answered:
+        async with box_files(deps, _remote_box(), CONFIG) as files:
+            await files.delete(await files.path("/srv/a.txt"))
+    assert (answered.value.status_code, answered.value.detail) == (502, "connection lost")
+    assert (connection.sftp_opened, sftp.exits) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_an_sftp_session_that_fails_to_open_is_a_500_and_nothing_is_written(monkeypatch):
+    refused = asyncssh.ChannelOpenError(asyncssh.OPEN_ADMINISTRATIVELY_PROHIBITED, "no sftp")
+    connection = RecordingConnection({}, refused)
+    deps = _recording(monkeypatch, connection)
+    with pytest.raises(HTTPException) as answered:
+        async with box_files(deps, _remote_box(), CONFIG) as files:
+            await files.write_text(await files.path("/srv/a.txt"), "x")
+    assert (answered.value.status_code, answered.value.detail) == (500, "no sftp")
+    assert connection.sftp_opened == 1
+    # The connection went back to the pool through its health check.
+    assert connection.commands == [HEALTH_CMD]
+
+
+# --- the answer of a remote failure that no operation answered itself -----------------
+
+
+@pytest.mark.parametrize(
+    ("answers", "failure", "status", "detail"),
+    [
+        # Every route: a bad path is a 400, a failure of SSH a 502, anything else a 500.
+        (DEFAULT_ANSWERS, ValidationError("bad path"), 400, "bad path"),
+        (DEFAULT_ANSWERS, SSHError("no route"), 502, "no route"),
+        (DEFAULT_ANSWERS, ConnectionError("pool closed"), 500, "pool closed"),
+        (DEFAULT_ANSWERS, TimeoutError("slow"), 500, "slow"),
+        # ls, download, view, dir-size and download-dir: the pool's error is a 502 too.
+        (files_api._UNREACHABLE, ConnectionError("pool closed"), 502, "pool closed"),
+        (files_api._UNREACHABLE, RuntimeError("other"), 500, "other"),
+        (files_api._DIR_SIZE, ConnectionError("pool closed"), 502, "pool closed"),
+        (files_api._DIR_SIZE, TimeoutError("slow"), 504, "Directory size timed out"),
+        (files_api._DIR_SIZE, RuntimeError("du"), 500, "du"),
+        (files_api._FOLDER_ZIP, TimeoutError("slow"), 504, "Download timed out"),
+        (files_api._FOLDER_ZIP, RuntimeError("zip"), 500, "zip"),
+        # The Excel preview: any failure but a bad path is a 502 that names SSH.
+        (excel_api._REMOTE_READ, ValidationError("bad path"), 400, "bad path"),
+        (excel_api._REMOTE_READ, SSHError("no route"), 502, "SSH error: no route"),
+        (excel_api._REMOTE_READ, RuntimeError("other"), 502, "SSH error: other"),
+    ],
+)
+def test_a_remote_failure_gets_the_answer_its_route_gave_before(answers, failure, status, detail):
+    """The statuses and texts are those of the route bodies before the interface."""
+    answered = answers.remote(failure)
+    assert (answered.status_code, answered.detail) == (status, detail)
+
+
+# --- no route asks which kind of box it has ------------------------------------------
+
+
+def test_the_file_routes_hold_no_test_of_the_kind_of_box():
+    """Only ``box_files`` tells the kinds apart. The Excel preview keeps its one local
+    branch: its local path rule (``validate_local_path``, no ``~``, no link resolved)
+    is not the one every other local route has."""
+    api = Path(sshler.api.__file__).parent
+    found = {
+        name: (api / name).read_text(encoding="utf-8").count("box.transport")
+        for name in ("files.py", "batch.py", "excel.py")
+    }
+    assert found == {"files.py": 0, "batch.py": 0, "excel.py": 1}
+
+
+# --- round trips of a remote listing, a rename and a preview -------------------------
+
+
+@dataclass
+class Counted:
+    client: TestClient
+    root: Path
+    counts: Counts
+
+
+@pytest.fixture
+def counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Counted]:
+    root = tmp_path / "remote"
+    (root / "home").mkdir(parents=True)
+    (root / "home" / "a.txt").write_text("hello\n", encoding="utf-8")
+    (root / "home" / "dot.png").write_bytes(b"\x89PNG small")
+    (root / "home" / "big.png").write_bytes(b"\x89PNG" + b"x" * (2 * 1024 * 1024))
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    counts = Counts()
+    server = ServerThread(root, keys, counts, "/home")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    box = {
+        "name": "lb",
+        "host": "127.0.0.1",
+        "user": "tester",
+        "port": server.port,
+        "keyfile": str(server.client_key),
+        "known_hosts": str(server.known_hosts),
+    }
+    (config_dir / "boxes.yaml").write_text(yaml.safe_dump({"boxes": [box]}), encoding="utf-8")
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text("", encoding="utf-8")
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+    monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
+    state.initialize(config_dir)
+    client = TestClient(make_app(ServerSettings(csrf_token=TOKEN)))
+    try:
+        yield Counted(client=client, root=root, counts=counts)
+    finally:
+        client.close()
+        state.reset_state()
+        server.close()
+
+
+def _get(counted: Counted, route: str, **params: str):
+    return counted.client.get(f"/api/v1/boxes/lb/{route}", params=params, headers=HEADERS)
+
+
+def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(counted, monkeypatch):
+    """The upload route's 400 is for a name the local box refuses. A remote box whose
+    connection fails with a ``ValueError`` (not a name's fault) keeps the answer every
+    other failure has there: a 500 with its text."""
+
+    async def refuse(*args: object, **kwargs: object) -> None:
+        raise ValueError("host name cannot be encoded")
+
+    monkeypatch.setattr(asyncssh, "connect", refuse)
+    resp = counted.client.post(
+        "/api/v1/boxes/lb/upload",
+        data={"directory": "/home"},
+        files={"file": ("n.txt", b"x")},
+        headers=HEADERS,
+    )
+    assert (resp.status_code, resp.json()["detail"]) == (500, "host name cannot be encoded")
+    assert not (counted.root / "home" / "n.txt").exists()
+
+
+def test_a_remote_listing_opens_one_session_and_runs_only_the_health_check(counted):
+    resp = _get(counted, "ls", directory="/home")
+    assert resp.status_code == 200
+    assert [e["name"] for e in resp.json()["entries"]] == ["a.txt", "big.png", "dot.png"]
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (1, 1)
+    assert counted.counts.commands == [HEALTH_CMD]
+
+
+def test_a_remote_listing_at_the_home_asks_for_the_home_once(counted):
+    resp = _get(counted, "ls", directory="~")
+    assert (resp.status_code, resp.json()["directory"]) == (200, "/home")
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (1, 1)
+    assert counted.counts.commands == [HOME_CMD, HEALTH_CMD]
+
+
+def test_a_remote_rename_opens_one_session(counted):
+    resp = counted.client.post(
+        "/api/v1/boxes/lb/rename",
+        json={"path": "~/a.txt", "new_name": "b.txt"},
+        headers=HEADERS,
+    )
+    assert (resp.status_code, resp.json()["path"]) == (200, "/home/b.txt")
+    assert (counted.root / "home" / "b.txt").read_text(encoding="utf-8") == "hello\n"
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (1, 1)
+    assert counted.counts.commands == [HOME_CMD, HEALTH_CMD]
+
+
+@pytest.mark.parametrize(
+    ("name", "sessions"),
+    [
+        ("a.txt", 1),  # the text
+        ("dot.png", 1),  # the image's bytes
+        # An image past the preview limit is read as bytes, then as text: two sessions,
+        # one per read, as each read opens its own.
+        ("big.png", 2),
+    ],
+)
+def test_a_remote_preview_opens_one_session_per_read(counted, name, sessions):
+    resp = _get(counted, "file", path=f"/home/{name}")
+    assert (resp.status_code, resp.json()["path"]) == (200, f"/home/{name}")
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (1, sessions)
+    assert counted.counts.commands == [HEALTH_CMD]
+
+
+def test_a_remote_listing_records_the_visit_and_a_failed_one_does_not(counted):
+    listed = _get(counted, "ls", directory="/home")
+    missing = _get(counted, "ls", directory="/nope")
+    assert (listed.status_code, missing.status_code) == (200, 500)
+    assert [path for path, _ in state.search_directories("lb", "")] == ["/home"]

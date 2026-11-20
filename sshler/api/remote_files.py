@@ -1,19 +1,32 @@
-"""Placing files over SFTP, and the size and zip of a remote folder."""
+"""The files of a remote box: ``RemoteFiles``, placing files over SFTP, and the size and
+zip of a remote folder."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
+import mimetypes
 import posixpath
 import secrets
 import stat as stat_mod
-from collections.abc import Awaitable
-from pathlib import PurePosixPath
+import tempfile
+from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path, PurePosixPath
+from types import TracebackType
 
 import asyncssh
 from fastapi import HTTPException
+from fastapi.responses import Response
 
+from .. import state
+from ..config import Box
+from ..ssh import SSHError, sftp_chmod, sftp_list_directory, sftp_read_file, sftp_session
+from ..ssh_pool import get_pool
+from ..validation import PathValidator, ValidationError
+from .file_contract import BatchOutcome, FolderZip, PathKind
+from .helpers import _attachment_header
+from .models import APIDirectoryEntry
 from .placement import (
     _NO_FOLDER_COPY,
     _ONLY_FILES,
@@ -23,13 +36,18 @@ from .placement import (
     _refuse_or_replace,
     _taken_after_check,
     ensure_source_unchanged,
+    failure_entry,
     kept_permission_bits,
+    refuse_a_name_this_request_placed,
     run_to_end,
 )
 from .remote import (
     command,
+    compose_remote_child,
     in_directory,
     path_word,
+    remote_directory,
+    remote_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -537,3 +555,402 @@ async def _spool_remote_zip(connection, command: str, dest: str) -> None:
     if completed.exit_status != 0:
         message = stderr.decode(errors="replace")
         raise HTTPException(status_code=500, detail=f"zip failed: {message}")
+
+
+async def _read_file_bytes(
+    connection: asyncssh.SSHClientConnection, path: str, limit: int
+) -> tuple[bytes, bool]:
+    async with sftp_session(connection) as sftp_client:
+        async with await sftp_client.open(path, "rb") as remote_file:
+            data_read = await remote_file.read(limit + 1)
+            # Opened with 'rb' so data should be bytes
+            data = data_read if isinstance(data_read, bytes) else data_read.encode()
+    too_large = len(data) > limit
+    if too_large:
+        return b"", True
+    return data, False
+
+
+async def _read_remote_text(connection: asyncssh.SSHClientConnection, path: str, limit: int) -> str:
+    """Retrieve UTF-8 text from an SFTP connection with graceful fallback."""
+
+    try:
+        return await sftp_read_file(connection, path, max_bytes=limit)
+    except TypeError as exc:
+        if "max_bytes" not in str(exc):
+            raise
+        return await sftp_read_file(connection, path)
+
+
+def remove_tree_command(path: str) -> str:
+    """The remote command that deletes the folder ``path`` and everything in it."""
+    return command("rm", "-rf", path_word(path))
+
+
+async def _resolve_tilde_paths(
+    connection, validated: list[tuple[str, str]], failed: list[dict]
+) -> list[tuple[str, str]]:
+    """Resolve ``~`` in each validated path against the remote home. SFTP and the
+    quoted shell commands do not expand it. A path that no longer validates is
+    reported in ``failed``; a failed home lookup (HTTP 502) aborts the batch."""
+    resolved: list[tuple[str, str]] = []
+    for orig, vpath in validated:
+        try:
+            resolved.append((orig, await remote_path(connection, vpath)))
+        except ValidationError as exc:
+            failed.append(failure_entry(orig, exc))
+    return resolved
+
+
+async def _resolve_tilde_destination(connection, destination: str) -> str:
+    try:
+        return await remote_path(connection, destination)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+
+
+class RemoteFiles:
+    """The files of a remote box, over one pooled connection.
+
+    Used as ``async with``: the connection is taken from the pool by the first
+    operation that needs it, so the checks that come first cost no round trip, and it
+    is given back when the block ends (closed instead after a timeout or a cancel, as
+    ``ssh_pool.connection`` decides). The operations that work on an SFTP client share
+    one session, opened when first needed and closed before the connection goes back.
+    The listing, chmod and the reads open their own session through ``sshler.ssh``,
+    one per call. A folder zip takes a connection of its own (see ``zip_folder``).
+    """
+
+    def __init__(
+        self, box: Box, connect: Callable[[], Awaitable[asyncssh.SSHClientConnection]]
+    ) -> None:
+        self._box = box
+        self._connect = connect
+        self._stack = contextlib.AsyncExitStack()
+        self._connection: asyncssh.SSHClientConnection | None = None
+        self._sftp: asyncssh.SFTPClient | None = None
+        self._after: list[Callable[[], Awaitable[object]]] = []
+
+    async def __aenter__(self) -> RemoteFiles:
+        await self._stack.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        return await self._stack.__aexit__(exc_type, exc, traceback)
+
+    async def after_release(self) -> None:
+        """What waits for the connection to be back in the pool (the visit a listing
+        records), after a block that ended without a failure."""
+        for step in self._after:
+            await step()
+
+    async def _conn(self) -> asyncssh.SSHClientConnection:
+        if self._connection is None:
+            self._connection = await self._stack.enter_async_context(
+                get_pool().connection(self._box, self._connect)
+            )
+        return self._connection
+
+    async def _session(self) -> asyncssh.SFTPClient:
+        if self._sftp is None:
+            self._sftp = await self._stack.enter_async_context(sftp_session(await self._conn()))
+        return self._sftp
+
+    # --- paths -----------------------------------------------------------------------
+
+    async def path(self, path: str) -> str:
+        PathValidator.validate_remote_path(path)
+        return await remote_path(await self._conn(), path)
+
+    async def folder(self, directory: str) -> str:
+        # `~` is the remote home, as for the folder zip (not `/`).
+        return await remote_directory(await self._conn(), directory)
+
+    async def child(self, directory: str, name: str) -> str:
+        validated = PathValidator.validate_filename(name)
+        connection = await self._conn()
+        return compose_remote_child(await remote_directory(connection, directory), validated)
+
+    def parent(self, path: str) -> str:
+        return str(PurePosixPath(path).parent)
+
+    # --- reading ---------------------------------------------------------------------
+
+    async def list_folder(self, directory: str) -> list[APIDirectoryEntry]:
+        """The visit to ``directory`` is recorded for the frecency search once the
+        connection is back in the pool."""
+        raw_entries = await sftp_list_directory(await self._conn(), directory)
+        entries = [
+            APIDirectoryEntry(
+                name=str(entry["name"]),
+                path=posixpath.join(directory, str(entry["name"])),
+                is_directory=bool(entry.get("is_directory")),
+                size=int(str(entry["size"])) if entry.get("size") is not None else None,
+                modified=float(str(entry["modified"]))
+                if entry.get("modified") is not None
+                else None,
+                mode=int(str(entry["mode"])) if entry.get("mode") is not None else None,
+            )
+            for entry in raw_entries
+        ]
+        box_name = self._box.name
+        self._after.append(lambda: state.record_directory_visit_async(box_name, directory))
+        return entries
+
+    async def stat(self, path: str) -> PathKind:
+        sftp_client = await self._session()
+        try:
+            attrs = await sftp_client.stat(path)
+        except (FileNotFoundError, OSError):
+            return PathKind(exists=False, is_directory=False, is_file=False)
+        perms = attrs.permissions
+        return PathKind(
+            exists=True,
+            is_directory=stat_mod.S_ISDIR(perms) if perms else False,
+            is_file=stat_mod.S_ISREG(perms) if perms else False,
+        )
+
+    async def read_bytes(self, path: str, limit: int) -> tuple[bytes, bool]:
+        """A file larger than ``limit`` gives ``(b"", True)``."""
+        return await _read_file_bytes(await self._conn(), path, limit)
+
+    async def read_text(self, path: str, limit: int) -> str:
+        return await _read_remote_text(await self._conn(), path, limit)
+
+    async def serve(self, path: str, *, inline: bool, limit: int) -> Response:
+        """Read whole into memory, so a file larger than ``limit`` is a 413."""
+        content, too_large = await _read_file_bytes(await self._conn(), path, limit)
+        if too_large:
+            detail = "File too large to view" if inline else "File too large to download via API"
+            raise HTTPException(status_code=413, detail=detail)
+        if inline:
+            mime, _ = mimetypes.guess_type(path)
+            return Response(
+                content=content,
+                media_type=mime or "application/octet-stream",
+                headers={"Content-Disposition": "inline"},
+            )
+        return Response(
+            content=content,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": _attachment_header(PurePosixPath(path).name)},
+        )
+
+    async def folder_size(self, path: str) -> int | None:
+        """None: both ``du`` forms failed on a folder that exists; the size is unknown
+        (never 0) and the UI asks."""
+        connection = await self._conn()
+        size = await _du_bytes(connection, du_command("-sb", path), 1)
+        if size is None:
+            # BSD/macOS `du` has no -b; -k works everywhere.
+            size = await _du_bytes(connection, du_command("-sk", path), 1024)
+        if size is None:
+            exists = await asyncio.wait_for(
+                connection.run(directory_test_command(path)), timeout=10
+            )
+            if exists.exit_status != 0:
+                raise HTTPException(status_code=404, detail="Directory not found")
+        return size
+
+    async def zip_folder(self, path: str) -> FolderZip:
+        """The zip streams through SSH into a temp file, capped in size and time. It
+        holds a connection of its own rather than the block's: a zip that was cut off
+        (too large, timed out, cancelled) may still run on it, so it is closed rather
+        than pooled; any other failure gives it back."""
+        PathValidator.validate_remote_path(path)
+        ssh_pool = get_pool()
+        tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        connection = None
+        try:
+            connection = await ssh_pool.acquire(self._box, self._connect)
+            validated_path = await remote_path(connection, path)
+            dirname, cmd = folder_zip_command(validated_path)
+            async with asyncio.timeout(ZIP_STREAM_TIMEOUT_SECONDS):
+                await _spool_remote_zip(connection, cmd, tmp_path)
+            # Inside the cleanup `try`: a cancel during the release's health check
+            # must still delete the zip. `release` closes the connection itself
+            # then, so it is no longer ours to release or discard.
+            done, connection = connection, None
+            await ssh_pool.release(self._box.name, done)
+        except BaseException as exc:
+            Path(tmp_path).unlink(missing_ok=True)
+            if connection is not None:
+                reusable = isinstance(exc, Exception) and not isinstance(
+                    exc, (TimeoutError, _ZipTooLargeError)
+                )
+                if reusable:
+                    await ssh_pool.release(self._box.name, connection)
+                else:
+                    ssh_pool.discard(self._box.name, connection)
+            if isinstance(exc, _ZipTooLargeError):
+                raise HTTPException(
+                    status_code=413, detail="Directory too large to download"
+                ) from exc
+            raise
+        return FolderZip(path=tmp_path, name=dirname)
+
+    # --- writing ---------------------------------------------------------------------
+
+    async def write_text(self, path: str, content: str) -> None:
+        sftp_client = await self._session()
+        async with await sftp_client.open(path, "w", encoding="utf-8") as remote_file:
+            await remote_file.write(content)
+
+    async def touch(self, path: str) -> None:
+        """A name that exists is a 409."""
+        await _remote_write_new(await self._session(), path, b"", overwrite=False)
+
+    async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
+        await _remote_write_new(await self._session(), path, data, overwrite=overwrite)
+
+    async def make_folder(self, path: str) -> None:
+        sftp_client = await self._session()
+        try:
+            await sftp_client.stat(path)
+            raise HTTPException(status_code=400, detail="Directory already exists")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        await sftp_client.mkdir(path)
+
+    async def delete(self, path: str) -> None:
+        await (await self._session()).remove(path)
+
+    async def chmod(self, path: str, mode: int) -> None:
+        await sftp_chmod(await self._conn(), path, mode)
+
+    async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
+        PathValidator.validate_remote_path(path)
+        new_name = PathValidator.validate_filename(new_name)
+        try:
+            source = await remote_path(await self._conn(), path)
+            target = str(PurePosixPath(source).parent / new_name)
+            await _remote_place(
+                await self._session(), source, target, move=True, overwrite=overwrite
+            )
+        except (FileNotFoundError, asyncssh.SFTPNoSuchFile) as exc:
+            raise HTTPException(status_code=404, detail="File not found") from exc
+        return target
+
+    async def place_into(
+        self,
+        source: str,
+        destination: str,
+        new_name: str | None,
+        *,
+        move: bool,
+        overwrite: bool,
+        allow_dirs: bool,
+    ) -> str:
+        PathValidator.validate_remote_path(source)
+        PathValidator.validate_remote_path(destination)
+        if new_name:
+            PathValidator.validate_filename(new_name)
+        try:
+            connection = await self._conn()
+            remote_src = await remote_path(connection, source)
+            remote_dest_dir = await remote_path(connection, destination)
+            name = new_name or PurePosixPath(remote_src).name
+            if not move:
+                # Named after the resolved source: `~` alone has no usable name.
+                name = PathValidator.validate_filename(name)
+            target = str(PurePosixPath(remote_dest_dir) / name)
+            await _remote_place(
+                await self._session(),
+                remote_src,
+                target,
+                move=move,
+                overwrite=overwrite,
+                allow_dirs=allow_dirs,
+            )
+        except (FileNotFoundError, asyncssh.SFTPNoSuchFile) as exc:
+            raise HTTPException(status_code=404, detail="Source not found") from exc
+        return target
+
+    async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
+        """Every path is checked before the connection is taken; a folder is removed
+        with ``rm -rf``. A failure of SSH itself fails each path not yet done."""
+        outcome = BatchOutcome()
+        succeeded, failed = outcome.succeeded, outcome.failed
+        validated: list[tuple[str, str]] = []
+        for path in paths:
+            try:
+                validated.append((path, PathValidator.validate_remote_path(path)))
+            except ValidationError as exc:
+                failed.append({"path": path, "error": str(exc)})
+        if not validated:
+            return outcome
+        try:
+            connection = await self._conn()
+            validated = await _resolve_tilde_paths(connection, validated, failed)
+            sftp_client = await self._session()
+            for orig, vpath in validated:
+                try:
+                    try:
+                        attrs = await sftp_client.stat(vpath)
+                        if stat_mod.S_ISDIR(attrs.permissions or 0):
+                            await connection.run(remove_tree_command(vpath), check=True)
+                        else:
+                            await sftp_client.remove(vpath)
+                    except (FileNotFoundError, OSError):
+                        await sftp_client.remove(vpath)
+                    succeeded.append(orig)
+                except Exception as exc:
+                    failed.append({"path": orig, "error": str(exc)})
+        except SSHError as exc:
+            already = {f["path"] for f in failed} | set(succeeded)
+            for orig, _ in validated:
+                if orig not in already:
+                    failed.append({"path": orig, "error": str(exc)})
+        return outcome
+
+    async def place_many(
+        self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
+    ) -> BatchOutcome:
+        """The destination, then every path, is checked before the connection is
+        taken. A failure of SSH itself fails each path not yet done."""
+        outcome = BatchOutcome()
+        succeeded, failed = outcome.succeeded, outcome.failed
+        landed: set[str] = set()
+        try:
+            dest_validated = PathValidator.validate_remote_path(destination)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+
+        validated: list[tuple[str, str]] = []
+        for path in paths:
+            try:
+                validated.append((path, PathValidator.validate_remote_path(path)))
+            except ValidationError as exc:
+                failed.append(failure_entry(path, exc))
+        if not validated:
+            return outcome
+        try:
+            connection = await self._conn()
+            dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
+            validated = await _resolve_tilde_paths(connection, validated, failed)
+            sftp_client = await self._session()
+            for orig, vpath in validated:
+                target = str(PurePosixPath(dest_resolved) / PurePosixPath(vpath).name)
+                try:
+                    refuse_a_name_this_request_placed(target, landed)
+                    await _remote_place(sftp_client, vpath, target, move=move, overwrite=overwrite)
+                except Exception as exc:
+                    failed.append(failure_entry(orig, exc))
+                else:
+                    landed.add(target)
+                    succeeded.append(orig)
+        except SSHError as exc:
+            already = {f["path"] for f in failed} | set(succeeded)
+            for orig, _ in validated:
+                if orig not in already:
+                    failed.append(failure_entry(orig, exc))
+        return outcome

@@ -15,16 +15,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
-from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
+from .box_files import Answers, box_files
 from .dependencies import APIDependencies
-from .helpers import _local_read_bytes, _read_file_bytes
-from .remote import remote_path
+from .local_files import LocalFiles
 
 MAX_ROWS = 2000
 MAX_COLS = 200
 # Hard cap on raw file bytes we'll parse — 50 MB is generous for a spreadsheet
 MAX_FILE_BYTES = 50_000_000
+
+# On a remote box any failure but a bad path is a 502 that names SSH.
+_REMOTE_READ = Answers(unreachable=(), other_status=502, other_prefix="SSH error: ")
 
 
 class ExcelSheet(BaseModel):
@@ -103,38 +105,23 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> Any:
         box = deps.get_box_or_404(application_config, name)
 
+        # The local box checks the path with `validate_local_path` and reads it as
+        # given (no `~`, no link resolved), unlike the local paths of every file route,
+        # so this route keeps its own local branch.
         if box.transport == "local":
             try:
                 validated = PathValidator.validate_local_path(path)
             except ValidationError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-            data, too_large = await _local_read_bytes(validated, MAX_FILE_BYTES)
-            if too_large:
-                return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
+            data, too_large = await LocalFiles().read_bytes(validated, MAX_FILE_BYTES)
         else:
-            try:
-                validated = PathValidator.validate_remote_path(path)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            async with box_files(deps, box, application_config, _REMOTE_READ) as files:
+                # Checked, then `~` resolved the way /file does: SFTP does not expand it.
+                target = await files.path(PathValidator.validate_remote_path(path))
+                data, too_large = await files.read_bytes(target, MAX_FILE_BYTES)
 
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    # SFTP does not expand `~`: resolve it the way /file does.
-                    validated = await remote_path(conn, validated)
-                    data, too_large = await _read_file_bytes(conn, validated, MAX_FILE_BYTES)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except HTTPException:
-                raise
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"SSH error: {exc}") from exc
-
-            if too_large:
-                return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
+        if too_large:
+            return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
 
         try:
             result = await asyncio.to_thread(_parse_workbook, data)

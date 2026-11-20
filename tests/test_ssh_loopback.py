@@ -18,7 +18,7 @@ import asyncssh
 import pytest
 import pytest_asyncio
 
-from sshler.api.helpers import _read_file_bytes
+from sshler.api.remote_files import _read_file_bytes
 from sshler.ssh import (
     SSHError,
     connect,
