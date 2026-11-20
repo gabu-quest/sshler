@@ -8,6 +8,10 @@ import json
 import pytest
 
 from sshler import ssh, tmux, webapp
+from sshler.terminal import local as terminal_local
+from sshler.terminal.local import LocalTmuxWindows
+from sshler.terminal.pump import apply_control
+from sshler.terminal.remote import RemoteTmuxWindows
 from sshler.validation import PathValidator, ValidationError
 
 
@@ -171,6 +175,13 @@ class _RecordingConnection:
         self.commands.append(command)
 
 
+class _Transport:
+    """A transport with tmux windows and nothing else: control messages reach only them."""
+
+    def __init__(self, windows) -> None:
+        self.tmux = windows
+
+
 class TestRemoteTmuxCommandStrings:
     """Remote tmux runs through a shell, so every user-controlled value must be quoted."""
 
@@ -185,14 +196,14 @@ class TestRemoteTmuxCommandStrings:
         """Kills: dropping `shlex.quote(str(new_name))` in the remote rename branch."""
         connection = _RecordingConnection()
         payload = json.dumps({"op": "rename-window", "target": HOSTILE_NAME})
-        asyncio.run(webapp._handle_control_message(payload, object(), connection, "demo", "ssh"))
+        asyncio.run(apply_control(payload, _Transport(RemoteTmuxWindows(connection, "demo"))))
         assert connection.commands == ["tmux -L ts-demo rename-window -t demo 'x; rm -rf ~ $(id)'"]
 
     def test_remote_select_window_quotes_target(self):
         """Kills: dropping `shlex.quote(str(target))` in the remote select-window branch."""
         connection = _RecordingConnection()
         payload = json.dumps({"op": "select-window", "target": "1;reboot"})
-        asyncio.run(webapp._handle_control_message(payload, object(), connection, "demo", "ssh"))
+        asyncio.run(apply_control(payload, _Transport(RemoteTmuxWindows(connection, "demo"))))
         assert connection.commands == ["tmux -L ts-demo select-window -t 'demo:1;reboot'"]
 
 
@@ -206,9 +217,9 @@ class TestLocalTmuxArgv:
         async def fake_run(session: str, args: list[str]):
             calls.append((session, args))
 
-        monkeypatch.setattr(webapp, "_run_local_tmux_command", fake_run)
+        monkeypatch.setattr(terminal_local, "_run_local_tmux_command", fake_run)
         payload = json.dumps({"op": "rename-window", "target": HOSTILE_NAME})
-        asyncio.run(webapp._handle_control_message(payload, object(), None, "demo", "local"))
+        asyncio.run(apply_control(payload, _Transport(LocalTmuxWindows("demo"))))
         assert calls == [("demo", ["rename-window", "-t", "demo", HOSTILE_NAME])]
 
     def test_open_local_tmux_quotes_every_argument_for_script(self, monkeypatch):

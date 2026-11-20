@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import json
 import logging
 import os
 import secrets
@@ -17,7 +16,8 @@ import time
 from collections.abc import Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import IO, Any, cast
+from functools import partial
+from typing import IO, cast
 
 import asyncssh
 from fastapi import (
@@ -30,7 +30,6 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse, Response
-from starlette.websockets import WebSocketState
 
 from . import state
 from .access import allowed_origins, origin_base, websocket_refusal
@@ -63,15 +62,15 @@ from .ssh import (
     sftp_is_directory,
 )
 from .ssh_pool import get_pool, initialize_pool, shutdown_pool
+from .terminal import OpenedTerminal, TerminalOpenError, run_pump, take_early_message
+from .terminal.conpty import ConPtyTransport
+from .terminal.local import LocalPtyTransport, LocalTmuxWindows
+from .terminal.remote import RemoteTmuxWindows, SshTransport, close_connection
+from .terminal.transport import open_or_close_on_cancel, teardown_scope
 from .tmux import (
-    WINDOW_LIST_FORMAT,
     _configure_tmux_bindings,
-    _run_local_tmux_command,
     local_tmux_command,
-    parse_window_list,
     record_ts_history,
-    remote_tmux_command,
-    run_local_tmux,
 )
 from .validation import PathValidator, ValidationError
 from .win_terminal_registry import TooManyTerminalsError, WindowsTerminalRegistry
@@ -523,15 +522,11 @@ async def _open_local_pty_tmux(
     session: str,
     cols: int = 80,
     rows: int = 24,
-) -> LocalPTYProcess | asyncio.subprocess.Process:
-    """Open a local tmux session using a real PTY for proper resize support.
+) -> LocalPTYProcess:
+    """Open a local tmux client on a real PTY, for proper resize support (POSIX only).
 
-    On Windows, falls back to the WSL-based subprocess path since pty/fcntl
-    are not available. On Unix, spawns a true PTY for resize support.
+    A Windows host never comes here: its local box runs a native shell instead.
     """
-    if LOCAL_IS_WINDOWS:
-        return await _open_local_tmux(working_directory, session)
-
     command = local_tmux_command(session) + ["new", "-As", session]
     if working_directory:
         command.extend(["-c", working_directory])
@@ -642,26 +637,6 @@ async def _open_local_tmux(
         stderr=asyncio.subprocess.PIPE,
         env=env,
     )
-
-
-# tmux helpers (_run_local_tmux_command, _configure_tmux_bindings, and the
-# per-session color logic) now live in sshler/tmux.py and are imported above —
-# this keeps tmux primitives in one module so api/* can reuse them without
-# importing webapp.py (circular import).
-
-
-async def _list_local_tmux_windows(session: str) -> list[dict[str, str | bool]] | None:
-    args = ["list-windows", "-F", WINDOW_LIST_FORMAT, "-t", session]
-    try:
-        returncode, stdout, _ = await run_local_tmux(session, args)
-    except Exception as exc:
-        logger.debug(f"Failed to list local tmux windows for session {session}: {exc}")
-        return None
-
-    if returncode != 0:
-        return None
-
-    return parse_window_list(stdout.decode("utf-8", errors="replace"))
 
 
 class Broadcaster:
@@ -1056,557 +1031,49 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         rows: int = Query(32, alias="rows"),
         shell: str = Query("", alias="shell"),
     ) -> None:
-        """Bridge between the browser websocket and tmux over SSH or locally.
+        """Bridge between the browser websocket and a terminal: tmux locally or over
+        SSH, or a native Windows shell.
 
         SECURITY: Session names are sanitized to prevent command injection attacks.
 
         English:
-            Streams bytes between the browser and tmux, handling command
-            messages (resize, rename, etc.) and window polling.
+            Checks who may connect and the session name, then opens the terminal the
+            box uses and runs the pump (``sshler.terminal``) until the session ends.
 
         日本語:
-            ブラウザと tmux の間でバイトストリームを仲介し、リサイズやウィンドウ
-            切り替えなどのコマンドメッセージを処理します。
+            接続の可否とセッション名を確認し、ボックスに応じたターミナルを開いて、
+            セッションが終わるまでポンプ (``sshler.terminal``) を動かします。
 
         Args:
-            websocket: Accepted websocket connection from the browser.
+            websocket: Websocket connection from the browser, not yet accepted.
             host: Box identifier provided by the client.
             directory: Requested working directory.
             session: Requested tmux session name.
             columns: Terminal width reported by the client.
             rows: Terminal height reported by the client.
+            shell: Native Windows shell id (Windows hosts only).
 
         Returns:
             None: The coroutine completes when the websocket terminates.
         """
+        # Who may open the socket is decided before anything about the request is
+        # validated, so a caller without credentials learns nothing else.
+        refusal = websocket_refusal(websocket)
+        if refusal is not None:
+            await websocket.close(code=refusal[0], reason=refusal[1])
+            return
 
-        logger = logging.getLogger("sshler.webapp")
-
-        # Pre-initialize variables used in the finally block so early returns
-        # (auth failures, validation errors) don't cause UnboundLocalError.
-        box: Box | None = None
-        transport = "ssh"
-        client_host = "unknown"
-        connection: asyncssh.SSHClientConnection | None = None
-        process: (
-            asyncssh.SSHClientProcess
-            | LocalPTYProcess
-            | WinPTYProcess
-            | asyncio.subprocess.Process
-            | None
-        ) = None
-        session_id: str | None = None
-        # Native-Windows persistence: the registry owns the ConPTY lifecycle; the
-        # handler attaches/detaches a sink instead of spawning/terminating.
-        win_registry: WindowsTerminalRegistry | None = None
-        win_session: Any = None
-        win_sink: Any = None
-        # Fire-and-forget tmux setup tasks. Held here so they are not garbage
-        # collected mid-flight and so teardown can cancel them.
-        background_tasks: set[asyncio.Task[None]] = set()
-
+        # Session names reach tmux command lines, so only safe characters pass.
         try:
-            # Who may open the socket is decided before anything about the request is
-            # validated, so a caller without credentials learns nothing else.
-            refusal = websocket_refusal(websocket)
-            if refusal is not None:
-                await websocket.close(code=refusal[0], reason=refusal[1])
-                return
+            session = PathValidator.sanitize_session_name(session)
+        except ValidationError as exc:
+            logger.warning(f"[Security] Invalid session name rejected: {exc}")
+            await websocket.close(code=4400, reason="Invalid session name")
+            return
 
-            # Sanitize session name to prevent command injection
-            # Session names are passed to tmux/subprocess commands, so only allow safe characters
-            try:
-                session = PathValidator.sanitize_session_name(session)
-            except ValidationError as exc:
-                logger.warning(f"[Security] Invalid session name rejected: {exc}")
-                await websocket.close(code=4400, reason="Invalid session name")
-                return
-
-            await websocket.accept()
-            application_config = load_config()
-            box = find_box(application_config, host)
-            if not box:
-                await websocket.close()
-                return
-
-            transport = getattr(box, "transport", "ssh")
-            normalized_directory = (
-                _normalize_local_path(directory)
-                if transport == "local"
-                else _normalize_directory_path(directory)
-            )
-
-            client_host = websocket.client.host if websocket.client else "unknown"
-            logger.info(
-                f"[Connection] WebSocket connected: box={box.name}, transport={transport}, "
-                f"dir={normalized_directory}, session={session}, client={client_host}"
-            )
-
-            if transport == "local":
-                try:
-                    is_directory = await _local_is_directory(normalized_directory)
-                except Exception as exc:
-                    logger.debug(f"Failed to check if directory exists (using fallback): {exc}")
-                    is_directory = False
-                if not is_directory:
-                    normalized_directory = _normalize_local_path(box.default_dir)
-
-                if LOCAL_IS_WINDOWS:
-                    # Native Windows: ConPTY shell (PowerShell/cmd/WSL) — no tmux.
-                    logger.info(
-                        f"[Connection] Starting native Windows shell: "
-                        f"dir={normalized_directory}, shell={shell or 'default'}"
-                    )
-                    try:
-                        win_registry = websocket.app.state.win_terminal_registry
-                        win_key = (box.name, session)
-
-                        async def _spawn_windows() -> WinPTYProcess:
-                            return await _open_windows_shell(
-                                shell, normalized_directory, columns, rows
-                            )
-
-                        # Re-use a persisted shell for this (box, session) if one
-                        # is still alive; otherwise spawn a fresh one. Errors from
-                        # the spawn (WSL/pywinpty missing) propagate unregistered.
-                        win_session, _created = await win_registry.get_or_create(
-                            win_key, _spawn_windows, columns, rows
-                        )
-                        process = win_session.process
-                        logger.info(
-                            "[Connection] Windows shell %s",
-                            "started" if _created else "re-attached",
-                        )
-                    except TooManyTerminalsError as exc:
-                        logger.warning(
-                            "websocket rejected: terminal session cap reached",
-                            extra={
-                                "service": "terminal",
-                                "event": "session_cap",
-                                "host": host,
-                                "error": str(exc),
-                            },
-                        )
-                        try:
-                            await websocket.send_text(
-                                "Too many open terminals on this server. "
-                                "Close one before opening another.\r\n"
-                            )
-                        except Exception:
-                            pass
-                        # Distinct code so the SPA can toast rather than reconnect-loop.
-                        await websocket.close(code=4504, reason="Too many terminals")
-                        return
-                    except WSLNotAvailableError as exc:
-                        logger.info(f"[Connection] WSL unavailable: {exc}")
-                        try:
-                            await websocket.send_text(f"{exc}\r\n")
-                        except Exception:
-                            pass
-                        # Distinct close code so the SPA toasts instead of reconnecting.
-                        await websocket.close(code=4502, reason="WSL not installed")
-                        return
-                    except WinPTYUnavailableError as exc:
-                        logger.warning(f"[Connection] pywinpty unavailable: {exc}")
-                        try:
-                            await websocket.send_text(f"{exc}\r\n")
-                        except Exception:
-                            pass
-                        # Distinct code so the SPA toasts instead of reconnecting.
-                        await websocket.close(code=4503, reason="pywinpty not installed")
-                        return
-                    except Exception as exc:
-                        logger.error(
-                            f"[Connection] Failed to start Windows shell: {exc}",
-                            exc_info=True,
-                        )
-                        try:
-                            await websocket.send_text(f"Connection failed: {exc}\r\n")
-                        except Exception as ws_exc:
-                            logger.debug(f"Failed to send error message: {ws_exc}")
-                        await websocket.close()
-                        return
-                else:
-                    logger.info(
-                        f"[Connection] Starting local tmux: dir={normalized_directory}, "
-                        f"session={session}"
-                    )
-
-                    try:
-                        # Use PTY-based local terminal for proper resize support
-                        process = await _open_local_pty_tmux(normalized_directory, session)
-                        logger.info("[Connection] Local PTY tmux process started successfully")
-                        # Make Ctrl+B c inherit the current pane's directory, and
-                        # record ts history so the session appears in ts's fzf picker.
-                        for setup in (
-                            _configure_tmux_bindings(session),
-                            record_ts_history(session, normalized_directory),
-                        ):
-                            task = asyncio.create_task(setup)
-                            background_tasks.add(task)
-                            task.add_done_callback(background_tasks.discard)
-                    except Exception as exc:
-                        logger.error(
-                            f"[Connection] Failed to start local tmux: {exc}", exc_info=True
-                        )
-                        error_msg = f"Connection failed: {exc}\r\n"
-                        try:
-                            await websocket.send_text(error_msg)
-                        except Exception as ws_exc:
-                            logger.debug(f"Failed to send error message via websocket: {ws_exc}")
-                        await websocket.close()
-                        return
-            else:
-                logger.info(
-                    f"[Connection] Connecting to SSH: host={box.connect_host}, "
-                    f"user={box.user}, port={box.port}"
-                )
-                try:
-                    connection = await connect(
-                        box.connect_host,
-                        box.user,
-                        box.port,
-                        box.keyfile,
-                        box.known_hosts,
-                        application_config.ssh_config_path,
-                        box.ssh_alias,
-                    )
-                    logger.info("[Connection] SSH connection established successfully")
-                except Exception as exc:  # pragma: no cover
-                    # network errors are environment specific
-                    logger.error(f"[Connection] SSH connection failed: {exc}", exc_info=True)
-                    await websocket.send_text(f"Connection failed: {exc}")
-                    await websocket.close()
-                    return
-
-                try:
-                    is_directory = await sftp_is_directory(connection, normalized_directory)
-                    if not is_directory:
-                        normalized_directory = box.default_dir or f"/home/{box.user}"
-                except Exception as exc:
-                    logger.debug(
-                        f"Failed to check if remote directory exists (using default): {exc}"
-                    )
-
-                process = await open_tmux(
-                    connection,
-                    working_directory=normalized_directory,
-                    session=session,
-                    columns=columns,
-                    rows=rows,
-                )
-
-            async def _process_message(message: dict[str, object]) -> bool:
-                message_type = message.get("type")
-                if message_type == "websocket.disconnect":
-                    logger.info("Writer: got disconnect")
-                    return False
-
-                if "text" in message and message["text"] is not None:
-                    text_value = message["text"]
-                    if isinstance(text_value, str):
-                        logger.debug(f"Writer: got text message: {text_value[:50]}")
-                        await _handle_control_message(
-                            text_value,
-                            process,
-                            connection,
-                            session,
-                            transport,
-                        )
-                    return True
-
-                if "bytes" in message and message["bytes"] is not None:
-                    bytes_value = message["bytes"]
-                    if isinstance(bytes_value, bytes):
-                        num_bytes = len(bytes_value)
-                        logger.debug(f"Writer: got {num_bytes} bytes, writing to stdin")
-                        if process is not None and process.stdin is not None:
-                            if isinstance(process, WinPTYProcess):
-                                # Mirrored input: every attached tab shares one stdin.
-                                if win_session is not None and win_registry is not None:
-                                    await win_registry.write(win_session, bytes_value)
-                            elif isinstance(process, LocalPTYProcess):
-                                await asyncio.to_thread(process.write, bytes_value)
-                            elif isinstance(process, asyncio.subprocess.Process):
-                                # Old script-based local process (deprecated)
-                                process.stdin.write(bytes_value)
-                            else:
-                                # SSHClientProcess with encoding=None (binary mode)
-                                process.stdin.write(bytes_value)
-                return True
-
-            # Handle any immediate message now that the process exists.
-            try:
-                initial_message = await asyncio.wait_for(websocket.receive(), timeout=0.05)
-                if not await _process_message(dict(initial_message)):
-                    return
-            except TimeoutError:
-                pass
-            except WebSocketDisconnect:
-                return
-
-            # Track session in database
-            try:
-                tracked_session = await state.create_or_update_session_async(
-                    box_name=box.name,
-                    session_name=session,
-                    working_directory=normalized_directory,
-                    metadata={
-                        "columns": columns,
-                        "rows": rows,
-                        "transport": transport,
-                    },
-                )
-                session_id = tracked_session.id
-                # So the registry can mark this row inactive when the shell is
-                # reaped/exits (the handler no longer flips it on mere detach).
-                if win_session is not None:
-                    win_session.session_id = session_id
-                logger.info(f"Session tracked: {session_id}")
-            except Exception as exc:
-                logger.warning(f"Failed to track session: {exc}")
-                session_id = None
-
-            async def reader() -> None:
-                logger.info("Reader task started")
-                # A local name so isinstance narrows it (`process` is reassigned
-                # in the enclosing handler, so mypy cannot narrow the closure).
-                proc = process
-                try:
-                    if proc is None:
-                        logger.error("Reader: process is None")
-                        return
-                    while True:
-                        logger.debug("Reader: waiting for stdout data...")
-                        # LocalPTYProcess / WinPTYProcess use sync reads in a thread.
-                        # LocalPTYProcess.read keeps the fd open until it returns,
-                        # even if this task is cancelled while the read is queued.
-                        data: bytes | str
-                        if isinstance(proc, LocalPTYProcess):
-                            data = await asyncio.to_thread(proc.read, 32768)
-                        elif isinstance(proc, WinPTYProcess):
-                            data = await asyncio.to_thread(proc.stdout.read, 32768)
-                        else:
-                            if proc.stdout is None:
-                                logger.error("Reader: process stdout is None")
-                                return
-                            data = await proc.stdout.read(32768)
-                        if not data:
-                            logger.info("Reader: got empty data, ending")
-                            break
-                        # Check if websocket is still connected before sending
-                        if websocket.client_state != WebSocketState.CONNECTED:
-                            logger.info("Reader: websocket no longer connected, ending")
-                            break
-                        logger.debug(f"Reader: got {len(data)} bytes, sending to websocket")
-                        # Convert str to bytes if needed (SSH returns str, local returns bytes)
-                        bytes_data = data.encode("utf-8") if isinstance(data, str) else data
-                        await websocket.send_bytes(bytes_data)
-                except Exception as exc:
-                    logger.debug(f"Reader ended: {exc}")
-
-            async def writer() -> None:
-                logger.info("Writer task started")
-                try:
-                    while True:
-                        logger.debug("Writer: waiting for websocket message...")
-                        message = await websocket.receive()
-                        if not await _process_message(dict(message)):
-                            break
-                except WebSocketDisconnect:
-                    logger.info("Writer: websocket disconnected")
-                except Exception as exc:
-                    logger.error(f"Writer exception: {exc}", exc_info=True)
-
-            async def poll_tmux_windows() -> None:
-                try:
-                    while True:
-                        if websocket.client_state != WebSocketState.CONNECTED:
-                            break
-                        window_payload: list[dict[str, str | bool]] | None
-                        if isinstance(process, WinPTYProcess):
-                            # Native Windows shell has no tmux windows to poll.
-                            window_payload = None
-                        elif transport == "local":
-                            window_payload = await _list_local_tmux_windows(session)
-                        else:
-                            if connection is not None:
-                                window_payload = await _list_tmux_windows(connection, session)
-                            else:
-                                window_payload = None
-                        if window_payload is not None:
-                            if websocket.client_state != WebSocketState.CONNECTED:
-                                break
-                            await websocket.send_text(
-                                json.dumps({"op": "windows", "windows": window_payload})
-                            )
-                            # Update window count in session tracking
-                            if session_id:
-                                try:
-                                    await state.update_session_activity_async(
-                                        session_id,
-                                        active=True,
-                                        window_count=len(window_payload),
-                                    )
-                                except Exception as exc:
-                                    logger.debug(f"Failed to update session activity: {exc}")
-                        await asyncio.sleep(2)
-                except Exception as exc:
-                    logger.debug(f"Tmux window polling ended: {exc}")
-
-            async def websocket_pinger() -> None:
-                """Send WebSocket pings to keep connection alive through proxies/NAT."""
-                try:
-                    while True:
-                        await asyncio.sleep(30)  # Ping every 30 seconds
-                        if websocket.client_state != WebSocketState.CONNECTED:
-                            break
-                        try:
-                            await websocket.send_text(json.dumps({"op": "ping"}))
-                            logger.debug("Sent WebSocket ping")
-                        except Exception as exc:
-                            logger.debug(f"WebSocket ping ended: {exc}")
-                            break
-                except Exception as exc:
-                    logger.debug(f"WebSocket pinger task ended: {exc}")
-
-            async def windows_pump() -> None:
-                """Wait until the persisted shell exits, then close this socket.
-
-                Output delivery happens via the registry sink (fanned out from the
-                drain task); this task only watches for shell exit so the handler
-                tears down when the user types ``exit``.
-                """
-                if win_session is None:
-                    return
-                await win_session.exited_event.wait()
-                with contextlib.suppress(Exception):
-                    await websocket.close(code=1000, reason="shell exited")
-
-            # For native Windows shells, attach a sink to the persisted session
-            # and replay its buffer (clear + ring snapshot) before going live.
-            if (
-                isinstance(process, WinPTYProcess)
-                and win_session is not None
-                and win_registry is not None
-            ):
-
-                async def _win_sink(chunk: bytes) -> None:
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_bytes(chunk)
-
-                win_sink = _win_sink
-                replay = await win_registry.attach(win_session, win_sink, columns, rows)
-                with contextlib.suppress(Exception):
-                    await websocket.send_bytes(replay)
-
-            poller = asyncio.create_task(poll_tmux_windows())
-            pinger = asyncio.create_task(websocket_pinger())
-            try:
-                if isinstance(process, WinPTYProcess):
-                    # Persisted shell: end on EITHER a client disconnect (writer)
-                    # OR the shell exiting (windows_pump) — whichever comes first.
-                    runner_tasks = {
-                        asyncio.create_task(windows_pump()),
-                        asyncio.create_task(writer()),
-                    }
-                    done, pending = await asyncio.wait(
-                        runner_tasks, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    for task in pending:
-                        task.cancel()
-                    for task in pending:
-                        with contextlib.suppress(asyncio.CancelledError, Exception):
-                            await task
-                    for task in done:
-                        with contextlib.suppress(Exception):
-                            task.result()
-                else:
-                    # The session ends when the client goes away. Output ending
-                    # first (the tmux session exited) keeps waiting for the
-                    # client, as before.
-                    reader_task = asyncio.create_task(reader())
-                    writer_task = asyncio.create_task(writer())
-                    try:
-                        await writer_task
-                    finally:
-                        # A local PTY read blocked in its thread ends when
-                        # LocalPTYProcess.close() hangs up the client below.
-                        for task in (writer_task, reader_task):
-                            task.cancel()
-                        for task in (writer_task, reader_task):
-                            with contextlib.suppress(asyncio.CancelledError, Exception):
-                                await task
-            finally:
-                poller.cancel()
-                pinger.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await poller
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await pinger
-
-                # Mark session inactive when the websocket closes — EXCEPT for
-                # native Windows shells, which persist in the registry; their row
-                # is flipped inactive only when reaped/exited (see _on_reaped).
-                if session_id and not isinstance(process, WinPTYProcess):
-                    try:
-                        await state.update_session_activity_async(session_id, active=False)
-                        logger.info(f"Session marked inactive: {session_id}")
-                    except Exception as exc:
-                        logger.warning(f"Failed to mark session inactive: {exc}")
-        finally:
-            for task in background_tasks:
-                task.cancel()
-            try:
-                if process:
-                    if transport == "local":
-                        # Don't terminate! Just detach so the session keeps running.
-                        if isinstance(process, WinPTYProcess):
-                            # Persist: drop our sink but keep the ConPTY + ring
-                            # buffer alive in the registry for re-attachment. The
-                            # shell is torn down only on exit / kill / shutdown.
-                            if (
-                                win_registry is not None
-                                and win_session is not None
-                                and win_sink is not None
-                            ):
-                                with contextlib.suppress(Exception):
-                                    await win_registry.detach(win_session, win_sink)
-                        elif isinstance(process, LocalPTYProcess):
-                            process.close()
-                            with contextlib.suppress(Exception):
-                                await asyncio.sleep(0.1)  # flush
-                        else:
-                            try:
-                                if process.stdin is not None:
-                                    process.stdin.close()
-                            except Exception as exc:
-                                logger.debug(f"Error closing process stdin: {exc}")
-                            with contextlib.suppress(Exception):
-                                await asyncio.sleep(0.1)  # flush
-                    else:
-                        # SSH process cleanup: signal EOF on stdin and close. This
-                        # runs only for non-local (SSH) transport, where `process`
-                        # is an asyncssh process — no isinstance guard needed (one
-                        # would wrongly skip cleanup for test/fake SSH processes).
-                        ssh_process = cast(asyncssh.SSHClientProcess, process)
-                        if ssh_process.stdin is not None:
-                            ssh_process.stdin.write_eof()
-                        if hasattr(ssh_process, "close"):
-                            ssh_process.close()
-            except Exception as exc:
-                logger.debug(f"Error during process cleanup: {exc}")
-            try:
-                if connection is not None:
-                    connection.close()
-            except Exception as exc:
-                logger.debug(f"Error closing SSH connection: {exc}")
-
-            box_name = box.name if box is not None else "unknown"
-            logger.info(
-                f"[Connection] WebSocket closed: box={box_name}, transport={transport}, "
-                f"session={session}, client={client_host}"
-            )
+        await websocket.accept()
+        request = TerminalRequest(host, directory, session, columns, rows, shell)
+        await _serve_terminal(websocket, request)
 
     @application.websocket("/ws/progress")
     async def progress_socket(websocket: WebSocket) -> None:
@@ -1696,124 +1163,243 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     return application
 
 
-async def _handle_control_message(
-    payload: str,
-    process,
-    connection: asyncssh.SSHClientConnection | None,
-    session: str,
-    transport: str,
-) -> None:
-    try:
-        message = json.loads(payload)
-    except json.JSONDecodeError:
+@dataclass(frozen=True)
+class TerminalRequest:
+    """What a client asked ``/ws/term`` for, its session name already sanitized."""
+
+    host: str
+    directory: str
+    session: str
+    columns: int
+    rows: int
+    shell: str
+
+
+async def _serve_terminal(websocket: WebSocket, request: TerminalRequest) -> None:
+    """Open the terminal *request* names on an accepted socket, run it, tear it down."""
+    config = load_config()
+    box = find_box(config, request.host)
+    if not box:
+        await websocket.close()
         return
-
-    operation = message.get("op")
-    if operation == "resize":
-        cols = int(message.get("cols", 0) or 0)
-        rows = int(message.get("rows", 0) or 0)
-        logger.info(f"[Resize] Received resize: {cols}x{rows} for {session} ({transport})")
-        if cols > 0 and rows > 0:
-            if transport == "local":
-                # Use the PTY resize method which does proper ioctl + SIGWINCH
-                # (LocalPTYProcess) or ConPTY setwinsize (WinPTYProcess).
-                if isinstance(process, (LocalPTYProcess, WinPTYProcess)):
-                    try:
-                        process.resize(cols, rows)
-                        logger.info(f"[Resize] Local PTY resized to {cols}x{rows}")
-                    except Exception as exc:
-                        logger.warning(f"Failed to resize local PTY: {exc}")
-                else:
-                    # Fallback for old script-based process (shouldn't happen)
-                    try:
-                        await _run_local_tmux_command(
-                            session, ["refresh-client", "-C", f"{cols}x{rows}"]
-                        )
-                        await _run_local_tmux_command(
-                            session,
-                            ["resize-window", "-t", session, "-x", str(cols), "-y", str(rows)],
-                        )
-                        logger.info(f"[Resize] Local tmux resized to {cols}x{rows}")
-                    except Exception as exc:
-                        logger.debug(f"Failed to resize local tmux: {exc}")
-            else:
-                # Resize SSH PTY - asyncssh handles the ioctl/SIGWINCH internally
-                try:
-                    process.change_terminal_size(cols, rows)
-                    logger.info(f"[Resize] SSH PTY resized to {cols}x{rows}")
-                except Exception as exc:
-                    logger.warning(f"Failed to resize SSH PTY: {exc}")
-    elif operation == "select-window":
-        target = message.get("target")
-        if target is not None:
-            if isinstance(process, WinPTYProcess):
-                pass  # Native Windows shell has no tmux windows.
-            elif transport == "local":
-                await _run_local_tmux_command(
-                    session, ["select-window", "-t", f"{session}:{target}"]
-                )
-            elif connection is not None:
-                try:
-                    await connection.run(
-                        remote_tmux_command(
-                            session,
-                            ["select-window", "-t", f"{session}:{target}"],
-                        ),
-                        check=False,
-                    )
-                except Exception as exc:
-                    logger.debug(f"Failed to select window: {exc}")
-    elif operation == "send":
-        data = message.get("data")
-        if data:
-            try:
-                if isinstance(process, LocalPTYProcess):
-                    process.write(data.encode())
-                else:
-                    process.stdin.write(data.encode())
-            except Exception as exc:
-                logger.debug(f"Failed to send data to process: {exc}")
-    elif operation == "rename-window":
-        new_name = message.get("target")
-        if new_name:
-            if isinstance(process, WinPTYProcess):
-                pass  # Native Windows shell has no tmux windows.
-            elif transport == "local":
-                await _run_local_tmux_command(
-                    session, ["rename-window", "-t", session, str(new_name)]
-                )
-            elif connection is not None:
-                try:
-                    rename_command = remote_tmux_command(
-                        session,
-                        ["rename-window", "-t", session, str(new_name)],
-                    )
-                    await connection.run(rename_command, check=False)
-                except Exception as exc:
-                    logger.debug(f"Failed to rename window: {exc}")
-
-
-async def _list_tmux_windows(
-    connection: asyncssh.SSHClientConnection, session: str
-) -> list[dict[str, str | bool]] | None:
+    kind = getattr(box, "transport", "ssh")
+    directory = (
+        _normalize_local_path(request.directory)
+        if kind == "local"
+        else _normalize_directory_path(request.directory)
+    )
+    client_host = websocket.client.host if websocket.client else "unknown"
+    logger.info(
+        f"[Connection] WebSocket connected: box={box.name}, transport={kind}, "
+        f"dir={directory}, session={request.session}, client={client_host}"
+    )
     try:
-        result = await connection.run(
-            remote_tmux_command(
-                session,
-                ["list-windows", "-F", WINDOW_LIST_FORMAT, "-t", session],
-            ),
-            check=False,
+        opened = await _open_terminal(websocket, box, config, request, directory)
+    except TerminalOpenError as exc:
+        with contextlib.suppress(Exception):
+            await websocket.send_text(exc.message)
+        await websocket.close(code=exc.code, reason=exc.reason)
+        return
+    # The one teardown: whatever ends the session, the transport closes here.
+    try:
+        await _run_terminal(websocket, opened, box, kind, request)
+    finally:
+        with teardown_scope():
+            await opened.transport.close()
+        logger.info(
+            f"[Connection] WebSocket closed: box={box.name}, transport={kind}, "
+            f"session={request.session}, client={client_host}"
+        )
+
+
+async def _open_terminal(
+    websocket: WebSocket, box: Box, config: AppConfig, request: TerminalRequest, directory: str
+) -> OpenedTerminal:
+    """Open the transport *box* uses; raises ``TerminalOpenError`` with what to tell the client."""
+    if getattr(box, "transport", "ssh") != "local":
+        return await _open_remote_terminal(box, config, request, directory)
+    directory = await _local_directory_or_default(box, directory)
+    if LOCAL_IS_WINDOWS:
+        registry = websocket.app.state.win_terminal_registry
+        return await _open_windows_terminal(registry, box, request, directory)
+    return await _open_local_terminal(request, directory)
+
+
+async def _local_directory_or_default(box: Box, directory: str) -> str:
+    try:
+        is_directory = await _local_is_directory(directory)
+    except Exception as exc:
+        logger.debug(f"Failed to check if directory exists (using fallback): {exc}")
+        is_directory = False
+    return directory if is_directory else _normalize_local_path(box.default_dir)
+
+
+async def _discard_pty(process: LocalPTYProcess) -> None:
+    await LocalPtyTransport(process, None).close()
+
+
+async def _open_local_terminal(request: TerminalRequest, directory: str) -> OpenedTerminal:
+    """A tmux client on a local PTY, attached to (or creating) the session."""
+    session = request.session
+    logger.info(f"[Connection] Starting local tmux: dir={directory}, session={session}")
+    try:
+        process = await open_or_close_on_cancel(
+            _open_local_pty_tmux(directory, session), _discard_pty
         )
     except Exception as exc:
-        logger.debug(f"Failed to list tmux windows for session {session}: {exc}")
-        return None
+        logger.error(f"[Connection] Failed to start local tmux: {exc}", exc_info=True)
+        raise TerminalOpenError(f"Connection failed: {exc}\r\n") from exc
+    logger.info("[Connection] Local PTY tmux process started successfully")
+    # Ctrl+B c opens new windows in the pane's directory, and the session is recorded
+    # in ts history so it appears in ts's picker.
+    background = (_configure_tmux_bindings(session), record_ts_history(session, directory))
+    transport = LocalPtyTransport(process, LocalTmuxWindows(session), background)
+    return OpenedTerminal(transport, directory)
 
-    if result.returncode != 0 or result.stdout is None:
-        return None
 
-    stdout_str = (
-        result.stdout
-        if isinstance(result.stdout, str)
-        else result.stdout.decode("utf-8", errors="replace")
+async def _open_windows_terminal(
+    registry: WindowsTerminalRegistry, box: Box, request: TerminalRequest, directory: str
+) -> OpenedTerminal:
+    """A tab of the persisted native Windows shell for (box, session), spawned if none."""
+    logger.info(
+        f"[Connection] Starting native Windows shell: "
+        f"dir={directory}, shell={request.shell or 'default'}"
     )
-    return parse_window_list(stdout_str)
+
+    async def spawn() -> WinPTYProcess:
+        return await _open_windows_shell(request.shell, directory, request.columns, request.rows)
+
+    try:
+        session, created = await registry.get_or_create(
+            (box.name, request.session), spawn, request.columns, request.rows
+        )
+    except TooManyTerminalsError as exc:
+        logger.warning(
+            "websocket rejected: terminal session cap reached",
+            extra={
+                "service": "terminal",
+                "event": "session_cap",
+                "host": request.host,
+                "error": str(exc),
+            },
+        )
+        too_many = "Too many open terminals on this server. Close one before opening another.\r\n"
+        raise TerminalOpenError(too_many, 4504, "Too many terminals") from exc
+    except WSLNotAvailableError as exc:
+        logger.info(f"[Connection] WSL unavailable: {exc}")
+        raise TerminalOpenError(f"{exc}\r\n", 4502, "WSL not installed") from exc
+    except WinPTYUnavailableError as exc:
+        logger.warning(f"[Connection] pywinpty unavailable: {exc}")
+        raise TerminalOpenError(f"{exc}\r\n", 4503, "pywinpty not installed") from exc
+    except Exception as exc:
+        logger.error(f"[Connection] Failed to start Windows shell: {exc}", exc_info=True)
+        raise TerminalOpenError(f"Connection failed: {exc}\r\n") from exc
+    logger.info("[Connection] Windows shell %s", "started" if created else "re-attached")
+    transport = await ConPtyTransport.attach(registry, session, request.columns, request.rows)
+
+    # The registry marks the row inactive when the shell is reaped or exits.
+    def hand_row_to_registry(session_id: str) -> None:
+        session.session_id = session_id
+
+    return OpenedTerminal(transport, directory, on_tracked=hand_row_to_registry)
+
+
+async def _open_remote_terminal(
+    box: Box, config: AppConfig, request: TerminalRequest, directory: str
+) -> OpenedTerminal:
+    """tmux on a remote box over a connection of its own, closed with the terminal."""
+    logger.info(
+        f"[Connection] Connecting to SSH: host={box.connect_host}, user={box.user}, port={box.port}"
+    )
+    try:
+        connection = await connect(
+            box.connect_host,
+            box.user,
+            box.port,
+            box.keyfile,
+            box.known_hosts,
+            config.ssh_config_path,
+            box.ssh_alias,
+        )
+    except Exception as exc:  # pragma: no cover - network errors are environment specific
+        logger.error(f"[Connection] SSH connection failed: {exc}", exc_info=True)
+        raise TerminalOpenError(f"Connection failed: {exc}") from exc
+    logger.info("[Connection] SSH connection established successfully")
+    try:
+        directory = await _remote_directory_or_default(connection, box, directory)
+        process = await open_tmux(
+            connection,
+            working_directory=directory,
+            session=request.session,
+            columns=request.columns,
+            rows=request.rows,
+        )
+    except BaseException:
+        with teardown_scope():
+            await close_connection(connection)
+        raise
+    tmux = RemoteTmuxWindows(connection, request.session)
+    return OpenedTerminal(SshTransport(connection, process, tmux), directory)
+
+
+async def _remote_directory_or_default(
+    connection: asyncssh.SSHClientConnection, box: Box, directory: str
+) -> str:
+    try:
+        if not await sftp_is_directory(connection, directory):
+            return box.default_dir or f"/home/{box.user}"
+    except Exception as exc:
+        logger.debug(f"Failed to check if remote directory exists (using default): {exc}")
+    return directory
+
+
+async def _run_terminal(
+    websocket: WebSocket, opened: OpenedTerminal, box: Box, kind: str, request: TerminalRequest
+) -> None:
+    """Track the session and run the pump until the client leaves or the terminal ends."""
+    if not await take_early_message(websocket, opened.transport):
+        return
+    session_id = await _track_terminal(opened, box, kind, request)
+    try:
+        await run_pump(websocket, opened.transport, partial(_record_windows, session_id))
+    finally:
+        # A persisted Windows shell's row is the registry's to mark (see on_tracked).
+        if session_id and opened.on_tracked is None:
+            with teardown_scope():
+                try:
+                    await state.update_session_activity_async(session_id, active=False)
+                    logger.info(f"Session marked inactive: {session_id}")
+                except Exception as exc:
+                    logger.warning(f"Failed to mark session inactive: {exc}")
+
+
+async def _track_terminal(
+    opened: OpenedTerminal, box: Box, kind: str, request: TerminalRequest
+) -> str | None:
+    """Record the session row; its id, or None when it could not be recorded."""
+    try:
+        tracked = await state.create_or_update_session_async(
+            box_name=box.name,
+            session_name=request.session,
+            working_directory=opened.directory,
+            metadata={"columns": request.columns, "rows": request.rows, "transport": kind},
+        )
+        if opened.on_tracked is not None:
+            opened.on_tracked(tracked.id)
+    except Exception as exc:
+        logger.warning(f"Failed to track session: {exc}")
+        return None
+    logger.info(f"Session tracked: {tracked.id}")
+    return tracked.id
+
+
+async def _record_windows(session_id: str | None, windows: list[dict[str, str | bool]]) -> None:
+    """Record the window count each time the window list is sent."""
+    if not session_id:
+        return
+    try:
+        await state.update_session_activity_async(
+            session_id, active=True, window_count=len(windows)
+        )
+    except Exception as exc:
+        logger.debug(f"Failed to update session activity: {exc}")

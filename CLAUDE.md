@@ -21,7 +21,8 @@
 ```
 /
 ├── sshler/                 ← Python backend (FastAPI)
-│   ├── webapp.py           ← Main app, routes, WebSocket handler (~3k lines)
+│   ├── webapp.py           ← Main app, routes, WebSocket handlers; opens each terminal
+│   ├── terminal/           ← /ws/term transports (local PTY, SSH, Windows ConPTY) and the pump
 │   ├── api/                ← API v1 endpoints (modular)
 │   ├── cli.py              ← CLI entry point
 │   ├── config.py           ← Config loading (boxes.yaml + SSH config)
@@ -68,8 +69,9 @@ FastAPI + uvicorn (Python 3.12+, async) · asyncssh (SFTP + remote tmux) · SQLi
 **WebSocket terminal flow:**
 1. Client calls `/api/v1/terminal/handshake` for connection info
 2. Client connects to `/ws/term?host=...&dir=...&session=...&token=...`
-3. Server opens tmux via SSH (remote) or subprocess (local)
-4. Binary data flows bidirectionally
+3. `terminal_socket` checks access and the session name, then `webapp.py` opens one transport from `sshler/terminal/`: `LocalPtyTransport` (tmux client on a local PTY), `SshTransport` (tmux over its own SSH connection) or `ConPtyTransport` (a tab of a persisted native Windows shell). Each keeps the contract in `terminal/transport.py` (read, write, resize, close) and knows nothing of the WebSocket
+4. `terminal/pump.py` `run_pump` carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects)
+5. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
 
 **Security layers:**
 - `X-SSHLER-TOKEN` header or `token` query param for auth, compared in constant time by `access.token_matches` (REST and sockets share it)
@@ -185,7 +187,7 @@ uv run sshler serve --dev   # RECOMMENDED: FastAPI :8822 + Vite :5173 (HMR at /a
 
 - **API endpoint:** route in `sshler/api/<module>.py` (or `webapp.py`), tests in `tests/test_api_v1.py`, update the frontend client if needed.
 - **Vue component:** `frontend/src/components/`, `*.spec.ts` alongside, `<script setup>`.
-- **WebSocket protocol:** `webapp.py` handler + `TerminalView.vue` client + `test_websocket.py`/`test_terminal_websocket.py`.
+- **WebSocket protocol:** `webapp.py` handler + `sshler/terminal/pump.py` + `TerminalView.vue` client + `test_websocket.py`/`test_terminal_websocket.py`. A new transport implements `terminal/transport.py` `Transport` and joins the contract test.
 
 ## Feature pipelines (architecture + invariants)
 

@@ -24,7 +24,8 @@ from fastapi.testclient import TestClient
 
 from sshler import tmux
 from sshler.ptyspawn import spawn_on_pty
-from sshler.webapp import LocalPTYProcess, ServerSettings, _list_local_tmux_windows, make_app
+from sshler.terminal.local import list_local_tmux_windows as _list_local_tmux_windows
+from sshler.webapp import LocalPTYProcess, ServerSettings, make_app
 
 TOKEN = "teardown-token"
 SESSION = "proj-1"

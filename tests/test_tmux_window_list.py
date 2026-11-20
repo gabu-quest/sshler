@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import pytest
 
 from sshler import snapshot, tmux
-from sshler.webapp import _list_local_tmux_windows, _list_tmux_windows
+from sshler.terminal.local import list_local_tmux_windows as _list_local_tmux_windows
+from sshler.terminal.remote import list_remote_tmux_windows as _list_tmux_windows
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
 
