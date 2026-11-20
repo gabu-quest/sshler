@@ -4,14 +4,13 @@ import base64
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile
 
 from ..config import AppConfig
-from ..ssh import SSHError
 from .box_files import Answers, box_files
 from .dependencies import APIDependencies
-from .file_contract import NameRefusedError
+from .failure import REASON_INVALID, Failure
+from .file_contract import MISSING_FILE, MISSING_FOLDER, MISSING_SOURCE
 from .helpers import (
     IMAGE_CONTENT_TYPES,
     MAX_IMAGE_PREVIEW_BYTES,
@@ -19,6 +18,7 @@ from .helpers import (
     _is_markdown_file,
     _syntax_from_filename,
 )
+from .local_files import FileAnswer
 from .models import (
     APIChmodRequest,
     APICopyRequest,
@@ -30,14 +30,13 @@ from .models import (
     APISimpleMessage,
     APITouchRequest,
 )
-from .placement import _RefusalAnswers
 from .rate_limiting import rate_limit_delete, rate_limit_upload, rate_limit_write
 
 logger = logging.getLogger(__name__)
 
 
-class _TempFileResponse(FileResponse):
-    """A ``FileResponse`` that deletes its file once the response is over.
+class _TempFileResponse(FileAnswer):
+    """A ``FileAnswer`` that deletes its file once the response is over.
 
     A ``background`` task is not enough: Starlette answers a malformed or
     unsatisfiable ``Range`` with an early ``return`` that skips it, and a client
@@ -51,23 +50,21 @@ class _TempFileResponse(FileResponse):
             Path(self.path).unlink(missing_ok=True)
 
 
-# How a route answers a failure on a remote box that no operation answered itself
-# (`Answers`; the default: a failure of SSH is a 502, anything else a 500). Where a
-# route also counts the pool's `ConnectionError` (a box it could not reach) as
-# unreachable, that is a 502 too.
-_UNREACHABLE = Answers(unreachable=(SSHError, ConnectionError))
+# The texts a route gives a thing not found and work past its limit (`Answers`); the
+# reason and the status of every failure are `failure_of`'s.
+_FILE = Answers(missing=MISSING_FILE)
+_SOURCE = Answers(missing=MISSING_SOURCE)
+_FOLDER = Answers(missing=MISSING_FOLDER)
 _DIR_SIZE = Answers(
-    unreachable=(SSHError, ConnectionError),
+    missing=MISSING_FOLDER,
     timed_out="Directory size timed out",
     log_other="Failed to get dir size",
 )
-_FOLDER_ZIP = Answers(unreachable=(SSHError, ConnectionError), timed_out="Download timed out")
+_FOLDER_ZIP = Answers(missing=MISSING_FOLDER, timed_out="Download timed out")
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
-    # The routes that place a file under a new name answer a refusal with its reason.
-    placing = APIRouter(route_class=_RefusalAnswers)
 
     @router.get("/boxes/{name}/ls", response_model=APIDirectoryListing)
     async def api_list_directory(
@@ -76,23 +73,23 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APIDirectoryListing:
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config, _UNREACHABLE) as files:
+        async with box_files(deps, box, application_config, _FOLDER) as files:
             folder = await files.folder(directory)
             entries = await files.list_folder(folder)
         return APIDirectoryListing(box=box.name, directory=folder, entries=entries)
 
-    @placing.post("/boxes/{name}/rename", response_model=APISimpleMessage)
+    @router.post("/boxes/{name}/rename", response_model=APISimpleMessage)
     async def api_rename(
         name: str,
         payload: APIRenameRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.rename(payload.path, payload.new_name, overwrite=payload.overwrite)
         return APISimpleMessage(status="ok", message="renamed", path=target)
 
-    @placing.post("/boxes/{name}/touch", response_model=APISimpleMessage)
+    @router.post("/boxes/{name}/touch", response_model=APISimpleMessage)
     async def api_touch_file(
         name: str,
         payload: APITouchRequest,
@@ -125,19 +122,19 @@ def get_router(deps: APIDependencies) -> APIRouter:
         _rate_limit: None = Depends(rate_limit_delete),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.path(payload.path)
             await files.delete(target)
         return APISimpleMessage(status="ok", message="deleted", path=target)
 
-    @placing.post("/boxes/{name}/move", response_model=APISimpleMessage)
+    @router.post("/boxes/{name}/move", response_model=APISimpleMessage)
     async def api_move(
         name: str,
         payload: APIMoveRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _SOURCE) as files:
             target = await files.place_into(
                 payload.source,
                 payload.destination,
@@ -148,14 +145,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
         return APISimpleMessage(status="ok", message="moved", path=target)
 
-    @placing.post("/boxes/{name}/copy", response_model=APISimpleMessage)
+    @router.post("/boxes/{name}/copy", response_model=APISimpleMessage)
     async def api_copy(
         name: str,
         payload: APICopyRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _SOURCE) as files:
             target = await files.place_into(
                 payload.source,
                 payload.destination,
@@ -173,7 +170,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APIFilePreview:
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.path(path)
             image_mime = IMAGE_CONTENT_TYPES.get(Path(target).suffix.lower())
             image_data: str | None = None
@@ -214,12 +211,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         encoded_len = len(content.encode("utf-8"))
         if encoded_len > deps.settings.max_upload_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File exceeds {deps.settings.max_upload_bytes // 1024}KB editing limit",
+            raise Failure(
+                REASON_INVALID,
+                f"File exceeds {deps.settings.max_upload_bytes // 1024}KB editing limit",
             )
 
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.path(path)
             await files.write_text(target, content)
         return APISimpleMessage(status="ok", message="saved", path=target)
@@ -231,7 +228,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ):
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config, _UNREACHABLE) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.path(path)
             return await files.serve(target, inline=False, limit=deps.settings.max_upload_bytes)
 
@@ -243,7 +240,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ):
         """Serve a file inline with its natural MIME type (for browser rendering)."""
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config, _UNREACHABLE) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.path(path)
             return await files.serve(target, inline=True, limit=deps.settings.max_upload_bytes)
 
@@ -287,7 +284,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             kind = await files.stat(await files.path(path))
         return kind._asdict()
 
-    @placing.post("/boxes/{name}/upload", response_model=APISimpleMessage)
+    @router.post("/boxes/{name}/upload", response_model=APISimpleMessage)
     async def api_upload(
         request: Request,
         name: str,
@@ -300,7 +297,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         candidate_name = (file.filename or "").strip()
         if not candidate_name:
-            raise HTTPException(status_code=400, detail="Missing filename")
+            raise Failure(REASON_INVALID, "Missing filename")
 
         try:
             contents = await file.read()
@@ -309,13 +306,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         if len(contents) > deps.settings.max_upload_bytes:
             limit_kb = deps.settings.max_upload_bytes // 1024
-            raise HTTPException(status_code=400, detail=f"Upload exceeds {limit_kb} KB limit")
+            raise Failure(REASON_INVALID, f"Upload exceeds {limit_kb} KB limit")
 
         async with box_files(deps, box, application_config) as files:
-            try:
-                target = await files.child(directory, candidate_name)
-            except NameRefusedError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            target = await files.child(directory, candidate_name)
             await files.upload(target, contents, overwrite=overwrite)
         return APISimpleMessage(status="ok", message="uploaded", path=target)
 
@@ -330,14 +324,13 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             mode = int(payload.mode, 8)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid octal mode") from exc
+            raise Failure(REASON_INVALID, "Invalid octal mode") from exc
         if mode < 0 or mode > 0o7777:
-            raise HTTPException(status_code=400, detail="Mode out of range")
+            raise Failure(REASON_INVALID, "Mode out of range")
 
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _FILE) as files:
             target = await files.path(payload.path)
             await files.chmod(target, mode)
         return APISimpleMessage(status="ok", message="chmod applied", path=target)
 
-    router.include_router(placing)
     return router

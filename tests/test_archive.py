@@ -361,7 +361,10 @@ class TestLocalArchiveGuards:
         root, client = place
         (root / "notes.txt").write_text("plain")
         resp = _extract(client, root / "notes.txt", root / "dest")
-        assert (resp.status_code, resp.json()) == (400, {"detail": "Unsupported archive format"})
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": "Unsupported archive format", "reason": "invalid"},
+        )
         assert list((root / "dest").iterdir()) == []
 
     def test_a_tar_entry_with_a_parent_reference_is_refused(self, place):
@@ -413,7 +416,7 @@ class TestLocalArchiveGuards:
         resp = _extract(client, root / "up.zip", root / "dest")
         assert (resp.status_code, resp.json()) == (
             400,
-            {"detail": "Archive contains unsafe path: ../outside/x.txt"},
+            {"detail": "Archive contains unsafe path: ../outside/x.txt", "reason": "invalid"},
         )
         assert list((root / "outside").iterdir()) == []
 
@@ -453,7 +456,7 @@ def test_a_local_archive_name_is_one_file_name_whatever_it_holds(
         assert zf.namelist() == ["file.txt"]
 
 
-def test_a_local_archive_of_a_missing_source_is_500_with_its_text(tmp_path, monkeypatch):
+def test_a_local_archive_of_a_missing_source_is_404_with_its_text(tmp_path, monkeypatch):
     config_dir = setup_config(tmp_path)
     dest = (tmp_path / "dest").resolve()
     dest.mkdir()
@@ -473,6 +476,6 @@ def test_a_local_archive_of_a_missing_source_is_500_with_its_text(tmp_path, monk
     finally:
         client.close()
     assert (resp.status_code, resp.json()) == (
-        500,
-        {"detail": f"[Errno 2] No such file or directory: {str(missing)!r}"},
+        404,
+        {"detail": f"No such file or directory: {missing}", "reason": "not_found"},
     )

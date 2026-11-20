@@ -35,6 +35,16 @@ tests of the kind per route module, so a new one outside such a function fails t
 A remote path with `~`, a remote command line built from words, and an SFTP session each
 have one owner: `remote_path` and `command` in `api/remote.py`, `sftp_session` in `ssh.py`.
 
+**A failed request** answers a failure status and `{"detail": text, "reason": word}`, written
+by one owner, `api/failure.py`. `STATUS_OF_REASON` there is the list of reasons, each with its
+one status. Code that refuses a request raises `Failure(reason, text)`; `failure_of` names the
+reason of any other error by its type (errno, SFTP type), never by its words, the same for
+both kinds of box; `failure_entry` gives an item of a batch the reason a single request would
+answer; `answer` writes the body for a check that runs before any route. The file routes are
+on it (`tests/test_failure_reasons.py` is their table, run on both kinds); a route outside
+them that raises a plain `HTTPException` gets its reason from its status. Every failure
+answer the suite's test client receives is checked by `tests/failure_check.py`.
+
 ## Frontend details
 
 **Emoji favicon system** in `src/utils/emoji-favicon.ts`:

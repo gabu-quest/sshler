@@ -12,10 +12,12 @@ methods take paths as the client sent them, because each kind checks them in its
 order before it resolves them. A transfer splits ``path`` in two: ``check_path``
 before anything is opened, ``resolve`` once the box is reached.
 
-Answers: an operation raises ``HTTPException`` for the answers it gives itself (a
-missing directory, a name the existing-name rule refuses, a file too large); any other
-failure is answered by ``box_files`` as the route asked, or not at all where the kind
-of box never answered it.
+Failures: an operation raises ``Failure`` (``failure.py``) only for an answer it gives
+itself (a size limit, a name the existing-name rule refuses, a folder where a file is
+needed that SFTP version 3 cannot name); any other failure goes on as raised, and
+``box_files`` answers it with ``failure_of``, the same way for both kinds of box.
+``as_sent`` gives back the client's spelling of a path the box resolved, so an answer
+never names a server path the client did not send.
 """
 
 from __future__ import annotations
@@ -31,12 +33,47 @@ from .models import APIDirectoryEntry
 
 
 class NameRefusedError(ValueError):
-    """``child`` on the local box was given a name that is not one name.
+    """``child`` on the local box was given a name that is not one name; answered as
+    ``invalid``, as a remote box's ``ValidationError`` for the same name is."""
 
-    The local routes answer it differently (an upload with a 400, a new file or folder
-    not at all), so it is raised for the route; a remote box refuses the name with a
-    ``ValidationError``, which ``box_files`` answers.
-    """
+
+# A folder was asked for and the path is not one.
+NOT_A_FOLDER = "Path is not a directory"
+
+# What a route, and a batch item of the same operation, says of a thing not found.
+MISSING_FILE = "File not found"
+MISSING_SOURCE = "Source not found"
+MISSING_FOLDER = "Directory not found"
+MISSING_ARCHIVE = "Archive not found"
+
+
+class SpelledPaths:
+    """The paths a block resolved, each with the spelling the client sent, for
+    ``BoxFiles.as_sent``."""
+
+    def __init__(self, separator: str) -> None:
+        self._separator = separator
+        self._sent: dict[str, str] = {}
+
+    def note(self, resolved: str, sent: str) -> str:
+        """Remember ``sent`` for ``resolved``; returns ``resolved``."""
+        self._sent.setdefault(resolved, sent)
+        return resolved
+
+    def as_sent(self, path: str) -> str | None:
+        """``path`` spelled from the longest resolved path that is it or holds it."""
+        best: str | None = None
+        for resolved in self._sent:
+            inside = path == resolved or path.startswith(
+                resolved.rstrip(self._separator) + self._separator
+            )
+            if inside and (best is None or len(resolved) > len(best)):
+                best = resolved
+        if best is None:
+            return None
+        rest = path[len(best) :].lstrip(self._separator)
+        sent = self._sent[best]
+        return f"{sent.rstrip(self._separator)}{self._separator}{rest}" if rest else sent
 
 
 # The archive names both kinds pack and unpack; a tar is gzipped.
@@ -138,6 +175,11 @@ class BoxFiles(Protocol):
 
     def join(self, folder: str, name: str) -> str:
         """``name`` in ``folder``, as this kind of box spells paths; nothing is checked."""
+        ...
+
+    def as_sent(self, path: str) -> str | None:
+        """The client's spelling of ``path`` (or of a path under it), a path this block
+        resolved from what the client sent; None for any other path."""
         ...
 
     async def prepare(self) -> None:

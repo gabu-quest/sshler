@@ -6,12 +6,13 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from ..access import token_matches
 from ..config import AppConfig, Box, find_box, get_config_path, load_config
 from ..config_cache import get_cache
 from ..ssh import SSHError, connect
+from .failure import REASON_NOT_FOUND, Failure
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from .tunnels import TunnelRegistry
@@ -64,7 +65,7 @@ class APIDependencies:
             logger.warning(
                 "Token mismatch on %s: supplied=%s", request.url.path, "yes" if supplied else "no"
             )
-            raise HTTPException(status_code=403, detail="Missing or invalid X-SSHLER-TOKEN header")
+            raise Failure("token", "Missing or invalid X-SSHLER-TOKEN header")
 
     async def get_application_config(self) -> AppConfig:
         """Dependency that loads the persisted configuration with caching."""
@@ -86,7 +87,7 @@ class APIDependencies:
     def get_box_or_404(self, application_config: AppConfig, name: str) -> Box:
         box = find_box(application_config, name)
         if box is None:
-            raise HTTPException(status_code=404, detail="Box not found")
+            raise Failure(REASON_NOT_FOUND, "Box not found")
         return box
 
     async def connect_for_box(self, box: Box, application_config: AppConfig):

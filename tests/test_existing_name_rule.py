@@ -46,6 +46,7 @@ from fastapi.testclient import TestClient
 from sshler import ssh_pool, state
 from sshler.api import local_files as local_files_api
 from sshler.api import remote_files as remote_files_api
+from sshler.api.failure import Failure
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
 
@@ -560,7 +561,10 @@ def test_a_remote_or_local_rename_of_a_missing_file_is_404(env, box):
     """Before: the remote rename turned the SFTP "no such file" into a 500."""
     s = side(env, box)
     resp = single(s, "rename", "ghost.txt", "new.txt")
-    assert (resp.status_code, resp.json()) == (404, {"detail": "File not found"})
+    assert (resp.status_code, resp.json()) == (
+        404,
+        {"detail": "File not found", "reason": "not_found"},
+    )
 
 
 @pytest.mark.parametrize("value", ["true", 1, "false", 0])
@@ -578,8 +582,10 @@ def test_overwrite_must_be_a_json_boolean(local_env, route, value):
     else:
         body = {"source": s.path("a.txt"), "destination": s.path("d")}
     resp = s.post(route, {**body, "overwrite": value})
-    assert resp.status_code == 422
-    assert resp.json()["detail"][0]["loc"][-1] == "overwrite"
+    assert (resp.status_code, resp.json()) == (
+        422,
+        {"detail": "body.overwrite: Input should be a valid boolean", "reason": "invalid"},
+    )
     assert files_under(s.base) == {"a.txt": b"source", "d": "dir", "d/a.txt": b"precious"}
 
 
@@ -798,7 +804,7 @@ def test_a_batch_does_the_free_names_and_lists_each_refused_item_with_its_reason
     }
     assert (body["failed"][2]["path"], body["failed"][2]["reason"]) == (
         s.path("ghost.txt"),
-        "failed",
+        "not_found",
     )
     assert s.disk("d/file.txt").read_bytes() == b"precious"
     assert files_under(s.disk("d/folder.txt")) == {}
@@ -1221,9 +1227,34 @@ def _tree_with_an_unreadable_file(s: Side) -> None:
 
 
 def _unreadable_reason(s: Side) -> str:
-    if s.box == "local":
-        return f"[Errno 13] Permission denied: '{s.disk('tree/three.txt')}'"
     return "Permission denied"
+
+
+def test_a_folder_copy_whose_failure_is_not_a_files_answers_the_systems_text(tmp_path, monkeypatch):
+    """``copytree`` keeps a failure outside a file's copy (a folder's times and modes) as
+    a text only; the answer is that text, never the list ``copytree`` raises."""
+    (tmp_path / "tree").mkdir()
+    (tmp_path / "tree" / "one.txt").write_bytes(b"one")
+    source, target = str(tmp_path / "tree"), str(tmp_path / "copy")
+
+    copystat = shutil.copystat
+
+    def refuse_for_a_folder(src, dst, *, follow_symlinks=True):
+        if os.path.isdir(src):
+            raise OSError(errno.EPERM, "Operation not permitted")
+        copystat(src, dst, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(shutil, "copystat", refuse_for_a_folder)
+
+    with pytest.raises(Failure) as raised:
+        local_files_api._local_copy_folder_new(source, target, symlinks=True)
+
+    assert (raised.value.status_code, raised.value.reason, raised.value.detail) == (
+        500,
+        "failed",
+        f"Could not copy {source} to {target}: [Errno 1] Operation not permitted",
+    )
+    assert os.path.lexists(target) is False
 
 
 @pytest.mark.parametrize("box", BOXES)
@@ -1245,7 +1276,7 @@ def test_a_folder_copy_that_fails_half_way_leaves_nothing_under_its_name(env, bo
         {
             "status": "partial",
             "succeeded": [],
-            "failed": [{"path": s.path("tree"), "error": error, "reason": "failed"}],
+            "failed": [{"path": s.path("tree"), "error": error, "reason": "denied"}],
         },
     )
     assert files_under(s.disk("d")) == {}
@@ -1281,7 +1312,7 @@ def test_a_cross_device_folder_move_that_fails_half_way_leaves_nothing(local_env
         s.disk("tree/three.txt").chmod(0o644)
 
     error = f"Could not copy {s.path('tree')} to {s.path('d/tree')}: {_unreadable_reason(s)}"
-    assert (resp.status_code, resp.json()) == (500, {"detail": error})
+    assert (resp.status_code, resp.json()) == (403, {"detail": error, "reason": "denied"})
     assert files_under(s.disk("d")) == {}
     assert s.disk("tree/three.txt").read_bytes() == b"three"
 
@@ -1315,7 +1346,7 @@ def test_a_partial_folder_that_cannot_be_removed_is_named(env, monkeypatch, box)
         f"Could not copy {s.path('tree')} to {s.path('d/tree')}: {_unreadable_reason(s)}; "
         f"the partial copy at {s.path('d/tree')} could not be removed: connection gone"
     )
-    assert resp.json()["failed"] == [{"path": s.path("tree"), "error": error, "reason": "failed"}]
+    assert resp.json()["failed"] == [{"path": s.path("tree"), "error": error, "reason": "denied"}]
     assert s.disk("d/tree").is_dir() is True
 
 
@@ -1504,7 +1535,10 @@ def test_a_replace_whose_second_rename_fails_puts_the_old_file_back(env, box, op
 
     resp = single(s, op, "a.txt", "b.txt" if op == "rename" else "d", overwrite=True)
 
-    assert (resp.status_code, resp.json()) == (500, {"detail": "rename refused"})
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": "rename refused", "reason": "failed"},
+    )
     assert files_under(s.base) == before
 
 
@@ -1522,7 +1556,12 @@ def test_a_backup_that_cannot_be_put_back_is_named(env, box):
     backup = f"/d/{backups[0]}"
     assert (resp.status_code, resp.json()) == (
         500,
-        {"detail": f"Could not replace /d/a.txt: rename refused; the old file is kept at {backup}"},
+        {
+            "detail": (
+                f"Could not replace /d/a.txt: rename refused; the old file is kept at {backup}"
+            ),
+            "reason": "failed",
+        },
     )
     assert files_under(s.disk("d")) == {backups[0]: b"old"}
     assert s.disk("a.txt").read_bytes() == b"source"
@@ -1650,7 +1689,10 @@ def test_a_cross_device_local_move_keeps_a_source_written_to_during_the_copy(
 
     resp = single(s, "move", "a.txt")
 
-    assert (resp.status_code, resp.json()) == (500, {"detail": source_changed(s.path("d/a.txt"))})
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": source_changed(s.path("d/a.txt")), "reason": "failed"},
+    )
     assert s.disk("d/a.txt").read_bytes() == b"source"
     assert s.disk("a.txt").read_bytes() == b"source and more"
 
@@ -1671,7 +1713,10 @@ def test_a_remote_move_by_copy_keeps_a_source_written_to_during_the_copy(
 
     resp = single(s, "move", "a.txt", overwrite=overwrite)
 
-    assert (resp.status_code, resp.json()) == (500, {"detail": source_changed("/d/a.txt")})
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": source_changed("/d/a.txt"), "reason": "failed"},
+    )
     assert s.disk("d/a.txt").read_bytes() == b"source"
     assert s.disk("a.txt").read_bytes() == b"source and more"
 
@@ -1776,15 +1821,15 @@ def test_a_batch_whose_destination_cannot_be_made_fails_each_item(local_env):
         {"paths": [s.path("a.txt"), s.path("b.txt")], "destination": s.path("b.txt/in")},
     )
 
-    reason = f"[Errno 20] Not a directory: '{s.path('b.txt/in')}'"
+    reason = f"Not a directory: {s.path('b.txt/in')}"
     assert (resp.status_code, resp.json()) == (
         200,
         {
             "status": "partial",
             "succeeded": [],
             "failed": [
-                {"path": s.path("a.txt"), "error": reason, "reason": "failed"},
-                {"path": s.path("b.txt"), "error": reason, "reason": "failed"},
+                {"path": s.path("a.txt"), "error": reason, "reason": "not_found"},
+                {"path": s.path("b.txt"), "error": reason, "reason": "not_found"},
             ],
         },
     )
@@ -1964,7 +2009,10 @@ def test_a_cross_device_folder_move_keeps_a_source_changed_in_a_sub_folder(
 
     resp = s.post("move", {"source": s.path("tree"), "destination": s.path("d")})
 
-    assert (resp.status_code, resp.json()) == (500, {"detail": source_changed(s.path("d/tree"))})
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": source_changed(s.path("d/tree")), "reason": "failed"},
+    )
     expected_deep = b"deep and more" if change == "append" else b"deep"
     assert s.disk("tree/sub/deep.txt").read_bytes() == expected_deep
     assert s.disk("tree/sub/new.txt").exists() is (change == "add")
@@ -2023,7 +2071,10 @@ def test_a_cross_device_move_keeps_a_source_replaced_by_a_file_of_equal_size_and
 
     resp = single(s, "move", "a.txt")
 
-    assert (resp.status_code, resp.json()) == (500, {"detail": source_changed(s.path("d/a.txt"))})
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": source_changed(s.path("d/a.txt")), "reason": "failed"},
+    )
     assert s.disk("d/a.txt").read_bytes() == b"source"
     assert s.disk("a.txt").read_bytes() == b"SOURCE"
 
@@ -2060,7 +2111,7 @@ def test_a_local_write_that_fails_removes_its_partial_file_when_close_fails_too(
 
     assert (resp.status_code, resp.json()) == (
         500,
-        {"detail": "[Errno 28] No space left on device"},
+        {"detail": "No space left on device", "reason": "failed"},
     )
     assert files_under(s.base) == {"a.txt": b"source", "d": "dir"}
 
@@ -2086,7 +2137,7 @@ def test_a_local_copy_validates_its_new_name(local_env, new_name, message):
         "copy", {"source": s.path("a.txt"), "destination": s.path("d"), "new_name": new_name}
     )
 
-    assert (resp.status_code, resp.json()) == (400, {"detail": message})
+    assert (resp.status_code, resp.json()) == (400, {"detail": message, "reason": "invalid"})
     assert files_under(s.base) == before
 
 

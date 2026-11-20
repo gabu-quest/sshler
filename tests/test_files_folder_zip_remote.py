@@ -365,7 +365,7 @@ def test_unresolvable_home_is_an_error(remote):
     resp = dir_size(client, "~")
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
     )
     assert log == [HOME_CMD]
 
@@ -422,7 +422,7 @@ def test_download_failure_reports_the_zip_error(remote):
     resp = download(client, "/gone")
     assert (resp.status_code, resp.json()) == (
         500,
-        {"detail": "zip failed: zip error: Nothing to do!"},
+        {"detail": "zip failed: zip error: Nothing to do!", "reason": "failed"},
     )
 
 
@@ -465,7 +465,7 @@ def test_unreachable_box_is_a_502_with_the_pool_message(remote, monkeypatch, cal
     resp = call(client, "/srv")
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "remote1: unreachable (cached, retry in 42s)"},
+        {"detail": "remote1: unreachable (cached, retry in 42s)", "reason": "unreachable"},
     )
 
 
@@ -582,7 +582,7 @@ def test_zip_past_the_cap_is_aborted_one_chunk_past_it(remote, small_cap):
     resp = download(remote.client, "/srv/big")
     assert (resp.status_code, resp.json()) == (
         413,
-        {"detail": "Directory too large to download"},
+        {"detail": "Directory too large to download", "reason": "too_large"},
     )
     # 10 chunks reach the cap exactly; the 11th passes it and stops the read.
     assert proc.stdout.requested == [CHUNK] * 11
@@ -653,7 +653,10 @@ def test_dir_size_of_a_missing_folder_is_404(remote):
     replies["du -sk /nope"] = reply("", err, 1)
     replies["test -d /nope"] = reply("", "", 1)
     resp = dir_size(client, "/nope")
-    assert (resp.status_code, resp.json()) == (404, {"detail": "Directory not found"})
+    assert (resp.status_code, resp.json()) == (
+        404,
+        {"detail": "Directory not found", "reason": "not_found"},
+    )
     assert log == ["du -sb /nope", "du -sk /nope", "test -d /nope"]
 
 
@@ -744,7 +747,7 @@ def test_file_routes_too_large_is_413_not_500(remote, monkeypatch, route, detail
 
     monkeypatch.setattr(remote_files_api, "_read_file_bytes", too_big)
     resp = client.get(f"/api/v1/boxes/{BOX}/{route}", params={"path": "/srv/x"}, headers=HEADERS)
-    assert (resp.status_code, resp.json()) == (413, {"detail": detail})
+    assert (resp.status_code, resp.json()) == (413, {"detail": detail, "reason": "too_large"})
 
 
 @pytest.mark.parametrize(
@@ -767,7 +770,7 @@ def test_file_routes_unreachable_box_is_502(remote, monkeypatch, route, params):
     resp = client.get(f"/api/v1/boxes/{BOX}/{route}", params=params, headers=HEADERS)
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "remote1: unreachable (cached, retry in 42s)"},
+        {"detail": "remote1: unreachable (cached, retry in 42s)", "reason": "unreachable"},
     )
 
 
@@ -929,7 +932,7 @@ def test_write_route_with_an_unresolvable_home_is_502_and_writes_nothing(remote)
     resp = _post(remote, "write", {"path": "~/a.txt", "content": "x"})
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
     )
     assert remote.sftp.calls == []
 
@@ -1139,7 +1142,7 @@ def test_a_failed_zip_reports_the_tail_of_a_long_stderr(remote, small_cap, monke
     resp = download(remote.client, "/srv/big")
     keep = 64 * 1024
     expected = "zip failed: " + ("w" * (keep - len(last))) + last.decode()
-    assert (resp.status_code, resp.json()) == (500, {"detail": expected})
+    assert (resp.status_code, resp.json()) == (500, {"detail": expected, "reason": "failed"})
 
 
 # --- existing remote files are never overwritten (wave 5c, WS-AE) ----------------
@@ -1238,11 +1241,11 @@ def test_touch_and_upload_refuse_a_target_whose_stat_is_denied(remote):
     """Mutation: treat every failed lstat as "the name is free" (`except Exception:
     pass`); the route opens the file and answers 200."""
     remote.sftp.denied.add("/srv/a.txt")
-    expected = {"detail": "Cannot check whether /srv/a.txt exists: Permission denied"}
+    expected = {"detail": "Permission denied", "reason": "denied"}
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})
-    assert (resp.status_code, resp.json()) == (400, expected)
+    assert (resp.status_code, resp.json()) == (403, expected)
     resp = _upload(remote, "a.txt", b"payload")
-    assert (resp.status_code, resp.json()) == (400, expected)
+    assert (resp.status_code, resp.json()) == (403, expected)
     assert remote.sftp.contents == {}
     assert remote.sftp.calls == [("lstat", "/srv/a.txt"), ("lstat", "/srv/a.txt")]
 

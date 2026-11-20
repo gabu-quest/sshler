@@ -171,7 +171,7 @@ def test_archive_create_with_a_failed_home_lookup_is_502_and_runs_nothing(remote
     )
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
     )
     assert remote.log == [HOME_CMD]
 
@@ -263,8 +263,12 @@ BOOK = {
         ("../book.xlsx", 200, BOOK),
         ("{home}/link.xlsx", 200, BOOK),
         ("{home}/sub/../book.xlsx", 200, BOOK),
-        ("{home}/nope.xlsx", 500, "Internal Server Error"),
-        ("{home}/bo\x00ok.xlsx", 500, "Internal Server Error"),
+        ("{home}/nope.xlsx", 404, {"detail": "File not found", "reason": "not_found"}),
+        (
+            "{home}/bo\x00ok.xlsx",
+            400,
+            {"detail": "Path cannot contain null bytes", "reason": "invalid"},
+        ),
     ],
     ids=["absolute", "home", "relative", "link", "parent", "missing", "null byte"],
 )
@@ -275,8 +279,7 @@ def test_a_local_excel_preview_takes_the_path_as_the_file_route_does(
     home, client = local_excel
     path = sent.replace("{home}", str(home))
     resp = client.get("/api/v1/boxes/local/excel", params={"path": path}, headers=HEADERS)
-    found = resp.json() if resp.status_code == 200 else resp.text
-    assert (resp.status_code, found) == (status, body)
+    assert (resp.status_code, resp.json()) == (status, body)
 
 
 def test_grep_searches_the_resolved_home_directory(remote):

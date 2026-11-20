@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import logging
 import mimetypes
+import os
 import posixpath
 import secrets
 import stat as stat_mod
@@ -16,21 +18,35 @@ from pathlib import Path, PurePosixPath
 from types import TracebackType
 
 import asyncssh
-from fastapi import HTTPException
 from fastapi.responses import Response
 
 from .. import state
 from ..config import Box
-from ..ssh import SSHError, sftp_chmod, sftp_list_directory, sftp_read_file, sftp_session
+from ..ssh import sftp_chmod, sftp_list_directory, sftp_read_file, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
+from .failure import (
+    REASON_FAILED,
+    REASON_INVALID,
+    REASON_NOT_FOUND,
+    REASON_TIMEOUT,
+    REASON_UNREACHABLE,
+    Failure,
+    failure_entry,
+    failure_of,
+)
 from .file_contract import (
+    MISSING_FILE,
+    MISSING_FOLDER,
+    MISSING_SOURCE,
+    NOT_A_FOLDER,
     TAR_SUFFIXES,
     BatchOutcome,
     FolderZip,
     PathKind,
     ReadChunk,
     SourceFile,
+    SpelledPaths,
     is_archive_name,
 )
 from .helpers import _attachment_header
@@ -44,7 +60,6 @@ from .placement import (
     _refuse_or_replace,
     _taken_after_check,
     ensure_source_unchanged,
-    failure_entry,
     kept_permission_bits,
     refuse_a_name_this_request_placed,
     run_to_end,
@@ -73,16 +88,12 @@ logger = logging.getLogger(__name__)
 
 
 async def _remote_lstat_mode(sftp_client, path: str) -> int | None:
-    """Only "no such file" counts as free; any other failure (permission denied) is a
-    400, since the name cannot be shown to be free."""
+    """Only "no such file" counts as free; any other failure (permission denied) goes
+    on as raised, since the name cannot be shown to be free."""
     try:
         attrs = await sftp_client.lstat(path)
     except asyncssh.SFTPNoSuchFile:
         return None
-    except asyncssh.SFTPError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Cannot check whether {path} exists: {exc.reason}"
-        ) from exc
     return attrs.permissions or 0
 
 
@@ -184,9 +195,9 @@ class _RemoteLanding:
             try:
                 await run_to_end(self.sftp.rename(backup, self.target))
             except Exception as restore_exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Could not replace {self.target}: {_reason(exc)}; "
+                raise Failure(
+                    REASON_FAILED,
+                    f"Could not replace {self.target}: {_reason(exc)}; "
                     f"the old file is kept at {backup}",
                 ) from restore_exc
             raise
@@ -231,7 +242,7 @@ async def _remote_landing(
     dest_mode = await _remote_lstat_mode(sftp_client, target)
     replace = _refuse_or_replace(dest_mode, overwrite=overwrite, source_regular=source_regular)
     if not source_regular:
-        raise HTTPException(status_code=400, detail=_ONLY_FILES)
+        raise Failure(REASON_INVALID, _ONLY_FILES)
     return await _RemoteLanding.start(
         sftp_client,
         target,
@@ -294,12 +305,15 @@ async def _remote_copy_folder_new(sftp_client, source: str, target: str) -> None
     try:
         await _remote_copy_tree(sftp_client, source, target)
     except Exception as exc:
-        detail = f"Could not copy {source} to {target}: {_reason(exc)}"
+        cause = failure_of(exc)
+        detail = f"Could not copy {source} to {target}: {cause.detail}"
         try:
             await run_to_end(_remote_remove_tree(sftp_client, target))
         except Exception as cleanup:
-            detail += f"; the partial copy at {target} could not be removed: {_reason(cleanup)}"
-        raise HTTPException(status_code=500, detail=detail) from exc
+            detail += (
+                f"; the partial copy at {target} could not be removed: {failure_of(cleanup).detail}"
+            )
+        raise Failure(cause.reason, detail) from exc
 
 
 async def _remote_remove_moved_source(
@@ -315,9 +329,8 @@ async def _remote_remove_moved_source(
             ensure_source_unchanged(before, after, target)
         await sftp_client.remove(source)
     except asyncssh.SFTPError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Copied to {target}, but the source could not be removed: {exc.reason}",
+        raise Failure(
+            REASON_FAILED, f"Copied to {target}, but the source could not be removed: {exc.reason}"
         ) from exc
 
 
@@ -435,7 +448,7 @@ async def _remote_place(
         same_file=source == target,
     )
     if stat_mod.S_ISDIR(source_mode) and not allow_dirs:
-        raise HTTPException(status_code=400, detail=_NO_FOLDER_COPY)
+        raise Failure(REASON_INVALID, _NO_FOLDER_COPY)
     if replace and move:
         assert dest_mode is not None
         if not await _remote_replace_by_rename(sftp_client, source, target, source_mode, dest_mode):
@@ -552,7 +565,7 @@ async def _spool_remote_zip(connection, command: str, dest: str) -> None:
 
     At most one chunk is held in memory. Past ``MAX_DIR_DOWNLOAD_BYTES`` the remote
     process is killed and ``_ZipTooLargeError`` raised; the caller must not pool the
-    connection afterwards. A non-zero exit raises ``HTTPException(500)`` with stderr.
+    connection afterwards. A non-zero exit is ``failed`` with stderr.
     """
     limit = MAX_DIR_DOWNLOAD_BYTES
     chunk_size = ZIP_STREAM_CHUNK_BYTES
@@ -584,7 +597,7 @@ async def _spool_remote_zip(connection, command: str, dest: str) -> None:
         process.close()
     if completed.exit_status != 0:
         message = stderr.decode(errors="replace")
-        raise HTTPException(status_code=500, detail=f"zip failed: {message}")
+        raise Failure(REASON_FAILED, f"zip failed: {message}")
 
 
 async def _read_file_bytes(
@@ -622,7 +635,7 @@ async def _resolve_tilde_paths(
 ) -> list[tuple[str, str]]:
     """Resolve ``~`` in each validated path against the remote home. SFTP and the
     quoted shell commands do not expand it. A path that no longer validates is
-    reported in ``failed``; a failed home lookup (HTTP 502) aborts the batch."""
+    reported in ``failed``; a failed home lookup aborts the batch."""
     resolved: list[tuple[str, str]] = []
     for orig, vpath in validated:
         try:
@@ -636,7 +649,7 @@ async def _resolve_tilde_destination(connection, destination: str) -> str:
     try:
         return await remote_path(connection, destination)
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+        raise Failure(REASON_INVALID, f"Invalid destination: {exc}") from exc
 
 
 class RemoteFiles:
@@ -660,6 +673,7 @@ class RemoteFiles:
         self._connection: asyncssh.SSHClientConnection | None = None
         self._sftp: asyncssh.SFTPClient | None = None
         self._after: list[Callable[[], Awaitable[object]]] = []
+        self._spelled = SpelledPaths("/")
 
     async def __aenter__(self) -> RemoteFiles:
         await self._stack.__aenter__()
@@ -691,15 +705,38 @@ class RemoteFiles:
             self._sftp = await self._stack.enter_async_context(sftp_session(await self._conn()))
         return self._sftp
 
+    @contextlib.asynccontextmanager
+    async def _needs(self, path: str, *, folder: bool) -> AsyncIterator[None]:
+        """SFTP version 3 has no code for a folder where a file is needed or the reverse:
+        the server says "no such file" or a bare failure. When the block fails so, the
+        kind of ``path`` is asked for, and a folder where a file is needed fails as the
+        local box's ``IsADirectoryError``, a file where a folder is needed as
+        ``NOT_A_FOLDER``; any other failure goes on as raised."""
+        try:
+            yield
+        except (asyncssh.SFTPNoSuchFile, asyncssh.SFTPFailure) as exc:
+            try:
+                attrs = await (await self._session()).stat(path)
+            except asyncssh.SFTPError:
+                raise exc from None
+            is_folder = stat_mod.S_ISDIR(attrs.permissions or 0)
+            if folder and not is_folder:
+                raise Failure(REASON_INVALID, NOT_A_FOLDER) from exc
+            if is_folder and not folder:
+                raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), path) from exc
+            raise
+
     # --- paths -----------------------------------------------------------------------
 
     async def path(self, path: str) -> str:
         PathValidator.validate_remote_path(path)
-        return await remote_path(await self._conn(), path)
+        return self._spelled.note(await remote_path(await self._conn(), path), path)
 
     async def folder(self, directory: str) -> str:
         # `~` is the remote home, as for the folder zip (not `/`).
-        return await remote_directory(await self._conn(), directory)
+        PathValidator.validate_remote_path(directory)
+        resolved = await remote_directory(await self._conn(), directory)
+        return self._spelled.note(resolved, directory)
 
     async def child(self, directory: str, name: str) -> str:
         validated = PathValidator.validate_filename(name)
@@ -714,13 +751,16 @@ class RemoteFiles:
         return path
 
     async def resolve(self, checked: str) -> str:
-        return await remote_path(await self._conn(), checked)
+        return self._spelled.note(await remote_path(await self._conn(), checked), checked)
 
     def name(self, path: str) -> str:
         return PurePosixPath(path).name
 
     def join(self, folder: str, name: str) -> str:
         return str(PurePosixPath(folder) / name)
+
+    def as_sent(self, path: str) -> str | None:
+        return self._spelled.as_sent(path)
 
     async def prepare(self) -> None:
         await self._session()
@@ -730,7 +770,8 @@ class RemoteFiles:
     async def list_folder(self, directory: str) -> list[APIDirectoryEntry]:
         """The visit to ``directory`` is recorded for the frecency search once the
         connection is back in the pool."""
-        raw_entries = await sftp_list_directory(await self._conn(), directory)
+        async with self._needs(directory, folder=True):
+            raw_entries = await sftp_list_directory(await self._conn(), directory)
         entries = [
             APIDirectoryEntry(
                 name=str(entry["name"]),
@@ -752,7 +793,7 @@ class RemoteFiles:
         sftp_client = await self._session()
         try:
             attrs = await sftp_client.stat(path)
-        except (FileNotFoundError, OSError):
+        except (asyncssh.SFTPNoSuchFile, asyncssh.SFTPNoSuchPath):
             return PathKind(exists=False, is_directory=False, is_file=False)
         perms = attrs.permissions
         return PathKind(
@@ -763,17 +804,20 @@ class RemoteFiles:
 
     async def read_bytes(self, path: str, limit: int) -> tuple[bytes, bool]:
         """A file larger than ``limit`` gives ``(b"", True)``."""
-        return await _read_file_bytes(await self._conn(), path, limit)
+        async with self._needs(path, folder=False):
+            return await _read_file_bytes(await self._conn(), path, limit)
 
     async def read_text(self, path: str, limit: int) -> str:
-        return await _read_remote_text(await self._conn(), path, limit)
+        async with self._needs(path, folder=False):
+            return await _read_remote_text(await self._conn(), path, limit)
 
     async def serve(self, path: str, *, inline: bool, limit: int) -> Response:
         """Read whole into memory, so a file larger than ``limit`` is a 413."""
-        content, too_large = await _read_file_bytes(await self._conn(), path, limit)
+        async with self._needs(path, folder=False):
+            content, too_large = await _read_file_bytes(await self._conn(), path, limit)
         if too_large:
             detail = "File too large to view" if inline else "File too large to download via API"
-            raise HTTPException(status_code=413, detail=detail)
+            raise Failure("too_large", detail)
         if inline:
             mime, _ = mimetypes.guess_type(path)
             return Response(
@@ -800,7 +844,7 @@ class RemoteFiles:
                 connection.run(directory_test_command(path)), timeout=10
             )
             if exists.exit_status != 0:
-                raise HTTPException(status_code=404, detail="Directory not found")
+                raise Failure(REASON_NOT_FOUND, MISSING_FOLDER)
         return size
 
     async def zip_folder(self, path: str) -> FolderZip:
@@ -836,9 +880,7 @@ class RemoteFiles:
                 else:
                     ssh_pool.discard(self._box.name, connection)
             if isinstance(exc, _ZipTooLargeError):
-                raise HTTPException(
-                    status_code=413, detail="Directory too large to download"
-                ) from exc
+                raise Failure("too_large", "Directory too large to download") from exc
             raise
         return FolderZip(path=tmp_path, name=dirname)
 
@@ -856,8 +898,9 @@ class RemoteFiles:
 
     async def write_text(self, path: str, content: str) -> None:
         sftp_client = await self._session()
-        async with await sftp_client.open(path, "w", encoding="utf-8") as remote_file:
-            await remote_file.write(content)
+        async with self._needs(path, folder=False):
+            async with await sftp_client.open(path, "w", encoding="utf-8") as remote_file:
+                await remote_file.write(content)
 
     async def touch(self, path: str) -> None:
         """A name that exists is a 409."""
@@ -870,11 +913,10 @@ class RemoteFiles:
         sftp_client = await self._session()
         try:
             await sftp_client.stat(path)
-            raise HTTPException(status_code=400, detail="Directory already exists")
-        except HTTPException:
-            raise
         except Exception:
-            pass
+            pass  # free, or the mkdir below fails and says why
+        else:
+            raise Failure(REASON_INVALID, "Directory already exists")
         await sftp_client.mkdir(path)
 
     async def land(self, path: str, *, source_mode: int, overwrite: bool) -> _RemoteLanding:
@@ -898,7 +940,9 @@ class RemoteFiles:
         await sftp_client.remove(path)
 
     async def delete(self, path: str) -> None:
-        await (await self._session()).remove(path)
+        sftp_client = await self._session()
+        async with self._needs(path, folder=False):
+            await sftp_client.remove(path)
 
     async def chmod(self, path: str, mode: int) -> None:
         await sftp_chmod(await self._conn(), path, mode)
@@ -906,14 +950,9 @@ class RemoteFiles:
     async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
         PathValidator.validate_remote_path(path)
         new_name = PathValidator.validate_filename(new_name)
-        try:
-            source = await remote_path(await self._conn(), path)
-            target = str(PurePosixPath(source).parent / new_name)
-            await _remote_place(
-                await self._session(), source, target, move=True, overwrite=overwrite
-            )
-        except (FileNotFoundError, asyncssh.SFTPNoSuchFile) as exc:
-            raise HTTPException(status_code=404, detail="File not found") from exc
+        source = self._spelled.note(await remote_path(await self._conn(), path), path)
+        target = str(PurePosixPath(source).parent / new_name)
+        await _remote_place(await self._session(), source, target, move=True, overwrite=overwrite)
         return target
 
     async def place_into(
@@ -930,25 +969,24 @@ class RemoteFiles:
         PathValidator.validate_remote_path(destination)
         if new_name:
             PathValidator.validate_filename(new_name)
-        try:
-            connection = await self._conn()
-            remote_src = await remote_path(connection, source)
-            remote_dest_dir = await remote_path(connection, destination)
-            name = new_name or PurePosixPath(remote_src).name
-            if not move:
-                # Named after the resolved source: `~` alone has no usable name.
-                name = PathValidator.validate_filename(name)
-            target = str(PurePosixPath(remote_dest_dir) / name)
-            await _remote_place(
-                await self._session(),
-                remote_src,
-                target,
-                move=move,
-                overwrite=overwrite,
-                allow_dirs=allow_dirs,
-            )
-        except (FileNotFoundError, asyncssh.SFTPNoSuchFile) as exc:
-            raise HTTPException(status_code=404, detail="Source not found") from exc
+        connection = await self._conn()
+        remote_src = self._spelled.note(await remote_path(connection, source), source)
+        remote_dest_dir = self._spelled.note(
+            await remote_path(connection, destination), destination
+        )
+        name = new_name or PurePosixPath(remote_src).name
+        if not move:
+            # Named after the resolved source: `~` alone has no usable name.
+            name = PathValidator.validate_filename(name)
+        target = str(PurePosixPath(remote_dest_dir) / name)
+        await _remote_place(
+            await self._session(),
+            remote_src,
+            target,
+            move=move,
+            overwrite=overwrite,
+            allow_dirs=allow_dirs,
+        )
         return target
 
     async def create_archive(
@@ -963,7 +1001,7 @@ class RemoteFiles:
             try:
                 validated_paths.append(PathValidator.validate_remote_path(p))
             except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid path {p}: {exc}") from exc
+                raise Failure(REASON_INVALID, f"Invalid path {p}: {exc}") from exc
         connection = await self._conn()
         # The quoted command does not expand `~`: it is resolved here.
         dest_resolved = await remote_path(connection, dest_validated)
@@ -973,30 +1011,49 @@ class RemoteFiles:
         try:
             await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
         except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Archive creation timed out") from exc
+            raise Failure(REASON_TIMEOUT, "Archive creation timed out") from exc
         return archive_target
 
     async def extract_archive(self, archive: str, destination: str) -> str:
-        """Both paths are checked, then the name, before the connection is taken;
+        """Both paths are checked before the connection is taken; then, as on the local
+        box, a missing archive fails first and a name that is no archive is a 400.
         ``tar`` or ``unzip`` runs on the box, a 504 past ``ARCHIVE_TIMEOUT``."""
         validated_archive = PathValidator.validate_remote_path(archive)
         validated_dest = PathValidator.validate_remote_path(destination)
-        if not is_archive_name(PurePosixPath(validated_archive).name):
-            raise HTTPException(status_code=400, detail="Unsupported archive format")
         connection = await self._conn()
         # The quoted command does not expand `~`: it is resolved here.
-        archive_resolved = await remote_path(connection, validated_archive)
+        archive_resolved = self._spelled.note(
+            await remote_path(connection, validated_archive), archive
+        )
         dest_resolved = await remote_path(connection, validated_dest)
+        found = await (await self._session()).stat(archive_resolved)
+        if not is_archive_name(PurePosixPath(validated_archive).name):
+            raise Failure(REASON_INVALID, "Unsupported archive format")
+        if stat_mod.S_ISDIR(found.permissions or 0):
+            raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), archive_resolved)
         cmd = archive_extract_command(archive_resolved, dest_resolved)
         try:
             await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
         except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="Extraction timed out") from exc
+            raise Failure(REASON_TIMEOUT, "Extraction timed out") from exc
         return dest_resolved
+
+    def _unreachable_fails_the_rest(
+        self, exc: Exception, validated: list[tuple[str, str]], outcome: BatchOutcome
+    ) -> None:
+        """A box that cannot be reached (SSH, the pool or the connection failed) fails
+        each path not yet done, with that reason; any other failure of the whole batch,
+        a home lookup that answered no home among them, goes on as raised."""
+        if isinstance(exc, Failure) or failure_of(exc).reason != REASON_UNREACHABLE:
+            raise exc
+        already = {f["path"] for f in outcome.failed} | set(outcome.succeeded)
+        for orig, _ in validated:
+            if orig not in already:
+                outcome.failed.append(failure_entry(orig, exc))
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
         """Every path is checked before the connection is taken; a folder is removed
-        with ``rm -rf``. A failure of SSH itself fails each path not yet done."""
+        with ``rm -rf``. A box that cannot be reached fails each path not yet done."""
         outcome = BatchOutcome()
         succeeded, failed = outcome.succeeded, outcome.failed
         validated: list[tuple[str, str]] = []
@@ -1004,7 +1061,7 @@ class RemoteFiles:
             try:
                 validated.append((path, PathValidator.validate_remote_path(path)))
             except ValidationError as exc:
-                failed.append({"path": path, "error": str(exc)})
+                failed.append(failure_entry(path, exc))
         if not validated:
             return outcome
         try:
@@ -1012,37 +1069,34 @@ class RemoteFiles:
             validated = await _resolve_tilde_paths(connection, validated, failed)
             sftp_client = await self._session()
             for orig, vpath in validated:
+                self._spelled.note(vpath, orig)
                 try:
-                    try:
-                        attrs = await sftp_client.stat(vpath)
-                        if stat_mod.S_ISDIR(attrs.permissions or 0):
-                            await connection.run(remove_tree_command(vpath), check=True)
-                        else:
-                            await sftp_client.remove(vpath)
-                    except (FileNotFoundError, OSError):
+                    attrs = await sftp_client.stat(vpath)
+                    if stat_mod.S_ISDIR(attrs.permissions or 0):
+                        await connection.run(remove_tree_command(vpath), check=True)
+                    else:
                         await sftp_client.remove(vpath)
                     succeeded.append(orig)
                 except Exception as exc:
-                    failed.append({"path": orig, "error": str(exc)})
-        except SSHError as exc:
-            already = {f["path"] for f in failed} | set(succeeded)
-            for orig, _ in validated:
-                if orig not in already:
-                    failed.append({"path": orig, "error": str(exc)})
+                    failed.append(
+                        failure_entry(orig, exc, as_sent=self.as_sent, missing=MISSING_FILE)
+                    )
+        except Exception as exc:
+            self._unreachable_fails_the_rest(exc, validated, outcome)
         return outcome
 
     async def place_many(
         self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
     ) -> BatchOutcome:
         """The destination, then every path, is checked before the connection is
-        taken. A failure of SSH itself fails each path not yet done."""
+        taken. A box that cannot be reached fails each path not yet done."""
         outcome = BatchOutcome()
         succeeded, failed = outcome.succeeded, outcome.failed
         landed: set[str] = set()
         try:
             dest_validated = PathValidator.validate_remote_path(destination)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+            raise Failure(REASON_INVALID, f"Invalid destination: {exc}") from exc
 
         validated: list[tuple[str, str]] = []
         for path in paths:
@@ -1058,18 +1112,18 @@ class RemoteFiles:
             validated = await _resolve_tilde_paths(connection, validated, failed)
             sftp_client = await self._session()
             for orig, vpath in validated:
+                self._spelled.note(vpath, orig)
                 target = str(PurePosixPath(dest_resolved) / PurePosixPath(vpath).name)
                 try:
                     refuse_a_name_this_request_placed(target, landed)
                     await _remote_place(sftp_client, vpath, target, move=move, overwrite=overwrite)
                 except Exception as exc:
-                    failed.append(failure_entry(orig, exc))
+                    failed.append(
+                        failure_entry(orig, exc, as_sent=self.as_sent, missing=MISSING_SOURCE)
+                    )
                 else:
                     landed.add(target)
                     succeeded.append(orig)
-        except SSHError as exc:
-            already = {f["path"] for f in failed} | set(succeeded)
-            for orig, _ in validated:
-                if orig not in already:
-                    failed.append(failure_entry(orig, exc))
+        except Exception as exc:
+            self._unreachable_fails_the_rest(exc, validated, outcome)
         return outcome

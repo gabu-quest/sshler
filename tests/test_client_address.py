@@ -187,7 +187,7 @@ def test_spoofed_header_does_not_escape_the_login_lockout():
 
     assert statuses == [401] * 5
     assert sixth.status_code == 429
-    assert sixth.text == LOCKOUT_TEXT
+    assert sixth.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
     assert tracker.is_locked_out("127.0.0.1") is True
     assert tracker.is_locked_out(_spoofed(1)) is False
 
@@ -235,7 +235,7 @@ def test_spoofed_header_does_not_escape_the_basic_auth_failure_count():
 
     assert statuses == [401] * 5
     assert sixth.status_code == 429
-    assert sixth.text == LOCKOUT_TEXT
+    assert sixth.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
 
 
 def test_spoofed_header_does_not_escape_the_login_rate_limit():
@@ -280,7 +280,10 @@ def test_spoofed_header_does_not_escape_the_post_rate_limit():
         client.close()
 
     assert refused.status_code == 429
-    assert refused.text == "Rate limit exceeded. Please try again later."
+    assert refused.json() == {
+        "detail": "Rate limit exceeded. Please try again later.",
+        "reason": "rate_limited",
+    }
 
 
 # --- trusted: the forwarded address is used -----------------------------------
@@ -310,7 +313,7 @@ def test_trusted_proxy_login_failures_lock_out_the_forwarded_address(trust_proxy
 
     assert statuses == [401] * 5
     assert locked.status_code == 429
-    assert locked.text == LOCKOUT_TEXT
+    assert locked.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
     assert tracker.is_locked_out(VICTIM) is True
     assert tracker.is_locked_out("127.0.0.1") is False
     # The lockout check runs before the cookie check, so another forwarded client

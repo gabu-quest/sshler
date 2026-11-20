@@ -108,7 +108,10 @@ def test_post_past_limit_gets_429_with_retry_after(limiter_clock: FrozenClock, c
     limited = client.post(UNROUTED)
     assert limited.status_code == 429
     assert limited.headers["Retry-After"] == "60"
-    assert limited.text == "Rate limit exceeded. Please try again later."
+    assert limited.json() == {
+        "detail": "Rate limit exceeded. Please try again later.",
+        "reason": "rate_limited",
+    }
 
 
 def test_get_past_limit_gets_429_with_retry_after(limiter_clock: FrozenClock, client: TestClient):
@@ -194,7 +197,10 @@ def test_auth_lockout_after_five_failures_returns_429(auth_env, auth_client: Tes
     locked = auth_client.get(UNROUTED, headers={"Authorization": _basic(USER, PASSWORD)})
     assert locked.status_code == 429
     assert locked.headers["Retry-After"] == str(LOCKOUT_SECONDS)
-    assert locked.text == "Too many failed authentication attempts. Try again later."
+    assert locked.json() == {
+        "detail": "Too many failed authentication attempts. Try again later.",
+        "reason": "rate_limited",
+    }
 
 
 def test_auth_lockout_retry_after_counts_down_and_expires(auth_env, auth_client: TestClient):

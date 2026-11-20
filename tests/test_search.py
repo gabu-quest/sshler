@@ -829,7 +829,7 @@ class TestRemoteSearchRoute:
         resp = _search_rbox(client, q="proj", root="/srv/a\x00b")
         assert (resp.status_code, resp.json()) == (
             400,
-            {"detail": "Path cannot contain null bytes"},
+            {"detail": "Path cannot contain null bytes", "reason": "invalid"},
         )
         assert box.commands == []
 

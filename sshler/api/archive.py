@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from ..config import AppConfig
 from ..validation import PathValidator, ValidationError
-from .box_files import box_files
+from .box_files import Answers, box_files
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, Failure
+from .file_contract import MISSING_ARCHIVE
 from .rate_limiting import rate_limit_file_ops
 
 logger = logging.getLogger(__name__)
 
 MAX_ARCHIVE_PATHS = 100
+_ARCHIVE = Answers(missing=MISSING_ARCHIVE)
 VALID_FORMATS = {"tar.gz", "tgz", "zip"}
 
 
@@ -36,14 +39,12 @@ def _validate_archive_name(name: str, fmt: str) -> str:
     try:
         validated = PathValidator.validate_filename(name)
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise Failure(REASON_INVALID, str(exc)) from exc
 
     expected_exts = {"tar.gz": (".tar.gz",), "tgz": (".tgz",), "zip": (".zip",)}
     valid_exts = expected_exts.get(fmt, ())
     if not any(validated.lower().endswith(ext) for ext in valid_exts):
-        raise HTTPException(
-            status_code=400, detail=f"Archive name must end in {' or '.join(valid_exts)}"
-        )
+        raise Failure(REASON_INVALID, f"Archive name must end in {' or '.join(valid_exts)}")
 
     return validated
 
@@ -60,13 +61,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
         _rate_limit: None = Depends(rate_limit_file_ops),
     ):
         if len(payload.paths) > MAX_ARCHIVE_PATHS:
-            raise HTTPException(status_code=400, detail=f"Too many paths (max {MAX_ARCHIVE_PATHS})")
+            raise Failure(REASON_INVALID, f"Too many paths (max {MAX_ARCHIVE_PATHS})")
         if not payload.paths:
-            raise HTTPException(status_code=400, detail="No paths provided")
+            raise Failure(REASON_INVALID, "No paths provided")
         if payload.format not in VALID_FORMATS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid format. Must be one of: {', '.join(VALID_FORMATS)}",
+            raise Failure(
+                REASON_INVALID, f"Invalid format. Must be one of: {', '.join(VALID_FORMATS)}"
             )
 
         archive_name = _validate_archive_name(payload.archive_name, payload.format)
@@ -88,7 +88,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ):
         box = deps.get_box_or_404(application_config, name)
 
-        async with box_files(deps, box, application_config) as files:
+        async with box_files(deps, box, application_config, _ARCHIVE) as files:
             destination = await files.extract_archive(payload.archive_path, payload.destination)
         return {"status": "ok", "message": "Extracted", "path": destination}
 

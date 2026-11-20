@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import os
 import stat as stat_mod
-from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any, NoReturn
+from collections.abc import Awaitable, Callable
+from typing import NoReturn
 
 import anyio
-from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse, Response
-from fastapi.routing import APIRoute
+
+from .failure import REASON_CANNOT_REPLACE, REASON_EXISTS, Failure
+from .failure import REASON_FAILED as REASON_FAILED  # the transfer's own failed items
+from .failure import failure_entry as failure_entry  # a batch's and a transfer's items
 
 # --- No file lands on an existing name unless the caller said replace -------------
 #
@@ -33,49 +34,15 @@ _INTO_ITSELF = "A folder cannot be placed inside itself"
 _NO_FOLDER_COPY = "Copying directories not supported"
 _ONLY_FILES = "Only files can be transferred"
 
-# `reason` of a refused item in a batch's failed list and a transfer's `done` event.
-REASON_EXISTS = "exists"  # a regular file has the name; `overwrite` would replace it
-REASON_CANNOT_REPLACE = "cannot_replace"  # the name is taken; `overwrite` cannot replace it
-REASON_FAILED = "failed"  # any other failure
-
 COPY_CHUNK_BYTES = 256 * 1024
 
 
-class DestinationRefused(HTTPException):
-    """A destination the rule refuses; ``reason`` is one of the ``REASON_*`` values."""
+class DestinationRefused(Failure):
+    """A destination the rule refuses, by reason (``exists`` or ``cannot_replace``),
+    with the status the rule gives it."""
 
     def __init__(self, status_code: int, detail: str, reason: str) -> None:
-        super().__init__(status_code=status_code, detail=detail)
-        self.reason = reason
-
-
-class _RefusalAnswers(APIRoute):
-    """A route that places a file under a new name: a ``DestinationRefused`` that reaches
-    the route's edge is answered as ``{"detail": text, "reason": reason}`` with its
-    status, so a caller can tell a name it may ask to replace from one it never can."""
-
-    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handler = super().get_route_handler()
-
-        async def answer(request: Request) -> Response:
-            try:
-                return await handler(request)
-            except DestinationRefused as exc:
-                return JSONResponse(
-                    {"detail": exc.detail, "reason": exc.reason},
-                    status_code=exc.status_code,
-                    headers=exc.headers,
-                )
-
-        return answer
-
-
-def failure_entry(path: str, exc: BaseException) -> dict[str, str]:
-    """One entry of a batch's or a transfer's failed list."""
-    if isinstance(exc, DestinationRefused):
-        return {"path": path, "error": str(exc.detail), "reason": exc.reason}
-    detail = exc.detail if isinstance(exc, HTTPException) else exc
-    return {"path": path, "error": str(detail), "reason": REASON_FAILED}
+        super().__init__(reason, detail, status=status_code)
 
 
 def _reason(exc: BaseException) -> str:
@@ -154,9 +121,9 @@ def ensure_source_unchanged(before: object, after: object, target: str) -> None:
     was copied (another box reaches the same file and the copy replaced it, or it was
     written to meanwhile): it is kept and the move fails."""
     if before != after:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Copied to {target}, but the source changed during the copy and was kept",
+        raise Failure(
+            REASON_FAILED,
+            f"Copied to {target}, but the source changed during the copy and was kept",
         )
 
 

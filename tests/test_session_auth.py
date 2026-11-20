@@ -314,7 +314,7 @@ class TestHttpAuth:
         )
         # The request itself carried no cookie, so /me cannot see a session yet.
         assert first.status_code == 401
-        assert first.json() == {"detail": "Not authenticated"}
+        assert first.json() == {"detail": "Not authenticated", "reason": "auth"}
         session_id = first.cookies["sshler_session"]
         assert get_session_store().get_session(session_id).username == AUTH_USER
 
@@ -346,7 +346,7 @@ class TestHttpAuth:
             headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)},
         )
         assert response.status_code == 401
-        assert response.json() == {"detail": "Invalid username or password"}
+        assert response.json() == {"detail": "Invalid username or password", "reason": "auth"}
 
     def test_logout_destroys_session(self, auth_client: TestClient):
         """Kills: `logout` clearing the cookie without `delete_session` (the old cookie
@@ -402,7 +402,10 @@ def test_login_failures_lock_out_the_forwarded_client_address(
     assert tracker.is_locked_out(forwarded) is True
     assert tracker.is_locked_out("127.0.0.1") is False
     assert locked.status_code == 429
-    assert locked.text == "Too many failed authentication attempts. Try again later."
+    assert locked.json() == {
+        "detail": "Too many failed authentication attempts. Try again later.",
+        "reason": "rate_limited",
+    }
 
 
 def test_login_when_auth_disabled_is_400():
@@ -413,4 +416,4 @@ def test_login_when_auth_disabled_is_400():
     response = client.post("/api/v1/auth/login", json={"username": "a", "password": "b"})
     client.close()
     assert response.status_code == 400
-    assert response.json() == {"detail": "Authentication is not enabled"}
+    assert response.json() == {"detail": "Authentication is not enabled", "reason": "invalid"}

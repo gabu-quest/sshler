@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,6 +37,12 @@ class TokenBucket:
             self.tokens -= tokens
             return True
         return False
+
+    def seconds_until(self, tokens: int = 1) -> float:
+        """Seconds until ``tokens`` can be consumed; 0 when they can be now."""
+        self._refill()
+        missing = tokens - self.tokens
+        return 0.0 if missing <= 0 else missing / self.refill_rate
 
     def _refill(self):
         """Refill tokens based on time passed."""
@@ -110,6 +117,13 @@ class RateLimiter:
             del self._buckets[key]
 
         self._last_cleanup = now
+
+    def retry_after(self, key: str) -> int:
+        """Whole seconds (at least 1) until ``key`` may make a request again."""
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            return 1
+        return max(1, math.ceil(bucket.seconds_until()))
 
     def reset(self, key: str):
         """Reset rate limit for a specific key."""

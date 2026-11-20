@@ -54,6 +54,8 @@ pytestmark = pytest.mark.posix_only("a loopback SSH server and git repositories 
 
 TOKEN = "runner-token"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
+# The reason a failure answer carries for each status these routes answer with.
+FALLBACK_REASON = {400: "invalid", 404: "not_found", 500: "failed", 504: "timeout"}
 HOME_CMD = 'printf %s "$HOME"'
 HEALTH_CMD = "echo test"
 PY = sys.executable
@@ -736,12 +738,18 @@ def test_a_remote_git_route_on_a_box_that_stops_answering_is_the_504(served, rep
 
     monkeypatch.setattr(git_api, "GIT_TIMEOUT", 0.3)
     resp = served.get("lb", "git/log", directory=repos.at("stuck"))
-    assert (resp.status_code, resp.json()) == (504, {"detail": "Git command timed out"})
+    assert (resp.status_code, resp.json()) == (
+        504,
+        {"detail": "Git command timed out", "reason": "timeout"},
+    )
 
 
 def test_a_remote_git_route_on_a_folder_that_fails_its_check_is_a_400(served):
     resp = served.get("lb", "git/log", directory="a\x00b")
-    assert (resp.status_code, resp.json()) == (400, {"detail": "Path cannot contain null bytes"})
+    assert (resp.status_code, resp.json()) == (
+        400,
+        {"detail": "Path cannot contain null bytes", "reason": "invalid"},
+    )
     assert served.counts.connections == 0
 
 
@@ -793,7 +801,10 @@ def test_a_remote_grep_with_no_grep_program_is_no_match_and_a_local_one_is_a_500
     monkeypatch.setenv("PATH", str(empty_bin))
     local = served.get("local", "grep", directory=str(tmp_path), pattern="x")
     assert (remote.status_code, remote.json()["matches"]) == (200, [])
-    assert (local.status_code, local.json()) == (500, {"detail": "grep not available"})
+    assert (local.status_code, local.json()) == (
+        500,
+        {"detail": "grep not available", "reason": "failed"},
+    )
 
 
 # --- the two refs of diff-files are read as revisions ----------------------------------
@@ -959,13 +970,26 @@ def test_a_git_show_gives_one_answer_on_both_kinds(
     resp = served.get(
         box, "git/show", directory=repos.at(directory), path=_under(repos, path), ref=ref
     )
-    assert (resp.status_code, resp.json()) == (status, {"detail": detail})
+    assert (resp.status_code, resp.json()) == (
+        status,
+        {"detail": detail, "reason": FALLBACK_REASON[status]},
+    )
 
 
 BLAME_ANSWERS = [
-    ("plain", "a.txt", 404, {"detail": "Not a git repository"}),
-    ("clean", "{plain}/a.txt", 400, {"detail": "Path is outside the git repository"}),
-    ("clean", "{clean}", 400, {"detail": "Path must point to a file inside the repository"}),
+    ("plain", "a.txt", 404, {"detail": "Not a git repository", "reason": "not_found"}),
+    (
+        "clean",
+        "{plain}/a.txt",
+        400,
+        {"detail": "Path is outside the git repository", "reason": "invalid"},
+    ),
+    (
+        "clean",
+        "{clean}",
+        400,
+        {"detail": "Path must point to a file inside the repository", "reason": "invalid"},
+    ),
     (
         "nested",
         "untracked.txt",
@@ -1023,8 +1047,16 @@ def test_a_git_show_takes_a_path_absolute_or_relative_from_any_folder_on_both_ki
         ("b.txt", 200, {"content": "bee", "ref": "HEAD", "path": "b.txt"}),
         ("{link}/sub/b.txt", 200, {"content": "bee", "ref": "HEAD", "path": "{link}/sub/b.txt"}),
         ("../top.txt", 200, {"content": "top", "ref": "HEAD", "path": "../top.txt"}),
-        ("..", 400, {"detail": "Path must point to a file inside the repository"}),
-        ("../../plain/a", 400, {"detail": "Path is outside the git repository"}),
+        (
+            "..",
+            400,
+            {"detail": "Path must point to a file inside the repository", "reason": "invalid"},
+        ),
+        (
+            "../../plain/a",
+            400,
+            {"detail": "Path is outside the git repository", "reason": "invalid"},
+        ),
     ],
 )
 def test_a_git_show_in_a_folder_reached_through_a_link_names_the_file_on_both_kinds(
@@ -1090,10 +1122,22 @@ def _home_repo(served: Served) -> None:
         ("~/x", "../h.txt", 200, {"content": "home", "ref": "HEAD", "path": "../h.txt"}, 1),
         ("~", "~/h.txt", 200, {"content": "home", "ref": "HEAD", "path": "~/h.txt"}, 1),
         ("~", "~//h.txt", 200, {"content": "home", "ref": "HEAD", "path": "~//h.txt"}, 1),
-        ("~", "~/../h.txt", 400, {"detail": "Path is outside the git repository"}, 1),
-        ("~", "~root/h.txt", 404, {"detail": "File not found at ref HEAD"}, 1),
-        ("~/..", "h.txt", 404, {"detail": "Not a git repository"}, 1),
-        ("/", "~/h.txt", 404, {"detail": "Not a git repository"}, 0),
+        (
+            "~",
+            "~/../h.txt",
+            400,
+            {"detail": "Path is outside the git repository", "reason": "invalid"},
+            1,
+        ),
+        (
+            "~",
+            "~root/h.txt",
+            404,
+            {"detail": "File not found at ref HEAD", "reason": "not_found"},
+            1,
+        ),
+        ("~/..", "h.txt", 404, {"detail": "Not a git repository", "reason": "not_found"}, 1),
+        ("/", "~/h.txt", 404, {"detail": "Not a git repository", "reason": "not_found"}, 0),
     ],
 )
 def test_a_remote_git_show_reads_a_tilde_as_the_home_of_the_box(
@@ -1208,7 +1252,7 @@ def test_a_remote_git_that_hangs_is_the_504_and_its_connection_is_not_handed_on(
         again = served.get("lb", "git/log", directory=repos.at("clean"))
     assert (stuck.status_code, stuck.json(), again.status_code) == (
         504,
-        {"detail": "Git command timed out"},
+        {"detail": "Git command timed out", "reason": "timeout"},
         200,
     )
     assert served.counts.connections == 2
@@ -1386,7 +1430,7 @@ def test_a_capture_tmux_refuses_is_the_400_with_its_error_output_on_both_kinds(
     resp = served.get(box, "sessions/gone/capture")
     assert (resp.status_code, resp.json()) == (
         400,
-        {"detail": "tmux capture-pane failed: can't find session: gone"},
+        {"detail": "tmux capture-pane failed: can't find session: gone", "reason": "invalid"},
     )
 
 
@@ -1398,7 +1442,7 @@ def test_a_capture_past_its_limit_is_the_504_on_both_kinds(
     resp = served.get(box, "sessions/stuck/capture")
     assert (resp.status_code, resp.json()) == (
         504,
-        {"detail": "tmux capture-pane timed out after 0.5 s"},
+        {"detail": "tmux capture-pane timed out after 0.5 s", "reason": "timeout"},
     )
 
 
@@ -1413,7 +1457,10 @@ def test_a_rename_tmux_refuses_is_the_400_and_keeps_the_name_on_both_kinds(
         headers=HEADERS,
     )
     listed = served.client.get(f"/api/v1/boxes/{box}/sessions", headers=HEADERS)
-    assert (resp.status_code, resp.json()) == (400, {"detail": "tmux rename failed"})
+    assert (resp.status_code, resp.json()) == (
+        400,
+        {"detail": "tmux rename failed", "reason": "invalid"},
+    )
     assert [item["session_name"] for item in listed.json()] == ["gone"]
 
 
@@ -1538,7 +1585,10 @@ def test_a_remote_box_with_no_tmux_is_the_400_of_a_refusal(
         json=body,
         headers=HEADERS,
     )
-    assert (resp.status_code, resp.json()) == (status, {"detail": detail})
+    assert (resp.status_code, resp.json()) == (
+        status,
+        {"detail": detail, "reason": FALLBACK_REASON[status]},
+    )
 
 
 SESSION_HOSTILE = ["a b", "it's", 'a"b', "$HOME", "`id`", "a;b", "a\nb"]
@@ -1555,7 +1605,7 @@ def test_a_remote_capture_refuses_a_hostile_word_before_it_connects(served, name
     if field == "pane":
         params["pane"] = name
     resp = served.get("lb", f"sessions/{session}/capture", **params)
-    assert (resp.status_code, resp.json()) == (400, {"detail": detail})
+    assert (resp.status_code, resp.json()) == (400, {"detail": detail, "reason": "invalid"})
     assert served.counts.connections == 0
 
 
@@ -1566,7 +1616,13 @@ def test_a_remote_rename_refuses_a_hostile_new_name_before_it_connects(served, n
     resp = served.client.patch(
         f"/api/v1/boxes/lb/sessions/{session_id}", json={"session_name": name}, headers=HEADERS
     )
-    assert (resp.status_code, resp.json()["detail"][0]["loc"]) == (422, ["body", "session_name"])
+    assert (resp.status_code, resp.json()) == (
+        422,
+        {
+            "detail": "body.session_name: String should match pattern '^[a-zA-Z0-9_.-]+$'",
+            "reason": "invalid",
+        },
+    )
     assert served.counts.connections == 0
 
 

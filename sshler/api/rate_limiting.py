@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request
 
 from ..rate_limit import get_rate_limiter
+from .failure import Failure
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def create_rate_limit_dependency(
         capacity_multiplier: Bucket capacity multiplier (allows bursts)
 
     Returns:
-        FastAPI dependency function that raises 429 if rate limit exceeded
+        FastAPI dependency function that fails as ``rate_limited`` (429) past the limit
 
     Example:
         ```python
@@ -53,7 +54,8 @@ def create_rate_limit_dependency(
             request: FastAPI request object
 
         Raises:
-            HTTPException: 429 Too Many Requests if rate limit exceeded
+            Failure: ``rate_limited`` past the limit, with ``Retry-After`` the whole
+            seconds until the limit allows a request
         """
         # Get client IP for rate limiting
         # Imported here: auth.py imports this module for `rate_limit_login`.
@@ -67,10 +69,10 @@ def create_rate_limit_dependency(
         # Check rate limit
         if not limiter.check(client_ip):
             logger.warning(f"[Security] Rate limit exceeded for {name} endpoint from {client_ip}")
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded. Maximum {rate} requests per {per} seconds allowed.",
-                headers={"Retry-After": str(per)},
+            raise Failure(
+                "rate_limited",
+                f"Rate limit exceeded. Maximum {rate} requests per {per} seconds allowed.",
+                headers={"Retry-After": str(limiter.retry_after(client_ip))},
             )
 
     return rate_limit_dependency

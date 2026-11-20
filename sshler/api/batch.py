@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, StrictBool
 
 from ..config import AppConfig
 from .box_files import box_files
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, Failure
 from .file_contract import BatchOutcome
 from .rate_limiting import rate_limit_delete, rate_limit_file_ops
 
@@ -38,8 +39,8 @@ class APIBatchCopyRequest(BaseModel):
 class APIBatchResult(BaseModel):
     status: str  # "ok" | "partial"
     succeeded: list[str]
-    # [{"path", "error", "reason"}]; move and copy give `reason` as one of the
-    # REASON_* values of `placement.py` ("exists", "cannot_replace", "failed").
+    # [{"path", "error", "reason"}]: `failure_entry` (`failure.py`) gives each item the
+    # reason and text a single request on that path would answer.
     failed: list[dict]
 
     @classmethod
@@ -53,19 +54,16 @@ class APIBatchResult(BaseModel):
 
 def _validate_batch_size(paths: list[str]) -> None:
     if len(paths) > MAX_BATCH_PATHS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many paths (max {MAX_BATCH_PATHS})",
-        )
+        raise Failure(REASON_INVALID, f"Too many paths (max {MAX_BATCH_PATHS})")
     if not paths:
-        raise HTTPException(status_code=400, detail="No paths provided")
+        raise Failure(REASON_INVALID, "No paths provided")
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
-    # Each batch collects its own failures, one entry per path: `box_files` answers
-    # none of them (answers=None).
+    # Each batch collects its own failures, one entry per path; `box_files` answers a
+    # failure of the whole batch (a destination refused, a box not reached first).
 
     @router.post("/boxes/{name}/batch/delete", response_model=APIBatchResult)
     async def api_batch_delete(
@@ -77,7 +75,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIBatchResult:
         _validate_batch_size(payload.paths)
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config, answers=None) as files:
+        async with box_files(deps, box, application_config) as files:
             outcome = await files.delete_many(payload.paths)
         return APIBatchResult.of(outcome)
 
@@ -91,7 +89,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIBatchResult:
         _validate_batch_size(payload.paths)
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config, answers=None) as files:
+        async with box_files(deps, box, application_config) as files:
             outcome = await files.place_many(
                 payload.paths, payload.destination, move=True, overwrite=payload.overwrite
             )
@@ -107,7 +105,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIBatchResult:
         _validate_batch_size(payload.paths)
         box = deps.get_box_or_404(application_config, name)
-        async with box_files(deps, box, application_config, answers=None) as files:
+        async with box_files(deps, box, application_config) as files:
             outcome = await files.place_many(
                 payload.paths, payload.destination, move=False, overwrite=payload.overwrite
             )

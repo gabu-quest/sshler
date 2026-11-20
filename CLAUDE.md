@@ -45,7 +45,7 @@ FastAPI + uvicorn (Python 3.12+, async) · asyncssh · SQLite via sqler · Vue 3
 
 **Local vs remote boxes (ADR-003):** `box.name == "local"` → subprocess tmux and the local file system, no SSH; otherwise an asyncssh connection and SFTP.
 
-**Files of a box:** a file route never asks which kind of box it has. It opens `box_files(deps, box, application_config)` and calls the operations of `BoxFiles`; `LocalFiles` and `RemoteFiles` each keep their side's checks and answers. A failure that no operation answered becomes an answer in one place, `Answers` in `api/box_files.py`. `tests/test_box_files_contract.py` proves the interface for both kinds; a new operation joins its table.
+**Files of a box:** a file route never asks which kind of box it has. It opens `box_files(deps, box, application_config)` and calls the operations of `BoxFiles`; `LocalFiles` and `RemoteFiles` each keep their side's checks and answers. Every failed request is answered by one owner, `api/failure.py` (`docs/architecture.md`). `tests/test_box_files_contract.py` proves the interface for both kinds; a new operation joins its table.
 
 **Terminal:** `/ws/term` opens one transport from `sshler/terminal/` behind the contract in `terminal/transport.py`; `terminal/pump.py` carries the bytes and knows nothing of the transport. Detail: `docs/architecture.md` "Terminal socket".
 

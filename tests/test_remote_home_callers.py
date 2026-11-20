@@ -349,7 +349,7 @@ def test_a_git_route_with_a_failed_home_lookup_answers_502(boxes, monkeypatch):
         client.close()
     assert (resp.status_code, resp.json(), connection.commands) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
         [],
     )
 

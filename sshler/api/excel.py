@@ -11,20 +11,21 @@ import asyncio
 import io
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
 from .box_files import Answers, box_files
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, Failure
+from .file_contract import MISSING_FILE
 
 MAX_ROWS = 2000
 MAX_COLS = 200
 # Hard cap on raw file bytes we'll parse — 50 MB is generous for a spreadsheet
 MAX_FILE_BYTES = 50_000_000
 
-# On a remote box any failure but a bad path is a 502 that names SSH.
-_REMOTE_READ = Answers(unreachable=(), other_status=502, other_prefix="SSH error: ")
+_READ = Answers(missing=MISSING_FILE)
 
 
 class ExcelSheet(BaseModel):
@@ -105,7 +106,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         # The path is taken as /file takes it: a local one normalised (`~` expanded,
         # links resolved), a remote one checked, then its `~` resolved.
-        async with box_files(deps, box, application_config, _REMOTE_READ) as files:
+        async with box_files(deps, box, application_config, _READ) as files:
             target = await files.path(path)
             data, too_large = await files.read_bytes(target, MAX_FILE_BYTES)
 
@@ -115,7 +116,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             result = await asyncio.to_thread(_parse_workbook, data)
         except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Could not parse workbook: {exc}") from exc
+            raise Failure(REASON_INVALID, f"Could not parse workbook: {exc}") from exc
 
         return result
 

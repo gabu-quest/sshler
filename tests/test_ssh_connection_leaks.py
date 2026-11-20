@@ -1283,7 +1283,7 @@ async def test_deleting_a_tunnel_twice_answers_404_the_second_time(app, ledger):
 
     assert first.status_code == 200
     assert second.status_code == 404
-    assert second.json() == {"detail": "Tunnel not found"}
+    assert second.json() == {"detail": "Tunnel not found", "reason": "not_found"}
     assert ledger.live() == 0
 
 
@@ -1364,7 +1364,7 @@ async def test_a_failed_remote_rename_answers_400_tmux_rename_failed(app, ledger
         stored = await state.get_session_by_id_async(session_id)
 
     assert resp.status_code == 400
-    assert resp.json() == {"detail": "tmux rename failed"}
+    assert resp.json() == {"detail": "tmux rename failed", "reason": "invalid"}
     assert stored is not None
     assert stored.session_name == "work"
 
@@ -1383,7 +1383,7 @@ async def test_a_rename_on_an_unreachable_box_answers_500(app, ledger):
         )
 
     assert resp.status_code == 500
-    assert resp.json() == {"detail": "Failed to rename session"}
+    assert resp.json() == {"detail": "Failed to rename session", "reason": "failed"}
 
 
 @pytest.mark.asyncio
@@ -1398,7 +1398,7 @@ async def test_a_capture_and_a_kill_on_an_unreachable_box_answer_as_before(app, 
 
     assert (capture.status_code, capture.json()) == (
         500,
-        {"detail": "capture failed: remote1: connection refused"},
+        {"detail": "capture failed: remote1: connection refused", "reason": "failed"},
     )
     assert kill.json() == {"status": "ok", "message": "deleted", "path": session_id}
 
@@ -1476,7 +1476,10 @@ async def test_a_failed_capture_answers_400_with_tmux_stderr(app, ledger):
         resp = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
 
     assert resp.status_code == 400
-    assert resp.json() == {"detail": "tmux capture-pane failed: no such session"}
+    assert resp.json() == {
+        "detail": "tmux capture-pane failed: no such session",
+        "reason": "invalid",
+    }
     assert ledger.live() == 1
 
 
@@ -1500,6 +1503,9 @@ async def test_a_capture_past_its_limit_answers_its_own_504_and_drops_the_connec
         again = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
 
     assert resp.status_code == 504
-    assert resp.json() == {"detail": "tmux capture-pane timed out after 0.05 s"}
+    assert resp.json() == {
+        "detail": "tmux capture-pane timed out after 0.05 s",
+        "reason": "timeout",
+    }
     assert again.status_code == 200
     assert len(ledger.opened) == 2

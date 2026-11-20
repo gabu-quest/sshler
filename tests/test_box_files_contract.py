@@ -39,15 +39,13 @@ from fastapi.testclient import TestClient
 
 import sshler.api
 from sshler import ssh_pool, state
-from sshler.api import excel as excel_api
-from sshler.api import files as files_api
+from sshler.api import archive as archive_api
 from sshler.api import remote_files as remote_files_api
 from sshler.api.box_files import DEFAULT_ANSWERS, Answers, box_files
 from sshler.api.placement import DestinationRefused
 from sshler.config import Box
 from sshler.ssh import SSHError, connect
 from sshler.ssh_pool import SSHConnectionPool
-from sshler.validation import ValidationError
 from sshler.webapp import ServerSettings, make_app
 
 pytestmark = pytest.mark.posix_only("an SFTP server rooted in a temp folder with POSIX file modes")
@@ -567,14 +565,9 @@ ROWS = [
         same=lambda k: (True, True, False),
     ),
     Row(
-        # The remote side answers an SFTP "no such file" with the catch-all 500, as the
-        # /stat route did before the interface.
         "a missing path",
         lambda f, k: _stat(f, k, "nope"),
-        differs={
-            "local": lambda k: (False, False, False),
-            "remote": lambda k: ("answered", 500, "No such file or directory"),
-        },
+        same=lambda k: (False, False, False),
     ),
     Row(
         "a name that exists is refused",
@@ -611,12 +604,12 @@ ROWS = [
         },
     ),
     Row(
-        # The local route leaves this failure unanswered; the remote one answers 500.
+        # Both answer 404 with the system's words; the local box names the path as sent.
         "a file gone between the stat and the read",
         _gone_before_the_read,
         differs={
-            "local": lambda k: ("unanswered", "FileNotFoundError"),
-            "remote": lambda k: ("answered", 500, "No such file or directory"),
+            "local": lambda k: ("answered", 404, f"No such file or directory: {k.at('a.txt')}"),
+            "remote": lambda k: ("answered", 404, "No such file or directory"),
         },
     ),
     Row(
@@ -642,13 +635,13 @@ ROWS = [
         same=lambda k: ("answered", 400, "Directory already exists"),
     ),
     Row(
-        # The local route answers 404; the remote one answers SFTP's "no such file"
-        # with the catch-all 500, as the /delete route did before the interface.
+        # Both answer 404 with the system's words (the /delete route gives its own text,
+        # "File not found"); the local box names the path as sent.
         "a missing file is not deleted",
         lambda f, k: _delete(f, k, "nope"),
         differs={
-            "local": lambda k: ("answered", 404, "File not found"),
-            "remote": lambda k: ("answered", 500, "No such file or directory"),
+            "local": lambda k: ("answered", 404, f"No such file or directory: {k.at('nope')}"),
+            "remote": lambda k: ("answered", 404, "No such file or directory"),
         },
     ),
     Row("a mode is set", _chmod, same=lambda k: 0o600),
@@ -766,11 +759,11 @@ ROWS = [
     ),
     Row(
         # A remote box checks every source before it is reached and names the bad one;
-        # the local box finds it while packing and answers 500 with the failure's text.
+        # the local box refuses it with the same check's text.
         "an archive with a source path holding a null byte",
         lambda f, k: _archive_of(f, k, [k.at("a.txt"), "/x\x00y"]),
         differs={
-            "local": lambda k: ("answered", 500, "stat: embedded null character in path"),
+            "local": lambda k: ("answered", 400, "Path cannot contain null bytes"),
             "remote": lambda k: (
                 "answered",
                 400,
@@ -781,10 +774,7 @@ ROWS = [
     Row(
         "an archive into a destination holding a null byte",
         lambda f, k: f.create_archive([k.at("a.txt")], "/x\x00y", "o.zip", "zip"),
-        differs={
-            "local": lambda k: ("answered", 500, "embedded null byte"),
-            "remote": lambda k: ("answered", 400, "Path cannot contain null bytes"),
-        },
+        same=lambda k: ("answered", 400, "Path cannot contain null bytes"),
     ),
     Row(
         "a batch delete removes a file and fails a missing path",
@@ -842,6 +832,19 @@ class RecordingConnection:
         return self.sftp
 
     def close(self) -> None:
+        pass
+
+
+class _StatSFTP:
+    """An SFTP client that finds every path with ``mode``."""
+
+    def __init__(self, mode: int) -> None:
+        self.mode = mode
+
+    async def stat(self, path: str) -> SimpleNamespace:
+        return SimpleNamespace(permissions=self.mode)
+
+    def exit(self) -> None:
         pass
 
 
@@ -1024,7 +1027,8 @@ async def test_a_remote_archive_is_unpacked_by_one_command_on_the_quoted_paths(
     home = 'printf %s "$HOME"'
     unpack = shlex.join(words)
     connection = RecordingConnection(
-        {home: _Result(stdout="/home", exit_status=0), unpack: _Result(stdout="", exit_status=0)}
+        {home: _Result(stdout="/home", exit_status=0), unpack: _Result(stdout="", exit_status=0)},
+        _StatSFTP(0o100644),
     )
     deps = _recording(monkeypatch, connection)
     async with box_files(deps, _remote_box(), CONFIG) as files:
@@ -1073,8 +1077,10 @@ async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp
 
 @pytest.mark.asyncio
 async def test_a_local_archive_that_does_not_exist_is_404(tmp_path):
-    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
-        with pytest.raises(HTTPException) as answered:
+    with pytest.raises(HTTPException) as answered:
+        async with box_files(
+            SimpleNamespace(), _local_box(), CONFIG, archive_api._ARCHIVE
+        ) as files:
             await files.extract_archive(str(tmp_path / "nope.zip"), str(tmp_path))
     assert (answered.value.status_code, answered.value.detail) == (404, "Archive not found")
 
@@ -1121,37 +1127,6 @@ async def test_an_sftp_session_that_fails_to_open_is_a_500_and_nothing_is_writte
     assert connection.sftp_opened == 1
     # The connection went back to the pool through its health check.
     assert connection.commands == [HEALTH_CMD]
-
-
-# --- the answer of a remote failure that no operation answered itself -----------------
-
-
-@pytest.mark.parametrize(
-    ("answers", "failure", "status", "detail"),
-    [
-        # Every route: a bad path is a 400, a failure of SSH a 502, anything else a 500.
-        (DEFAULT_ANSWERS, ValidationError("bad path"), 400, "bad path"),
-        (DEFAULT_ANSWERS, SSHError("no route"), 502, "no route"),
-        (DEFAULT_ANSWERS, ConnectionError("pool closed"), 500, "pool closed"),
-        (DEFAULT_ANSWERS, TimeoutError("slow"), 500, "slow"),
-        # ls, download, view, dir-size and download-dir: the pool's error is a 502 too.
-        (files_api._UNREACHABLE, ConnectionError("pool closed"), 502, "pool closed"),
-        (files_api._UNREACHABLE, RuntimeError("other"), 500, "other"),
-        (files_api._DIR_SIZE, ConnectionError("pool closed"), 502, "pool closed"),
-        (files_api._DIR_SIZE, TimeoutError("slow"), 504, "Directory size timed out"),
-        (files_api._DIR_SIZE, RuntimeError("du"), 500, "du"),
-        (files_api._FOLDER_ZIP, TimeoutError("slow"), 504, "Download timed out"),
-        (files_api._FOLDER_ZIP, RuntimeError("zip"), 500, "zip"),
-        # The Excel preview: any failure but a bad path is a 502 that names SSH.
-        (excel_api._REMOTE_READ, ValidationError("bad path"), 400, "bad path"),
-        (excel_api._REMOTE_READ, SSHError("no route"), 502, "SSH error: no route"),
-        (excel_api._REMOTE_READ, RuntimeError("other"), 502, "SSH error: other"),
-    ],
-)
-def test_a_remote_failure_gets_the_answer_its_route_gave_before(answers, failure, status, detail):
-    """The statuses and texts are those of the route bodies before the interface."""
-    answered = answers.remote(failure)
-    assert (answered.status_code, answered.detail) == (status, detail)
 
 
 # --- no route asks which kind of box it has ------------------------------------------
@@ -1267,8 +1242,8 @@ def _get(counted: Counted, route: str, **params: str):
 
 def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(counted, monkeypatch):
     """The upload route's 400 is for a name the local box refuses. A remote box whose
-    connection fails with a ``ValueError`` (not a name's fault) keeps the answer every
-    other failure has there: a 500 with its text."""
+    connection fails with a ``ValueError`` (not a name's fault) is a fault nobody named:
+    a 500 ``internal`` that names the type and the text."""
 
     async def refuse(*args: object, **kwargs: object) -> None:
         raise ValueError("host name cannot be encoded")
@@ -1280,7 +1255,10 @@ def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(count
         files={"file": ("n.txt", b"x")},
         headers=HEADERS,
     )
-    assert (resp.status_code, resp.json()["detail"]) == (500, "host name cannot be encoded")
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": "ValueError: host name cannot be encoded", "reason": "internal"},
+    )
     assert not (counted.root / "home" / "n.txt").exists()
 
 
@@ -1331,7 +1309,7 @@ def test_a_remote_preview_opens_one_session_per_read(counted, name, sessions):
 def test_a_remote_listing_records_the_visit_and_a_failed_one_does_not(counted):
     listed = _get(counted, "ls", directory="/home")
     missing = _get(counted, "ls", directory="/nope")
-    assert (listed.status_code, missing.status_code) == (200, 500)
+    assert (listed.status_code, missing.status_code) == (200, 404)
     assert [path for path, _ in state.search_directories("lb", "")] == ["/home"]
 
 
@@ -1417,7 +1395,7 @@ def test_a_bad_transfer_path_is_a_400_before_any_connection(
         json={"src_box": src, "dest_box": dest, "paths": paths, "destination": destination},
         headers=HEADERS,
     )
-    assert (resp.status_code, resp.json()) == (400, {"detail": detail})
+    assert (resp.status_code, resp.json()) == (400, {"detail": detail, "reason": "invalid"})
     assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
 
 

@@ -8,10 +8,13 @@ from pathlib import Path
 
 import pytest
 from platform_support import posix_only_skip
+from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from failure_check import failure_body_problem  # noqa: E402
 
 from sshler import (  # noqa: E402
     artifacts,
@@ -128,6 +131,22 @@ def _hermetic_env(
     _reset_process_globals()
     yield
     _reset_process_globals()
+
+
+@pytest.fixture(autouse=True)
+def _every_failure_answers_by_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every failure answer the suite's test client receives from the app is checked by
+    ``failure_body_problem``; a wrong one fails the test that received it."""
+    original = TestClient.request
+
+    def request(self, method, url, *args, **kwargs):
+        response = original(self, method, url, *args, **kwargs)
+        problem = failure_body_problem(self.app, method, response)
+        if problem is not None:
+            raise AssertionError(f"{method} {url}: {problem}")
+        return response
+
+    monkeypatch.setattr(TestClient, "request", request)
 
 
 FAKE_TMUX_SCRIPT = r"""

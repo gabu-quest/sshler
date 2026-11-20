@@ -20,9 +20,8 @@ import shlex
 import weakref
 from pathlib import PurePosixPath
 
-from fastapi import HTTPException
-
 from ..validation import PathValidator, ValidationError
+from .failure import REASON_INVALID, REASON_UNREACHABLE, Failure
 
 HOME_COMMAND = 'printf %s "$HOME"'
 HOME_LOOKUP_TIMEOUT = 10
@@ -40,16 +39,20 @@ async def remote_home(connection) -> str:
     """The home folder of the box behind ``connection``, an absolute path.
 
     Asked for once per connection. A lookup that fails or answers anything but an
-    absolute path is a 502 and is not remembered; a timeout raises ``TimeoutError``.
+    absolute path is ``unreachable`` (502) and is not remembered; past
+    ``HOME_LOOKUP_TIMEOUT`` it raises ``TimeoutError`` saying so.
     """
     try:
         return _homes[connection]
     except (KeyError, TypeError):
         pass
-    result = await asyncio.wait_for(connection.run(HOME_COMMAND), timeout=HOME_LOOKUP_TIMEOUT)
+    try:
+        result = await asyncio.wait_for(connection.run(HOME_COMMAND), timeout=HOME_LOOKUP_TIMEOUT)
+    except TimeoutError as exc:
+        raise TimeoutError("The remote home directory lookup timed out") from exc
     home = (result.stdout or "").strip()
     if result.exit_status != 0 or not home.startswith("/"):
-        raise HTTPException(status_code=502, detail="Could not resolve the remote home directory")
+        raise Failure(REASON_UNREACHABLE, "Could not resolve the remote home directory")
     try:
         _homes[connection] = home
     except TypeError:
@@ -116,11 +119,11 @@ def compose_remote_child_path(directory: str, filename: str) -> str:
 
 
 def compose_remote_child(directory: str, filename: str) -> str:
-    """``directory/filename``, validated; a bad result is a 400."""
+    """``directory/filename``, validated; a bad result is ``invalid``."""
     try:
         return PathValidator.validate_remote_path(compose_remote_child_path(directory, filename))
     except (ValidationError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise Failure(REASON_INVALID, str(exc)) from exc
 
 
 # --- command lines ---------------------------------------------------------------

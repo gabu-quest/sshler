@@ -30,11 +30,11 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse
 
 from . import state
 from .access import allowed_origins, origin_base, websocket_refusal
-from .api import APIDependencies, create_api_router
+from .api import APIDependencies, create_api_router, failure
 from .api.auth import create_auth_router, get_client_ip
 from .api.helpers import (
     DEFAULT_MAX_UPLOAD_BYTES,
@@ -818,6 +818,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     application = FastAPI(
         title="sshler", version="0.1.0", docs_url=None, redoc_url=None, lifespan=lifespan
     )
+    failure.install(application)
     mount_spa(application, settings.serve_spa)
 
     application.state.settings = settings
@@ -851,9 +852,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 logging.warning(
                     f"[Security] Blocked locked-out IP {client_ip} ({retry_after}s remaining)"
                 )
-                return Response(
-                    status_code=429,
-                    content="Too many failed authentication attempts. Try again later.",
+                return failure.answer(
+                    "rate_limited",
+                    "Too many failed authentication attempts. Try again later.",
                     headers={"Retry-After": str(retry_after)},
                 )
 
@@ -872,8 +873,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 # Fall back to Basic Auth
                 auth_header = request.headers.get("authorization")
                 if not auth_header or not auth_header.startswith("Basic "):
-                    return Response(
-                        status_code=401,
+                    return failure.answer(
+                        "auth",
+                        "Authentication required",
                         headers={"WWW-Authenticate": 'Basic realm="sshler"'},
                     )
 
@@ -888,8 +890,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
                     await asyncio.sleep(2)
 
-                    return Response(
-                        status_code=401,
+                    return failure.answer(
+                        "auth",
+                        "Invalid credentials",
                         headers={"WWW-Authenticate": 'Basic realm="sshler"'},
                     )
 
@@ -965,9 +968,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             limiter = get_rate_limiter("general", rate=600, per=60)
 
         if not limiter.check(client_ip):
-            return Response(
-                status_code=429,
-                content="Rate limit exceeded. Please try again later.",
+            return failure.answer(
+                "rate_limited",
+                "Rate limit exceeded. Please try again later.",
                 headers={"Retry-After": "60"},
             )
 
@@ -1000,10 +1003,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         f"[Security] Blocked request with invalid Origin: {origin_value} "
                         f"(expected one of: {allowed_origins_list})"
                     )
-                    return Response(
-                        status_code=403,
-                        content="Invalid Origin header",
-                    )
+                    return failure.answer("origin", "Invalid Origin header")
 
         return await call_next(request)
 
