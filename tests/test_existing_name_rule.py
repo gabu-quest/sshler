@@ -44,7 +44,8 @@ import yaml
 from fastapi.testclient import TestClient
 
 from sshler import ssh_pool, state
-from sshler.api import files as files_api
+from sshler.api import local_files as local_files_api
+from sshler.api import remote_files as remote_files_api
 from sshler.api import transfer as transfer_api
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
@@ -649,7 +650,7 @@ def _intrude_after_local_check(monkeypatch, target: Path, make) -> list[str]:
     """The owner's check finds ``target`` free; then ``make`` creates it, before the
     write. Returns the checked paths."""
     checked: list[str] = []
-    real = files_api._local_lstat
+    real = local_files_api._local_lstat
 
     def check_then_intrude(path: str):
         found = real(path)
@@ -658,13 +659,13 @@ def _intrude_after_local_check(monkeypatch, target: Path, make) -> list[str]:
             make(target)
         return found
 
-    monkeypatch.setattr(files_api, "_local_lstat", check_then_intrude)
+    monkeypatch.setattr(local_files_api, "_local_lstat", check_then_intrude)
     return checked
 
 
 def _intrude_after_remote_check(monkeypatch, root: Path, target: str, make) -> list[str]:
     checked: list[str] = []
-    real = files_api._remote_lstat_mode
+    real = remote_files_api._remote_lstat_mode
 
     async def check_then_intrude(sftp_client, path: str):
         found = await real(sftp_client, path)
@@ -674,7 +675,7 @@ def _intrude_after_remote_check(monkeypatch, root: Path, target: str, make) -> l
             make(disk)
         return found
 
-    monkeypatch.setattr(files_api, "_remote_lstat_mode", check_then_intrude)
+    monkeypatch.setattr(remote_files_api, "_remote_lstat_mode", check_then_intrude)
     return checked
 
 
@@ -1418,7 +1419,7 @@ def test_a_client_that_disconnects_mid_transfer_leaves_no_partial_file(
 
     if dest == "local":
         owner, real_write = transfer_api._ThreadedLanding, transfer_api._ThreadedLanding.write
-        real_abort = files_api._LocalLanding.abort
+        real_abort = local_files_api._LocalLanding.abort
 
         def abort(self):
             try:
@@ -1426,10 +1427,10 @@ def test_a_client_that_disconnects_mid_transfer_leaves_no_partial_file(
             finally:
                 cleaned.set()
 
-        monkeypatch.setattr(files_api._LocalLanding, "abort", abort)
+        monkeypatch.setattr(local_files_api._LocalLanding, "abort", abort)
     else:
-        owner, real_write = files_api._RemoteLanding, files_api._RemoteLanding.write
-        real_remote_abort = files_api._RemoteLanding.abort
+        owner, real_write = remote_files_api._RemoteLanding, remote_files_api._RemoteLanding.write
+        real_remote_abort = remote_files_api._RemoteLanding.abort
 
         async def remote_abort(self):
             try:
@@ -1437,7 +1438,7 @@ def test_a_client_that_disconnects_mid_transfer_leaves_no_partial_file(
             finally:
                 cleaned.set()
 
-        monkeypatch.setattr(files_api._RemoteLanding, "abort", remote_abort)
+        monkeypatch.setattr(remote_files_api._RemoteLanding, "abort", remote_abort)
 
     async def write(self, data):
         await real_write(self, data)
@@ -1585,23 +1586,23 @@ def test_a_transfer_between_two_boxes_that_reach_one_file_keeps_it(env, server, 
 def _append_before_commit(monkeypatch, local_dest: bool, source: Path) -> None:
     """The source grows after its bytes were read and before the copy is committed."""
     if local_dest:
-        real = files_api._LocalLanding.commit
+        real = local_files_api._LocalLanding.commit
 
         def commit(self):
             with open(source, "ab") as handle:
                 handle.write(b" and more")
             real(self)
 
-        monkeypatch.setattr(files_api._LocalLanding, "commit", commit)
+        monkeypatch.setattr(local_files_api._LocalLanding, "commit", commit)
     else:
-        real_remote = files_api._RemoteLanding.commit
+        real_remote = remote_files_api._RemoteLanding.commit
 
         async def remote_commit(self):
             with open(source, "ab") as handle:
                 handle.write(b" and more")
             await real_remote(self)
 
-        monkeypatch.setattr(files_api._RemoteLanding, "commit", remote_commit)
+        monkeypatch.setattr(remote_files_api._RemoteLanding, "commit", remote_commit)
 
 
 @pytest.mark.parametrize("server", ["refusing-rename"])
@@ -2009,7 +2010,7 @@ def test_a_cross_device_move_keeps_a_source_replaced_by_a_file_of_equal_size_and
         return real_link(src, dst, *args, **kwargs)
 
     monkeypatch.setattr(os, "link", no_link)
-    real = files_api._LocalLanding.commit
+    real = local_files_api._LocalLanding.commit
 
     def commit(self):
         found = os.stat(s.disk("a.txt"))
@@ -2019,7 +2020,7 @@ def test_a_cross_device_move_keeps_a_source_replaced_by_a_file_of_equal_size_and
         os.replace(other, s.disk("a.txt"))
         real(self)
 
-    monkeypatch.setattr(files_api._LocalLanding, "commit", commit)
+    monkeypatch.setattr(local_files_api._LocalLanding, "commit", commit)
 
     resp = single(s, "move", "a.txt")
 
@@ -2054,7 +2055,7 @@ def test_a_local_write_that_fails_removes_its_partial_file_when_close_fails_too(
         self.handle = _HandleWhoseCloseFails(self.handle)
         raise OSError(errno.ENOSPC, "No space left on device")
 
-    monkeypatch.setattr(files_api._LocalLanding, "commit", commit)
+    monkeypatch.setattr(local_files_api._LocalLanding, "commit", commit)
 
     resp = single(s, "copy", "a.txt")
 
@@ -2287,7 +2288,7 @@ def test_a_transfer_file_has_the_source_bits_at_every_write(
 
         monkeypatch.setattr(owner, "write", write)
 
-    watch(files_api._LocalLanding if dest == "local" else files_api._RemoteLanding)
+    watch(local_files_api._LocalLanding if dest == "local" else remote_files_api._RemoteLanding)
 
     events = transfer(env, src, dest, [a.path("x.txt")], b.path("in"))
 
@@ -2372,7 +2373,7 @@ def test_a_local_copy_has_the_source_bits_from_its_first_byte(
         seen.append(os.fstat(dst.fileno()).st_mode & 0o7777)
         return real(src, dst, *rest)
 
-    monkeypatch.setattr(files_api.shutil, "copyfileobj", copyfileobj)
+    monkeypatch.setattr(local_files_api.shutil, "copyfileobj", copyfileobj)
 
     resp = single(s, "copy", "a.txt") if op == "copy" else batch(s, "copy", ["a.txt"])
 
@@ -2433,7 +2434,7 @@ def test_a_local_move_over_a_file_has_the_replaced_bits_when_it_takes_the_name(
         seen.append(os.stat(src).st_mode & 0o7777)
         return real(src, dst, **rest)
 
-    monkeypatch.setattr(files_api.os, "replace", replace)
+    monkeypatch.setattr(local_files_api.os, "replace", replace)
 
     if op == "rename":
         resp = single(s, "rename", "a.txt", "b.txt", overwrite=True)

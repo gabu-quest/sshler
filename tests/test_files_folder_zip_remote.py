@@ -24,6 +24,7 @@ from platform_support import mkdir_or_skip_unholdable_name
 
 from sshler import ssh_pool, state
 from sshler.api import files as files_api
+from sshler.api import remote_files as remote_files_api
 from sshler.api.dependencies import APIDependencies
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
@@ -562,8 +563,8 @@ def _pool_idle(box: str) -> int:
 @pytest.fixture
 def small_cap(monkeypatch: pytest.MonkeyPatch) -> int:
     """Cap at 10 chunks so a test streams kilobytes, not 500 MB. Returns the cap."""
-    monkeypatch.setattr(files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
-    monkeypatch.setattr(files_api, "MAX_DIR_DOWNLOAD_BYTES", 10 * CHUNK)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(remote_files_api, "MAX_DIR_DOWNLOAD_BYTES", 10 * CHUNK)
     return 10 * CHUNK
 
 
@@ -598,8 +599,8 @@ def test_zip_past_the_cap_holds_at_most_a_chunk_in_memory(remote, monkeypatch):
     temp file; the traced peak then reaches the 16 MiB read before the abort. Spooled,
     the peak stays near one 64 KiB chunk (bound: 2 MiB, an eighth of the cap)."""
     cap = 256 * CHUNK  # 16 MiB
-    monkeypatch.setattr(files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
-    monkeypatch.setattr(files_api, "MAX_DIR_DOWNLOAD_BYTES", cap)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(remote_files_api, "MAX_DIR_DOWNLOAD_BYTES", cap)
     remote.processes[ZIP_BIG] = FakeProcess(EndlessStream(max_reads=300))
     tracemalloc.start()
     try:

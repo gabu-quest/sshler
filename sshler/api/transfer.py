@@ -20,20 +20,18 @@ from ..ssh import SSHError, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .files import (
+from .helpers import _normalize_local_path
+from .local_files import _local_landing, local_fingerprint
+from .placement import (
     REASON_FAILED,
-    _local_landing,
-    _remote_landing,
     ensure_source_unchanged,
     failure_entry,
-    local_fingerprint,
     refuse_a_name_this_request_placed,
-    remote_fingerprint,
     run_to_end,
 )
-from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_transfer
 from .remote import remote_path
+from .remote_files import _remote_landing, remote_fingerprint
 
 logger = logging.getLogger(__name__)
 

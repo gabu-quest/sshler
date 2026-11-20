@@ -16,21 +16,20 @@ from ..ssh import SSHError, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .files import (
-    _local_destination,
-    _local_make_folder,
-    _local_place,
-    _local_refuse_a_folder_into_itself,
-    _remote_place,
-    failure_entry,
-    refuse_a_name_this_request_placed,
-)
 from .helpers import (
     _local_batch_delete,
     _normalize_local_path,
 )
+from .local_files import (
+    _local_destination,
+    _local_make_folder,
+    _local_place,
+    _local_refuse_a_folder_into_itself,
+)
+from .placement import failure_entry, refuse_a_name_this_request_placed
 from .rate_limiting import rate_limit_delete, rate_limit_file_ops
 from .remote import command, path_word, remote_path
+from .remote_files import _remote_place
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +62,7 @@ class APIBatchResult(BaseModel):
     status: str  # "ok" | "partial"
     succeeded: list[str]
     # [{"path", "error", "reason"}]; move and copy give `reason` as one of the
-    # REASON_* values of `files.py` ("exists", "cannot_replace", "failed").
+    # REASON_* values of `placement.py` ("exists", "cannot_replace", "failed").
     failed: list[dict]
 
 
