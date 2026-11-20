@@ -315,4 +315,61 @@ describe("a name that is taken", () => {
       src_box: "x", dest_box: "y", paths: ["/s/a", "/s/b"], destination: "/d", mode: "copy",
     });
   });
+
+  describe("a cross-box transfer's event stream", () => {
+    const item = { path: "/s/a", error: "File already exists", reason: "exists" };
+    const stream =
+      `event: failed\ndata: ${JSON.stringify(item)}\n\n` +
+      'event: progress\ndata: {"file":"/s/b","bytes_done":1,"bytes_total":1,"index":1,"total":2}\n\n' +
+      `event: done\ndata: ${JSON.stringify({ succeeded: ["/s/b"], failed: [item] })}\n\n`;
+
+    /** Serve ``text`` cut into the given pieces and record every call, in order. */
+    async function readCut(pieces: Uint8Array[], expectCalls: number) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const piece of pieces) controller.enqueue(piece);
+          controller.close();
+        },
+      });
+      fetchMock.mockImplementation(async () => new Response(body, { status: 200 }));
+      const calls: unknown[] = [];
+      crossBoxTransfer(
+        "x", "y", ["/s/a", "/s/b"], "/d", "copy", "t",
+        (progress) => calls.push(["progress", progress.file]),
+        (result) => calls.push(["done", result.succeeded]),
+        (error) => calls.push(["error", error]),
+        { onItemFailed: (failed) => calls.push(["failed", failed]) },
+      );
+      await vi.waitFor(() => expect(calls.length).toBe(expectCalls));
+      return calls;
+    }
+    const bytes = (text: string) => new TextEncoder().encode(text);
+    const uncut = [["failed", item], ["progress", "/s/b"], ["done", ["/s/b"]]];
+
+    it("gives the same calls, in the same order, when it is cut after every single byte", async () => {
+      const all = bytes(stream);
+      const pieces = Array.from(all, (_b, i) => all.slice(i, i + 1));
+      expect(await readCut(pieces, 3)).toEqual(uncut);
+    });
+
+    it("gives the same calls when an event: line and its data: line arrive in two reads", async () => {
+      const cut = stream.indexOf("data: ", stream.indexOf("event: done"));
+      const pieces = [bytes(stream.slice(0, cut)), bytes(stream.slice(cut))];
+      expect(await readCut(pieces, 3)).toEqual(uncut);
+    });
+
+    it("calls onError once, with a plain text, when it ends with neither done nor error", async () => {
+      const cut = stream.indexOf("event: done");
+      expect(await readCut([bytes(stream.slice(0, cut))], 3)).toEqual([
+        ["failed", item],
+        ["progress", "/s/b"],
+        ["error", "The transfer ended before it finished."],
+      ]);
+    });
+
+    it("does not call onError after an error event", async () => {
+      const text = 'event: error\ndata: {"detail":"Transfer error: boom"}\n\n';
+      expect(await readCut([bytes(text)], 1)).toEqual([["error", "Transfer error: boom"]]);
+    });
+  });
 });

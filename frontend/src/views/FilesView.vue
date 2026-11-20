@@ -745,8 +745,8 @@ async function doRename() {
 
 /**
  * Upload one file: "uploaded", or "skipped" when it already exists and the user keeps
- * it. A 409 asks to replace (Yes re-sends with the overwrite flag); any other 4xx is
- * final; a network or server failure is retried with backoff.
+ * it. A 409 with the reason "exists" asks to replace (Yes re-sends with the overwrite
+ * flag); any other 4xx is final; a network or server failure is retried with backoff.
  */
 async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
   uploadTarget.value = file;
@@ -759,7 +759,9 @@ async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
       return "uploaded";
     } catch (err) {
       const status = err instanceof UploadError ? err.status : null;
-      if (status === 409) {
+      // Only a file the server says it may replace is asked about; any other refusal
+      // is final and shows the server's own text.
+      if (status === 409 && err instanceof UploadError && err.reason === "exists") {
         filesStore.uploadError = null; // the prompt answers this one
         if (!(await askReplace(file.name))) return "skipped";
         await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null, { overwrite: true });

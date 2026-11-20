@@ -77,4 +77,18 @@ describe("uploadFile", () => {
     expect(err).toBeInstanceOf(UploadError);
     expect([(err as UploadError).status, (err as UploadError).message]).toEqual([0, "upload failed: network error"]);
   });
+
+  // Mutation: drop the server's reason; the view cannot tell a file it may replace from
+  // a folder it never can.
+  it.each([
+    [409, { detail: "File already exists", reason: "exists" }, "exists"],
+    [409, { detail: "File already exists", reason: "cannot_replace" }, "cannot_replace"],
+    [400, { detail: "Only a regular file can be replaced", reason: "cannot_replace" }, "cannot_replace"],
+    [409, { detail: "File already exists" }, null],
+  ])("a %i answer carries the server's reason: %j", async (status, body, reason) => {
+    FakeXHR.answer = { status, body: JSON.stringify(body) };
+    const err = await uploadFile("box", "/srv", new File(["x"], "a.txt"), "tok").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UploadError);
+    expect([(err as UploadError).status, (err as UploadError).reason]).toEqual([status, reason]);
+  });
 });

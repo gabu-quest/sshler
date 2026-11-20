@@ -20,10 +20,12 @@ import { REPLACE_ARM_MS } from "@/composables/useReplacePrompt";
 const { messageSpy, dialogSpy, UploadErrorMock } = vi.hoisted(() => {
   class UploadErrorMock extends Error {
     readonly status: number;
-    constructor(message: string, status: number) {
+    readonly reason: string | null;
+    constructor(message: string, status: number, reason: string | null = null) {
       super(message);
       this.name = "UploadError";
       this.status = status;
+      this.reason = reason;
     }
   }
   return {
@@ -121,7 +123,7 @@ vi.mock("@phosphor-icons/vue", () => {
 
 const i18nPlugin = { install(app: App) { createI18n(app); } };
 const uploadFile = vi.mocked(http.uploadFile);
-const exists = () => new UploadErrorMock("File already exists", 409);
+const exists = () => new UploadErrorMock("File already exists", 409, "exists");
 const OK = { status: "ok", message: "uploaded" };
 
 async function mountLoaded() {
@@ -276,6 +278,24 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
     );
     expect(uploadFile).toHaveBeenCalledTimes(1);
     expect(messageSpy.warning).not.toHaveBeenCalled();
+    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    expect(messageSpy.success).not.toHaveBeenCalled();
+  });
+
+  // Mutation: ask "Replace?" on every 409 (the old rule); a folder's name asks, and Yes
+  // fails with "Only a regular file can be replaced".
+  it.each([
+    ["a name that can never be replaced", new UploadErrorMock("File already exists", 409, "cannot_replace")],
+    ["a name refused with no reason", new UploadErrorMock("File already exists", 409)],
+  ])("a 409 for %s shows the server's text, is not retried and asks nothing", async (_label, refusal) => {
+    uploadFile.mockRejectedValueOnce(refusal);
+    const { container } = await mountLoaded();
+    await choose(container, ["a.txt"]);
+    await waitFor(() => expect(messageSpy.error).toHaveBeenCalledTimes(1));
+    expect(messageSpy.error).toHaveBeenCalledWith(
+      "a.txt: File already exists", { closable: true, duration: 0 },
+    );
+    expect(uploadFile).toHaveBeenCalledTimes(1);
     expect(dialogSpy.warning).not.toHaveBeenCalled();
     expect(messageSpy.success).not.toHaveBeenCalled();
   });

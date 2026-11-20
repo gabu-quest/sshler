@@ -561,15 +561,18 @@ export async function writeFile(
 }
 
 /** A refused upload: ``status`` is the HTTP status (0 for a network error), so a caller
- * can tell "already exists" (409) and other client errors (4xx, not worth retrying)
- * from a server or network failure. */
+ * can tell client errors (4xx, not worth retrying) from a server or network failure.
+ * ``reason`` is the server's ("exists": a file the caller may ask to replace;
+ * "cannot_replace": a name that can never be replaced), null when it gave none. */
 export class UploadError extends Error {
   readonly status: number;
+  readonly reason: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, reason: string | null = null) {
     super(message);
     this.name = "UploadError";
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -626,7 +629,10 @@ export async function uploadFile(
       try {
         const parsed = JSON.parse(body);
         if (parsed?.detail) {
-          reject(new UploadError(Array.isArray(parsed.detail) ? parsed.detail.join(", ") : String(parsed.detail), status));
+          const reason = typeof parsed.reason === "string" ? parsed.reason : null;
+          reject(
+            new UploadError(Array.isArray(parsed.detail) ? parsed.detail.join(", ") : String(parsed.detail), status, reason),
+          );
           return;
         }
       } catch {
@@ -1098,6 +1104,10 @@ export function crossBoxTransfer(
 
       const decoder = new TextDecoder();
       let buffer = "";
+      // The event named by the last `event:` line stays until its `data:` line comes,
+      // however the reads cut the stream.
+      let currentEvent = "";
+      let finished = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1109,7 +1119,6 @@ export function crossBoxTransfer(
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
-        let currentEvent = "";
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             currentEvent = line.slice(7).trim();
@@ -1122,8 +1131,10 @@ export function crossBoxTransfer(
               } else if (currentEvent === "failed") {
                 options.onItemFailed?.(parsed as TransferResult["failed"][number]);
               } else if (currentEvent === "done") {
+                finished = true;
                 onDone(parsed as TransferResult);
               } else if (currentEvent === "error") {
+                finished = true;
                 onError(parsed.detail || "Transfer error");
               }
             } catch {
@@ -1133,6 +1144,7 @@ export function crossBoxTransfer(
           }
         }
       }
+      if (!finished) onError("The transfer ended before it finished.");
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       onError(err instanceof Error ? err.message : String(err));
