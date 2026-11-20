@@ -22,6 +22,7 @@ from typing import IO, cast
 import asyncssh
 from fastapi import (
     FastAPI,
+    HTTPException,
     Query,
     Request,
     WebSocket,
@@ -39,11 +40,11 @@ from .api.helpers import (
     DEFAULT_MAX_UPLOAD_BYTES,
     LOCAL_IS_WINDOWS,
     _local_is_directory,
-    _normalize_directory_path,
     _normalize_local_path,
     available_windows_shells,
     default_windows_shell,
 )
+from .api.remote import remote_directory
 from .api.tunnels import TunnelRegistry
 from .auth import AuthManager, PasswordHasher, PasswordPolicy, PasswordValidator
 from .config import (
@@ -1193,7 +1194,7 @@ async def _serve_terminal(websocket: WebSocket, request: TerminalRequest) -> Non
     directory = (
         _normalize_local_path(request.directory)
         if kind == "local"
-        else _normalize_directory_path(request.directory)
+        else request.directory  # a remote folder is resolved on the terminal's connection
     )
     client_host = websocket.client.host if websocket.client else "unknown"
     logger.info(
@@ -1350,14 +1351,39 @@ async def _open_remote_terminal(
 
 
 async def _remote_directory_or_default(
-    connection: asyncssh.SSHClientConnection, box: Box, directory: str
+    connection: asyncssh.SSHClientConnection, box: Box, requested: str
 ) -> str:
+    """The folder tmux starts in: ``requested``, or the box's default folder when that is
+    not a directory. A ``~`` in either is the box's home, asked on this connection.
+
+    A box whose home cannot be read still gets its terminal: a folder that needs the
+    home is passed over, and the last resort is ``/``."""
+    directory = await _resolved_remote_directory(connection, box, requested)
+    if directory is not None:
+        try:
+            if await sftp_is_directory(connection, directory):
+                return directory
+        except Exception as exc:
+            logger.debug(f"Failed to check if remote directory exists (using it): {exc}")
+            return directory
+    default = box.default_dir or f"/home/{box.user}"
+    return await _resolved_remote_directory(connection, box, default) or "/"
+
+
+async def _resolved_remote_directory(
+    connection: asyncssh.SSHClientConnection, box: Box, folder: str
+) -> str | None:
+    """``folder`` with ``~`` resolved, or ``None`` when the box's home cannot be read."""
     try:
-        if not await sftp_is_directory(connection, directory):
-            return box.default_dir or f"/home/{box.user}"
-    except Exception as exc:
-        logger.debug(f"Failed to check if remote directory exists (using default): {exc}")
-    return directory
+        return await remote_directory(connection, folder)
+    except HTTPException as exc:
+        reason = str(exc.detail)
+    except TimeoutError:
+        reason = "the lookup timed out"
+    except (asyncssh.Error, OSError) as exc:
+        reason = str(exc)
+    logger.warning("Cannot resolve %r on %s: %s", folder, box.name, reason)
+    return None
 
 
 async def _run_terminal(

@@ -33,6 +33,7 @@ from .files import (
 )
 from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_transfer
+from .remote import remote_path
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +88,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
         dest_box = deps.get_box_or_404(application_config, payload.dest_box)
 
         def _validate() -> tuple[list[str], str]:
-            """Normalise every path (a local one resolves links: a worker-thread job)."""
+            """Check every path (a local one is normalised, links resolved: a worker-thread
+            job). A remote path is checked and kept as spelled: its ``~`` is resolved on
+            that box's connection."""
             paths: list[str] = []
             for path in payload.paths:
                 try:
                     if src_box.transport == "local":
                         paths.append(_normalize_local_path(path))
                     else:
-                        paths.append(PathValidator.validate_remote_path(path))
+                        PathValidator.validate_remote_path(path)
+                        paths.append(path)
                 except (ValidationError, ValueError) as exc:
                     raise HTTPException(
                         status_code=400, detail=f"Invalid path {path}: {exc}"
@@ -103,7 +107,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 if dest_box.transport == "local":
                     dest = _normalize_local_path(payload.destination)
                 else:
-                    dest = PathValidator.validate_remote_path(payload.destination)
+                    PathValidator.validate_remote_path(payload.destination)
+                    dest = payload.destination
             except (ValidationError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
             return paths, dest
@@ -142,7 +147,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         )
                         dest_sftp = await stack.enter_async_context(sftp_session(dest_conn))
 
-                    for index, src_path in enumerate(validated_paths):
+                    # `~` is each remote side's own home; the events and answers below
+                    # still name each item as the request spelled it.
+                    source_paths = validated_paths
+                    if src_sftp is not None:
+                        source_paths = [await remote_path(src_conn, p) for p in source_paths]
+                    destination = validated_dest
+                    if dest_sftp is not None:
+                        destination = await remote_path(dest_conn, destination)
+
+                    for index, src_path in enumerate(source_paths):
                         # Every answer and event names the item as the request spelled
                         # it; the work runs on the validated path.
                         sent_path = payload.paths[index]
@@ -155,9 +169,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                             else PurePosixPath(src_path).name
                         )
                         dest_path = (
-                            str(Path(validated_dest) / filename)
+                            str(Path(destination) / filename)
                             if dest_box.transport == "local"
-                            else str(PurePosixPath(validated_dest) / filename)
+                            else str(PurePosixPath(destination) / filename)
                         )
 
                         try:
@@ -225,6 +239,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
             except SSHError as exc:
                 yield _sse_event("error", {"detail": f"SSH error: {exc}"})
+                return
+            except HTTPException as exc:
+                yield _sse_event("error", {"detail": str(exc.detail)})
                 return
             except Exception as exc:
                 yield _sse_event("error", {"detail": str(exc)})

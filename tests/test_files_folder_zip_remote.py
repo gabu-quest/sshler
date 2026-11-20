@@ -677,11 +677,11 @@ def listed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     [("~", "/home/tester"), ("~/sub dir", "/home/tester/sub dir")],
 )
 def test_remote_listing_at_tilde_lists_the_remote_home(remote, listed, sent, resolved):
-    """WS-Z carry-over: `_normalize_directory_path` mapped `~` to `/`, so the remote
-    listing at `~` showed `/` while the toolbar zip at `~` zipped the home folder.
+    """A remote listing at `~` once showed `/`, while the toolbar zip at `~` zipped the
+    home folder.
 
-    Mutation: list `_normalize_directory_path(directory)` without resolving `~` first;
-    the listed path is `/` (or `/~/sub dir`)."""
+    Mutation: list the folder without resolving `~` first; the listed path is `/`
+    (or `/~/sub dir`)."""
     client, replies, log = remote
     replies[HOME_CMD] = reply("/home/tester")
     resp = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": sent}, headers=HEADERS)
@@ -770,11 +770,11 @@ def test_file_routes_unreachable_box_is_502(remote, monkeypatch, route, params):
     )
 
 
-# --- writes at `~` (wave 5b, WS-AC item 1) ------------------------------------
+# --- writes at `~` -------------------------------------------------------------
 #
-# Review: "touch, mkdir and upload still send `~` through `_normalize_directory_path`,
-# which maps it to `/` ... The user sees `/home/u`'s files, clicks New File "a.txt",
-# and the server writes `/a.txt`." Every remote route in files.py that takes a folder
+# Touch, mkdir and upload once turned `~` into `/`: the user saw the files of
+# `/home/u`, clicked New File "a.txt", and the server wrote `/a.txt`.
+# Every remote route in files.py that takes a folder
 # or a path resolves `~` with the same `$HOME` lookup as the listing. Shared mutation
 # (the pre-fix routes): pass the raw `~` path on to SFTP; the recorded calls then name
 # `/a.txt` (folder routes) or `~/a.txt` (path routes) and no `$HOME` lookup is logged.
@@ -791,8 +791,8 @@ def _post(remote, route: str, body: dict):
     [("~", f"{HOME}/a.txt"), ("~/sub dir", f"{HOME}/sub dir/a.txt")],
 )
 def test_touch_at_tilde_creates_the_file_in_the_remote_home(remote, directory, created):
-    """Mutation: `_normalize_directory_path(payload.directory)` without the `~` lookup;
-    the file is created at `/a.txt` (or `/~/sub dir/a.txt`)."""
+    """Mutation: use `payload.directory` without the `~` lookup; the file is created
+    at `/a.txt` (or `/~/sub dir/a.txt`)."""
     remote.replies[HOME_CMD] = reply(HOME)
     resp = _post(remote, "touch", {"directory": directory, "filename": "a.txt"})
     assert (resp.status_code, resp.json()["path"]) == (200, created)

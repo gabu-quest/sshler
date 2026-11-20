@@ -18,7 +18,7 @@ from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
 from .helpers import _normalize_local_path
-from .remote import and_then, assign, command, in_directory, pipe, quiet
+from .remote import and_then, assign, command, in_directory, pipe, quiet, remote_path
 
 logger = logging.getLogger(__name__)
 
@@ -240,9 +240,11 @@ def remote_git_diff_files_command(directory: str, ref_a: str, ref_b: str) -> str
     return in_directory(directory, quiet(command("git", "diff", "--name-status", ref_a, ref_b)))
 
 
-def _validate_remote_directory(directory: str) -> str:
+async def _remote_folder(connection, directory: str) -> str:
+    """The folder a remote git command runs in: ``~`` is the box's home, the path is
+    validated (a bad one is a 400)."""
     try:
-        return PathValidator.validate_remote_path(directory)
+        return await remote_path(connection, directory)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -276,13 +278,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 cwd=root,
             )
         else:
-            validated = _validate_remote_directory(directory)
-            cmd = remote_git_log_command(validated, fmt, limit)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
+                    cmd = remote_git_log_command(await _remote_folder(conn, directory), fmt, limit)
                     ok, output = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 return GitLogResponse(box=name, directory=directory, commits=[], error=str(exc))
@@ -324,14 +325,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
             if not ok:
                 raise HTTPException(status_code=404, detail=f"File not found at ref {ref}")
         else:
-            validated_dir = _validate_remote_directory(directory)
             validated_path = _validate_remote_file_path(path)
-            cmd = remote_git_show_command(validated_dir, validated_path, ref, MAX_SHOW_BYTES)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
+                    cmd = remote_git_show_command(
+                        await _remote_folder(conn, directory), validated_path, ref, MAX_SHOW_BYTES
+                    )
                     ok, content = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -357,14 +359,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 timeout=60,
             )
         else:
-            validated_dir = _validate_remote_directory(directory)
             validated_path = _validate_remote_file_path(path)
-            cmd = remote_git_blame_command(validated_dir, validated_path)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
+                    cmd = remote_git_blame_command(
+                        await _remote_folder(conn, directory), validated_path
+                    )
                     ok, output = await _run_remote_git(conn, cmd, timeout=60)
             except SSHError as exc:
                 return GitBlameResponse(box=name, path=path, lines=[], error=str(exc))
@@ -402,13 +405,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     box=name, directory=directory, branches=[], is_repo=False
                 )
         else:
-            validated = _validate_remote_directory(directory)
-            cmd = remote_git_branches_command(validated, fmt)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
+                    cmd = remote_git_branches_command(await _remote_folder(conn, directory), fmt)
                     ok, output = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 return GitBranchesResponse(
@@ -469,13 +471,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 cwd=root,
             )
         else:
-            validated = _validate_remote_directory(directory)
-            cmd = remote_git_diff_files_command(validated, ref_a, ref_b)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
+                    cmd = remote_git_diff_files_command(
+                        await _remote_folder(conn, directory), ref_a, ref_b
+                    )
                     ok, output = await _run_remote_git(conn, cmd)
             except SSHError as exc:
                 return GitDiffFilesResponse(

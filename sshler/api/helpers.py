@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import platform
-import posixpath
 import shutil
 import subprocess
 from pathlib import Path
@@ -104,24 +103,6 @@ def default_windows_shell() -> str | None:
         if shell_id in available:
             return shell_id
     return None
-
-
-def _normalize_directory_path(directory: str | None) -> str:
-    """The terminal's starting folder on a remote box, absolute and normalised; ``~``
-    becomes ``/`` here. Remote API routes take their folders from ``api.remote``,
-    which resolves ``~`` to the home folder instead."""
-    raw = (directory or "/").strip()
-    if not raw or raw == "~":
-        raw = "/"
-    if not raw.startswith("/"):
-        raw = "/" + raw.lstrip("/")
-
-    normalized = posixpath.normpath(raw)
-    if normalized == ".":
-        return "/"
-    if not normalized.startswith("/"):
-        normalized = "/" + normalized.lstrip("/")
-    return normalized or "/"
 
 
 def _normalize_local_path(directory: str | None, allowed_base: str | Path | None = None) -> str:
