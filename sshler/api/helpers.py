@@ -165,49 +165,8 @@ def _normalize_local_path(directory: str | None, allowed_base: str | Path | None
     return str(resolved)
 
 
-async def _local_list_directory(path: str) -> list[dict[str, object]]:
-    def _worker() -> list[dict[str, object]]:
-        entries: list[dict[str, object]] = []
-        base_path = Path(path)
-        for child in base_path.iterdir():
-            try:
-                stats = child.stat()
-            except Exception:
-                continue
-            entries.append(
-                {
-                    "name": child.name,
-                    "is_directory": child.is_dir(),
-                    "size": stats.st_size if child.is_file() else None,
-                    "modified": stats.st_mtime,
-                }
-            )
-        entries.sort(key=lambda entry: (not entry["is_directory"], str(entry["name"]).lower()))
-        return entries
-
-    return await asyncio.to_thread(_worker)
-
-
 async def _local_is_directory(path: str) -> bool:
     return await asyncio.to_thread(lambda: Path(path).is_dir())
-
-
-async def _local_write_bytes(path: str, data: bytes) -> None:
-    def _worker() -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(Path(path), "wb") as handle:
-            handle.write(data)
-
-    await asyncio.to_thread(_worker)
-
-
-async def _local_create_file(path: str) -> None:
-    def _worker() -> None:
-        file_path = Path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.touch(exist_ok=False)
-
-    await asyncio.to_thread(_worker)
 
 
 def _syntax_from_filename(path: str) -> str:
