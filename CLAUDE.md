@@ -1,232 +1,93 @@
 # Claude Context: sshler
 
-**Version:** 1.0.1 | **Type:** Full-Stack Web Application (FastAPI + Vue 3)
-
----
+**Type:** Full-stack web application (FastAPI + Vue 3). The version is in `pyproject.toml`.
 
 ## What This Is
 
-**sshler** is a local-only web UI for browsing remote files over SFTP and accessing tmux sessions in the browser. No remote installation required.
+**sshler** is a local-only web UI for browsing remote files over SFTP and using tmux sessions in a browser terminal (WebSocket + xterm.js). Nothing is installed on the remote.
 
-**Key characteristics:**
 - Single-user localhost tool (not a multi-tenant service)
-- Single UI: Vue 3 SPA at `/app` (root `/` redirects there). The legacy HTMX UI has been removed.
-- Real-time terminal via WebSocket + xterm.js
-- Security-first: CSRF tokens, origin validation, session auth
-
----
+- One UI: the Vue 3 SPA at `/app` (root `/` redirects there)
 
 ## Repository Structure
 
 ```
-/
-├── sshler/                 ← Python backend (FastAPI)
-│   ├── webapp.py           ← Main app, routes, WebSocket handlers; opens each terminal
-│   ├── terminal/           ← /ws/term transports (local PTY, SSH, Windows ConPTY) and the pump
-│   ├── api/                ← API v1 endpoints (modular)
-│   ├── cli.py              ← CLI entry point
-│   ├── config.py           ← Config loading (boxes.yaml + SSH config)
-│   ├── ssh.py              ← SSH/SFTP operations (asyncssh); `sftp_session` opens and closes every SFTP session
-│   ├── api/remote.py       ← Remote paths (`~` resolved once per connection) and remote command lines (quoted words)
-│   ├── ssh_pool.py         ← Connection pooling
-│   ├── state.py            ← SQLite state (sessions, favorites)
-│   ├── session.py          ← Session auth store
-│   ├── auth.py             ← Auth middleware, rate limiting
-│   ├── validation.py       ← Path validation, security
-│   ├── pdf.py              ← Playwright-backed PDF renderer (optional [pdf] extra)
-│   ├── api/progress.py     ← Progress-bars REST + WS broadcaster wiring
-│   ├── api/artifacts.py    ← Local HTML catalog REST API
-│   ├── artifacts.py        ← Discovery, path containment, loopback sidecar
-│   └── static/dist/        ← Built Vue SPA (served at /app)
-├── frontend/               ← Vue 3 SPA
-│   ├── src/
-│   │   ├── views/          ← Page components (FilesView, TerminalView, etc.)
-│   │   ├── components/     ← Reusable components
-│   │   ├── stores/         ← Pinia stores
-│   │   ├── composables/    ← Reusable logic (usePdfExport, usePrintableHtml, ...)
-│   │   ├── api/            ← API client
-│   │   └── router/         ← Vue Router config
-│   └── package.json
-├── tests/                  ← pytest tests
-│   ├── e2e/                ← Playwright E2E tests
-│   └── test_*.py           ← Unit/integration tests
-└── pyproject.toml          ← Project config (uv/pip)
+sshler/                 ← Python backend (FastAPI)
+├── webapp.py           ← Main app, routes, WebSocket handlers; opens each terminal
+├── terminal/           ← /ws/term transports (local PTY, SSH, Windows ConPTY) and the pump
+├── api/                ← API v1 endpoints, one module per group of routes
+│   ├── file_contract.py, box_files.py   ← the files of a box: one interface (`BoxFiles`)
+│   ├── local_files.py, remote_files.py  ← its two implementations and their helpers
+│   ├── placement.py    ← the rule for a name that already exists (rename, move, copy, upload)
+│   └── remote.py       ← remote paths (`~` resolved once per connection), remote command lines (quoted words)
+├── ssh.py              ← SSH/SFTP (asyncssh); `sftp_session` opens and closes every SFTP session
+├── ssh_pool.py         ← Connection pooling
+├── config.py           ← Config loading (boxes.yaml + SSH config)
+├── state.py            ← SQLite state (sessions, favorites)
+├── session.py, auth.py ← Session store, auth middleware, rate limiting
+├── validation.py       ← Path validation
+├── artifacts.py, pdf.py, claude_sessions.py ← Features (see docs/architecture.md)
+└── static/dist/        ← Built Vue SPA (served at /app)
+frontend/src/           ← Vue 3 SPA: views/, components/, stores/ (Pinia), composables/, api/, router/
+tests/                  ← pytest (`test_*.py`), Playwright in `tests/e2e/`
 ```
-
----
 
 ## Tech Stack
 
-FastAPI + uvicorn (Python 3.12+, async) · asyncssh (SFTP + remote tmux) · SQLite via sqler · Vue 3 + Pinia (`<script setup>`) · xterm.js over binary WebSocket · Playwright for optional `[pdf]` extra · pytest / Vitest / Playwright · uv.
-
----
+FastAPI + uvicorn (Python 3.12+, async) · asyncssh · SQLite via sqler · Vue 3 + Pinia (`<script setup>`) · xterm.js · Playwright for the optional `[pdf]` extra · pytest / Vitest · uv.
 
 ## Key Patterns
 
 ### Backend
 
-**webapp.py is the monolith** — Routes, WebSocket handler, middleware all here. API endpoints are modular in `sshler/api/`.
+**webapp.py is the monolith**: routes, WebSocket handlers, middleware. API endpoints are modular in `sshler/api/`.
 
-**WebSocket terminal flow:**
-1. Client calls `/api/v1/terminal/handshake` for connection info
-2. Client connects to `/ws/term?host=...&dir=...&session=...&token=...`
-3. `terminal_socket` checks access and the session name, then `webapp.py` opens one transport from `sshler/terminal/`: `LocalPtyTransport` (tmux client on a local PTY), `SshTransport` (tmux over its own SSH connection) or `ConPtyTransport` (a tab of a persisted native Windows shell). Each keeps the contract in `terminal/transport.py` (read, write, resize, close) and knows nothing of the WebSocket
-4. `terminal/pump.py` `run_pump` carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects)
-5. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
+**Local vs remote boxes (ADR-003):** `box.name == "local"` → subprocess tmux and the local file system, no SSH; otherwise an asyncssh connection and SFTP.
+
+**Files of a box:** a file route never asks which kind of box it has. It opens `box_files(deps, box, application_config)` and calls the operations of `BoxFiles`; `LocalFiles` and `RemoteFiles` each keep their side's checks and answers. A failure that no operation answered becomes an answer in one place, `Answers` in `api/box_files.py`. `tests/test_box_files_contract.py` proves the interface for both kinds; a new operation joins its table.
+
+**Terminal:** `/ws/term` opens one transport from `sshler/terminal/` behind the contract in `terminal/transport.py`; `terminal/pump.py` carries the bytes and knows nothing of the transport. Detail: `docs/architecture.md` "Terminal socket".
 
 **Security layers:**
-- `X-SSHLER-TOKEN` header or `token` query param for auth, compared in constant time by `access.token_matches` (REST and sockets share it)
-- Origin header validation (CSRF protection): `access.allowed_origins` is the one list; the HTTP middleware applies it to POST/PUT/PATCH/DELETE, and every socket applies it to its upgrade (a present, unlisted Origin, including `null`, is refused; no Origin is allowed; `SSHLER_ORIGIN_CHECK_ENABLED=false` turns both off)
-- `/ws/term`, `/ws/progress` and `/ws/ping` call one function, `access.websocket_refusal`, before accepting: credentials (close 4401), token (4403), Origin (4403); `/ws/term` validates the session name after that (4400)
-- Path traversal prevention in file operations
+- `X-SSHLER-TOKEN` header or `token` query param, compared in constant time by `access.token_matches` (REST and sockets share it)
+- Origin validation (CSRF): `access.allowed_origins` is the one list; the HTTP middleware applies it to POST/PUT/PATCH/DELETE and every socket to its upgrade (a present, unlisted Origin, including `null`, is refused; no Origin is allowed; `SSHLER_ORIGIN_CHECK_ENABLED=false` turns both off)
+- `/ws/term`, `/ws/progress` and `/ws/ping` call `access.websocket_refusal` before accepting: credentials (close 4401), token (4403), Origin (4403); `/ws/term` then validates the session name (4400)
 - Rate limiting on auth endpoints
-
-**Local vs Remote boxes:**
-- `box.name == "local"` → subprocess tmux, direct filesystem
-- Otherwise → asyncssh connection, SFTP operations
 
 ### Frontend
 
-**Pinia stores** manage all state (`stores/`):
-- `app` — Theme, terminal settings, `activeBox` (tracks current box across views)
-- `bootstrap` — Initial config from `/api/v1/bootstrap`
-- `boxes` — Available SSH boxes
-- `files` — File browser state
-- `favorites` — Pinned directories
-
-**API client** in `src/api/http.ts` handles auth headers automatically.
-
-**Terminal component** wraps xterm.js with WebSocket management.
-
-**Emoji favicon system** in `src/utils/emoji-favicon.ts`:
-- Two disjoint pools: `BOX_EMOJIS` (vehicles/buildings) and `DIR_EMOJIS` (animals/nature/food)
-- `getEmojiForBox()` — deterministic emoji per box name (never overlaps with directory emojis)
-- `getEmojiForString()` — deterministic emoji per `box:path` string
-- Uses FNV-1a hashing for uniform distribution
-
-**Active box tracking**: `app.activeBox` ref is set by FilesView/TerminalView/MultiTerminalView. AppHeader nav links carry `?box=` context so switching views preserves the current box.
-
-**Directory search** uses frecency-based ranking:
-- Local box: queries zoxide directly for instant results
-- Remote boxes: SQLite frecency table + SSH `find` for discovery
-- Formula: `score = visit_count * exp(-0.1 * days_since_last_visit)`
-
----
+**Pinia stores** (`stores/`) hold all state: `app` (theme, terminal settings, `activeBox`), `bootstrap` (config from `/api/v1/bootstrap`), `boxes`, `files`, `favorites`. The API client in `src/api/http.ts` adds auth headers. The terminal component wraps xterm.js and its WebSocket. Emoji favicons, active-box tracking, directory search and the mobile terminal: `docs/architecture.md` "Frontend details".
 
 ## Project CLI (just)
 
-Run `just` with no args to see all recipes.
+`just` with no arguments lists every recipe: `just test` (backend + frontend), `test-backend`, `test-frontend`, `test-e2e`, `build`, `typecheck`, `dev` (backend + Vite HMR), `ci` (build + test + typecheck).
 
-```bash
-just test              # All tests (backend + frontend)
-just test-backend      # pytest only
-just test-frontend     # Vitest only
-just test-e2e          # Playwright E2E
-just test-mobile       # Mobile responsive E2E
-just build             # Build frontend
-just typecheck         # Type check everything
-just dev               # Start dev server (backend + Vite HMR)
-just ci                # Full CI: build + test + typecheck
-just install           # Install all dependencies
-```
+Direct forms: `uv run pytest`, `uv run pytest tests/e2e/` (after `uv run playwright install chromium`), `pnpm --prefix frontend test -- --run`.
 
----
-
-## Testing
-
-### Running Tests
-
-Prefer the `just` recipes above. Direct forms:
-
-```bash
-uv run pytest                    # All backend tests
-uv run pytest tests/test_*.py    # Unit/integration only
-uv run playwright install chromium   # once, for E2E
-uv run pytest tests/e2e/         # Playwright E2E
-pnpm --prefix frontend test -- --run  # Frontend Vitest
-```
-
-Key suites: `test_websocket.py`/`test_httpx_ws.py`/`test_terminal_websocket.py` (WS), `test_api_v1.py`, `test_command_injection.py`/`test_path_validation.py` (security), `test_session_auth.py`/`test_rate_limit.py`, `test_search.py`; frontend specs sit beside components as `*.spec.ts`.
-
----
+Key suites: `test_websocket.py`/`test_terminal_websocket.py` (WS), `test_api_v1.py`, `test_box_files_contract.py`/`test_existing_name_rule.py` (files), `test_command_injection.py`/`test_path_validation.py` (security), `test_session_auth.py`.
 
 ## Security Considerations
 
-**MUST validate:**
-- All file paths (symlink escape, traversal)
-- Session names (shell injection prevention)
-- Origin headers on state-changing requests
-- Token presence on all authenticated endpoints
+**MUST validate:** all file paths (symlink escape, traversal), session names (shell injection), Origin headers on state-changing requests, token presence on all authenticated endpoints.
 
 **MUST NOT:** execute uploaded content, disable auth in configs, or trust client paths without normalization.
 
-**Auth flow:** httpOnly session cookies (Secure in production), CSRF via origin validation, optional basic auth for exposed deployments.
-
----
+**Auth:** httpOnly session cookies (Secure in production); optional basic auth for exposed deployments.
 
 ## Development Workflow
 
-### Backend
-
-```bash
-uv run sshler serve --log-level debug
-SSHLER_HOST=127.0.0.1 SSHLER_PORT=8822 uv run sshler serve
-
-cd frontend && pnpm install
-pnpm dev              # Vite dev server (proxies to backend)
-pnpm build            # Build to sshler/static/dist
-pnpm test -- --run
-
-uv run sshler serve --dev   # RECOMMENDED: FastAPI :8822 + Vite :5173 (HMR at /app/)
-```
-
-**`--dev` is REQUIRED with the Vite dev server:** it adds `http://localhost:5173` to allowed origins and enables backend auto-reload. Without it, POSTs from Vite fail with 403.
-
----
+`uv run sshler serve --dev` runs FastAPI on :8822 and Vite on :5173 (HMR at `/app/`). **`--dev` is required with the Vite dev server:** it adds `http://localhost:5173` to the allowed origins and reloads the backend; without it, POSTs from Vite fail with 403. More: `docs/dev-workflow.md`.
 
 ## Common Tasks
 
 - **API endpoint:** route in `sshler/api/<module>.py` (or `webapp.py`), tests in `tests/test_api_v1.py`, update the frontend client if needed.
+- **File operation:** a method on `BoxFiles` kept by both implementations, and a row in the contract test.
 - **Vue component:** `frontend/src/components/`, `*.spec.ts` alongside, `<script setup>`.
-- **WebSocket protocol:** `webapp.py` handler + `sshler/terminal/pump.py` + `TerminalView.vue` client + `test_websocket.py`/`test_terminal_websocket.py`. A new transport implements `terminal/transport.py` `Transport` and joins the contract test.
+- **WebSocket protocol:** `webapp.py` handler + `sshler/terminal/pump.py` + `TerminalView.vue` + `test_websocket.py`/`test_terminal_websocket.py`. A new transport implements `terminal/transport.py` `Transport` and joins the contract test.
 
-## Feature pipelines (architecture + invariants)
+## Before changing a feature, read its section
 
-CLI usage of ping, progress, artifacts, diff notebook and markdown preview is in the global `sshler*` skills and in `docs/skills/<feature>/SKILL.md`; this section covers only what you need to change the code.
-
-**Shared broadcaster pattern (progress, ping):** REST route in `sshler/api/<x>.py` → `<X>Broadcaster` in `webapp.py`, instantiated **per-app in `make_app()`** (never module-global, so tests don't share sockets), wired via `APIDependencies.broadcast_<x>` to avoid a `webapp.py` ⇄ `api/` circular import → `/ws/<x>` (auth mirrors `/ws/term`, token query param) → Pinia store with exponential-backoff reconnect. Event payloads must be JSON-serializable (`json.dumps(event)`).
-
-### PDF export
-- `sshler/pdf.py` `PDF_RENDERER` launches Chromium in the lifespan; soft-fails to `available=False` without the `[pdf]` extra. `POST /api/v1/pdf/render` `{html, filename}` → PDF, 503 when unavailable.
-- `bootstrap.pdfAvailable` gates every UI entry: hide when false, no disabled placeholders.
-- HTML pipeline is `composables/usePrintableHtml.ts` (marked → DOMPurify → mermaid → image inlining); new entry points call `usePdfExport().exportOne/exportMany`, never re-roll it.
-
-### Progress bars
-- `ProgressBar` model in `state.py`; REST `/api/v1/progress[/:name]`, name `^[A-Za-z0-9._:-]{1,64}$`, status `{running, done, failed, cancelled}`. WS sends `snapshot` on connect, then `upsert`/`delete`.
-- CLI token discovery: `--token` → `$SSHLER_TOKEN` → `<config_dir>/runtime-token` (0600, written by `serve()`); URL: `--url` → `$SSHLER_PROGRESS_URL` → `http://127.0.0.1:8822`. That is why `httpx` is a core dep.
-- `stores/progress.ts`: subscriptions are client-side and **scoped per box** (`subscriptionsByScope`, key = `appStore.activeBox`; no-ops without a box), persisted at `localStorage["sshler:progress:subscribed"]`.
-- WS lifecycle is owned by `App.vue`; `<ProgressStrip>` is `v-if`-gated so it must NOT own it. Bars never auto-dismiss (including `done`); percent is floored.
-- New WS event: add to `ProgressEvent` in `api/types.ts`, handle in `_handleEvent`, broadcast from `api/progress.py`.
-
-### Local HTML artifacts (`/app/artifacts`)
-- `ArtifactProject`/`ArtifactRegistration` in `state.py`; modes `file`/`site`/`collection`. `ArtifactSidecar` (`sshler/artifacts.py`) binds only `127.0.0.1`, GET/HEAD only, no CORS, strict resolved-path containment, rejects hidden/traversal/symlink paths.
-- **Deletion invariant:** removal deletes registrations only; never unlink the source path.
-- New discovery rules go in `sshler/artifacts.py` with pure tests plus sidecar containment tests. Design: `ROADMAP-ARTIFACTS.md`.
-
-### Diff notebook (`/app/diff`)
-- No dedicated diff backend: each side composes `GET /api/v1/boxes/{name}/git/show`; keep blob-based composition the default.
-- Saved notebooks (`DiffNotebook`, `/api/v1/diff/notebooks[/:id]`) are **immutable**: every POST is a new id, no PUT; editing a loaded one forks. URL state is versioned base64 JSON in `?n=`; legacy `?lb=&ld=` URLs must still hydrate.
-- A `missing` side (404) is not an error; it renders empty so adds/deletes display.
-- New command: parser case in `utils/diffCommandParser.ts` + spec + `DiffView.applyCommand` + `DiffHelpOverlay`. New URL field: bump `NOTEBOOK_VERSION` and write a migration.
-
-### Ping
-- `POST /api/v1/ping` (no persistence) → `/ws/ping` (no snapshot) → `stores/ping.ts` `pendingPings` → renderless `PingNotificationHandler.vue` inside `<NNotificationProvider>`. Dismiss: per-ping `duration` → `appStore.pingDefaultDuration` → manual.
-
-### Claude session dashboard (`/app/claude`, local box only, pull-based REST)
-- Scanner `sshler/claude_sessions.py` reads `<config-dir>/projects/*/*.jsonl` (`$CLAUDE_CONFIG_DIR`, default `~/.claude`), whole-file streamed, cached per `(path, mtime, size)`; globs guarded with `resolve().is_relative_to(base)`. Title priority mirrors `/resume`: `customTitle` → `aiTitle` → `lastPrompt` → first prompt. Groups by `repo_root` (walk up for `.git`).
-- `POST /api/v1/claude/sessions/{id}/open` validates a strict UUID BEFORE any fs/tmux op, then opens window `cl-<6hex>` in the **repo root's** tmux session, but with the window cwd = the exact `info.cwd`, because `claude --resume` is cwd-scoped. Idempotent: an existing window is only `select-window`ed, never re-typed into.
-- `ts_session_name(dir)` in `sshler/tmux.py` matches the `ts` CLI byte-for-byte (basename, `.`/`:`→`_`, no hash); frontend `generateSessionName` must match it for every box. Remote boxes use the same per-session `tmux -L ts-<name>` servers (`remote_tmux_command`), so `ts` after a plain `ssh host` attaches the session sshler opened. tmux helpers live in `tmux.py` to avoid circular imports.
-- Resume command is a client-side template with `{id}` (global + per-session overrides in localStorage); the server (`_resolve_resume_command`) requires `{id}`, rejects control chars, substitutes the validated UUID.
+`docs/architecture.md` holds the architecture and invariants of: the terminal socket; the shared broadcaster pattern (progress, ping); PDF export; progress bars; local HTML artifacts (the deletion invariant); the diff notebook (immutable notebooks, versioned URL state); ping; the Claude session dashboard (`ts_session_name` must match the `ts` CLI). CLI usage of these features is in `docs/skills/<feature>/SKILL.md`.
 
 ## Environment Variables
 
@@ -238,42 +99,15 @@ CLI usage of ping, progress, artifacts, diff notebook and markdown preview is in
 | `SSHLER_PUBLIC_URL` | - | For origin validation |
 | `SSHLER_COOKIE_SECURE` | true | Secure cookie flag |
 
----
+## ADRs
 
-## ADRs (Architectural Decisions)
-
-### ADR-001: Cookie Sessions over JWTs
-Sessions are revocable, simpler, and correct for single-backend browser apps. JWTs solve distributed auth problems we don't have.
-
-### ADR-003: Local Box Special Case
-`box.name == "local"` triggers subprocess-based tmux instead of SSH. Enables local filesystem browsing without SSH.
-
----
+- **ADR-001, cookie sessions over JWTs:** sessions are revocable and simpler, and right for a single-backend browser app.
 
 ## Known Gotchas
 
-### Origin Validation (403 on POST, a socket that will not open)
-The backend validates the `Origin` header on all state-changing requests and on every WebSocket upgrade. If you get 403 errors on POST/PUT/DELETE, or the terminal, progress strip or pings will not connect while the log says `WebSocket refused: origin ... is not allowed`:
-1. Check you're running with `--dev` flag when using Vite dev server
-2. Check `SSHLER_PUBLIC_URL` is set correctly if behind a proxy
-
-### Favorites Persistence
-Favorites are stored in both:
-- SQLite state database (via `state.replace_favorites_async`)
-- YAML config (via `save_config`)
-
-The `refresh_box` endpoint resets connection overrides but should NOT touch favorites.
-
-### Asset Paths in Frontend
-Use **relative paths** in `index.html` and `manifest.webmanifest` (e.g., `favicon.png` not `/app/favicon.png`). Vite handles base path resolution during build. Absolute paths break the dev server.
-
----
-
-## Mobile terminal UX
-
-`components/MobileInputBar.vue` (quick keys + `?` legend; each key has a fixed colour meaning, red = Ctrl+C), `components/Terminal.vue` (xterm wrapper, mobile viewport), `components/AppHeader.vue` (14px mobile header with CPU/MEM stats), `composables/useResponsive.ts`.
-
----
+- **403 on POST, or a socket that will not open:** the backend validates `Origin` on every state-changing request and WebSocket upgrade (the log says `WebSocket refused: origin ... is not allowed`). Run with `--dev` when using the Vite dev server; set `SSHLER_PUBLIC_URL` behind a proxy.
+- **Favorites live in two places:** the SQLite state database (`state.replace_favorites_async`) and the YAML config (`save_config`). `refresh_box` resets connection overrides and must NOT touch favorites.
+- **Asset paths in the frontend are relative** in `index.html` and `manifest.webmanifest` (`favicon.png`, not `/app/favicon.png`): Vite resolves the base path at build, and absolute paths break the dev server.
 
 ## Before Committing
 
