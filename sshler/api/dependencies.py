@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
 
@@ -13,20 +12,17 @@ from ..access import token_matches
 from ..config import AppConfig, Box, find_box, get_config_path, load_config
 from ..config_cache import get_cache
 from ..ssh import SSHError, connect
-from ..ssh_pool import get_pool
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from .tunnels import TunnelRegistry
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 _CONNECT_FAIL_CACHE: dict[str, float] = {}  # box_name -> timestamp of last failure
 _CONNECT_FAIL_COOLDOWN = 60  # seconds
 
-# Upper bound on one polled probe (status, stats, git badge, session sync,
-# the stats stream): getting a connection (a connect is itself capped by the
+# Upper bound on one polled probe (status, stats, git badge, the session
+# routes, the stats stream): getting a connection (a connect is itself capped by the
 # pool's ``CONNECT_TIMEOUT_SECONDS``) plus the commands. Returning the
 # connection to the pool afterwards is not counted. Read at call time so
 # tests can shorten it.
@@ -34,7 +30,7 @@ PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class ProbeTimeoutError(SSHError):
-    """``run_pooled`` ran past ``PROBE_TIMEOUT_SECONDS``.
+    """A bounded request (``box_runner(..., deadline=...)``) ran past its limit.
 
     The message names the step that was running (getting a connection, or
     the command) and the limit. It is an ``SSHError``, not a
@@ -118,59 +114,6 @@ class APIDependencies:
         # Success — clear failure cache
         _CONNECT_FAIL_CACHE.pop(box.name, None)
         return conn
-
-    async def run_pooled(
-        self,
-        box: Box,
-        application_config: AppConfig,
-        operation: Callable[[Any], Awaitable[T]],
-        *,
-        timeout: float | None = None,
-    ) -> T:
-        """Run ``operation(conn)`` on a pooled connection to ``box``.
-
-        For the routes the UI polls: they share the pool's idle connections
-        instead of opening one per request. Getting the connection plus the
-        operation is bounded by ``timeout`` seconds (default
-        ``PROBE_TIMEOUT_SECONDS``, read at call time); past it this raises
-        ``ProbeTimeoutError`` naming the step. Returning the connection to the
-        pool comes after the bound, so a finished operation is never reported
-        as a timeout. A connection whose operation timed out or was cancelled
-        is closed, not reused (a command may still be running on it).
-        """
-        pool = get_pool()
-        limit = PROBE_TIMEOUT_SECONDS if timeout is None else timeout
-        deadline = asyncio.timeout(limit)
-        conn = None
-        try:
-            async with deadline:
-                conn = await pool.acquire(
-                    box, lambda: self.connect_for_box(box, application_config)
-                )
-                result = await operation(conn)
-        except BaseException as exc:
-            if conn is not None:
-                ordinary = (
-                    isinstance(exc, Exception)
-                    and not isinstance(exc, TimeoutError)
-                    and not deadline.expired()
-                )
-                if ordinary:
-                    await pool.release(box.name, conn)
-                else:
-                    pool.discard(box.name, conn)
-            if deadline.expired():
-                if conn is None:
-                    message = f"connect to {box.name} timed out after {limit:g} s"
-                else:
-                    message = (
-                        f"command on {box.name} timed out"
-                        f" ({limit:g} s limit for connect plus command)"
-                    )
-                raise ProbeTimeoutError(message) from None
-            raise
-        await pool.release(box.name, conn)
-        return result
 
     @staticmethod
     def clear_connect_failure(box_name: str):

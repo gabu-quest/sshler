@@ -12,8 +12,10 @@ It answers the pool's health check and the home lookup; it emulates in Python th
 test programs of the table (``python -c SCRIPT``, by the exact script), ``true``, and
 ``cat`` of files under ``/proc`` (from canned text, ``Counts.proc``); and it runs
 ``git`` only when every word is plain (letters, digits and ``_./%:=()|,+-`` and the
-log's field separator), never a word from a hostile input. Any other line is recorded
-and refused with status 127.
+log's field separator), never a word from a hostile input. A tmux line is answered from
+canned text by ``_tmux_reply`` (no tmux runs), and the session-listing script of
+``api/sessions.py`` by its exact text. Any other line is recorded and refused with
+status 127.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 import asyncssh
 import pytest
@@ -38,9 +41,11 @@ import yaml
 from fastapi.testclient import TestClient
 
 from sshler import ssh_pool, state
+from sshler import tmux as tmux_module
 from sshler.api import boxes as boxes_api
 from sshler.api import dependencies as dependencies_api
-from sshler.api.box_runner import BoxRunner, LocalRunner, Ran, over
+from sshler.api import sessions as sessions_api
+from sshler.api.box_runner import BoxRunner, LocalRunner, Ran, TmuxTimeoutError, over
 from sshler.ssh import connect
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
@@ -88,11 +93,37 @@ def _proc() -> dict[str, list[str]]:
     }
 
 
+# What a tmux stand-in answers, on both kinds: its words as JSON on its output; with a
+# word "gone", tmux's refusal on its error output and status 1; with a word "latin", a
+# line that is not UTF-8; with a word "stuck", nothing for 60 s. The local stand-in is
+# this Python script first on PATH; the loopback server gives the same answers from
+# ``_tmux_reply``.
+TMUX_GONE = "can't find session: gone\n"
+TMUX_NOT_INSTALLED = "sh: 1: tmux: not found\n"
+TMUX_LATIN = b"caf\xe9\n"
+FAKE_TMUX = f"""#!{PY}
+import json, sys, time
+args = sys.argv[1:]
+if "stuck" in args:
+    time.sleep(60)
+if "gone" in args:
+    sys.stderr.write({TMUX_GONE!r})
+    sys.exit(1)
+if "latin" in args:
+    sys.stdout.buffer.write({TMUX_LATIN!r})
+    sys.exit(0)
+print(json.dumps(args))
+"""
+# The sessions the loopback box's listing script names.
+LIVE_SESSIONS = "alpha\nwork\n"
+
+
 @dataclass
 class Counts:
     commands: list[str] = field(default_factory=list)
     connections: int = 0
     proc: dict[str, list[str]] = field(default_factory=_proc)
+    tmux_installed: bool = True
 
     def read_proc(self, name: str) -> str | None:
         texts = self.proc.get(name)
@@ -152,6 +183,13 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         process.stdout.write(home.encode())
         process.exit(0)
         return
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        tokens = []
+    if tokens[:1] == ["tmux"]:
+        await _tmux_reply(process, counts, tokens[1:])
+        return
     parsed = _parse(line)
     if parsed is None:
         process.exit(127)
@@ -169,6 +207,8 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         status, out = await _git(words, cwd)
     elif words == ["true"]:
         status, out = 0, ""
+    elif words == ["sh", "-c", sessions_api.REMOTE_LIST_SESSIONS]:
+        status, out = 0, LIVE_SESSIONS
     elif words[0] == "cat" and len(words) > 1 and all(w.startswith("/proc/") for w in words[1:]):
         texts = [counts.read_proc(name) for name in words[1:]]
         status = 0 if all(text is not None for text in texts) else 1  # what cat gives
@@ -192,6 +232,26 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         data, status = data[:cut], 0  # bytes, as head -c cuts: it may split a character
     process.stdout.write(data)
     process.exit(status)
+
+
+async def _tmux_reply(process: asyncssh.SSHServerProcess, counts: Counts, args: list[str]) -> None:
+    """The answer of ``FAKE_TMUX`` for ``args``, or the shell's when tmux is not installed."""
+    if not counts.tmux_installed:
+        process.stderr.write(TMUX_NOT_INSTALLED.encode())
+        process.exit(127)
+        return
+    if "stuck" in args:
+        await asyncio.sleep(60)
+    if "gone" in args:
+        process.stderr.write(TMUX_GONE.encode())
+        process.exit(1)
+        return
+    if "latin" in args:
+        process.stdout.write(TMUX_LATIN)
+        process.exit(0)
+        return
+    process.stdout.write((json.dumps(args) + "\n").encode())
+    process.exit(0)
 
 
 class ServerThread:
@@ -1235,3 +1295,286 @@ def test_a_remote_box_s_status_runs_true_once(served):
     assert 0 < body["latency_ms"] < 15_000
     assert served.counts.connections == 1
     assert [_parse(line) for line in served.remote_commands()] == [(None, ["true"], None)]
+
+
+# --- tmux on a session's own server, on both kinds -------------------------------------
+
+
+@pytest.fixture
+def fake_tmux_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``FAKE_TMUX`` first on PATH as ``tmux``, so the local box never runs a real tmux."""
+    bin_dir = tmp_path / "tmux-bin"
+    bin_dir.mkdir()
+    script = bin_dir / "tmux"
+    script.write_text(FAKE_TMUX, encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+@pytest.mark.asyncio
+async def test_tmux_runs_on_the_session_server_with_every_word_as_one_word(kind, fake_tmux_on_path):
+    ran = await kind.runner.tmux("work", ["display-message", "-p", *HOSTILE_WORDS])
+    expected = ["-L", "ts-work", "display-message", "-p", *HOSTILE_WORDS]
+    assert ran == Ran(0, json.dumps(expected) + "\n", "")
+
+
+@pytest.mark.asyncio
+async def test_tmux_that_says_no_gives_its_status_and_its_error_output(kind, fake_tmux_on_path):
+    ran = await kind.runner.tmux("gone", ["capture-pane", "-p", "-t", "gone"])
+    assert ran == Ran(1, "", TMUX_GONE)
+
+
+@pytest.mark.asyncio
+async def test_tmux_past_its_limit_raises_the_tmux_timeout(kind, fake_tmux_on_path):
+    started = time.monotonic()
+    with pytest.raises(TmuxTimeoutError):
+        await kind.runner.tmux("stuck", ["kill-session", "-t", "stuck"], timeout=0.5)
+    assert time.monotonic() - started < 4.0
+
+
+@pytest.mark.asyncio
+async def test_tmux_with_no_limit_has_the_tmux_command_limit(kind, fake_tmux_on_path, monkeypatch):
+    monkeypatch.setattr(tmux_module, "TMUX_COMMAND_TIMEOUT", 0.5)
+    started = time.monotonic()
+    with pytest.raises(TmuxTimeoutError):
+        await kind.runner.tmux("stuck", ["kill-session", "-t", "stuck"])
+    assert time.monotonic() - started < 4.0
+
+
+# --- the session routes run tmux through the runner ------------------------------------
+
+
+def _new_session(served: Served, box: str, name: str) -> str:
+    created = served.client.post(
+        f"/api/v1/boxes/{box}/sessions",
+        json={"session_name": name, "working_directory": "/srv"},
+        headers=HEADERS,
+    )
+    assert created.status_code == 200, created.text
+    return created.json()["id"]
+
+
+def _capture_words(target: str) -> list[str]:
+    session = target.split(":")[0]
+    return ["-L", f"ts-{session}", "capture-pane", "-p", "-J", "-S", "-", "-t", target]
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_capture_gives_one_answer_on_both_kinds(served, fake_tmux_on_path, box):
+    resp = served.get(box, "sessions/work/capture", window="1", pane="0")
+    text = json.dumps(_capture_words("work:1.0"))
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {"session": "work", "target": "work:1.0", "text": text, "lines": 1, "chars": len(text)},
+    )
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_capture_that_is_not_utf8_gives_its_text_with_the_bad_byte_marked_on_both_kinds(
+    served, fake_tmux_on_path, box
+):
+    """A remote capture read the output strictly as UTF-8: the read failed, and the
+    route answered 400 "tmux capture-pane failed: " with no text after it."""
+    resp = served.get(box, "sessions/latin/capture")
+    assert (resp.status_code, resp.json()["text"]) == (200, "caf\ufffd")
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_capture_tmux_refuses_is_the_400_with_its_error_output_on_both_kinds(
+    served, fake_tmux_on_path, box
+):
+    resp = served.get(box, "sessions/gone/capture")
+    assert (resp.status_code, resp.json()) == (
+        400,
+        {"detail": "tmux capture-pane failed: can't find session: gone"},
+    )
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_capture_past_its_limit_is_the_504_on_both_kinds(
+    served, fake_tmux_on_path, monkeypatch, box
+):
+    monkeypatch.setattr(tmux_module, "TMUX_CAPTURE_TIMEOUT", 0.5)
+    resp = served.get(box, "sessions/stuck/capture")
+    assert (resp.status_code, resp.json()) == (
+        504,
+        {"detail": "tmux capture-pane timed out after 0.5 s"},
+    )
+
+
+@pytest.mark.parametrize("box", ["local", "lb"])
+def test_a_rename_tmux_refuses_is_the_400_and_keeps_the_name_on_both_kinds(
+    served, fake_tmux_on_path, box
+):
+    session_id = _new_session(served, box, "gone")
+    resp = served.client.patch(
+        f"/api/v1/boxes/{box}/sessions/{session_id}",
+        json={"session_name": "fresh"},
+        headers=HEADERS,
+    )
+    listed = served.client.get(f"/api/v1/boxes/{box}/sessions", headers=HEADERS)
+    assert (resp.status_code, resp.json()) == (400, {"detail": "tmux rename failed"})
+    assert [item["session_name"] for item in listed.json()] == ["gone"]
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "body", "status"),
+    [
+        ("PATCH", "sessions/{id}", {"session_name": "fresh"}, 200),
+        ("DELETE", "sessions/{id}?kill_tmux=true", None, 200),
+        ("GET", "sessions/work/capture", None, 200),
+        ("POST", "sessions/sync", None, 200),
+    ],
+    ids=["rename", "kill", "capture", "sync"],
+)
+def test_a_remote_session_route_takes_one_connection_and_one_command(
+    served, method, route, body, status
+):
+    """Counted on the code before the runner: one pooled connection and one command
+    for each (the pool's health check on release aside)."""
+    session_id = _new_session(served, "lb", "work")
+    resp = served.client.request(
+        method,
+        f"/api/v1/boxes/lb/{route.format(id=session_id)}",
+        json=body,
+        headers=HEADERS,
+    )
+    assert resp.status_code == status, resp.text
+    assert (served.counts.connections, len(served.remote_commands())) == (1, 1)
+
+
+def test_a_remote_rename_kill_and_capture_send_the_tmux_words_of_the_session(served):
+    session_id = _new_session(served, "lb", "work")
+    served.client.patch(
+        f"/api/v1/boxes/lb/sessions/{session_id}", json={"session_name": "fresh"}, headers=HEADERS
+    )
+    served.client.delete(f"/api/v1/boxes/lb/sessions/{session_id}?kill_tmux=true", headers=HEADERS)
+    served.get("lb", "sessions/work/capture", lines="50")
+    assert [shlex.split(line) for line in served.remote_commands()] == [
+        ["tmux", "-L", "ts-work", "rename-session", "-t", "work", "fresh"],
+        ["tmux", "-L", "ts-fresh", "kill-session", "-t", "fresh"],
+        ["tmux", "-L", "ts-work", "capture-pane", "-p", "-J", "-S", "-50", "-t", "work"],
+    ]
+
+
+def test_a_remote_sync_runs_the_listing_script_and_marks_the_rest_inactive(served):
+    _new_session(served, "lb", "work")
+    _new_session(served, "lb", "beta")
+    resp = served.client.post("/api/v1/boxes/lb/sessions/sync", headers=HEADERS)
+    assert resp.status_code == 200
+    assert sorted((item["session_name"], item["active"]) for item in resp.json()) == [
+        ("beta", False),
+        ("work", True),
+    ]
+    assert [_parse(line) for line in served.remote_commands()] == [
+        (None, ["sh", "-c", sessions_api.REMOTE_LIST_SESSIONS], None)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "body", "status", "detail"),
+    [
+        ("PATCH", "sessions/{id}", {"session_name": "fresh"}, 500, "Failed to rename session"),
+        ("DELETE", "sessions/{id}?kill_tmux=true", None, 200, "deleted"),
+        (
+            "GET",
+            "sessions/stuck/capture",
+            None,
+            504,
+            "tmux capture-pane timed out after 0.5 s",
+        ),
+    ],
+    ids=["rename", "kill", "capture"],
+)
+def test_a_remote_tmux_that_hangs_does_not_hand_its_connection_on(
+    served, monkeypatch, method, route, body, status, detail
+):
+    """tmux may still run on the connection, so the next request opens a new one. A
+    rename or a kill has tmux's command limit on a remote box too; before, only the
+    15 s bound of the request stopped it."""
+    monkeypatch.setattr(tmux_module, "TMUX_COMMAND_TIMEOUT", 0.5)
+    monkeypatch.setattr(tmux_module, "TMUX_CAPTURE_TIMEOUT", 0.5)
+    with served.client:  # one event loop for every request, so the pool can reuse
+        session_id = _new_session(served, "lb", "stuck")
+        started = time.monotonic()
+        stuck = served.client.request(
+            method,
+            f"/api/v1/boxes/lb/{route.format(id=session_id)}",
+            json=body,
+            headers=HEADERS,
+        )
+        elapsed = time.monotonic() - started
+        again = served.get("lb", "sessions/work/capture")
+    assert elapsed < 4.0
+    answer = stuck.json().get("detail", stuck.json().get("message"))
+    assert (stuck.status_code, answer, again.status_code) == (status, detail, 200)
+    assert served.counts.connections == 2
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "body", "status", "detail"),
+    [
+        ("PATCH", "sessions/{id}", {"session_name": "fresh"}, 400, "tmux rename failed"),
+        (
+            "GET",
+            "sessions/work/capture",
+            None,
+            400,
+            "tmux capture-pane failed: sh: 1: tmux: not found",
+        ),
+    ],
+    ids=["rename", "capture"],
+)
+def test_a_remote_box_with_no_tmux_is_the_400_of_a_refusal(
+    served, method, route, body, status, detail
+):
+    """As before: the remote shell answers 127 and its text, which the route reads as
+    tmux saying no. (The local box without tmux raises before anything runs, a 500.)"""
+    served.counts.tmux_installed = False
+    session_id = _new_session(served, "lb", "work")
+    resp = served.client.request(
+        method,
+        f"/api/v1/boxes/lb/{route.format(id=session_id)}",
+        json=body,
+        headers=HEADERS,
+    )
+    assert (resp.status_code, resp.json()) == (status, {"detail": detail})
+
+
+SESSION_HOSTILE = ["a b", "it's", 'a"b', "$HOME", "`id`", "a;b", "a\nb"]
+
+
+@pytest.mark.parametrize("name", SESSION_HOSTILE, ids=repr)
+@pytest.mark.parametrize(
+    ("field", "detail"),
+    [("session", "Invalid session name"), ("window", "Invalid window"), ("pane", "Invalid pane")],
+)
+def test_a_remote_capture_refuses_a_hostile_word_before_it_connects(served, name, field, detail):
+    session = quote(name, safe="") if field == "session" else "work"
+    params = {"window": name if field == "window" else "1"}
+    if field == "pane":
+        params["pane"] = name
+    resp = served.get("lb", f"sessions/{session}/capture", **params)
+    assert (resp.status_code, resp.json()) == (400, {"detail": detail})
+    assert served.counts.connections == 0
+
+
+@pytest.mark.parametrize("name", SESSION_HOSTILE, ids=repr)
+def test_a_remote_rename_refuses_a_hostile_new_name_before_it_connects(served, name):
+    """The body's own pattern refuses the name (422), before the route's check."""
+    session_id = _new_session(served, "lb", "work")
+    resp = served.client.patch(
+        f"/api/v1/boxes/lb/sessions/{session_id}", json={"session_name": name}, headers=HEADERS
+    )
+    assert (resp.status_code, resp.json()["detail"][0]["loc"]) == (422, ["body", "session_name"])
+    assert served.counts.connections == 0
+
+
+def test_a_remote_capture_of_a_name_with_a_leading_dash_reaches_tmux_as_one_word(served):
+    """The name check lets a leading ``-`` through, as before; it reaches tmux as the
+    value of ``-t`` and as part of the server's name, one word each."""
+    resp = served.get("lb", "sessions/-x/capture")
+    assert (resp.status_code, resp.json()["text"]) == (200, json.dumps(_capture_words("-x")))
+    assert [shlex.split(line) for line in served.remote_commands()] == [
+        ["tmux", *_capture_words("-x")]
+    ]

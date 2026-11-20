@@ -19,7 +19,7 @@ sshler/                 ← Python backend (FastAPI)
 │   ├── file_contract.py, box_files.py   ← the files of a box: one interface (`BoxFiles`)
 │   ├── local_files.py, remote_files.py  ← its two implementations and their helpers
 │   ├── placement.py    ← the rule for a name that already exists (rename, move, copy, upload)
-│   ├── box_runner.py ← a command on a box (`BoxRunner`): git, grep, the badge
+│   ├── box_runner.py ← a command on a box (`BoxRunner`): git, grep, tmux, stats
 │   └── remote.py       ← remote paths (`~` resolved once per connection), remote command lines (quoted words)
 ├── ssh.py              ← SSH/SFTP (asyncssh); `sftp_session` opens and closes every SFTP session
 ├── ssh_pool.py         ← Connection pooling

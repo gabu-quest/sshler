@@ -40,6 +40,15 @@ Where the kinds differ, each as the routes had it before:
 * ``reach(timeout)``: the local box is this machine and answers at once (0 s, nothing
   is run: Windows has no ``true``); a remote box runs ``true`` once.
 
+``tmux(session, args)`` runs tmux on the session's own server (``tmux -L ts-<session>``,
+built by ``sshler.tmux``) with ``args``, each one word, and gives what tmux wrote on its
+error output too. Its limit is ``tmux.TMUX_COMMAND_TIMEOUT`` unless one is given; past
+it the call raises ``TmuxTimeoutError`` (a ``TimeoutError``), and only then, so a
+connect that timed out is not taken for tmux that did. Where the kinds differ: the
+local box runs ``tmux.run_local_tmux`` (no tmux there raises ``FileNotFoundError``;
+on Windows tmux runs in WSL); a remote box sends ``tmux.remote_tmux_command`` (no tmux
+there is status 127 with the shell's error text).
+
 A remote runner takes its box's pooled connection at the first call that needs it and
 gives it back when the block ends.
 """
@@ -57,6 +66,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Protocol
 
+from .. import tmux as tmux_module
 from ..config import AppConfig, Box
 from ..proc import run_bounded
 from ..ssh_pool import get_pool
@@ -72,11 +82,13 @@ FOLDER_NOT_ENTERED = 1
 
 @dataclass(frozen=True)
 class Ran:
-    """What a program gave: its exit status (None when ``output_limit`` cut the output)
-    and its standard output."""
+    """What a program gave: its exit status (None when ``output_limit`` cut the output),
+    its standard output, and its error output (given by ``tmux`` only; empty from
+    ``run``)."""
 
     status: int | None
     output: str
+    errors: str = ""
 
     @property
     def ok(self) -> bool:
@@ -85,6 +97,17 @@ class Ran:
 
 class ProgramNotFoundError(Exception):
     """The local box has no program by the first word's name."""
+
+
+class TmuxTimeoutError(TimeoutError):
+    """tmux itself, not the connect before it, ran past its limit."""
+
+
+def _text(data: str | bytes | None) -> str:
+    """Output as text: bytes read as UTF-8 with a bad byte marked."""
+    if data is None:
+        return ""
+    return data if isinstance(data, str) else data.decode("utf-8", errors="replace")
 
 
 class BoxRunner(Protocol):
@@ -109,6 +132,10 @@ class BoxRunner(Protocol):
         timeout: float,
         output_limit: int | None = None,
     ) -> Ran: ...
+
+    async def tmux(self, session: str, args: Sequence[str], *, timeout: float | None = None) -> Ran:
+        """tmux on ``session``'s own server with ``args``: status, output, error output."""
+        ...
 
 
 class LocalRunner:
@@ -148,6 +175,14 @@ class LocalRunner:
         if output_limit is not None:
             return Ran(None, stdout[:output_limit].decode("utf-8", errors="replace"))
         return Ran(status, stdout.decode("utf-8", errors="replace"))
+
+    async def tmux(self, session: str, args: Sequence[str], *, timeout: float | None = None) -> Ran:
+        # A limit of None is run_local_tmux's own TMUX_COMMAND_TIMEOUT.
+        try:
+            status, stdout, stderr = await tmux_module.run_local_tmux(session, list(args), timeout)
+        except TimeoutError as exc:
+            raise TmuxTimeoutError(f"tmux on {session} timed out") from exc
+        return Ran(status, _text(stdout), _text(stderr))
 
 
 def remote_command_line(
@@ -212,6 +247,23 @@ class RemoteRunner:
         status = result.exit_status
         return Ran(-1 if status is None else status, output)
 
+    async def tmux(self, session: str, args: Sequence[str], *, timeout: float | None = None) -> Ran:
+        connection = await self._connection()  # outside the limit: a connect is not tmux
+        limit = tmux_module.TMUX_COMMAND_TIMEOUT if timeout is None else timeout
+        line = tmux_module.remote_tmux_command(session, list(args))
+        try:
+            result = await asyncio.wait_for(
+                connection.run(line, check=False, encoding=None), timeout=limit
+            )
+        except asyncio.CancelledError:
+            self.timed_out = True
+            raise
+        except TimeoutError as exc:
+            self.timed_out = True
+            raise TmuxTimeoutError(f"tmux on {session} timed out") from exc
+        status = result.exit_status
+        return Ran(-1 if status is None else status, _text(result.stdout), _text(result.stderr))
+
 
 def over(connection: Any) -> RemoteRunner:
     """A remote runner on a connection the caller holds."""
@@ -233,8 +285,11 @@ async def box_runner(
     """The runner of ``box`` for the block.
 
     With ``deadline`` the whole block (taking the connection and every command) is
-    bounded: past it ``ProbeTimeoutError`` is raised, naming the step, as for
-    ``APIDependencies.run_pooled``.
+    bounded, as a polled request is: past it ``ProbeTimeoutError`` is raised, naming the
+    step ("connect to NAME timed out after N s" while the connection was still being
+    taken, "command on NAME timed out (N s limit for connect plus command)" after).
+    Giving the connection back to the pool is not counted, so a block whose work
+    finished is never reported as a timeout.
 
     On a remote box the pooled connection is taken by the first call that needs it and
     given back when the block ends; it is closed instead when the block ended by a
@@ -278,7 +333,7 @@ async def box_runner(
                     raise
                 spoiled = True
                 if not taken:
-                    message = f"connect to {box.name} timed out after {deadline:g} s"
+                    message = _connect_timed_out(box, deadline)
                 else:
                     message = _command_timed_out(box, deadline)
                 raise ProbeTimeoutError(message) from None
@@ -295,6 +350,10 @@ async def box_runner(
             pool.discard(box.name, taken[0])
         else:
             await pool.release(box.name, taken[0])
+
+
+def _connect_timed_out(box: Box, deadline: float) -> str:
+    return f"connect to {box.name} timed out after {deadline:g} s"
 
 
 def _command_timed_out(box: Box, deadline: float) -> str:

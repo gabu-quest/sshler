@@ -192,7 +192,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIGitInfo:
         """Get git repository info for a directory on a box."""
         box = deps.get_box_or_404(application_config, name)
-        # The UI polls this route: the request is bounded as run_pooled bounds one.
+        # The UI polls this route: the connect and every command are bounded.
         limit = dependencies.PROBE_TIMEOUT_SECONDS
         try:
             async with box_runner(deps, box, application_config, deadline=limit) as runner:

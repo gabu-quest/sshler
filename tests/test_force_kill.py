@@ -15,6 +15,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -273,12 +274,13 @@ def kill_recorders(monkeypatch):
     async def fake_force(session_name):
         force_calls.append(session_name)
 
-    async def fake_run_local_tmux(session_name, args):
+    async def fake_run_local_tmux(session_name, args, timeout=None):
         plain_calls.append((session_name, list(args)))
-        return 0, "", ""
+        return 0, b"", b""
 
     monkeypatch.setattr("sshler.api.sessions.force_kill_local_session", fake_force)
-    monkeypatch.setattr("sshler.api.sessions.run_local_tmux", fake_run_local_tmux)
+    # The runner of the local box runs every session's tmux through this one helper.
+    monkeypatch.setattr("sshler.tmux.run_local_tmux", fake_run_local_tmux)
     return {"force": force_calls, "plain": plain_calls}
 
 
@@ -365,8 +367,9 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
     commands: list[str] = []
 
     class FakeConnection:
-        async def run(self, command, check=False):
+        async def run(self, command, check=False, encoding="utf-8"):
             commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout=b"", stderr=b"")
 
         def close(self):
             pass

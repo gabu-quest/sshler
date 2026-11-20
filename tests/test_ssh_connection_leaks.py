@@ -32,6 +32,7 @@ import yaml
 from sshler import ssh_pool, state
 from sshler.api import dependencies as deps_module
 from sshler.api import stats_stream
+from sshler.api.box_runner import box_runner
 from sshler.api.dependencies import APIDependencies
 from sshler.ssh import SSHError
 from sshler.ssh_pool import SSHConnectionPool
@@ -126,7 +127,7 @@ class Ledger:
             return _result(0, first_sample)
         if command.startswith("cat /proc/uptime /proc/meminfo /proc/stat "):
             return _result(0, PROC_UPTIME + PROC_MEMINFO + second_sample)
-        if command.startswith("tmux list-sessions"):
+        if command.startswith("sh -c ") and "list-sessions" in command:
             return _result(0, "alpha\n")
         if command.startswith("true "):
             return _result(0)
@@ -573,19 +574,18 @@ class ReleaseGateConnection:
 
 
 @pytest.mark.asyncio
-async def test_run_pooled_does_not_count_the_release_against_the_probe_limit(monkeypatch):
-    """A probe whose command finished is not a timeout because returning the
-    connection to the pool is slow: the result comes back and the healthy
+async def test_a_bounded_request_does_not_count_the_release_against_its_limit(monkeypatch):
+    """A request whose command finished is not a timeout because returning the
+    connection to the pool is slow: the output comes back and the healthy
     connection is pooled.
 
     A 0 s limit expires at the first await inside the bound. The fake connect
     and command never await, so only the release's health check suspends.
 
-    Mutation killed: the probe limit also bounding ``release`` (the health
-    check is cancelled, the call raises a timeout and the good connection is
+    Mutation killed: the request's limit also bounding ``release`` (the health
+    check is cancelled, the request raises a timeout and the good connection is
     closed).
     """
-    monkeypatch.setattr(deps_module, "PROBE_TIMEOUT_SECONDS", 0.0, raising=False)
     pool = SSHConnectionPool()
     monkeypatch.setattr(ssh_pool, "_global_pool", pool)
     conn = ReleaseGateConnection()
@@ -596,11 +596,13 @@ async def test_run_pooled_does_not_count_the_release_against_the_probe_limit(mon
     monkeypatch.setattr(APIDependencies, "connect_for_box", connect)
     deps = APIDependencies(ServerSettings(csrf_token=TOKEN))
 
-    async def operation(c):
-        result = await c.run("uptime")
-        return result.stdout
+    async def bounded_request() -> str:
+        box = SimpleNamespace(name=BOX, transport="ssh")
+        async with box_runner(deps, box, SimpleNamespace(), deadline=0.0) as runner:
+            ran = await runner.run(["uptime"], folder=None, timeout=5.0)
+        return ran.output
 
-    task = asyncio.create_task(deps.run_pooled(_box(), SimpleNamespace(), operation))
+    task = asyncio.create_task(bounded_request())
     await asyncio.wait_for(conn.checking.wait(), 5.0)
     conn.gate.set()
 
@@ -1382,6 +1384,37 @@ async def test_a_rename_on_an_unreachable_box_answers_500(app, ledger):
 
     assert resp.status_code == 500
     assert resp.json() == {"detail": "Failed to rename session"}
+
+
+@pytest.mark.asyncio
+async def test_a_capture_and_a_kill_on_an_unreachable_box_answer_as_before(app, ledger):
+    """The capture names the connect's failure in its 500; the kill still deletes
+    the row. Both pass on the code before the runner too."""
+    ledger.fail_connect = True
+    async with _client(app) as client:
+        session_id = await _new_session(client)
+        capture = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+        kill = await client.delete(f"/api/v1/boxes/{BOX}/sessions/{session_id}?kill_tmux=true")
+
+    assert (capture.status_code, capture.json()) == (
+        500,
+        {"detail": "capture failed: remote1: connection refused"},
+    )
+    assert kill.json() == {"status": "ok", "message": "deleted", "path": session_id}
+
+
+@pytest.mark.asyncio
+async def test_a_sync_reads_the_live_sessions_and_marks_the_rest_inactive(app, ledger):
+    """The fake box lists ``alpha`` only."""
+    async with _client(app) as client:
+        await _new_session(client, "alpha")
+        await _new_session(client, "beta")
+        resp = await client.post(f"/api/v1/boxes/{BOX}/sessions/sync")
+
+    assert sorted((s["session_name"], s["active"]) for s in resp.json()) == [
+        ("alpha", True),
+        ("beta", False),
+    ]
 
 
 @pytest.mark.asyncio

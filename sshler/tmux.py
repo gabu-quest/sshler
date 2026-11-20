@@ -312,8 +312,8 @@ async def force_kill_local_session(session_name: str) -> None:
     from the server dying. Best-effort: every step is suppressed so a partial
     failure never blocks session deletion.
 
-    LOCAL ONLY. Remote boxes share the default tmux server, so ``kill-server``
-    there would nuke unrelated sessions — callers must not use this for remote.
+    LOCAL ONLY: it runs tmux and signals processes on this machine. A remote force
+    kill is not built (``api.sessions.force_kill_supported``).
     """
     # 1. Capture pane PIDs before the socket goes away.
     pids = await _list_local_pane_pids(session_name)

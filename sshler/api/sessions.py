@@ -1,6 +1,14 @@
+"""Layouts and the tmux sessions of a box.
+
+A session route runs tmux on a box through the box's runner (``BoxRunner.tmux``): the
+same words on both kinds, the local box's tmux on this machine and a remote box's over
+its pooled connection. Two things the kinds really do differently each live in one
+function here: ``live_sessions`` (which sessions are running) and
+``force_kill_supported`` (a force kill is built for the local box only).
+"""
+
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import re
@@ -9,15 +17,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .. import state
 from .. import tmux as tmux_module
-from ..config import AppConfig
-from ..tmux import (
-    discover_local_sessions,
-    force_kill_local_session,
-    remote_tmux_command,
-    run_local_tmux,
-)
+from ..config import AppConfig, Box
+from ..tmux import discover_local_sessions, force_kill_local_session
 from ..validation import PathValidator, ValidationError
-from .dependencies import PROBE_TIMEOUT_SECONDS, APIDependencies
+from . import dependencies
+from .box_files import is_local
+from .box_runner import TmuxTimeoutError, box_runner
+from .dependencies import APIDependencies
 from .models import (
     APILayout,
     APILayoutCreate,
@@ -31,18 +37,10 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
-async def _get_live_tmux_sessions_local() -> set[str]:
-    """Get live tmux session names from local system.
-
-    Scans all ts-* server sockets (per-session isolation) and also
-    checks the default server for backward compatibility.
-    """
-    return await discover_local_sessions()
-
-
 # Lists sessions on the remote default tmux server and on every per-session
 # ``ts-*`` server, so sessions opened by sshler or by ``ts`` both count as live.
-_REMOTE_LIST_SESSIONS = """tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+# A fixed text, never built from a request; sent as one word to ``sh -c``.
+REMOTE_LIST_SESSIONS = """tmux list-sessions -F '#{session_name}' 2>/dev/null || true
 socket_dir=/tmp/tmux-$(id -u)
 for socket in "$socket_dir"/ts-*; do
     [ -S "$socket" ] || continue
@@ -52,19 +50,35 @@ done
 """
 
 
-async def _get_live_tmux_sessions_remote(connection) -> set[str]:
-    """Get live tmux sessions across remote ``ts-*`` and legacy sockets."""
+async def live_sessions(deps: APIDependencies, box: Box, application_config: AppConfig) -> set[str]:
+    """The names of the tmux sessions running on ``box``: those of its default server
+    and of every ``ts-*`` server. Empty when they cannot be read.
+
+    The local box scans its own socket folder in Python (``discover_local_sessions``).
+    A remote box runs ``REMOTE_LIST_SESSIONS`` in one command on its pooled connection,
+    the connect and the command bounded by ``PROBE_TIMEOUT_SECONDS`` (the overview polls
+    this every 30 s per box); a failure of any kind is an empty set.
+    """
+    if is_local(box):
+        return await discover_local_sessions()
+    limit = dependencies.PROBE_TIMEOUT_SECONDS
     try:
-        result = await connection.run(_REMOTE_LIST_SESSIONS, check=False)
-        if result.returncode == 0 and result.stdout:
-            return set(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
+        async with box_runner(deps, box, application_config, deadline=limit) as runner:
+            ran = await runner.run(["sh", "-c", REMOTE_LIST_SESSIONS], folder=None, timeout=limit)
     except Exception as exc:
-        logger.debug(f"Failed to list remote tmux sessions: {exc}")
-    return set()
+        logger.warning(f"Failed to list the tmux sessions of {box.name}: {exc}")
+        return set()
+    if not ran.ok:
+        return set()
+    return {line.strip() for line in ran.output.splitlines() if line.strip()}
 
 
-class _CaptureTimeoutError(TimeoutError):
-    """The remote capture command, not the connect before it, ran past its limit."""
+def force_kill_supported(box: Box) -> bool:
+    """Whether a force kill (stop the session's own tmux server, then SIGKILL every
+    pane process that outlived it) is built for ``box``: for the local box only. A
+    remote session runs on its own ``ts-<name>`` server too, so a remote force kill
+    could be scoped the same way, but it is not built."""
+    return is_local(box)
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -184,27 +198,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     status_code=400,
                     detail="Session name may only contain alphanumeric, underscore, dot, and dash",
                 )
+            limit = dependencies.PROBE_TIMEOUT_SECONDS
             try:
-                if box.transport == "local":
-                    # Use old session name for -L (socket is named after original session)
-                    returncode, _, stderr = await run_local_tmux(
+                async with box_runner(deps, box, application_config, deadline=limit) as runner:
+                    # The server keeps the old name: its socket is named after it.
+                    ran = await runner.tmux(
                         record.session_name, ["rename-session", "-t", record.session_name, new_name]
                     )
-                    if returncode != 0:
-                        logger.warning(f"tmux rename failed: {stderr.decode().strip()}")
-                        raise HTTPException(status_code=400, detail="tmux rename failed")
-                else:
-                    command = remote_tmux_command(
-                        record.session_name,
-                        ["rename-session", "-t", record.session_name, new_name],
-                    )
-                    result = await deps.run_pooled(
-                        box,
-                        application_config,
-                        lambda connection: connection.run(command, check=False),
-                    )
-                    if result.returncode != 0:
-                        raise HTTPException(status_code=400, detail="tmux rename failed")
+                if not ran.ok:
+                    logger.warning(f"tmux rename failed: {ran.errors.strip()}")
+                    raise HTTPException(status_code=400, detail="tmux rename failed")
             except HTTPException:
                 raise
             except Exception as exc:
@@ -258,32 +261,22 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         if kill_tmux and record.session_name:
             try:
-                if box.transport == "local":
-                    if force:
-                        # Nuke the session's own tmux server + SIGKILL any pane
-                        # processes that ignore SIGHUP. Scoped to this session's
-                        # ts-<name> socket, so other sessions are untouched.
-                        await force_kill_local_session(record.session_name)
-                    else:
-                        await run_local_tmux(
-                            record.session_name, ["kill-session", "-t", record.session_name]
-                        )
+                if force and force_kill_supported(box):
+                    # Stops the session's own ts-<name> server and SIGKILLs any pane
+                    # process that ignored SIGHUP; other sessions are untouched.
+                    await force_kill_local_session(record.session_name)
                 else:
                     if force:
                         logger.info(
-                            "force kill requested for remote session %s; "
-                            "remote uses a shared tmux server, falling back to "
-                            "kill-session to avoid killing other sessions",
+                            "force kill requested for remote session %s; a remote force "
+                            "kill is not built, so the session is ended with kill-session",
                             record.session_name,
                         )
-                    command = remote_tmux_command(
-                        record.session_name, ["kill-session", "-t", record.session_name]
-                    )
-                    await deps.run_pooled(
-                        box,
-                        application_config,
-                        lambda connection: connection.run(command, check=False),
-                    )
+                    limit = dependencies.PROBE_TIMEOUT_SECONDS
+                    async with box_runner(deps, box, application_config, deadline=limit) as runner:
+                        await runner.tmux(
+                            record.session_name, ["kill-session", "-t", record.session_name]
+                        )
             except Exception as exc:
                 logger.warning(f"Failed to kill tmux session {record.session_name}: {exc}")
 
@@ -305,11 +298,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         Powers the terminal toolbar's "super kill" — kills the session's own
         per-session tmux server and SIGKILLs any pane process that ignored the
-        SIGHUP. Local boxes only; remote boxes share one tmux server so a
-        server-wide kill there is unsafe.
+        SIGHUP. Local box only: a remote force kill is not built
+        (``force_kill_supported``), so a remote box is answered 400.
         """
         box = deps.get_box_or_404(application_config, name)
-        if box.transport != "local":
+        if not force_kill_supported(box):
             raise HTTPException(
                 status_code=400,
                 detail="force-kill by name is supported for the local box only",
@@ -384,26 +377,13 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if they no longer exist. Returns the updated session list.
         """
         box = deps.get_box_or_404(application_config, name)
-
-        # Get live tmux sessions
-        if box.transport == "local":
-            live_sessions = await _get_live_tmux_sessions_local()
-        else:
-            # Polled every 30 s per box by the overview: use the pool (this
-            # route used to open a connection per call and never close it).
-            try:
-                live_sessions = await deps.run_pooled(
-                    box, application_config, _get_live_tmux_sessions_remote
-                )
-            except Exception as exc:
-                logger.warning(f"Failed to connect to {name} for session sync: {exc}")
-                live_sessions = set()
+        running = await live_sessions(deps, box, application_config)
 
         # Get DB sessions and mark stale ones inactive
         db_sessions = await state.list_sessions_async(name, active_only=False)
         updated_count = 0
         for session in db_sessions:
-            if session.active and session.session_name not in live_sessions:
+            if session.active and session.session_name not in running:
                 await state.update_session_activity_async(session.id, active=False)
                 updated_count += 1
 
@@ -468,58 +448,21 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         # A full-history capture can take far longer than a normal tmux command.
         limit = tmux_module.TMUX_CAPTURE_TIMEOUT
+        # The capture's own limit is tmux's alone; the bound of the request adds the
+        # time a connect may take, so a slow connect does not eat into the capture.
+        deadline = limit + dependencies.PROBE_TIMEOUT_SECONDS
         try:
-            if box.transport == "local":
+            async with box_runner(deps, box, application_config, deadline=deadline) as runner:
                 try:
-                    returncode, stdout_b, stderr_b = await run_local_tmux(
-                        session_name, capture_args, timeout=limit
-                    )
-                except TimeoutError as exc:
+                    ran = await runner.tmux(session_name, capture_args, timeout=limit)
+                except TmuxTimeoutError as exc:
                     raise _capture_timeout(name, session_name, limit) from exc
-                if returncode != 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="tmux capture-pane failed: "
-                        + stderr_b.decode(errors="replace").strip(),
-                    )
-                text = stdout_b.decode(errors="replace")
-            else:
-                command = remote_tmux_command(session_name, capture_args)
-
-                async def capture(connection):
-                    # The limit is the command's own, as on the local box. Its
-                    # timeout stays a TimeoutError so the pool drops the
-                    # connection (the command may still be running on it), and
-                    # is told apart from a connect that timed out.
-                    try:
-                        result = await asyncio.wait_for(
-                            connection.run(command, check=False), timeout=limit
-                        )
-                    except TimeoutError as exc:
-                        raise _CaptureTimeoutError from exc
-                    if result.returncode != 0:
-                        stderr_txt = (
-                            (result.stderr or "").strip() if isinstance(result.stderr, str) else ""
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"tmux capture-pane failed: {stderr_txt}",
-                        )
-                    return (
-                        result.stdout
-                        if isinstance(result.stdout, str)
-                        else (result.stdout or b"").decode(errors="replace")
-                    )
-
-                try:
-                    text = await deps.run_pooled(
-                        box,
-                        application_config,
-                        capture,
-                        timeout=limit + PROBE_TIMEOUT_SECONDS,
-                    )
-                except _CaptureTimeoutError as exc:
-                    raise _capture_timeout(name, session_name, limit) from exc
+            if not ran.ok:
+                raise HTTPException(
+                    status_code=400,
+                    detail="tmux capture-pane failed: " + ran.errors.strip(),
+                )
+            text = ran.output
         except HTTPException:
             raise
         except Exception as exc:

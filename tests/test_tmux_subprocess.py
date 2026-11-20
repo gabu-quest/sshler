@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from sshler import snapshot, state, tmux
 from sshler.api import dependencies
-from sshler.api import sessions as sessions_api
 from sshler.webapp import ServerSettings, make_app
 
 TOKEN = "tmux-subprocess-token"
@@ -363,7 +362,7 @@ def test_capture_is_bounded_at_30s(monkeypatch: pytest.MonkeyPatch) -> None:
         calls.append((session, list(args), timeout))
         return 0, b"line one\n", b""
 
-    monkeypatch.setattr(sessions_api, "run_local_tmux", spy)
+    monkeypatch.setattr(tmux, "run_local_tmux", spy)
     client = _client()
 
     response = client.get(
