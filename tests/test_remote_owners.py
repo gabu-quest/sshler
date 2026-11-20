@@ -384,10 +384,10 @@ BUILDERS = {
         lambda n, p: [
             "cd",
             p,
-            "2>/dev/null",
             "&&",
             "git",
             "rev-parse",
+            "--git-dir",
             "--abbrev-ref",
             "HEAD",
             "2>/dev/null",
@@ -409,7 +409,8 @@ BUILDERS = {
             "2>/dev/null",
             "|",
             "head",
-            "-1",
+            "-c",
+            "1",
         ],
     ),
     "git log": (
@@ -448,7 +449,18 @@ BUILDERS = {
     ),
     "git diff files": (
         lambda n: remote_git_diff_files_command(n, "main", "dev"),
-        lambda n, p: ["cd", p, "&&", "git", "diff", "--name-status", "main", "dev", "2>/dev/null"],
+        lambda n, p: [
+            "cd",
+            p,
+            "&&",
+            "git",
+            "diff",
+            "--name-status",
+            "main",
+            "dev",
+            "--",
+            "2>/dev/null",
+        ],
     ),
 }
 

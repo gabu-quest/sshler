@@ -129,8 +129,8 @@ class Ledger:
             return _result(0, "alpha\n")
         if command == "true":
             return _result(0)
-        if "rev-parse --abbrev-ref" in command:
-            return _result(0, "main\n")
+        if "rev-parse --git-dir --abbrev-ref" in command:
+            return _result(0, ".git\nmain\n")
         if "rev-parse --short" in command:
             return _result(0, "abc1234\n")
         if "status --porcelain" in command:

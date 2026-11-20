@@ -1025,13 +1025,33 @@ def test_a_remote_failure_gets_the_answer_its_route_gave_before(answers, failure
 def test_the_file_routes_hold_no_test_of_the_kind_of_box():
     """Only ``box_files`` tells the kinds apart. The Excel preview keeps its one local
     branch: its local path rule (``validate_local_path``, no ``~``, no link resolved)
-    is not the one every other local route has."""
+    is not the one every other local route has. The command routes run through
+    ``box_runner``: git.py keeps one test in each of the log, show, blame and branches
+    routes and grep.py one for the in-process search of a Windows local box (each named
+    in its module's docstring); boxes.py keeps the two of its status and stats routes,
+    and names the field once more when it lists a box."""
     api = Path(sshler.api.__file__).parent
     found = {
         name: (api / name).read_text(encoding="utf-8").count("box.transport")
-        for name in ("files.py", "batch.py", "excel.py", "transfer.py")
+        for name in (
+            "files.py",
+            "batch.py",
+            "excel.py",
+            "transfer.py",
+            "git.py",
+            "grep.py",
+            "boxes.py",
+        )
     }
-    assert found == {"files.py": 0, "batch.py": 0, "excel.py": 1, "transfer.py": 0}
+    assert found == {
+        "files.py": 0,
+        "batch.py": 0,
+        "excel.py": 1,
+        "transfer.py": 0,
+        "git.py": 4,
+        "grep.py": 1,
+        "boxes.py": 3,
+    }
 
 
 def test_a_transfer_holds_no_sftp_client():

@@ -9,8 +9,10 @@ from fastapi import APIRouter, Depends
 
 from .. import state
 from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
-from ..proc import run_bounded
 from ..ssh_pool import get_pool
+from ..validation import ValidationError
+from . import dependencies
+from .box_runner import BoxRunner, ProgramNotFoundError, Ran, box_runner, remote_command_line
 from .dependencies import APIDependencies
 from .models import (
     APIBox,
@@ -23,7 +25,6 @@ from .models import (
     APIThemeResult,
     APIThemeUpdate,
 )
-from .remote import and_then, command, in_directory, path_word, pipe, quiet, resolve_tilde
 
 logger = logging.getLogger(__name__)
 
@@ -203,15 +204,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIGitInfo:
         """Get git repository info for a directory on a box."""
         box = deps.get_box_or_404(application_config, name)
-
-        if box.transport == "local":
-            return await _get_local_git_info(directory)
-
-        # Remote box: use SSH commands on a pooled connection
+        # The UI polls this route: the request is bounded as run_pooled bounds one.
+        limit = dependencies.PROBE_TIMEOUT_SECONDS
         try:
-            return await deps.run_pooled(
-                box, application_config, lambda conn: _get_remote_git_info(conn, directory)
-            )
+            async with box_runner(deps, box, application_config, deadline=limit) as runner:
+                return await git_info(runner, directory)
         except Exception as e:
             logger.warning(f"Failed to get git info for {name}:{directory}: {e}")
             return APIGitInfo(error=str(e))
@@ -376,90 +373,76 @@ def _parse_uptime(output: str) -> int | None:
 GIT_INFO_TIMEOUT = 5.0
 
 
-async def _get_local_git_info(directory: str) -> APIGitInfo:
-    """Get git info for a local directory."""
-    import os
-    from pathlib import Path
+# One byte of `git status --porcelain` shows that it printed a line. The first byte of
+# a line is ASCII, so the cut never splits a character.
+GIT_STATUS_BYTES = 1
 
-    try:
-        # Expand ~ and resolve path
-        if directory.startswith("~"):
-            directory = os.path.expanduser(directory)
-        target = Path(directory).resolve()
 
-        if not target.exists():
-            return APIGitInfo(is_repo=False)
-
-        # Run git commands
-        async def run_git(cmd: list[str]) -> tuple[bool, str]:
-            try:
-                returncode, stdout, _ = await run_bounded(cmd, GIT_INFO_TIMEOUT, cwd=str(target))
-                return returncode == 0, stdout.decode().strip()
-            except Exception:
-                return False, ""
-
-        # Check if git repo
-        ok, _ = await run_git(["git", "rev-parse", "--git-dir"])
-        if not ok:
-            return APIGitInfo(is_repo=False)
-
-        # Get branch name
-        ok, branch_out = await run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        branch = branch_out if ok and branch_out else None
-
-        # Get short commit hash
-        ok, commit_out = await run_git(["git", "rev-parse", "--short", "HEAD"])
-        commit = commit_out if ok and commit_out else None
-
-        # Check if dirty
-        ok, status = await run_git(["git", "status", "--porcelain"])
-        dirty = bool(status)
-
-        return APIGitInfo(is_repo=True, branch=branch, commit=commit, dirty=dirty)
-    except Exception as e:
-        logger.warning(f"Failed to get local git info for {directory}: {e}")
-        return APIGitInfo(error=str(e))
+def git_info_words() -> tuple[list[str], list[str], list[str]]:
+    """The three commands of the git badge: the git folder then the branch (the folder
+    is printed even when the branch fails, in a repository with no commit), the short
+    commit, and the changes of the tree."""
+    return (
+        ["git", "rev-parse", "--git-dir", "--abbrev-ref", "HEAD"],
+        ["git", "rev-parse", "--short", "HEAD"],
+        ["git", "status", "--porcelain"],
+    )
 
 
 def remote_git_info_commands(directory: str) -> tuple[str, str, str]:
-    """The three remote commands of the git badge for ``directory`` (``~`` already
-    resolved): the branch (fails outside a repo), the short commit, and the first
-    line of ``git status`` (empty when clean)."""
-    branch = and_then(
-        quiet(command("cd", path_word(directory))),
-        quiet(command("git", "rev-parse", "--abbrev-ref", "HEAD")),
+    """The three lines the remote runner sends for the git badge of ``directory``
+    (``~`` already resolved)."""
+    head, commit, status = git_info_words()
+    return (
+        remote_command_line(head, directory),
+        remote_command_line(commit, directory),
+        remote_command_line(status, directory, GIT_STATUS_BYTES),
     )
-    commit = in_directory(directory, quiet(command("git", "rev-parse", "--short", "HEAD")))
-    status = in_directory(
-        directory, pipe(quiet(command("git", "status", "--porcelain")), command("head", "-1"))
-    )
-    return branch, commit, status
 
 
-async def _get_remote_git_info(conn, directory: str) -> APIGitInfo:
-    """Get git info for a remote directory via SSH."""
+class GitTimedOutError(Exception):
+    """A command of the git badge ran past its limit."""
+
+
+async def git_info(runner: BoxRunner, directory: str) -> APIGitInfo:
+    """The git badge of ``directory`` on the runner's box: the same three commands and
+    the same answer on both kinds. A command past ``GIT_INFO_TIMEOUT`` ends the badge at
+    once with an error that says so; no later command is run."""
     try:
-        target = await resolve_tilde(conn, directory)
-        branch_cmd, commit_cmd, status_cmd = remote_git_info_commands(target)
-        # Check if git repo and get branch in one command
-        result = await conn.run(branch_cmd, check=False)
+        folder = await runner.folder(directory)
+    except ValidationError:
+        return APIGitInfo(is_repo=False)
 
-        if result.returncode != 0:
-            return APIGitInfo(is_repo=False)
+    async def run(words: list[str], output_limit: int | None = None) -> Ran:
+        try:
+            return await runner.run(
+                words, folder=folder, timeout=GIT_INFO_TIMEOUT, output_limit=output_limit
+            )
+        except TimeoutError:
+            raise GitTimedOutError(
+                f"git in {directory} timed out after {GIT_INFO_TIMEOUT:g} s"
+            ) from None
+        except ProgramNotFoundError:
+            return Ran(1, "")
 
-        branch = (result.stdout or "").strip()
-        if not branch:
-            return APIGitInfo(is_repo=False)
+    head_words, commit_words, status_words = git_info_words()
+    try:
+        return await _git_info_answer(run, head_words, commit_words, status_words)
+    except GitTimedOutError as exc:
+        return APIGitInfo(error=str(exc))
 
-        # Get short commit hash
-        commit_result = await conn.run(commit_cmd, check=False)
-        commit = (commit_result.stdout or "").strip() or None
 
-        # Check if dirty
-        status_result = await conn.run(status_cmd, check=False)
-        dirty = bool((status_result.stdout or "").strip())
+async def _git_info_answer(run, head_words, commit_words, status_words) -> APIGitInfo:
+    head = await run(head_words)
+    lines = head.output.strip().splitlines()
+    if not lines:
+        return APIGitInfo(is_repo=False)
+    branch = lines[-1] if head.ok and len(lines) >= 2 else None
 
-        return APIGitInfo(is_repo=True, branch=branch, commit=commit, dirty=dirty)
-    except Exception as e:
-        logger.warning(f"Failed to get remote git info for {directory}: {e}")
-        return APIGitInfo(error=str(e))
+    commit_ran = await run(commit_words)
+    commit = commit_ran.output.strip() if commit_ran.ok and commit_ran.output.strip() else None
+
+    status_ran = await run(status_words, GIT_STATUS_BYTES)
+    dirty = bool(status_ran.output)
+
+    return APIGitInfo(is_repo=True, branch=branch, commit=commit, dirty=dirty)

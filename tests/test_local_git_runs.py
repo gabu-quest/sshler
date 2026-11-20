@@ -11,7 +11,8 @@ import pytest
 from fastapi import HTTPException
 
 from sshler.api import boxes, local_files
-from sshler.api.git import _run_local_git
+from sshler.api.box_runner import LocalRunner
+from sshler.api.git import _git
 from sshler.api.models import APIGitInfo
 
 
@@ -21,7 +22,7 @@ def test_a_timed_out_git_child_is_gone_after_the_504(tmp_path, stalled_program):
     gone = stalled_program("git")
 
     with pytest.raises(HTTPException) as caught:
-        asyncio.run(_run_local_git(["git", "status"], cwd=str(tmp_path), timeout=0.5))
+        asyncio.run(_git(LocalRunner(), ["git", "status"], str(tmp_path), timeout=0.5))
 
     assert (caught.value.status_code, caught.value.detail) == (504, "Git command timed out")
     gone()
@@ -43,15 +44,15 @@ def test_a_stuck_gitignore_check_gives_up_and_marks_nothing(tmp_path, monkeypatc
 
 
 @pytest.mark.posix_only("a #!/bin/sh stand-in for git first on PATH")
-def test_a_stuck_git_gives_the_git_info_of_no_repository(tmp_path, monkeypatch, stalled_program):
+def test_a_stuck_git_gives_the_git_info_an_error(tmp_path, monkeypatch, stalled_program):
     """Mutation killed: communicate() with no limit in the git info of a local folder."""
     gone = stalled_program("git")
     monkeypatch.setattr(boxes, "GIT_INFO_TIMEOUT", 0.5)
 
     started = time.monotonic()
-    info = asyncio.run(boxes._get_local_git_info(str(tmp_path)))
+    info = asyncio.run(boxes.git_info(LocalRunner(), str(tmp_path)))
 
-    assert info == APIGitInfo(is_repo=False)
+    assert info == APIGitInfo(error=f"git in {tmp_path} timed out after 0.5 s")
     assert time.monotonic() - started < 10
     gone()
 
@@ -82,6 +83,6 @@ def test_git_runs_in_the_given_folder_and_returns_its_output(tmp_path, monkeypat
     work.mkdir()
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
-    ok, out = asyncio.run(_run_local_git(["git", "x"], cwd=str(work)))
+    ok, out = asyncio.run(_git(LocalRunner(), ["git", "x"], str(work)))
 
     assert (ok, out) == (True, str(work.resolve()))

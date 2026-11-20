@@ -55,6 +55,12 @@ class Answers:
 DEFAULT_ANSWERS = Answers()
 
 
+def is_local(box: Box) -> bool:
+    """The one test of the kind of a box: its files and its commands are this
+    machine's (the local box) or reached over SSH (every other box)."""
+    return box.transport == "local"
+
+
 @asynccontextmanager
 async def box_files(
     deps: APIDependencies,
@@ -72,7 +78,7 @@ async def box_files(
     ``answers`` turns each failure into its answer once, on the way out of the block;
     with None every failure goes on as it was raised (a batch collects its own).
     """
-    if box.transport == "local":
+    if is_local(box):
         try:
             yield LocalFiles()
         except ValidationError as exc:
