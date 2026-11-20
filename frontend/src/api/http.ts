@@ -50,7 +50,48 @@ export interface TransferProgress {
 
 export interface TransferResult {
   succeeded: string[];
-  failed: { path: string; error: string }[];
+  failed: { path: string; error: string; reason?: "exists" | "cannot_replace" | "failed" }[];
+}
+
+/**
+ * An error answer: a plain Error with the server's text, plus the HTTP status (not
+ * enumerable, so the error still compares equal to `new Error(text)`). `errorStatus`
+ * reads it, so a view can tell a taken name (409) from any other failure.
+ */
+function statusError(message: string, status: number, reason?: string): Error {
+  const err = new Error(message);
+  Object.defineProperty(err, "status", { value: status, enumerable: false });
+  if (reason) Object.defineProperty(err, "reason", { value: reason, enumerable: false });
+  return err;
+}
+
+/** The server's `reason` of a refused single operation ("exists", "cannot_replace"), if any. */
+export function errorReason(err: unknown): string | null {
+  const reason = (err as { reason?: unknown } | null)?.reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+export function errorStatus(err: unknown): number | null {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : null;
+}
+
+/** Sent only when true, so a request without it is the plain, refusing one. */
+export interface OverwriteOption {
+  overwrite?: boolean;
+}
+
+/** A cross-box transfer's options. */
+export interface CrossBoxOptions extends OverwriteOption {
+  /**
+   * An item the server could not place, told the moment it happens. The last event
+   * names every such item again, so this is only for what is shown meanwhile.
+   */
+  onItemFailed?: (item: TransferResult["failed"][number]) => void;
+}
+
+function overwriteField(options: OverwriteOption): { overwrite?: true } {
+  return options.overwrite ? { overwrite: true } : {};
 }
 
 const API_BASE = "/api/v1";
@@ -112,8 +153,8 @@ async function handle<T>(response: Response, requestInfo?: { url: string, option
       await handleAuthErrors(response);
     }
 
-    const detail = await safeParseError(response);
-    throw new Error(detail || `request failed with ${response.status}`);
+    const { detail, reason } = await parseError(response);
+    throw statusError(detail || `request failed with ${response.status}`, response.status, reason);
   }
   return response.json() as Promise<T>;
 }
@@ -132,19 +173,24 @@ async function apiFetch<T>(url: string, init?: RequestInit, timeoutMs?: number):
   return handle<T>(res, { url, options });
 }
 
-async function safeParseError(response: Response): Promise<string | null> {
+async function parseError(response: Response): Promise<{ detail: string | null; reason?: string }> {
   try {
     const data = await response.json();
+    const reason = typeof data?.reason === "string" ? data.reason : undefined;
     if (data?.detail) {
       if (Array.isArray(data.detail)) {
-        return data.detail.map((item: any) => item?.msg || String(item)).join(", ");
+        return { detail: data.detail.map((item: any) => item?.msg || String(item)).join(", "), reason };
       }
-      return String(data.detail);
+      return { detail: String(data.detail), reason };
     }
   } catch (err) {
-    return null;
+    return { detail: null };
   }
-  return null;
+  return { detail: null };
+}
+
+async function safeParseError(response: Response): Promise<string | null> {
+  return (await parseError(response)).detail;
 }
 
 export function buildHeaders(token?: string | null): HeadersInit {
@@ -465,11 +511,12 @@ export async function renameFile(
   path: string,
   new_name: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<SimpleMessage> {
   return apiFetch<SimpleMessage>(`${API_BASE}/boxes/${encodeURIComponent(name)}/rename`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ path, new_name }),
+    body: JSON.stringify({ path, new_name, ...overwriteField(options) }),
   });
 }
 
@@ -952,11 +999,12 @@ export async function batchMove(
   paths: string[],
   destination: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<BatchResult> {
   return apiFetch<BatchResult>(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/move`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ paths, destination }),
+    body: JSON.stringify({ paths, destination, ...overwriteField(options) }),
   });
 }
 
@@ -965,11 +1013,12 @@ export async function batchCopy(
   paths: string[],
   destination: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<BatchResult> {
   return apiFetch<BatchResult>(`${API_BASE}/boxes/${encodeURIComponent(name)}/batch/copy`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ paths, destination }),
+    body: JSON.stringify({ paths, destination, ...overwriteField(options) }),
   });
 }
 
@@ -982,11 +1031,12 @@ export async function sameBoxTransfer(
   destination: string,
   mode: "copy" | "move",
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<BatchResult> {
   if (mode === "move") {
-    return batchMove(box, paths, destination, token);
+    return batchMove(box, paths, destination, token, options);
   }
-  return batchCopy(box, paths, destination, token);
+  return batchCopy(box, paths, destination, token, options);
 }
 
 /**
@@ -1004,6 +1054,7 @@ export function crossBoxTransfer(
   onProgress: (progress: TransferProgress) => void,
   onDone: (result: TransferResult) => void,
   onError: (error: string) => void,
+  options: CrossBoxOptions = {},
 ): AbortController {
   const controller = new AbortController();
 
@@ -1022,6 +1073,7 @@ export function crossBoxTransfer(
           paths,
           destination,
           mode,
+          ...overwriteField(options),
         }),
         signal: controller.signal,
       });
@@ -1067,6 +1119,8 @@ export function crossBoxTransfer(
               const parsed = JSON.parse(data);
               if (currentEvent === "progress") {
                 onProgress(parsed as TransferProgress);
+              } else if (currentEvent === "failed") {
+                options.onItemFailed?.(parsed as TransferResult["failed"][number]);
               } else if (currentEvent === "done") {
                 onDone(parsed as TransferResult);
               } else if (currentEvent === "error") {

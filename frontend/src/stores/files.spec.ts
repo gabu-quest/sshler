@@ -475,3 +475,20 @@ describe("Files Store Properties", () => {
     });
   });
 });
+
+describe("Files store rename with overwrite", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("hands the overwrite option to the rename call, and sends none when none is given", async () => {
+    const store = useFilesStore();
+    await store.doRename("b", "/d/a", "c", "tok", { overwrite: true });
+    await store.doRename("b", "/d/a", "c", "tok");
+    expect(mockRenameFile.mock.calls).toEqual([
+      ["b", "/d/a", "c", "tok", { overwrite: true }],
+      ["b", "/d/a", "c", "tok"],
+    ]);
+  });
+});

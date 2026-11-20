@@ -323,6 +323,8 @@ export const ja: Record<string, string> = {
   "commander.same_directory": "コピー元とコピー先が同じディレクトリです",
   "commander.delete_confirm": "{count}個のアイテムを削除しますか？この操作は元に戻せません。",
   "commander.transfer_cancel": "キャンセル",
+  "commander.transfer_skipped": "スキップしました（既存のファイルを残しました）",
+  "commander.transfer_waiting": "回答待ち",
   "commander.git_history": "Git履歴",
   "commander.git_commits": "コミット",
   "commander.git_branches": "ブランチ",
@@ -832,6 +834,12 @@ export const ja: Record<string, string> = {
   "files.replace_confirm": "「{name}」は既に存在します。置き換えますか？",
   "files.replace_yes": "置き換える",
   "files.replace_no": "いいえ（残す）",
+  "files.replace_all": "すべて置き換える",
+  "files.skip_all": "すべてスキップ",
+  "files.batch_moved": "{count} 件を移動しました",
+  "files.batch_copied": "{count} 件をコピーしました",
+  "files.batch_summary_move": "移動 {done} 件、スキップ {skipped} 件、失敗 {failed} 件",
+  "files.batch_summary_copy": "コピー {done} 件、スキップ {skipped} 件、失敗 {failed} 件",
   "files.upload_skipped": "{name}: スキップしました（既存のファイルを残しました）",
 
   // Recovery

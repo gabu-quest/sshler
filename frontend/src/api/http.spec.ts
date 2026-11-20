@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  batchCopy,
+  batchMove,
   buildHeaders as _buildHeaders,
+  crossBoxTransfer,
   downloadDirectory,
+  errorReason,
+  errorStatus,
   fetchBoxes,
   filenameFromContentDisposition,
+  renameFile,
+  sameBoxTransfer,
 } from "./http";
 
 // Token refresh goes through the bootstrap store; mock it so the spec controls
@@ -215,5 +222,97 @@ describe("downloadDirectory", () => {
     expect(out.blob.size).toBe("PK-zip-bytes".length);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/boxes/devbox/download-dir?path=%7E");
+  });
+});
+
+describe("a name that is taken", () => {
+  const sentBody = (n = 0) => JSON.parse(fetchMock.mock.calls[n]![1].body as string);
+
+  // Mutation killed: throwing a plain Error, so a view cannot tell 409 from any other failure.
+  it("an error answer carries its status and the server's text", async () => {
+    fetchMock.mockResolvedValueOnce(res(409, { detail: "File already exists" }));
+    const err = await renameFile("b", "/d/a", "c", "t").catch((e) => e);
+    expect([err.message, errorStatus(err)]).toEqual(["File already exists", 409]);
+    expect(errorStatus(new Error("x"))).toBeNull();
+  });
+
+  // Mutation killed: dropping the reason, so a view cannot tell a replaceable name from a folder.
+  it("an error answer carries the server's reason beside its status", async () => {
+    fetchMock.mockResolvedValueOnce(res(409, { detail: "File already exists", reason: "cannot_replace" }));
+    const err = await renameFile("b", "/d/a", "c", "t").catch((e) => e);
+    expect([err.message, errorStatus(err), errorReason(err)]).toEqual(["File already exists", 409, "cannot_replace"]);
+    expect(Object.keys(err)).toEqual([]);
+    fetchMock.mockResolvedValueOnce(res(500, { detail: "boom" }));
+    expect(errorReason(await renameFile("b", "/d/a", "c", "t").catch((e) => e))).toBeNull();
+  });
+
+  // Mutation killed: always sending the flag, or never sending it.
+  it("rename sends overwrite only when asked", async () => {
+    fetchMock.mockImplementation(async () => res(200, { status: "ok", message: "renamed" }));
+    await renameFile("b", "/d/a", "c", "t");
+    await renameFile("b", "/d/a", "c", "t", { overwrite: true });
+    expect(sentBody(0)).toEqual({ path: "/d/a", new_name: "c" });
+    expect(sentBody(1)).toEqual({ path: "/d/a", new_name: "c", overwrite: true });
+  });
+
+  it.each([["move", batchMove, "batch/move"], ["copy", batchCopy, "batch/copy"]] as const)(
+    "batch %s sends overwrite only when asked",
+    async (_mode, call, route) => {
+      fetchMock.mockImplementation(async () => res(200, { status: "ok", succeeded: [], failed: [] }));
+      await call("b", ["/s/a"], "/d", "t");
+      await call("b", ["/s/a"], "/d", "t", { overwrite: true });
+      expect(fetchMock.mock.calls[0]![0]).toContain(route);
+      expect(sentBody(0)).toEqual({ paths: ["/s/a"], destination: "/d" });
+      expect(sentBody(1)).toEqual({ paths: ["/s/a"], destination: "/d", overwrite: true });
+    },
+  );
+
+  it("a same-box transfer passes the flag on to the batch call", async () => {
+    fetchMock.mockImplementation(async () => res(200, { status: "ok", succeeded: [], failed: [] }));
+    await sameBoxTransfer("b", ["/s/a"], "/d", "move", "t", { overwrite: true });
+    expect(fetchMock.mock.calls[0]![0]).toContain("batch/move");
+    expect(sentBody(0)).toEqual({ paths: ["/s/a"], destination: "/d", overwrite: true });
+  });
+
+  it("a cross-box transfer sends overwrite only when asked and hands on each item's reason", async () => {
+    const sse = 'event: done\ndata: {"succeeded":[],"failed":[{"path":"/s/a","error":"File already exists","reason":"exists"}]}\n\n';
+    fetchMock.mockImplementation(async () => new Response(sse, { status: 200 }));
+    const run = (options?: { overwrite?: boolean }) =>
+      new Promise<unknown>((resolve) => {
+        crossBoxTransfer("x", "y", ["/s/a"], "/d", "copy", "t", () => {}, resolve, () => {}, options);
+      });
+    const first = await run();
+    await run({ overwrite: true });
+    expect(sentBody(0)).toEqual({ src_box: "x", dest_box: "y", paths: ["/s/a"], destination: "/d", mode: "copy" });
+    expect(sentBody(1)).toEqual({
+      src_box: "x", dest_box: "y", paths: ["/s/a"], destination: "/d", mode: "copy", overwrite: true,
+    });
+    expect(first).toEqual({
+      succeeded: [], failed: [{ path: "/s/a", error: "File already exists", reason: "exists" }],
+    });
+  });
+
+  // Mutation: the "failed" event is dropped, so a refused file is known only at the end.
+  it("a cross-box transfer hands on each refused item when its event arrives", async () => {
+    const item = { path: "/s/a", error: "File already exists", reason: "exists" };
+    const sse =
+      `event: failed\ndata: ${JSON.stringify(item)}\n\n` +
+      'event: progress\ndata: {"file":"/s/b","bytes_done":1,"bytes_total":1,"index":1,"total":2}\n\n' +
+      `event: done\ndata: ${JSON.stringify({ succeeded: ["/s/b"], failed: [item] })}\n\n`;
+    fetchMock.mockImplementation(async () => new Response(sse, { status: 200 }));
+    const seen: unknown[] = [];
+    await new Promise<void>((resolve) => {
+      crossBoxTransfer(
+        "x", "y", ["/s/a", "/s/b"], "/d", "copy", "t",
+        (progress) => seen.push(["progress", progress.file]),
+        (result) => { seen.push(["done", result.succeeded]); resolve(); },
+        () => {},
+        { onItemFailed: (failed) => seen.push(["failed", failed]) },
+      );
+    });
+    expect(seen).toEqual([["failed", item], ["progress", "/s/b"], ["done", ["/s/b"]]]);
+    expect(sentBody(0)).toEqual({
+      src_box: "x", dest_box: "y", paths: ["/s/a", "/s/b"], destination: "/d", mode: "copy",
+    });
   });
 });

@@ -15,6 +15,7 @@ import { ref } from "vue";
 import { createI18n } from "@/i18n";
 import * as http from "@/api/http";
 import FilesView from "./FilesView.vue";
+import { REPLACE_ARM_MS } from "@/composables/useReplacePrompt";
 
 const { messageSpy, dialogSpy, UploadErrorMock } = vi.hoisted(() => {
   class UploadErrorMock extends Error {
@@ -144,6 +145,8 @@ async function choose(container: Element, names: string[]) {
 /** The options of the n-th replace prompt, once it has been shown. */
 async function prompt(n: number) {
   await waitFor(() => expect(dialogSpy.warning).toHaveBeenCalledTimes(n));
+  // Replace is dead for a moment after a prompt appears; wait until it answers.
+  await new Promise((resolve) => setTimeout(resolve, REPLACE_ARM_MS + 50));
   return dialogSpy.warning.mock.calls[n - 1]![0];
 }
 
@@ -243,6 +246,24 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
     expect(uploadedNames()).toEqual([["a.txt", {}], ["b.txt", {}], ["c.txt", {}], ["d.txt", {}]]);
   });
 
+  // Mutation: leaving only takes the open prompt down; the next taken name then asks
+  // from a view that is gone, and a Yes there sends the overwrite.
+  it("leaving the view during a multi-file upload: later taken names are kept without a prompt", async () => {
+    uploadFile.mockRejectedValueOnce(exists()).mockRejectedValueOnce(exists()).mockResolvedValueOnce(OK);
+    const { container, unmount } = await mountLoaded();
+    await choose(container, ["a.txt", "b.txt", "c.txt"]);
+    await prompt(1);
+    unmount();
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(messageSpy.warning).toHaveBeenCalledTimes(2));
+    expect(messageSpy.warning.mock.calls.map((c) => c[0])).toEqual([
+      "a.txt: skipped, the existing file was kept",
+      "b.txt: skipped, the existing file was kept",
+    ]);
+    expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
+    expect(uploadedNames()).toEqual([["a.txt", {}], ["b.txt", {}], ["c.txt", {}]]);
+  });
+
   // Mutation: retry every failure (the pre-5d loop); a 400 is sent three times with
   // "retrying" warnings.
   it("a 4xx other than 409 is reported once, not retried, and no prompt is shown", async () => {
@@ -299,7 +320,8 @@ describe("FilesView upload: the replace prompt's default answer is No", () => {
   // positiveText. jsdom cannot render the real dialog (cssstyle throws on its
   // `var(--n-border)` shorthand), so this pins the options that make "No" the first
   // stop. Mutation: drop `closable: false`, or give the dialog its own initial focus
-  // (`autoFocus`, `positiveButtonProps`); the option set differs.
+  // (`autoFocus`); the option set differs. The disabled `positiveButtonProps` is the
+  // half-second delay before Replace answers; a disabled button is never focused.
   it("the prompt has no close button and no focus override, so 'No, keep it' takes the first focus", async () => {
     uploadFile.mockRejectedValueOnce(exists());
     const { container } = await mountLoaded();
@@ -308,7 +330,7 @@ describe("FilesView upload: the replace prompt's default answer is No", () => {
     expect(opts.closable).toBe(false);
     expect(Object.keys(opts).sort()).toEqual([
       "closable", "content", "negativeText", "onAfterLeave", "onEsc", "onMaskClick",
-      "onNegativeClick", "onPositiveClick", "positiveText", "title",
+      "onNegativeClick", "onPositiveClick", "positiveButtonProps", "positiveText", "title",
     ]);
     // A dialog that closes any other way (onAfterLeave alone) resolves as No.
     opts.onAfterLeave();

@@ -12,6 +12,7 @@ import {
 import type { ApiBox, GitInfo } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePdfExport } from "@/composables/usePdfExport";
+import { useReplacePrompt } from "@/composables/useReplacePrompt";
 import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
 import { useFilesStore } from "@/stores/files";
@@ -27,7 +28,7 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { UploadError, touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { UploadError, errorStatus, errorReason, touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 
@@ -72,6 +73,7 @@ const favoritesStore = useFavoritesStore();
 const filesStore = useFilesStore();
 const appStore = useAppStore();
 const dialog = useDialog();
+const { askReplace, withReplace, leave: leavePrompt } = useReplacePrompt();
 const message = useMessage();
 const { exportOne: exportOnePdf, exportMany: exportManyPdf, busy: pdfBusy } = usePdfExport();
 const { isMobile } = useResponsive();
@@ -543,6 +545,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  leavePrompt();
   scrollObserver?.disconnect();
 });
 
@@ -710,9 +713,24 @@ async function applyChmod() {
 
 async function doRename() {
   if (!selectedBox.value || !renameTarget.value || !renameValue.value.trim()) return;
+  const newName = renameValue.value.trim();
+  if (newName === renameTarget.value.split("/").pop()) {
+    // The name is unchanged: nothing to send, nothing to replace.
+    renameTarget.value = null;
+    renameValue.value = "";
+    return;
+  }
   actionBusy.value = true;
   try {
-    await filesStore.doRename(selectedBox.value, renameTarget.value, renameValue.value.trim(), tokenValue.value || null);
+    try {
+      await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null);
+    } catch (err) {
+      // A taken name the server would replace asks; "No" leaves the dialog open and
+      // everything as it was. Any other refusal shows the server's text.
+      if (errorStatus(err) !== 409 || errorReason(err) !== "exists") throw err;
+      if (!(await askReplace(newName))) return;
+      await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null, { overwrite: true });
+    }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success(t('files.renamed'));
@@ -723,28 +741,6 @@ async function doRename() {
   } finally {
     actionBusy.value = false;
   }
-}
-
-/**
- * Ask whether to replace an existing file. Resolves true only for "Replace"; "No",
- * Escape, a mask click or the dialog closing any other way resolve false. The dialog has
- * no close button, so its focus trap lands on "No, keep it" first and Enter presses it.
- */
-function askReplace(name: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    dialog.warning({
-      title: t('files.replace_title'),
-      content: t('files.replace_confirm', { name }),
-      positiveText: t('files.replace_yes'),
-      negativeText: t('files.replace_no'),
-      closable: false,
-      onPositiveClick: () => resolve(true),
-      onNegativeClick: () => resolve(false),
-      onEsc: () => resolve(false),
-      onMaskClick: () => resolve(false),
-      onAfterLeave: () => resolve(false),
-    });
-  });
 }
 
 /**
@@ -987,19 +983,30 @@ function openBatchModal(mode: "move" | "copy") {
 
 async function handleBatchConfirm(destination: string) {
   if (!selectedBox.value || !selectedPaths.value.length) return;
+  const box = selectedBox.value;
+  const token = tokenValue.value || null;
+  const mode = batchModal.value.mode;
+  const paths = [...selectedPaths.value];
   batchModal.value.visible = false;
   actionBusy.value = true;
   try {
-    const result = batchModal.value.mode === "move"
-      ? await filesStore.doBatchMove(selectedBox.value, selectedPaths.value, destination, tokenValue.value || null)
-      : await filesStore.doBatchCopy(selectedBox.value, selectedPaths.value, destination, tokenValue.value || null);
-    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    filesStore.setSelectedFiles([]);
-    const verb = batchModal.value.mode === "move" ? "Moved" : "Copied";
-    if (result.status === "partial") {
-      message.warning(`${verb} ${result.succeeded.length}, failed ${result.failed.length}`);
+    const place = mode === "move" ? filesStore.doBatchMove : filesStore.doBatchCopy;
+    const outcome = await withReplace(paths, (toSend, overwrite) =>
+      overwrite ? place(box, toSend, destination, token, { overwrite: true }) : place(box, toSend, destination, token),
+    );
+    await directoryStore.load(box, currentDir.value, token);
+    // Names the user kept are no failure; a selection that moved nothing stays as it was.
+    if (outcome.succeeded.length || outcome.failed.length) filesStore.setSelectedFiles([]);
+    for (const item of outcome.failed) {
+      message.error(`${item.path.split('/').pop() || item.path}: ${item.error}`, { closable: true, duration: 0 });
+    }
+    const counts = { done: outcome.succeeded.length, skipped: outcome.skipped.length, failed: outcome.failed.length };
+    if (!counts.skipped && !counts.failed) {
+      message.success(t(mode === "move" ? 'files.batch_moved' : 'files.batch_copied', { count: counts.done }));
     } else {
-      message.success(`${verb} ${result.succeeded.length} item(s)`);
+      const summary = t(mode === "move" ? 'files.batch_summary_move' : 'files.batch_summary_copy', counts);
+      if (counts.failed) message.warning(summary);
+      else message.info(summary);
     }
   } catch (err) {
     message.error(err instanceof Error ? err.message : String(err));

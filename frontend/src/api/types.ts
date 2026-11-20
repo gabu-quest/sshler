@@ -145,7 +145,9 @@ export interface SearchResponse {
 export interface BatchResult {
   status: "ok" | "partial";
   succeeded: string[];
-  failed: { path: string; error: string }[];
+  /** `reason` is "exists" when a regular file has the name (a retry with overwrite replaces it),
+   * "cannot_replace" when the name is taken by something overwrite cannot replace. */
+  failed: { path: string; error: string; reason?: "exists" | "cannot_replace" | "failed" }[];
 }
 
 export interface GrepMatch {

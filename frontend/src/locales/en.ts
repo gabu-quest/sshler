@@ -323,6 +323,8 @@ export const en: Record<string, string> = {
   "commander.same_directory": "Source and destination are the same directory",
   "commander.delete_confirm": "Delete {count} item(s)? This cannot be undone.",
   "commander.transfer_cancel": "Cancel",
+  "commander.transfer_skipped": "skipped, the existing file was kept",
+  "commander.transfer_waiting": "waiting for your answer",
   "commander.git_history": "Git History",
   "commander.git_commits": "Commits",
   "commander.git_branches": "Branches",
@@ -832,6 +834,12 @@ export const en: Record<string, string> = {
   "files.replace_confirm": "\"{name}\" already exists here. Replace it?",
   "files.replace_yes": "Replace",
   "files.replace_no": "No, keep it",
+  "files.replace_all": "Replace all",
+  "files.skip_all": "Skip all",
+  "files.batch_moved": "Moved {count} item(s)",
+  "files.batch_copied": "Copied {count} item(s)",
+  "files.batch_summary_move": "Moved {done}, skipped {skipped}, failed {failed}",
+  "files.batch_summary_copy": "Copied {done}, skipped {skipped}, failed {failed}",
   "files.upload_skipped": "{name}: skipped, the existing file was kept",
 
   // Recovery

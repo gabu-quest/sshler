@@ -15,6 +15,7 @@ import CommanderPane from "@/components/CommanderPane.vue";
 import CommanderTransferProgress from "@/components/CommanderTransferProgress.vue";
 import FileEditorModal from "@/components/FileEditorModal.vue";
 import { useI18n } from "@/i18n";
+import { useReplacePrompt } from "@/composables/useReplacePrompt";
 import { useResponsive } from "@/composables/useResponsive";
 import { useAppStore } from "@/stores/app";
 import { useBootstrapStore } from "@/stores/bootstrap";
@@ -29,6 +30,7 @@ const favoritesStore = useFavoritesStore();
 const appStore = useAppStore();
 const message = useMessage();
 const { t } = useI18n();
+const { withReplace, dismiss: dismissPrompt, leave: leavePrompt } = useReplacePrompt();
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null);
 
@@ -50,6 +52,13 @@ const transferMode = ref<"copy" | "move">("copy");
 const transferFiles = ref<string[]>([]);
 const transferProgress = ref<TransferProgress | null>(null);
 const transferResult = ref<TransferResult | null>(null);
+const transferSkipped = ref<string[]>([]);
+const transferPlaced = ref<string[]>([]);
+const transferWaiting = ref<string[]>([]);
+const transferFailedSoFar = ref<TransferResult["failed"]>([]);
+/** Taken names the call in flight has reported and nobody has been asked about yet. */
+const transferHeld = ref<string[]>([]);
+const transferSending = ref<string[] | null>(null);
 const transferError = ref<string | null>(null);
 const transferSrcBox = ref("");
 const transferDestBox = ref("");
@@ -277,6 +286,12 @@ async function startTransfer(mode: "copy" | "move") {
   transferFiles.value = paths;
   transferProgress.value = null;
   transferResult.value = null;
+  transferSkipped.value = [];
+  transferPlaced.value = [];
+  transferWaiting.value = [];
+  transferFailedSoFar.value = [];
+  transferHeld.value = [];
+  transferSending.value = null;
   transferError.value = null;
   transferSrcBox.value = ctx.box;
   transferDestBox.value = ctx.otherBox;
@@ -284,49 +299,86 @@ async function startTransfer(mode: "copy" | "move") {
   transferAbortController = null;
   showTransfer.value = true;
 
-  if (ctx.box === ctx.otherBox) {
-    try {
-      const result = await sameBoxTransfer(ctx.box, paths, ctx.otherDir, mode, tokenValue.value);
-      transferResult.value = {
-        succeeded: result.succeeded,
-        failed: result.failed,
-      };
-      refreshBothPanes();
-    } catch (err) {
-      transferError.value = err instanceof Error ? err.message : String(err);
+  const { box, otherBox, otherDir } = ctx;
+  const send = (toSend: string[], overwrite: boolean): Promise<TransferResult> => {
+    transferProgress.value = null;
+    transferSending.value = toSend;
+    const options = overwrite ? [{ overwrite: true }] : [];
+    if (box === otherBox) {
+      return sameBoxTransfer(box, toSend, otherDir, mode, tokenValue.value, ...options);
     }
-    return;
-  }
+    transferHeld.value = [];
+    return new Promise<TransferResult>((resolve, reject) => {
+      const controller = crossBoxTransfer(
+        box,
+        otherBox,
+        toSend,
+        otherDir,
+        mode,
+        tokenValue.value,
+        (progress) => {
+          transferProgress.value = progress;
+        },
+        (result) => {
+          transferAbortController = null;
+          resolve(result);
+        },
+        (error) => {
+          transferAbortController = null;
+          reject(new Error(error));
+        },
+        {
+          ...options[0],
+          // A file the server did not place is not done, whatever the files after it
+          // do: a taken name stays pending until it is asked about, any other shows why.
+          onItemFailed: (item) => {
+            if (!overwrite && item.reason === "exists") transferHeld.value = [...transferHeld.value, item.path];
+            else transferFailedSoFar.value = [...transferFailedSoFar.value, item];
+          },
+        },
+      );
+      transferAbortController = controller;
+      controller.signal.addEventListener("abort", () => reject(new Error("Cancelled")));
+    });
+  };
 
-  transferAbortController = crossBoxTransfer(
-    ctx.box,
-    ctx.otherBox,
-    paths,
-    ctx.otherDir,
-    mode,
-    tokenValue.value,
-    (progress) => {
-      transferProgress.value = progress;
-    },
-    (result) => {
-      transferResult.value = result;
-      transferAbortController = null;
-      refreshBothPanes();
-    },
-    (error) => {
-      transferError.value = error;
-      transferAbortController = null;
-    },
-  );
+  try {
+    const outcome = await withReplace(paths, send, {
+      // What the first call settled stays as it is for the rest of the transfer; the
+      // taken names wait for the user, and each answer shows at once.
+      onFirst: (first) => {
+        transferProgress.value = null;
+        transferHeld.value = [];
+        transferPlaced.value = [...first.succeeded];
+        transferFailedSoFar.value = first.failed.filter((item) => item.reason !== "exists");
+        transferWaiting.value = first.failed.filter((item) => item.reason === "exists").map((item) => item.path);
+      },
+      onDecision: (path, accepted) => {
+        transferWaiting.value = transferWaiting.value.filter((waiting) => waiting !== path);
+        if (!accepted) transferSkipped.value = [...transferSkipped.value, path];
+      },
+    });
+    if (transferError.value === null) {
+      transferResult.value = { succeeded: outcome.succeeded, failed: outcome.failed };
+      transferSkipped.value = outcome.skipped;
+    }
+  } catch (err) {
+    // A cancel has already put its own text on the dialog.
+    if (transferError.value === null) transferError.value = err instanceof Error ? err.message : String(err);
+  }
+  refreshBothPanes();
 }
 
 function cancelTransfer() {
+  // A prompt still open is answered No, and no retry goes out after it.
+  dismissPrompt();
   transferAbortController?.abort();
   transferAbortController = null;
   transferError.value = "Cancelled";
 }
 
 function closeTransfer() {
+  dismissPrompt();
   showTransfer.value = false;
   transferAbortController = null;
 }
@@ -629,6 +681,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  leavePrompt();
   transferAbortController?.abort();
   transferAbortController = null;
   document.removeEventListener("keydown", handleKeydown);
@@ -709,6 +762,12 @@ onUnmounted(() => {
       :files="transferFiles"
       :progress="transferProgress"
       :result="transferResult"
+      :skipped="transferSkipped"
+      :placed="transferPlaced"
+      :waiting="transferWaiting"
+      :failed-so-far="transferFailedSoFar"
+      :held="transferHeld"
+      :sending="transferSending"
       :error="transferError"
       @cancel="cancelTransfer"
       @close="closeTransfer"
