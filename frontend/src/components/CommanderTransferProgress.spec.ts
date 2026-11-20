@@ -46,6 +46,8 @@ describe("CommanderTransferProgress final states", () => {
       { name: "two.txt", state: ["skipped"], icon: "PhMinus", note: "skipped, the existing file was kept" },
       { name: "three.txt", state: ["failed"], icon: "PhX", note: "Only a regular file can be replaced" },
     ]);
+    // Mutation: the count says every file once the transfer has ended.
+    expect(container.querySelector(".overall-label")!.textContent).toBe("1 / 3 files");
   });
 
   it("without a skipped list every file that did not fail is done, as before", () => {
@@ -79,6 +81,8 @@ describe("CommanderTransferProgress while a transfer runs", () => {
       ["three.txt", "skipped", "skipped, the existing file was kept"],
       ["four.txt", "failed", "Only a regular file can be replaced"],
     ]);
+    // Mutation: the count is the retry's own index (0), not the files placed so far.
+    expect(container.querySelector(".overall-label")!.textContent).toBe("1 / 4 files");
   });
 
   it("a file waiting for the user's answer has its own icon and text", () => {

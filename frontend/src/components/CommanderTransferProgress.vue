@@ -53,10 +53,8 @@ const filePercent = computed(() => {
   return Math.round((props.progress.bytes_done / props.progress.bytes_total) * 100);
 });
 
-const overallDone = computed(() => {
-  if (props.result) return props.files.length;
-  return props.progress?.index ?? 0;
-});
+// The files that were placed: a kept or failed file is not counted, also at the end.
+const overallDone = computed(() => props.files.filter((file) => getFileStatus(file) === "done").length);
 
 const overallPercent = computed(() => {
   if (!props.files.length) return 0;
@@ -336,23 +334,23 @@ function getFileError(filePath: string): string | null {
   font-size: 11px;
 }
 
+/* What happened to a file is read whole: it wraps under a long name, never cut. */
+.file-skipped,
+.file-waiting,
+.file-error {
+  font-size: 10px;
+  max-width: 65%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .file-skipped,
 .file-waiting {
   color: #fbbf24;
-  font-size: 10px;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .file-error {
   color: #f87171;
-  font-size: 10px;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .transfer-current {
