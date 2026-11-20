@@ -26,7 +26,8 @@
 │   ├── api/                ← API v1 endpoints (modular)
 │   ├── cli.py              ← CLI entry point
 │   ├── config.py           ← Config loading (boxes.yaml + SSH config)
-│   ├── ssh.py              ← SSH/SFTP operations (asyncssh)
+│   ├── ssh.py              ← SSH/SFTP operations (asyncssh); `sftp_session` opens and closes every SFTP session
+│   ├── api/remote.py       ← Remote paths (`~` resolved once per connection) and remote command lines (quoted words)
 │   ├── ssh_pool.py         ← Connection pooling
 │   ├── state.py            ← SQLite state (sessions, favorites)
 │   ├── session.py          ← Session auth store

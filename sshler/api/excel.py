@@ -18,8 +18,8 @@ from ..config import AppConfig
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .files import _remote_path
 from .helpers import _local_read_bytes, _read_file_bytes
+from .remote import remote_path
 
 MAX_ROWS = 2000
 MAX_COLS = 200
@@ -124,7 +124,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     box, lambda: deps.connect_for_box(box, application_config)
                 ) as conn:
                     # SFTP does not expand `~`: resolve it the way /file does.
-                    validated = await _remote_path(conn, validated)
+                    validated = await remote_path(conn, validated)
                     data, too_large = await _read_file_bytes(conn, validated, MAX_FILE_BYTES)
             except ValidationError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

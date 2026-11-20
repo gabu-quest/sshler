@@ -68,15 +68,19 @@ def test_plain_directory_is_unchanged():
 @pytest.mark.parametrize(
     ("directory", "target"),
     [
-        ("~", "~"),
-        ("~/", "~"),
-        ("~/proj", "~/proj"),
-        ("~/a b; rm -rf x", "~/'a b; rm -rf x'"),
+        ("~", "/home/u"),
+        ("~/", "/home/u"),
+        ("~/proj", "/home/u/proj"),
+        ("~/a b; rm -rf x", "'/home/u/a b; rm -rf x'"),
     ],
 )
-def test_leading_tilde_stays_expandable_and_the_rest_is_quoted(directory, target):
-    """Mutation: quote the whole path (`'~/a b'`); the remote shell then never expands
-    `~` and `cd` fails, so a repo under the home folder shows as not a repo."""
-    conn = RecordingConnection([_reply("main\n"), _reply("abc1234\n"), _reply("")])
+def test_leading_tilde_is_the_resolved_home_and_the_path_is_quoted(directory, target):
+    """Mutation: quote the whole path unresolved (`'~/a b'`); the remote shell then
+    never expands `~` and `cd` fails, so a repo under the home folder shows as not a
+    repo. The command line holds no unquoted `~` either."""
+    conn = RecordingConnection(
+        [_reply("/home/u"), _reply("main\n"), _reply("abc1234\n"), _reply("")]
+    )
     asyncio.run(_get_remote_git_info(conn, directory))
-    assert conn.commands[1] == f"cd {target} && git rev-parse --short HEAD 2>/dev/null"
+    assert conn.commands[0] == 'printf %s "$HOME"'
+    assert conn.commands[2] == f"cd {target} && git rev-parse --short HEAD 2>/dev/null"

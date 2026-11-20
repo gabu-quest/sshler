@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import re
-import shlex
 import shutil
 import time
 
@@ -20,9 +19,9 @@ from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from . import helpers
 from .dependencies import APIDependencies
-from .files import _remote_path
 from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_grep
+from .remote import command, quiet, remote_path
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,13 @@ class APIGrepResponse(BaseModel):
     directory: str
     matches: list[APIGrepMatch]
     truncated: bool
+
+
+def remote_grep_command(pattern: str, directory: str, case_sensitive: bool, limit: int) -> str:
+    """The remote ``grep`` for ``pattern`` under ``directory``. ``--`` ends grep's
+    options, so neither the pattern nor the folder is read as one."""
+    words = ["grep", "-rn", *([] if case_sensitive else ["-i"])]
+    return quiet(command(*words, "-m", str(limit), "--", pattern, directory))
 
 
 def _parse_grep_output(output: str, limit: int) -> tuple[list[APIGrepMatch], bool]:
@@ -340,14 +346,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
                 # The quoted shell argument would not expand `~`: resolve it here.
-                validated_dir = await _remote_path(connection, validated_dir)
+                validated_dir = await remote_path(connection, validated_dir)
 
-                # Build command as list, then join with shlex.quote for safety
-                cmd_parts = ["grep", "-rn"]
-                if not case_sensitive:
-                    cmd_parts.append("-i")
-                cmd_parts.extend(["-m", str(limit), "--", pattern, validated_dir])
-                cmd = " ".join(shlex.quote(p) for p in cmd_parts) + " 2>/dev/null"
+                cmd = remote_grep_command(pattern, validated_dir, case_sensitive, limit)
 
                 try:
                     result = await asyncio.wait_for(

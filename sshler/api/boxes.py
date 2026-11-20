@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shlex
 import time
 from typing import TYPE_CHECKING
 
@@ -24,6 +23,7 @@ from .models import (
     APIThemeResult,
     APIThemeUpdate,
 )
+from .remote import and_then, command, in_directory, path_word, pipe, quiet, resolve_tilde
 
 logger = logging.getLogger(__name__)
 
@@ -421,29 +421,28 @@ async def _get_local_git_info(directory: str) -> APIGitInfo:
         return APIGitInfo(error=str(e))
 
 
-def _remote_cd_target(directory: str) -> str:
-    """``directory`` as one shell word for ``cd``, quoted against injection.
-
-    A leading ``~`` / ``~/`` stays unquoted so the remote shell still expands it to
-    the home directory; everything after it is quoted.
-    """
-    if directory == "~":
-        return "~"
-    if directory.startswith("~/"):
-        rest = directory[2:]
-        return f"~/{shlex.quote(rest)}" if rest else "~"
-    return shlex.quote(directory)
+def remote_git_info_commands(directory: str) -> tuple[str, str, str]:
+    """The three remote commands of the git badge for ``directory`` (``~`` already
+    resolved): the branch (fails outside a repo), the short commit, and the first
+    line of ``git status`` (empty when clean)."""
+    branch = and_then(
+        quiet(command("cd", path_word(directory))),
+        quiet(command("git", "rev-parse", "--abbrev-ref", "HEAD")),
+    )
+    commit = in_directory(directory, quiet(command("git", "rev-parse", "--short", "HEAD")))
+    status = in_directory(
+        directory, pipe(quiet(command("git", "status", "--porcelain")), command("head", "-1"))
+    )
+    return branch, commit, status
 
 
 async def _get_remote_git_info(conn, directory: str) -> APIGitInfo:
     """Get git info for a remote directory via SSH."""
-    target = _remote_cd_target(directory)
     try:
+        target = await resolve_tilde(conn, directory)
+        branch_cmd, commit_cmd, status_cmd = remote_git_info_commands(target)
         # Check if git repo and get branch in one command
-        result = await conn.run(
-            f"cd {target} 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null",
-            check=False,
-        )
+        result = await conn.run(branch_cmd, check=False)
 
         if result.returncode != 0:
             return APIGitInfo(is_repo=False)
@@ -453,17 +452,11 @@ async def _get_remote_git_info(conn, directory: str) -> APIGitInfo:
             return APIGitInfo(is_repo=False)
 
         # Get short commit hash
-        commit_result = await conn.run(
-            f"cd {target} && git rev-parse --short HEAD 2>/dev/null",
-            check=False,
-        )
+        commit_result = await conn.run(commit_cmd, check=False)
         commit = (commit_result.stdout or "").strip() or None
 
         # Check if dirty
-        status_result = await conn.run(
-            f"cd {target} && git status --porcelain 2>/dev/null | head -1",
-            check=False,
-        )
+        status_result = await conn.run(status_cmd, check=False)
         dirty = bool((status_result.stdout or "").strip())
 
         return APIGitInfo(is_repo=True, branch=branch, commit=commit, dirty=dirty)

@@ -287,7 +287,7 @@ def download(client, path):
 
 
 def test_dir_size_at_tilde_runs_du_on_the_resolved_home(remote):
-    """Mutation: skip `_resolve_remote_tilde` and `du -sb '~'` runs (and the replies
+    """Mutation: skip `resolve_tilde` and `du -sb '~'` runs (and the replies
     dict raises on the unknown command, giving a 500)."""
     client, replies, log = remote
     replies[HOME_CMD] = reply("/home/tester")
@@ -706,7 +706,7 @@ def test_remote_listing_of_an_absolute_path_runs_no_home_lookup(remote, listed):
 def test_file_routes_resolve_tilde_like_the_folder_zip(remote, monkeypatch, route):
     """Wave 4e review: `/download` and `/view` read the literal `~/notes.txt`.
 
-    Mutation: drop `_resolve_remote_tilde` from the route; SFTP is asked for
+    Mutation: drop `resolve_tilde` from the route; SFTP is asked for
     `~/notes.txt`."""
     client, replies, log = remote
     replies[HOME_CMD] = reply("/home/tester")
@@ -1339,3 +1339,60 @@ def test_touch_has_no_overwrite_option(remote):
         {"detail": "File already exists", "reason": "exists"},
     )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}
+
+
+# --- a folder or path whose name starts with a dash ---------------------------------
+#
+# `zip` and `du` were given the bare name, so a folder called `-rf` was read as options.
+
+
+def test_download_of_a_folder_named_like_an_option_names_it_as_a_path(remote):
+    """Mutation: pass the bare folder name to zip; it gets `-rf`, read as an option."""
+    client, replies, log = remote
+    replies["cd /srv && zip -r -q - ./-rf"] = reply(b"Z")
+    resp = download(client, "/srv/-rf")
+    assert (resp.status_code, resp.content) == (200, b"Z")
+    assert log == ["cd /srv && zip -r -q - ./-rf"]
+
+
+def test_dir_size_of_a_relative_path_named_like_an_option_names_it_as_a_path(remote):
+    """Mutation: pass the path to du as it came; du gets `-x`, read as an option."""
+    client, replies, log = remote
+    replies["du -sb ./-x"] = reply("12\t./-x\n")
+    resp = dir_size(client, "-x")
+    assert (resp.status_code, resp.json()) == (200, {"size_bytes": 12})
+    assert log == ["du -sb ./-x"]
+
+
+# --- the remote home is asked for once per connection --------------------------------
+
+
+def test_two_listings_under_tilde_on_a_reused_connection_ask_for_home_once(remote, listed):
+    """Mutation: ask the remote for `$HOME` on every request; the log holds it twice."""
+    client, replies, log = remote
+    replies[HOME_CMD] = reply("/home/tester")
+    for _ in range(2):
+        resp = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~/x"}, headers=HEADERS)
+        assert resp.json()["directory"] == "/home/tester/x"
+    assert len(remote.connections) == 1
+    assert log == [HOME_CMD]
+
+
+def test_a_failed_home_lookup_is_asked_again_by_the_next_request(remote, listed):
+    """Mutation: remember a failed lookup; the second request answers 502 without asking."""
+    client, replies, log = remote
+    replies[HOME_CMD] = reply("", "", 1)
+    first = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~"}, headers=HEADERS)
+    replies[HOME_CMD] = reply("/home/tester")
+    second = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~"}, headers=HEADERS)
+    assert (first.status_code, second.status_code) == (502, 200)
+    assert log == [HOME_CMD, HOME_CMD]
+
+
+def test_a_remote_whose_home_is_root_lists_tilde_paths_from_root(remote, listed):
+    """Mutation: join the home and the rest with a plain "/"; the folder is `//x`."""
+    client, replies, log = remote
+    replies[HOME_CMD] = reply("/")
+    resp = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~/x"}, headers=HEADERS)
+    assert (resp.status_code, resp.json()["directory"]) == (200, "/x")
+    assert listed == ["/x"]

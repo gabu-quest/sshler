@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import socket
 from asyncio.subprocess import Process
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import asyncssh
@@ -172,6 +174,25 @@ async def open_tmux(
     return process
 
 
+@contextlib.asynccontextmanager
+async def sftp_session(
+    connection: asyncssh.SSHClientConnection,
+) -> AsyncIterator[asyncssh.SFTPClient]:
+    """An SFTP session on ``connection`` for the length of an ``async with`` block.
+
+    The one place a session is opened: it is closed once on every way out of the
+    block (return, exception, cancellation). A close that fails, as on a connection
+    that dropped, is not raised over the block's own outcome. The connection itself
+    stays open: its lifetime is the pool's (``ssh_pool``).
+    """
+    sftp_client = await connection.start_sftp_client()
+    try:
+        yield sftp_client
+    finally:
+        with contextlib.suppress(Exception):
+            sftp_client.exit()
+
+
 async def sftp_list_directory(
     connection: asyncssh.SSHClientConnection, path: str
 ) -> list[dict[str, object]]:
@@ -193,9 +214,8 @@ async def sftp_list_directory(
         list[dict[str, object]]: Metadata entries sorted with directories first.
     """
 
-    sftp_client = await connection.start_sftp_client()
     entries: list[dict[str, object]] = []
-    try:
+    async with sftp_session(connection) as sftp_client:
         for filename in await sftp_client.listdir(path):
             # An SFTP server lists the folder itself and its parent among the names.
             if filename in (".", ".."):
@@ -215,11 +235,6 @@ async def sftp_list_directory(
                 entries.append(entry)
             except Exception:
                 pass
-    finally:
-        try:
-            sftp_client.exit()
-        except Exception:
-            pass
     entries.sort(key=lambda entry: (not entry["is_directory"], str(entry["name"]).lower()))
     return entries
 
@@ -241,28 +256,16 @@ async def sftp_is_directory(connection: asyncssh.SSHClientConnection, path: str)
         bool: ``True`` when ``path`` is a directory, otherwise ``False``.
     """
 
-    sftp_client = await connection.start_sftp_client()
-    try:
+    async with sftp_session(connection) as sftp_client:
         stats = await sftp_client.stat(path)
         permissions = stats.permissions or 0
         return (permissions & 0o40000) == 0o40000
-    finally:
-        try:
-            sftp_client.exit()
-        except Exception:
-            pass
 
 
 async def sftp_chmod(connection: asyncssh.SSHClientConnection, path: str, mode: int) -> None:
     """Change file permissions via SFTP."""
-    sftp_client = await connection.start_sftp_client()
-    try:
+    async with sftp_session(connection) as sftp_client:
         await sftp_client.chmod(path, mode)
-    finally:
-        try:
-            sftp_client.exit()
-        except Exception:
-            pass
 
 
 async def sftp_read_file(
@@ -281,18 +284,12 @@ async def sftp_read_file(
         として返します（復号できないバイトは置換します）。
     """
 
-    sftp_client = await connection.start_sftp_client()
-    try:
+    async with sftp_session(connection) as sftp_client:
         async with await sftp_client.open(
             path, "r", encoding="utf-8", errors="replace"
         ) as remote_file:
             text = await remote_file.read(max_bytes)
         return text
-    finally:
-        try:
-            sftp_client.exit()
-        except Exception:
-            pass
 
 
 async def _expand_alias(alias: str) -> dict[str, str | None]:

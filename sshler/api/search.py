@@ -6,7 +6,6 @@ import asyncio
 import fnmatch
 import logging
 import os
-import shlex
 import shutil
 import time
 from typing import TYPE_CHECKING
@@ -22,7 +21,7 @@ from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from . import helpers
 from .dependencies import APIDependencies
-from .files import _remote_path
+from .remote import command, path_word, pipe, quiet, remote_path, then
 
 if TYPE_CHECKING:
     pass
@@ -240,23 +239,41 @@ async def _discover_local(
         return []
 
 
-def _remote_find_command(
-    root: str | None,
+DISCOVERY_SEPARATOR = "---SSHLER-FILES---"
+
+
+def remote_find_command(
+    root: str,
     pattern: str,
     entry_type: str,
     max_depth: int,
     limit: int,
 ) -> str:
-    # A bare "~" stays unquoted so the remote shell expands it; a "~/sub" root
-    # arrives here already resolved to an absolute path.
-    if root is None or root in ("", "~"):
-        root_expr = "~"
-    else:
-        root_expr = shlex.quote(root)
-    return (
-        f"find {root_expr} -maxdepth {max_depth} -type {entry_type} "
-        f"-iname {shlex.quote(pattern)} 2>/dev/null | head -n {limit}"
+    """The remote ``find`` for names matching ``pattern`` under ``root`` (a path with
+    any ``~`` already resolved: the remote shell is never asked to expand one)."""
+    find = command(
+        "find",
+        path_word(root),
+        "-maxdepth",
+        str(max_depth),
+        "-type",
+        entry_type,
+        "-iname",
+        pattern,
     )
+    return pipe(quiet(find), command("head", "-n", str(limit)))
+
+
+def remote_discovery_command(
+    root: str, pattern: str, max_depth: int, limit: int, include_files: bool
+) -> str:
+    """Folders under ``root`` matching ``pattern``; with ``include_files``, then a
+    ``DISCOVERY_SEPARATOR`` line and the matching files."""
+    folders = remote_find_command(root, pattern, "d", max_depth, limit)
+    if not include_files:
+        return folders
+    files = remote_find_command(root, pattern, "f", max_depth, limit)
+    return then(folders, command("printf", "%s\\n", DISCOVERY_SEPARATOR), files)
 
 
 async def _discover_remote_directories(
@@ -271,17 +288,14 @@ async def _discover_remote_directories(
 
     Returns list of (path, is_directory) tuples.
     """
-    separator = "---SSHLER-FILES---"
+    separator = DISCOVERY_SEPARATOR
     try:
-        if root is not None and root.startswith("~/"):
-            root = await _remote_path(connection, root)
+        # No root means the home folder, as in a shell.
+        resolved_root = await remote_path(connection, root or "~")
     except Exception as exc:
         logger.warning(f"Remote directory discovery root not usable: {exc}")
         return []
-    cmd = _remote_find_command(root, pattern, "d", max_depth, limit)
-    if include_files:
-        files_cmd = _remote_find_command(root, pattern, "f", max_depth, limit)
-        cmd = f"{cmd}; printf '%s\\n' {shlex.quote(separator)}; {files_cmd}"
+    cmd = remote_discovery_command(resolved_root, pattern, max_depth, limit, include_files)
 
     try:
         result = await asyncio.wait_for(

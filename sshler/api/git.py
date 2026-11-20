@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import shlex
 from datetime import datetime
 from pathlib import Path
 
@@ -19,10 +18,13 @@ from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
 from .helpers import _normalize_local_path
+from .remote import and_then, assign, command, in_directory, pipe, quiet
 
 logger = logging.getLogger(__name__)
 
-_REF_RE = re.compile(r"^[a-zA-Z0-9_./-]{1,200}$")
+# A ref is given to git as a bare word: one starting with "-" would be read as an
+# option (`--output` makes `git diff` write a file), so it is refused.
+_REF_RE = re.compile(r"^(?!-)[a-zA-Z0-9_./-]{1,200}$")
 _LOG_FIELD_SEP = "\x1f"
 MAX_BLAME_LINES = 10_000
 MAX_SHOW_BYTES = 1_048_576  # 1 MB
@@ -164,20 +166,78 @@ async def _get_local_root_and_relpath(directory: str, path: str) -> tuple[str, s
     return root, str(relative)
 
 
+# Prints TARGET relative to the repo ROOT (TARGET may be relative to DIR); exits 3
+# when TARGET is the root itself or outside it.
+_REPO_RELATIVE_PATH_SCRIPT = (
+    "import os, sys; "
+    'root = os.environ["ROOT"]; '
+    'directory = os.environ["DIR"]; '
+    'target = os.environ["TARGET"]; '
+    "candidate = target if os.path.isabs(target) else os.path.join(directory, target); "
+    "rel = os.path.relpath(os.path.normpath(candidate), root); "
+    '(rel in {".", ".."} or rel.startswith("../")) and sys.exit(3); '
+    "print(rel)"
+)
+
+
 def _build_remote_repo_path_command(directory: str, path: str) -> str:
-    return (
-        f"cd {shlex.quote(directory)} && "
-        "ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && "
-        f'REL=$(ROOT="$ROOT" DIR={shlex.quote(directory)} TARGET={shlex.quote(path)} '
-        "python3 -c 'import os, sys; "
-        'root = os.environ["ROOT"]; '
-        'directory = os.environ["DIR"]; '
-        'target = os.environ["TARGET"]; '
-        "candidate = target if os.path.isabs(target) else os.path.join(directory, target); "
-        "rel = os.path.relpath(os.path.normpath(candidate), root); "
-        '(rel in {".", ".."} or rel.startswith("../")) and sys.exit(3); '
-        "print(rel)' 2>/dev/null)"
+    """Sets the shell variables ROOT (the repo's top folder, for a repo at
+    ``directory``) and REL (``path`` relative to ROOT); fails when either is missing.
+    Later commands read them as ``"$ROOT"`` and ``"$REL"``, never as text."""
+    relative = " ".join(
+        [
+            'ROOT="$ROOT"',
+            assign("DIR", directory),
+            assign("TARGET", path),
+            quiet(command("python3", "-c", _REPO_RELATIVE_PATH_SCRIPT)),
+        ]
     )
+    return in_directory(
+        directory,
+        and_then(
+            "ROOT=$(" + quiet(command("git", "rev-parse", "--show-toplevel")) + ")",
+            "REL=$(" + relative + ")",
+        ),
+    )
+
+
+def remote_git_log_command(directory: str, fmt: str, limit: int) -> str:
+    return in_directory(
+        directory, quiet(command("git", "log", f"--pretty=format:{fmt}", "-n", str(limit)))
+    )
+
+
+def remote_git_show_command(directory: str, path: str, ref: str, max_bytes: int) -> str:
+    """``path`` at ``ref`` (a validated ref), cut to ``max_bytes``."""
+    show = quiet('git -C "$ROOT" show "$REF:$REL"')
+    return and_then(
+        _build_remote_repo_path_command(directory, path),
+        assign("REF", ref),
+        pipe(show, command("head", "-c", str(max_bytes))),
+    )
+
+
+def remote_git_blame_command(directory: str, path: str) -> str:
+    return and_then(
+        _build_remote_repo_path_command(directory, path),
+        quiet('git -C "$ROOT" blame --porcelain -- "$REL"'),
+    )
+
+
+def remote_git_branches_command(directory: str, fmt: str) -> str:
+    return in_directory(
+        directory,
+        and_then(
+            quiet(command("git", "branch", f"--format={fmt}")),
+            command("echo", "---ROOT---"),
+            quiet(command("git", "rev-parse", "--show-toplevel")),
+        ),
+    )
+
+
+def remote_git_diff_files_command(directory: str, ref_a: str, ref_b: str) -> str:
+    """Files changed between two validated refs, with their status letter."""
+    return in_directory(directory, quiet(command("git", "diff", "--name-status", ref_a, ref_b)))
 
 
 def _validate_remote_directory(directory: str) -> str:
@@ -217,10 +277,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
         else:
             validated = _validate_remote_directory(directory)
-            cmd = (
-                f"cd {shlex.quote(validated)} && "
-                f"git log --pretty=format:{shlex.quote(fmt)} -n {limit} 2>/dev/null"
-            )
+            cmd = remote_git_log_command(validated, fmt, limit)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
@@ -269,11 +326,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         else:
             validated_dir = _validate_remote_directory(directory)
             validated_path = _validate_remote_file_path(path)
-            cmd = (
-                f"{_build_remote_repo_path_command(validated_dir, validated_path)} && "
-                f'git -C "$ROOT" show {shlex.quote(ref)}:"$REL" 2>/dev/null'
-                f" | head -c {MAX_SHOW_BYTES}"
-            )
+            cmd = remote_git_show_command(validated_dir, validated_path, ref, MAX_SHOW_BYTES)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
@@ -306,10 +359,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         else:
             validated_dir = _validate_remote_directory(directory)
             validated_path = _validate_remote_file_path(path)
-            cmd = (
-                f"{_build_remote_repo_path_command(validated_dir, validated_path)} && "
-                'git -C "$ROOT" blame --porcelain -- "$REL" 2>/dev/null'
-            )
+            cmd = remote_git_blame_command(validated_dir, validated_path)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
@@ -353,12 +403,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 )
         else:
             validated = _validate_remote_directory(directory)
-            cmd = (
-                f"cd {shlex.quote(validated)} && "
-                f"git branch --format={shlex.quote(fmt)} 2>/dev/null && "
-                "echo '---ROOT---' && "
-                "git rev-parse --show-toplevel 2>/dev/null"
-            )
+            cmd = remote_git_branches_command(validated, fmt)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(
@@ -425,10 +470,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             )
         else:
             validated = _validate_remote_directory(directory)
-            cmd = (
-                f"cd {shlex.quote(validated)} && "
-                f"git diff --name-status {shlex.quote(ref_a)} {shlex.quote(ref_b)} 2>/dev/null"
-            )
+            cmd = remote_git_diff_files_command(validated, ref_a, ref_b)
             ssh_pool = get_pool()
             try:
                 async with ssh_pool.connection(

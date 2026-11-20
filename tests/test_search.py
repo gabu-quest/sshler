@@ -697,7 +697,7 @@ class TestRemoteRootUnderHome:
             ("~/$(touch x)", "'/home/u/$(touch x)'"),
             ("~/a;b", "'/home/u/a;b'"),
             ("~//etc", "/home/u/etc"),
-            ("~", "~"),
+            ("~", "/home/u"),
         ],
     )
     def test_the_command_names_the_absolute_root(self, root, sent):
@@ -710,7 +710,9 @@ class TestRemoteRootUnderHome:
     @pytest.mark.parametrize("root", [None, ""])
     def test_no_root_still_means_the_remote_home(self, root):
         _, commands = _remote_find(root)
-        assert commands == ["find ~ -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"]
+        assert commands == [
+            "find /home/u -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
 
     def test_another_users_home_is_quoted_whole(self):
         _, commands = _remote_find("~other/x")
@@ -726,3 +728,12 @@ class TestRemoteRootUnderHome:
     def test_an_invalid_root_finds_nothing(self):
         result, commands = _remote_find("~/a\x00b")
         assert (result, commands) == ([], [])
+
+
+class TestRemoteRootNamedLikeAnOption:
+    def test_a_relative_root_starting_with_a_dash_is_sent_as_a_path(self):
+        """Mutation: send the root as it came; find reads `-delete` as an expression."""
+        _, commands = _remote_find("-delete")
+        assert commands == [
+            "find ./-delete -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]

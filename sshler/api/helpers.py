@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import platform
 import posixpath
 import shutil
 import subprocess
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import asyncssh
 
-from ..ssh import sftp_read_file
+from ..ssh import sftp_read_file, sftp_session
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +107,9 @@ def default_windows_shell() -> str | None:
 
 
 def _normalize_directory_path(directory: str | None) -> str:
+    """The terminal's starting folder on a remote box, absolute and normalised; ``~``
+    becomes ``/`` here. Remote API routes take their folders from ``api.remote``,
+    which resolves ``~`` to the home folder instead."""
     raw = (directory or "/").strip()
     if not raw or raw == "~":
         raw = "/"
@@ -120,18 +122,6 @@ def _normalize_directory_path(directory: str | None) -> str:
     if not normalized.startswith("/"):
         normalized = "/" + normalized.lstrip("/")
     return normalized or "/"
-
-
-def _compose_remote_child_path(directory: str, filename: str) -> str:
-    cleaned = (filename or "").strip()
-    if not cleaned:
-        raise ValueError("Filename is required")
-    if cleaned in {".", ".."} or "/" in cleaned:
-        raise ValueError("Filename cannot contain path separators")
-    if "\x00" in cleaned:
-        raise ValueError("Filename contains unsupported characters")
-    parent = PurePosixPath(_normalize_directory_path(directory))
-    return (parent / cleaned).as_posix()
 
 
 def _normalize_local_path(directory: str | None, allowed_base: str | Path | None = None) -> str:
@@ -303,15 +293,11 @@ async def _local_delete_file(path: str) -> None:
 async def _read_file_bytes(
     connection: asyncssh.SSHClientConnection, path: str, limit: int
 ) -> tuple[bytes, bool]:
-    sftp_client = await connection.start_sftp_client()
-    try:
+    async with sftp_session(connection) as sftp_client:
         async with await sftp_client.open(path, "rb") as remote_file:
             data_read = await remote_file.read(limit + 1)
             # Opened with 'rb' so data should be bytes
             data = data_read if isinstance(data_read, bytes) else data_read.encode()
-    finally:
-        with contextlib.suppress(Exception):
-            sftp_client.exit()
     too_large = len(data) > limit
     if too_large:
         return b"", True

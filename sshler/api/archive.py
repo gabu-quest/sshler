@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -18,15 +17,32 @@ from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .files import _remote_path
 from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_file_ops
+from .remote import and_then, command, path_word, remote_path
 
 logger = logging.getLogger(__name__)
 
 MAX_ARCHIVE_PATHS = 100
 ARCHIVE_TIMEOUT = 120
 VALID_FORMATS = {"tar.gz", "tgz", "zip"}
+
+
+def archive_create_command(fmt: str, archive_target: str, paths: list[str]) -> str:
+    """The remote command that packs ``paths`` into ``archive_target`` (``fmt`` is
+    one of ``VALID_FORMATS``); relative paths are taken from ``/``."""
+    sources = [path_word(p) for p in paths]
+    if fmt in ("tar.gz", "tgz"):
+        return command("tar", "czf", path_word(archive_target), "-C", "/", *sources)
+    return and_then(command("cd", "/"), command("zip", "-r", path_word(archive_target), *sources))
+
+
+def archive_extract_command(archive: str, destination: str) -> str:
+    """The remote command that unpacks ``archive`` (by its name, a tar.gz, .tgz or
+    .zip) into ``destination``."""
+    if PurePosixPath(archive).name.lower().endswith((".tar.gz", ".tgz")):
+        return command("tar", "xzf", path_word(archive), "-C", path_word(destination))
+    return command("unzip", "-o", path_word(archive), "-d", path_word(destination))
 
 
 class APIArchiveCreateRequest(BaseModel):
@@ -155,15 +171,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
                 # SFTP and the quoted shell command do not expand `~`: resolve it here.
-                dest_resolved = await _remote_path(connection, dest_validated)
-                resolved_paths = [await _remote_path(connection, p) for p in validated_paths]
+                dest_resolved = await remote_path(connection, dest_validated)
+                resolved_paths = [await remote_path(connection, p) for p in validated_paths]
                 archive_target = str(PurePosixPath(dest_resolved) / archive_name)
-                quoted_paths = " ".join(shlex.quote(p) for p in resolved_paths)
-
-                if payload.format in ("tar.gz", "tgz"):
-                    cmd = f"tar czf {shlex.quote(archive_target)} -C / {quoted_paths}"
-                else:
-                    cmd = f"cd / && zip -r {shlex.quote(archive_target)} {quoted_paths}"
+                cmd = archive_create_command(payload.format, archive_target, resolved_paths)
 
                 try:
                     await asyncio.wait_for(
@@ -239,14 +250,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
                 # SFTP and the quoted shell command do not expand `~`: resolve it here.
-                archive_resolved = await _remote_path(connection, validated_archive)
-                dest_resolved = await _remote_path(connection, validated_dest)
-                if name_lower.endswith((".tar.gz", ".tgz")):
-                    cmd = f"tar xzf {shlex.quote(archive_resolved)} -C {shlex.quote(dest_resolved)}"
-                else:
-                    cmd = (
-                        f"unzip -o {shlex.quote(archive_resolved)} -d {shlex.quote(dest_resolved)}"
-                    )
+                archive_resolved = await remote_path(connection, validated_archive)
+                dest_resolved = await remote_path(connection, validated_dest)
+                cmd = archive_extract_command(archive_resolved, dest_resolved)
                 try:
                     await asyncio.wait_for(
                         connection.run(cmd, check=True),

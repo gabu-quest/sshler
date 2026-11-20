@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
-import shlex
 import stat as stat_mod
 from pathlib import Path, PurePosixPath
 
@@ -14,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, StrictBool
 
 from ..config import AppConfig, Box
-from ..ssh import SSHError
+from ..ssh import SSHError, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
@@ -23,7 +21,6 @@ from .files import (
     _local_make_folder,
     _local_place,
     _local_refuse_a_folder_into_itself,
-    _remote_path,
     _remote_place,
     failure_entry,
     refuse_a_name_this_request_placed,
@@ -33,10 +30,16 @@ from .helpers import (
     _normalize_local_path,
 )
 from .rate_limiting import rate_limit_delete, rate_limit_file_ops
+from .remote import command, path_word, remote_path
 
 logger = logging.getLogger(__name__)
 
 MAX_BATCH_PATHS = 100
+
+
+def remove_tree_command(path: str) -> str:
+    """The remote command that deletes the folder ``path`` and everything in it."""
+    return command("rm", "-rf", path_word(path))
 
 
 class APIBatchDeleteRequest(BaseModel):
@@ -83,7 +86,7 @@ async def _resolve_tilde_paths(
     resolved: list[tuple[str, str]] = []
     for orig, vpath in validated:
         try:
-            resolved.append((orig, await _remote_path(connection, vpath)))
+            resolved.append((orig, await remote_path(connection, vpath)))
         except ValidationError as exc:
             failed.append(failure_entry(orig, exc))
     return resolved
@@ -91,7 +94,7 @@ async def _resolve_tilde_paths(
 
 async def _resolve_tilde_destination(connection, destination: str) -> str:
     try:
-        return await _remote_path(connection, destination)
+        return await remote_path(connection, destination)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
 
@@ -165,8 +168,7 @@ async def _batch_place(
             ) as connection:
                 dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
                 validated = await _resolve_tilde_paths(connection, validated, failed)
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     for orig, vpath in validated:
                         target = str(PurePosixPath(dest_resolved) / PurePosixPath(vpath).name)
                         try:
@@ -179,9 +181,6 @@ async def _batch_place(
                         else:
                             landed.add(target)
                             succeeded.append(orig)
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except SSHError as exc:
             already = {f["path"] for f in failed} | set(succeeded)
             for orig, _ in validated:
@@ -235,16 +234,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         box, lambda: deps.connect_for_box(box, application_config)
                     ) as connection:
                         validated = await _resolve_tilde_paths(connection, validated, failed)
-                        sftp_client = await connection.start_sftp_client()
-                        try:
+                        async with sftp_session(connection) as sftp_client:
                             for orig, vpath in validated:
                                 try:
                                     try:
                                         attrs = await sftp_client.stat(vpath)
                                         if stat_mod.S_ISDIR(attrs.permissions or 0):
                                             await connection.run(
-                                                f"rm -rf {shlex.quote(vpath)}",
-                                                check=True,
+                                                remove_tree_command(vpath), check=True
                                             )
                                         else:
                                             await sftp_client.remove(vpath)
@@ -253,9 +250,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                     succeeded.append(orig)
                                 except Exception as exc:
                                     failed.append({"path": orig, "error": str(exc)})
-                        finally:
-                            with contextlib.suppress(Exception):
-                                sftp_client.exit()
                 except SSHError as exc:
                     # If connection failed entirely, mark remaining as failed
                     already = {f["path"] for f in failed} | set(succeeded)

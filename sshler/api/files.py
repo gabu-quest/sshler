@@ -9,7 +9,6 @@ import mimetypes
 import os
 import posixpath
 import secrets
-import shlex
 import shutil
 import stat as stat_mod
 import tempfile
@@ -28,7 +27,7 @@ from fastapi.routing import APIRoute
 from .. import state
 from ..config import AppConfig
 from ..proc import run_bounded
-from ..ssh import SSHError, sftp_chmod, sftp_list_directory
+from ..ssh import SSHError, sftp_chmod, sftp_list_directory, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
@@ -37,13 +36,11 @@ from .helpers import (
     LOCAL_IS_WINDOWS,
     MAX_IMAGE_PREVIEW_BYTES,
     _compose_local_child_path,
-    _compose_remote_child_path,
     _is_markdown_file,
     _local_delete_file,
     _local_read_bytes,
     _local_read_text,
     _local_write_text,
-    _normalize_directory_path,
     _normalize_local_path,
     _read_file_bytes,
     _read_remote_text,
@@ -62,6 +59,14 @@ from .models import (
     APITouchRequest,
 )
 from .rate_limiting import rate_limit_delete, rate_limit_upload, rate_limit_write
+from .remote import (
+    command,
+    compose_remote_child,
+    in_directory,
+    path_word,
+    remote_directory,
+    remote_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,45 +105,6 @@ async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
         return set(line.strip() for line in stdout.decode().splitlines() if line.strip())
     except Exception:
         return set()
-
-
-async def _resolve_remote_tilde(connection, path: str) -> str:
-    """Expand a leading ``~`` / ``~/`` to the remote home directory.
-
-    The remote path is quoted for the shell later, which stops the remote shell
-    from expanding ``~``; resolving it here keeps validation, ``du`` and ``zip``
-    all working on the real folder.
-    """
-    if path != "~" and not path.startswith("~/"):
-        return path
-    result = await asyncio.wait_for(connection.run('printf %s "$HOME"'), timeout=10)
-    home = (result.stdout or "").strip()
-    if result.exit_status != 0 or not home.startswith("/"):
-        raise HTTPException(status_code=502, detail="Could not resolve the remote home directory")
-    # Join with a plain "/" (posixpath.join would drop `home` when the rest starts
-    # with "/", as in `~//etc`), then normalise; the caller validates the result.
-    return home if path == "~" else posixpath.normpath(f"{home}/{path[2:]}")
-
-
-async def _remote_path(connection, path: str) -> str:
-    """``path`` with ``~`` resolved to the remote home, validated (raises
-    ``ValidationError``). SFTP does not expand ``~``: it would be a literal folder."""
-    return PathValidator.validate_remote_path(await _resolve_remote_tilde(connection, path))
-
-
-async def _remote_directory(connection, directory: str | None) -> str:
-    """A remote folder with ``~`` resolved the way the listing does, then normalised.
-    Without the lookup ``_normalize_directory_path`` maps ``~`` to ``/``."""
-    resolved = await _resolve_remote_tilde(connection, (directory or "/").strip())
-    return _normalize_directory_path(resolved)
-
-
-def _compose_remote_child(directory: str, filename: str) -> str:
-    """``directory/filename``, validated; a bad result is a 400."""
-    try:
-        return PathValidator.validate_remote_path(_compose_remote_child_path(directory, filename))
-    except (ValidationError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # --- No file lands on an existing name unless the caller said replace -------------
@@ -1105,13 +1071,36 @@ def _attachment_header(filename: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
-async def _du_bytes(connection, command: str, multiplier: int) -> int | None:
+def du_command(flag: str, path: str) -> str:
+    """``du <flag> <path>``: the total size of a remote folder."""
+    return command("du", flag, path_word(path))
+
+
+def directory_test_command(path: str) -> str:
+    """Succeeds when ``path`` is a folder on the remote."""
+    return command("test", "-d", path_word(path))
+
+
+def folder_zip_command(path: str) -> tuple[str, str]:
+    """``(zip name, command)`` that writes a zip of the remote folder ``path`` to
+    stdout, with the folder's own name as the top of every entry. ``/`` has no name:
+    its contents are zipped as "root"."""
+    if path == "/":
+        dirname, parent, target = "root", "/", "."
+    else:
+        dirname = PurePosixPath(path).name
+        parent = PurePosixPath(path).parent.as_posix()
+        target = dirname
+    return dirname, in_directory(parent, command("zip", "-r", "-q", "-", path_word(target)))
+
+
+async def _du_bytes(connection, du_line: str, multiplier: int) -> int | None:
     """Run a ``du`` command and return its total times ``multiplier``, or None.
 
     ``du`` exits non-zero when a subfolder is unreadable but still prints the
     total, so the printed number decides, not the exit status.
     """
-    result = await asyncio.wait_for(connection.run(command), timeout=30)
+    result = await asyncio.wait_for(connection.run(du_line), timeout=30)
     first_field = (result.stdout or "").strip().split("\t")[0]
     return int(first_field) * multiplier if first_field.isdigit() else None
 
@@ -1266,7 +1255,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
                 # `~` is the remote home, as for the folder zip (not `/`).
-                normalized_remote = await _remote_directory(connection, directory)
+                normalized_remote = await remote_directory(connection, directory)
                 raw_entries = await sftp_list_directory(connection, normalized_remote)
         except HTTPException:
             raise
@@ -1336,10 +1325,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, payload.path)
+                validated_path = await remote_path(connection, payload.path)
                 target_path = str(PurePosixPath(validated_path).parent / new_name)
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     await _remote_place(
                         sftp_client,
                         validated_path,
@@ -1347,9 +1335,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         move=True,
                         overwrite=payload.overwrite,
                     )
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1391,15 +1376,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                remote_path = _compose_remote_child(
-                    await _remote_directory(connection, payload.directory), validated_filename
+                remote_path = compose_remote_child(
+                    await remote_directory(connection, payload.directory), validated_filename
                 )
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     await _remote_write_new(sftp_client, remote_path, b"", overwrite=False)
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except SSHError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except HTTPException:
@@ -1439,11 +1420,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                remote_path = _compose_remote_child(
-                    await _remote_directory(connection, payload.directory), validated_name
+                remote_path = compose_remote_child(
+                    await remote_directory(connection, payload.directory), validated_name
                 )
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     try:
                         await sftp_client.stat(remote_path)
                         raise HTTPException(status_code=400, detail="Directory already exists")
@@ -1452,9 +1432,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     except Exception:
                         pass
                     await sftp_client.mkdir(remote_path)
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except SSHError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except HTTPException:
@@ -1494,13 +1471,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, payload.path)
-                sftp_client = await connection.start_sftp_client()
-                try:
+                validated_path = await remote_path(connection, payload.path)
+                async with sftp_session(connection) as sftp_client:
                     await sftp_client.remove(validated_path)
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1551,11 +1524,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                remote_src = await _remote_path(connection, payload.source)
-                remote_dest_dir = await _remote_path(connection, payload.destination)
+                remote_src = await remote_path(connection, payload.source)
+                remote_dest_dir = await remote_path(connection, payload.destination)
                 remote_target = str(PurePosixPath(remote_dest_dir) / PurePosixPath(remote_src).name)
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     await _remote_place(
                         sftp_client,
                         remote_src,
@@ -1563,9 +1535,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         move=True,
                         overwrite=payload.overwrite,
                     )
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1623,15 +1592,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                remote_src = await _remote_path(connection, payload.source)
-                remote_dest_dir = await _remote_path(connection, payload.destination)
+                remote_src = await remote_path(connection, payload.source)
+                remote_dest_dir = await remote_path(connection, payload.destination)
                 # Named after the resolved source: `~` alone has no usable name.
                 new_name = PathValidator.validate_filename(
                     payload.new_name or PurePosixPath(remote_src).name
                 )
                 remote_target = str(PurePosixPath(remote_dest_dir) / new_name)
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     await _remote_place(
                         sftp_client,
                         remote_src,
@@ -1640,9 +1608,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         overwrite=payload.overwrite,
                         allow_dirs=False,
                     )
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except (FileNotFoundError, asyncssh.SFTPNoSuchFile) as exc:
             raise HTTPException(status_code=404, detail="Source not found") from exc
         except HTTPException:
@@ -1710,7 +1675,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, path)
+                validated_path = await remote_path(connection, path)
                 suffix = Path(validated_path).suffix.lower()
                 image_mime = IMAGE_CONTENT_TYPES.get(suffix)
                 remote_image_data: str | None = None
@@ -1792,16 +1757,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, path)
-                sftp_client = await connection.start_sftp_client()
-                try:
+                validated_path = await remote_path(connection, path)
+                async with sftp_session(connection) as sftp_client:
                     async with await sftp_client.open(
                         validated_path, "w", encoding="utf-8"
                     ) as remote_file:
                         await remote_file.write(content)
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -1840,7 +1801,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, path)
+                validated_path = await remote_path(connection, path)
                 content, too_large = await _read_file_bytes(
                     connection, validated_path, deps.settings.max_upload_bytes
                 )
@@ -1895,7 +1856,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, path)
+                validated_path = await remote_path(connection, path)
                 content, too_large = await _read_file_bytes(
                     connection, validated_path, deps.settings.max_upload_bytes
                 )
@@ -1961,14 +1922,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, path)
-                quoted = shlex.quote(validated_path)
-                remote_size = await _du_bytes(connection, f"du -sb {quoted}", 1)
+                validated_path = await remote_path(connection, path)
+                remote_size = await _du_bytes(connection, du_command("-sb", validated_path), 1)
                 if remote_size is None:
                     # BSD/macOS `du` has no -b; -k works everywhere.
-                    remote_size = await _du_bytes(connection, f"du -sk {quoted}", 1024)
+                    remote_size = await _du_bytes(
+                        connection, du_command("-sk", validated_path), 1024
+                    )
                 if remote_size is None:
-                    exists = await asyncio.wait_for(connection.run(f"test -d {quoted}"), timeout=10)
+                    exists = await asyncio.wait_for(
+                        connection.run(directory_test_command(validated_path)), timeout=10
+                    )
                     if exists.exit_status != 0:
                         raise HTTPException(status_code=404, detail="Directory not found")
         except HTTPException:
@@ -2042,15 +2006,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 connection = await ssh_pool.acquire(
                     box, lambda: deps.connect_for_box(box, application_config)
                 )
-                validated_path = await _remote_path(connection, path)
-                if validated_path == "/":
-                    # No folder name to zip: archive the contents of `/` as "root".
-                    dirname, parent, target = "root", "/", "."
-                else:
-                    dirname = PurePosixPath(validated_path).name
-                    parent = PurePosixPath(validated_path).parent.as_posix()
-                    target = dirname
-                cmd = f"cd {shlex.quote(parent)} && zip -r -q - {shlex.quote(target)}"
+                validated_path = await remote_path(connection, path)
+                dirname, cmd = folder_zip_command(validated_path)
                 async with asyncio.timeout(ZIP_STREAM_TIMEOUT_SECONDS):
                     await _spool_remote_zip(connection, cmd, tmp_path)
                 # Inside the cleanup `try`: a cancel during the release's health check
@@ -2120,18 +2077,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, path)
-                sftp_client = await connection.start_sftp_client()
-                try:
-                    attrs = await sftp_client.stat(validated_path)
-                    is_dir = stat_mod.S_ISDIR(attrs.permissions) if attrs.permissions else False
-                    is_file = stat_mod.S_ISREG(attrs.permissions) if attrs.permissions else False
-                    return {"exists": True, "is_directory": is_dir, "is_file": is_file}
-                except (FileNotFoundError, OSError):
-                    return {"exists": False, "is_directory": False, "is_file": False}
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
+                validated_path = await remote_path(connection, path)
+                async with sftp_session(connection) as sftp_client:
+                    try:
+                        attrs = await sftp_client.stat(validated_path)
+                        perms = attrs.permissions
+                        is_dir = stat_mod.S_ISDIR(perms) if perms else False
+                        is_file = stat_mod.S_ISREG(perms) if perms else False
+                        return {"exists": True, "is_directory": is_dir, "is_file": is_file}
+                    except (FileNotFoundError, OSError):
+                        return {"exists": False, "is_directory": False, "is_file": False}
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -2191,15 +2146,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                remote_path = _compose_remote_child(
-                    await _remote_directory(connection, directory), validated_filename
+                remote_path = compose_remote_child(
+                    await remote_directory(connection, directory), validated_filename
                 )
-                sftp_client = await connection.start_sftp_client()
-                try:
+                async with sftp_session(connection) as sftp_client:
                     await _remote_write_new(sftp_client, remote_path, contents, overwrite=overwrite)
-                finally:
-                    with contextlib.suppress(Exception):
-                        sftp_client.exit()
         except HTTPException:
             raise
         except SSHError as exc:
@@ -2244,7 +2195,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             async with ssh_pool.connection(
                 box, lambda: deps.connect_for_box(box, application_config)
             ) as connection:
-                validated_path = await _remote_path(connection, payload.path)
+                validated_path = await remote_path(connection, payload.path)
                 await sftp_chmod(connection, validated_path, mode)
         except HTTPException:
             raise

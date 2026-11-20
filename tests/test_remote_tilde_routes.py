@@ -152,7 +152,7 @@ def test_archive_create_resolves_tilde_in_destination_and_sources(remote, fmt, n
     )
     assert resp.status_code == 200
     assert resp.json()["path"] == f"{HOME}/{name}"
-    assert remote.log == [HOME_CMD, HOME_CMD, command]
+    assert remote.log == [HOME_CMD, command]
 
 
 def test_archive_create_with_a_failed_home_lookup_is_502_and_runs_nothing(remote):
@@ -188,7 +188,7 @@ def test_archive_extract_resolves_tilde_in_archive_and_destination(remote, archi
     remote.replies[command] = _reply()
     resp = _post(remote, "archive/extract", {"archive_path": archive, "destination": "~/dest"})
     assert (resp.status_code, resp.json()["path"]) == (200, f"{HOME}/dest")
-    assert remote.log == [HOME_CMD, HOME_CMD, command]
+    assert remote.log == [HOME_CMD, command]
 
 
 # --- batch ---------------------------------------------------------------------
@@ -264,3 +264,36 @@ async def test_rate_limit_buckets_by_the_forwarded_client_address(
         await limit(_request("127.0.0.1", "203.0.113.9"))
     assert refused.value.status_code == 429
     await limit(_request("127.0.0.1", "203.0.113.10"))
+
+
+# --- a path whose name starts with a dash --------------------------------------------
+
+
+def test_archive_create_names_a_relative_source_starting_with_a_dash_as_a_path(remote):
+    """Mutation: pass the source to tar as it came; tar reads `-rf` as options."""
+    command = "tar czf /srv/o.tar.gz -C / ./-rf"
+    remote.replies[command] = _reply()
+    resp = _post(
+        remote,
+        "archive/create",
+        {"paths": ["-rf"], "destination": "/srv", "archive_name": "o.tar.gz", "format": "tar.gz"},
+    )
+    assert resp.status_code == 200
+    assert remote.log == [command]
+
+
+def test_batch_delete_of_a_relative_folder_starting_with_a_dash_names_it_as_a_path(remote):
+    """Mutation: pass the folder to rm as it came; rm reads `-rf` as options."""
+
+    async def folder_stat(path: str):
+        remote.sftp.calls.append(("stat", path))
+        return SimpleNamespace(permissions=0o040755)
+
+    remote.sftp.stat = folder_stat
+    remote.replies["rm -rf ./-rf"] = _reply()
+    resp = _post(remote, "batch/delete", {"paths": ["-rf"]})
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {"status": "ok", "succeeded": ["-rf"], "failed": []},
+    )
+    assert remote.log == ["rm -rf ./-rf"]

@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictBool
 
 from ..config import AppConfig
-from ..ssh import SSHError
+from ..ssh import SSHError, sftp_session
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
@@ -131,8 +131,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 lambda: deps.connect_for_box(src_box, application_config),
                             )
                         )
-                        src_sftp = await src_conn.start_sftp_client()
-                        stack.push_async_callback(_safe_exit_sftp, src_sftp)
+                        src_sftp = await stack.enter_async_context(sftp_session(src_conn))
 
                     if dest_box.transport != "local":
                         dest_conn = await stack.enter_async_context(
@@ -141,8 +140,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 lambda: deps.connect_for_box(dest_box, application_config),
                             )
                         )
-                        dest_sftp = await dest_conn.start_sftp_client()
-                        stack.push_async_callback(_safe_exit_sftp, dest_sftp)
+                        dest_sftp = await stack.enter_async_context(sftp_session(dest_conn))
 
                     for index, src_path in enumerate(validated_paths):
                         # Every answer and event names the item as the request spelled
@@ -250,11 +248,6 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
 def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-
-async def _safe_exit_sftp(sftp_client) -> None:
-    with contextlib.suppress(Exception):
-        sftp_client.exit()
 
 
 async def _source_stat(box, sftp_client, path: str) -> tuple[int, int, tuple]:
