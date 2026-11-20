@@ -12,6 +12,29 @@ points here; each section stands alone.
 4. `terminal/pump.py` `run_pump` carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects)
 5. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
 
+## A command on a box, and the files of a box
+
+No route in `sshler/api/` asks which kind of box it holds. It asks one of two interfaces, and
+each has a local and a remote implementation:
+
+- **Files:** `BoxFiles` (`api/file_contract.py`), opened with `box_files(deps, box, config)`
+  (`api/box_files.py`), kept by `LocalFiles` and `RemoteFiles`. Listing, reading, writing,
+  placing under the existing-name rule, batches, archives, the folder zip.
+- **Programs:** `BoxRunner` (`api/box_runner.py`), opened with `box_runner(deps, box, config,
+  deadline=...)`. `run(words, folder=, timeout=)` for git and grep, `tmux(session, args)`,
+  `folder`/`file` for paths, `reach` for the status check. Its module docstring is the
+  contract: every word reaches the program as one word, what a time limit does to the
+  program and to a pooled connection, and where the two kinds differ.
+
+Work the two kinds really do differently sits in one function that decides once and returns
+the same shape for both: `box_stats` (`api/boxes.py`), `live_sessions` and
+`force_kill_supported` (`api/sessions.py`), `search_box` (`api/search.py`), and the in-process
+grep of a Windows local box (`api/grep.py`). `tests/test_box_files_contract.py` counts the
+tests of the kind per route module, so a new one outside such a function fails there.
+
+A remote path with `~`, a remote command line built from words, and an SFTP session each
+have one owner: `remote_path` and `command` in `api/remote.py`, `sftp_session` in `ssh.py`.
+
 ## Frontend details
 
 **Emoji favicon system** in `src/utils/emoji-favicon.ts`:
