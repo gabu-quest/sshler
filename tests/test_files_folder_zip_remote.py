@@ -1154,7 +1154,10 @@ def test_touch_on_an_existing_remote_file_answers_409_and_keeps_its_bytes(remote
     passthrough); the route answers 200, opens the file "w" and its bytes become b""."""
     remote.sftp.contents["/srv/a.txt"] = b"precious"
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}
     assert remote.sftp.calls == [("lstat", "/srv/a.txt")]
 
@@ -1169,7 +1172,10 @@ def test_upload_onto_an_existing_remote_file_answers_409_and_keeps_its_bytes(rem
         files={"file": ("a.bin", b"replacement", "application/octet-stream")},
         headers=HEADERS,
     )
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.bin": b"precious"}
     assert remote.sftp.calls == [("lstat", "/srv/a.bin")]
 
@@ -1214,9 +1220,15 @@ def test_touch_and_upload_refuse_a_dangling_symlink_and_write_nothing(remote):
     link reads as free and the open writes through it, creating `/etc/target`."""
     remote.sftp.symlinks["/srv/link"] = "/etc/target"
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "link"})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
     resp = _upload(remote, "link", b"payload")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
     assert remote.sftp.contents == {}
     assert remote.sftp.calls == [("lstat", "/srv/link"), ("lstat", "/srv/link")]
 
@@ -1252,9 +1264,15 @@ def test_a_file_that_appears_after_the_check_is_not_truncated(remote, monkeypatc
 
     monkeypatch.setattr(remote.sftp, "lstat", lstat_before_it_appeared)
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     resp = _upload(remote, "a.txt", b"replacement")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}
 
 
@@ -1277,7 +1295,10 @@ def test_upload_with_overwrite_false_still_refuses(remote):
     explicit "false" would replace the file."""
     remote.sftp.contents["/srv/a.bin"] = b"precious"
     resp = _upload(remote, "a.bin", b"replacement", overwrite="false")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.bin": b"precious"}
 
 
@@ -1289,7 +1310,7 @@ def test_upload_with_overwrite_never_writes_through_a_symlink(remote):
     resp = _upload(remote, "a.bin", b"replacement", overwrite="true")
     assert (resp.status_code, resp.json()) == (
         400,
-        {"detail": "Only a regular file can be replaced"},
+        {"detail": "Only a regular file can be replaced", "reason": "cannot_replace"},
     )
     assert remote.sftp.contents == {"/etc/passwd": b"root:x:0:0"}
     assert remote.sftp.calls == [("lstat", "/srv/a.bin")]
@@ -1313,5 +1334,8 @@ def test_touch_has_no_overwrite_option(remote):
     the existing file is truncated to b""."""
     remote.sftp.contents["/srv/a.txt"] = b"precious"
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt", "overwrite": True})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}

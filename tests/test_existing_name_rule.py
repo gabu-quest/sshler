@@ -168,6 +168,24 @@ for _name in ("lstat", "stat", "link", "remove", "realpath", "mkdir", "rmdir", "
 CountingServer.posix_rename = _counted("posix_rename")
 
 
+class NoSetstatServer(asyncssh.SFTPServer):
+    """An SFTP server that cannot change a file's attributes, as some gateways are: a new
+    file has the bits its open asked for, narrowed by the server's umask."""
+
+    def setstat(self, path: bytes, attrs: asyncssh.SFTPAttrs) -> None:
+        raise asyncssh.SFTPOpUnsupported("setstat not supported")
+
+    def fsetstat(self, file_obj: object, attrs: asyncssh.SFTPAttrs) -> None:
+        raise asyncssh.SFTPOpUnsupported("fsetstat not supported")
+
+
+class SetstatFailsServer(asyncssh.SFTPServer):
+    """An SFTP server that has the operation and fails it (a file system that refuses)."""
+
+    def fsetstat(self, file_obj: object, attrs: asyncssh.SFTPAttrs) -> None:
+        raise asyncssh.SFTPFailure("fsetstat refused")
+
+
 SERVERS = {"refusing-rename": asyncssh.SFTPServer, "replacing-rename": ReplacingRenameServer}
 # Servers that behave differently again, for the tests that name them.
 ODD_SERVERS = {
@@ -176,6 +194,8 @@ ODD_SERVERS = {
     "no-rename-back": NoRenameBackServer,
     "case-blind": CaseBlindServer,
     "counting": CountingServer,
+    "no-setstat": NoSetstatServer,
+    "setstat-fails": SetstatFailsServer,
 }
 
 
@@ -268,6 +288,8 @@ SERVER_OF_BOX = {
     "lb-no-rename-back": "no-rename-back",
     "lb-case-blind": "case-blind",
     "lb-counting": "counting",
+    "lb-no-setstat": "no-setstat",
+    "lb-setstat-fails": "setstat-fails",
 }
 
 
@@ -2186,3 +2208,362 @@ def test_a_same_box_batch_answers_with_the_paths_it_was_sent(local_env, op):
         "succeeded": [sent_b],
         "failed": [{"path": sent_a, "error": "File already exists", "reason": "exists"}],
     }
+
+
+# --- a file placed under a new name has the source's permission bits -------------------
+
+
+@pytest.fixture
+def set_umask():
+    """Set the process umask (the SFTP server here runs in this process, so it is the
+    server's too) and restore it afterwards."""
+    old = os.umask(0o022)
+
+    def apply(value: int) -> None:
+        os.umask(value)
+
+    try:
+        yield apply
+    finally:
+        os.umask(old)
+
+
+TRANSFER_ENDS = [("local", REMOTE), (REMOTE, "local")]
+
+
+@pytest.mark.parametrize("server", ["refusing-rename"])
+@pytest.mark.parametrize(("src", "dest"), TRANSFER_ENDS)
+@pytest.mark.parametrize("mode", ["copy", "move"])
+@pytest.mark.parametrize(
+    ("source_bits", "umask", "arrives"),
+    [
+        (0o600, 0o022, 0o600),
+        (0o755, 0o077, 0o755),
+        (0o664, 0o022, 0o664),
+        (0o4755, 0o022, 0o755),
+        (0o400, 0o022, 0o400),
+    ],
+)
+def test_a_transfer_to_a_new_name_gives_the_file_the_source_permission_bits(
+    env, set_umask, server, src, dest, mode, source_bits, umask, arrives
+):
+    a, b = side(env, src), side(env, dest)
+    a.disk("x.txt").write_bytes(b"source x")
+    a.disk("x.txt").chmod(source_bits)
+    b.disk("in").mkdir()
+    set_umask(umask)
+
+    events = transfer(env, src, dest, [a.path("x.txt")], b.path("in"), mode=mode)
+
+    assert events[-1] == ("done", {"succeeded": [a.path("x.txt")], "failed": []})
+    assert b.disk("in/x.txt").read_bytes() == b"source x"
+    assert b.disk("in/x.txt").stat().st_mode & 0o7777 == arrives
+    if mode == "move":
+        assert a.disk("x.txt").exists() is False
+
+
+@pytest.mark.parametrize("server", ["refusing-rename"])
+@pytest.mark.parametrize(("src", "dest"), TRANSFER_ENDS)
+@pytest.mark.parametrize(("source_bits", "umask"), [(0o600, 0o000), (0o755, 0o077)])
+def test_a_transfer_file_has_the_source_bits_at_every_write(
+    env, monkeypatch, set_umask, server, src, dest, source_bits, umask
+):
+    """The mode of the file being written, read at each write: the source's bits from
+    the first byte on, so a 0600 file is never readable by another user."""
+    a, b = side(env, src), side(env, dest)
+    a.disk("x.txt").write_bytes(b"source x")
+    a.disk("x.txt").chmod(source_bits)
+    b.disk("in").mkdir()
+    set_umask(umask)
+    seen: list[int] = []
+
+    def watch(owner):
+        real = owner.write
+
+        def write(self, data):
+            on_disk = Path(self.target) if dest == "local" else env.root / self.target.lstrip("/")
+            seen.append(on_disk.stat().st_mode & 0o7777)
+            return real(self, data)
+
+        monkeypatch.setattr(owner, "write", write)
+
+    watch(files_api._LocalLanding if dest == "local" else files_api._RemoteLanding)
+
+    events = transfer(env, src, dest, [a.path("x.txt")], b.path("in"))
+
+    assert events[-1] == ("done", {"succeeded": [a.path("x.txt")], "failed": []})
+    assert seen == [source_bits]
+
+
+@pytest.mark.parametrize("box", ["lb-refusing", "lb-replacing"])
+@pytest.mark.parametrize("mode", [0o664, 0o775, 0o400])
+@pytest.mark.parametrize("op", ["copy", "batch/copy"])
+def test_a_remote_copy_to_a_new_name_gives_exactly_the_source_bits_under_umask_022(
+    env, umask_022, box, mode, op
+):
+    """The bits go on the open's attributes, which the server's umask narrows; they
+    are set again exactly before the first byte."""
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(mode)
+
+    resp = single(s, "copy", "a.txt") if op == "copy" else batch(s, "copy", ["a.txt"])
+
+    assert resp.status_code == 200, resp.text
+    assert s.disk("d/a.txt").read_bytes() == b"source"
+    assert s.disk("d/a.txt").stat().st_mode & 0o7777 == mode
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("op", ["copy", "batch/copy", "move", "batch/move"])
+def test_a_replaced_file_with_no_permission_bits_keeps_none(env, box, op):
+    """A file locked with `chmod 000` stays locked when it is replaced."""
+    s = side(env, box)
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(0o644)
+    s.disk("d").mkdir()
+    s.disk("d/a.txt").write_bytes(b"old")
+    s.disk("d/a.txt").chmod(0o000)
+
+    if op.startswith("batch"):
+        resp = batch(s, op.split("/")[1], ["a.txt"], overwrite=True)
+    else:
+        resp = single(s, op, "a.txt", overwrite=True)
+
+    assert resp.status_code == 200, resp.text
+    assert s.disk("d/a.txt").stat().st_mode & 0o7777 == 0o000
+    s.disk("d/a.txt").chmod(0o600)
+    assert s.disk("d/a.txt").read_bytes() == b"source"
+
+
+@pytest.mark.parametrize("server", ["refusing-rename"])
+@pytest.mark.parametrize(("src", "dest"), TRANSFER_ENDS)
+def test_a_file_with_no_permission_bits_replaced_by_a_transfer_keeps_none(env, server, src, dest):
+    a, b = side(env, src), side(env, dest)
+    a.disk("x.txt").write_bytes(b"source x")
+    a.disk("x.txt").chmod(0o644)
+    b.disk("in").mkdir()
+    b.disk("in/x.txt").write_bytes(b"old")
+    b.disk("in/x.txt").chmod(0o000)
+
+    events = transfer(env, src, dest, [a.path("x.txt")], b.path("in"), overwrite=True)
+
+    assert events[-1] == ("done", {"succeeded": [a.path("x.txt")], "failed": []})
+    assert b.disk("in/x.txt").stat().st_mode & 0o7777 == 0o000
+    b.disk("in/x.txt").chmod(0o600)
+    assert b.disk("in/x.txt").read_bytes() == b"source x"
+
+
+@pytest.mark.parametrize("op", ["copy", "batch/copy"])
+def test_a_local_copy_has_the_source_bits_from_its_first_byte(
+    local_env, monkeypatch, umask_022, op
+):
+    """A 0600 file copied on the local box is never readable by another user: the new
+    file has the source's bits before the copy writes to it."""
+    s = side(local_env, "local")
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(0o600)
+    seen: list[int] = []
+    real = shutil.copyfileobj
+
+    def copyfileobj(src, dst, *rest):
+        seen.append(os.fstat(dst.fileno()).st_mode & 0o7777)
+        return real(src, dst, *rest)
+
+    monkeypatch.setattr(files_api.shutil, "copyfileobj", copyfileobj)
+
+    resp = single(s, "copy", "a.txt") if op == "copy" else batch(s, "copy", ["a.txt"])
+
+    assert resp.status_code == 200, resp.text
+    assert seen == [0o600]
+    assert s.disk("d/a.txt").read_bytes() == b"source"
+    assert s.disk("d/a.txt").stat().st_mode & 0o7777 == 0o600
+
+
+def test_a_local_copy_keeps_the_times_and_the_extended_attributes(local_env):
+    s = side(local_env, "local")
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"source")
+    try:
+        os.setxattr(s.disk("a.txt"), "user.note", b"kept")
+    except OSError:
+        pytest.skip("this file system keeps no user attributes")
+    os.utime(s.disk("a.txt"), ns=(1_600_000_000_000_000_000, 1_600_000_001_000_000_000))
+
+    resp = single(s, "copy", "a.txt")
+
+    assert resp.status_code == 200, resp.text
+    assert os.getxattr(s.disk("d/a.txt"), "user.note") == b"kept"
+    assert s.disk("d/a.txt").stat().st_mtime_ns == 1_600_000_001_000_000_000
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("op", ["copy", "batch/copy"])
+def test_a_copy_to_a_new_name_never_carries_setuid(env, umask_022, box, op):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(0o4755)
+
+    resp = single(s, "copy", "a.txt") if op == "copy" else batch(s, "copy", ["a.txt"])
+
+    assert resp.status_code == 200, resp.text
+    assert s.disk("d/a.txt").read_bytes() == b"source"
+    assert s.disk("d/a.txt").stat().st_mode & 0o7777 == 0o755
+
+
+@pytest.mark.parametrize("op", ["rename", "move", "batch/move"])
+def test_a_local_move_over_a_file_has_the_replaced_bits_when_it_takes_the_name(
+    local_env, monkeypatch, op
+):
+    """A 0666 file moved over a 0600 one is never at that name with its own bits."""
+    s = side(local_env, "local")
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(0o666)
+    target = "b.txt" if op == "rename" else "d/a.txt"
+    s.disk("d").mkdir()
+    s.disk(target).write_bytes(b"old")
+    s.disk(target).chmod(0o600)
+    seen: list[int] = []
+    real = os.replace
+
+    def replace(src, dst, **rest):
+        seen.append(os.stat(src).st_mode & 0o7777)
+        return real(src, dst, **rest)
+
+    monkeypatch.setattr(files_api.os, "replace", replace)
+
+    if op == "rename":
+        resp = single(s, "rename", "a.txt", "b.txt", overwrite=True)
+    elif op.startswith("batch"):
+        resp = batch(s, "move", ["a.txt"], overwrite=True)
+    else:
+        resp = single(s, "move", "a.txt", overwrite=True)
+
+    assert resp.status_code == 200, resp.text
+    assert seen == [0o600]
+    assert s.disk(target).read_bytes() == b"source"
+    assert s.disk(target).stat().st_mode & 0o7777 == 0o600
+
+
+@pytest.mark.parametrize("box", ["lb-no-setstat"])
+@pytest.mark.parametrize("op", ["copy", "batch/copy"])
+def test_a_server_that_cannot_set_bits_still_takes_a_copy(env, umask_022, box, op):
+    """The new file keeps the bits its open asked for, narrowed by the server's umask:
+    never wider than the source's."""
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(0o664)
+
+    resp = single(s, "copy", "a.txt") if op == "copy" else batch(s, "copy", ["a.txt"])
+
+    assert resp.status_code == 200, resp.text
+    assert s.disk("d/a.txt").read_bytes() == b"source"
+    assert s.disk("d/a.txt").stat().st_mode & 0o7777 == 0o644
+
+
+@pytest.mark.parametrize("server", ["no-setstat"])
+def test_a_server_that_cannot_set_bits_still_takes_a_transfer_and_a_replace(env, umask_022, server):
+    a, b = side(env, "local"), side(env, REMOTE)
+    a.disk("x.txt").write_bytes(b"source x")
+    a.disk("x.txt").chmod(0o600)
+    a.disk("y.txt").write_bytes(b"source y")
+    b.disk("in").mkdir()
+    b.disk("in/y.txt").write_bytes(b"old")
+    b.disk("in/y.txt").chmod(0o640)
+
+    events = transfer(
+        env, "local", REMOTE, [a.path("x.txt"), a.path("y.txt")], b.path("in"), overwrite=True
+    )
+
+    assert events[-1] == ("done", {"succeeded": [a.path("x.txt"), a.path("y.txt")], "failed": []})
+    assert b.disk("in/x.txt").read_bytes() == b"source x"
+    assert b.disk("in/x.txt").stat().st_mode & 0o7777 == 0o600
+    assert b.disk("in/y.txt").read_bytes() == b"source y"
+    assert b.disk("in/y.txt").stat().st_mode & 0o7777 == 0o640
+
+
+@pytest.mark.parametrize("box", ["lb-setstat-fails"])
+def test_a_copy_whose_bits_cannot_be_set_leaves_no_file(env, umask_022, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("a.txt").chmod(0o664)
+
+    resp = single(s, "copy", "a.txt")
+
+    assert resp.status_code == 500, resp.text
+    assert "fsetstat refused" in resp.json()["detail"]
+    assert s.disk("d/a.txt").exists() is False
+    assert s.disk("a.txt").read_bytes() == b"source"
+
+
+# --- touch and upload answer every refusal with its reason -----------------------------
+
+
+def upload_to(s: Side, directory: str, name: str, **extra):
+    return s.env.client.post(
+        f"/api/v1/boxes/{s.box}/upload",
+        data={"directory": s.path(directory), **extra},
+        files={"file": (name, b"uploaded", "application/octet-stream")},
+        headers=HEADERS,
+    )
+
+
+def make_taken(s: Side, kind: str) -> None:
+    s.disk("in").mkdir()
+    s.disk("elsewhere.txt").write_bytes(b"keep me")
+    if kind == "file":
+        s.disk("in/x.txt").write_bytes(b"precious")
+    elif kind == "folder":
+        s.disk("in/x.txt").mkdir()
+    else:
+        s.disk("in/x.txt").symlink_to(s.disk("elsewhere.txt"))
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(
+    ("kind", "answer"),
+    [("file", EXISTS), ("folder", TAKEN), ("link", TAKEN)],
+)
+def test_an_upload_onto_a_taken_name_answers_with_the_reason(env, box, kind, answer):
+    s = side(env, box)
+    make_taken(s, kind)
+    before = files_under(s.base)
+
+    resp = upload_to(s, "in", "x.txt")
+
+    assert (resp.status_code, resp.json()) == (409, answer)
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("kind", ["folder", "link"])
+def test_an_upload_with_overwrite_onto_what_is_not_a_file_answers_with_the_reason(env, box, kind):
+    s = side(env, box)
+    make_taken(s, kind)
+    before = files_under(s.base)
+
+    resp = upload_to(s, "in", "x.txt", overwrite="true")
+
+    assert (resp.status_code, resp.json()) == (400, NOT_REGULAR)
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(
+    ("kind", "answer"),
+    [("file", EXISTS), ("folder", TAKEN), ("link", TAKEN)],
+)
+def test_a_touch_onto_a_taken_name_answers_with_the_reason(env, box, kind, answer):
+    s = side(env, box)
+    make_taken(s, kind)
+    before = files_under(s.base)
+
+    resp = s.post("touch", {"directory": s.path("in"), "filename": "x.txt"})
+
+    assert (resp.status_code, resp.json()) == (400 if box == "local" else 409, answer)
+    assert files_under(s.base) == before

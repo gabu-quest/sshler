@@ -72,7 +72,10 @@ def test_upload_onto_an_existing_local_file_answers_409_and_keeps_its_bytes(clie
     client's replace offer, keyed on 409, would never appear for a local box."""
     (work / "a.bin").write_bytes(b"precious")
     resp = upload(client, work, "a.bin", b"replacement")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert (work / "a.bin").read_bytes() == b"precious"
 
 
@@ -89,7 +92,10 @@ def test_upload_with_overwrite_false_still_refuses_locally(client, work):
     """Mutation: replace whenever the field is present; "false" would replace."""
     (work / "a.bin").write_bytes(b"precious")
     resp = upload(client, work, "a.bin", b"replacement", overwrite="false")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert (work / "a.bin").read_bytes() == b"precious"
 
 
@@ -99,9 +105,15 @@ def test_upload_and_touch_refuse_a_dangling_local_symlink(client, work, tmp_path
     target = tmp_path / "outside.txt"
     make_symlink(work / "link", target)
     resp = upload(client, work, "link", b"payload")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
     resp = touch(client, work, "link")
-    assert (resp.status_code, resp.json()) == (400, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        400,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
     assert target.exists() is False
 
 
@@ -114,7 +126,7 @@ def test_upload_with_overwrite_never_writes_through_a_local_symlink(client, work
     resp = upload(client, work, "link", b"payload", overwrite="true")
     assert (resp.status_code, resp.json()) == (
         400,
-        {"detail": "Only a regular file can be replaced"},
+        {"detail": "Only a regular file can be replaced", "reason": "cannot_replace"},
     )
     assert target.read_bytes() == b"keep me"
 

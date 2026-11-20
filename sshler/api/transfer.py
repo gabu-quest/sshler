@@ -301,22 +301,39 @@ class _ThreadedLanding:
         await run_to_end(asyncio.to_thread(self.landing.abort))
 
 
-async def _open_landing(box, sftp_client, path: str, *, overwrite: bool, source_regular: bool):
+async def _open_landing(
+    box,
+    sftp_client,
+    path: str,
+    *,
+    overwrite: bool,
+    source_regular: bool,
+    source_mode: int | None = None,
+):
     """The destination file, decided by the rule, its folder made if missing.
 
-    A replaced file keeps its permission bits. A free name gets the destination's
-    default bits (the local umask, or the server's default), not the source's: the
-    two boxes need not share users or groups."""
+    A replaced file keeps its permission bits. A free name gets ``source_mode``'s nine
+    permission bits whatever the destination's umask (setuid, setgid and sticky are
+    never carried), from before the first byte; without ``source_mode`` it gets the
+    destination's default bits."""
     if box.transport == "local":
         await asyncio.to_thread(os.makedirs, os.path.dirname(path), exist_ok=True)
         landing = await asyncio.to_thread(
-            _local_landing, path, overwrite=overwrite, source_regular=source_regular
+            _local_landing,
+            path,
+            overwrite=overwrite,
+            source_regular=source_regular,
+            source_mode=source_mode,
         )
         return _ThreadedLanding(landing)
     with contextlib.suppress(Exception):
         await sftp_client.mkdir(str(PurePosixPath(path).parent))
     return await _remote_landing(
-        sftp_client, path, overwrite=overwrite, source_regular=source_regular
+        sftp_client,
+        path,
+        overwrite=overwrite,
+        source_regular=source_regular,
+        source_mode=source_mode,
     )
 
 
@@ -349,6 +366,7 @@ async def _copy_one_file(
         dest_path,
         overwrite=overwrite,
         source_regular=stat_mod.S_ISREG(source_mode),
+        source_mode=source_mode,
     )
     committed = False
     try:

@@ -324,9 +324,10 @@ class _LocalLanding:
     (``O_CREAT|O_EXCL``: ``FileExistsError`` when taken, a dangling link included); a
     replace writes a temp file beside the target and renames it over on ``commit``.
 
-    A replace's temp file gets ``mode``'s permission bits (the replaced file's); a free
-    name gets the default bits (the umask's), which a copy within the box then sets to
-    the source's."""
+    ``mode`` gives the new file its permission bits: the replaced file's on a replace,
+    the source's on a free name. They are on the file before its first byte and the
+    umask cannot narrow them. Without ``mode`` a free name gets the default bits (the
+    umask's)."""
 
     def __init__(self, target: str, *, replace: bool, mode: int | None = None) -> None:
         self.target = target
@@ -338,8 +339,21 @@ class _LocalLanding:
             if mode is not None:
                 os.fchmod(fd, kept_permission_bits(mode))
             self.handle = os.fdopen(fd, "wb")
-        else:
+        elif mode is None:
             self.handle = open(target, "xb")  # noqa: SIM115 - closed by commit/abort
+        else:
+            bits = kept_permission_bits(mode)
+            # Created no wider than ``bits`` (the umask only narrows), then set exactly,
+            # both before the first write.
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, bits)
+            try:
+                os.fchmod(fd, bits)
+            except BaseException:
+                os.close(fd)
+                with contextlib.suppress(OSError):
+                    os.unlink(target)
+                raise
+            self.handle = os.fdopen(fd, "wb")
 
     def write(self, data: bytes) -> None:
         self.handle.write(data)
@@ -361,35 +375,50 @@ class _LocalLanding:
                 os.unlink(self.temp if self.temp is not None else self.target)
 
 
-def _local_landing(target: str, *, overwrite: bool, source_regular: bool = True) -> _LocalLanding:
-    """Decide ``target`` by the rule and open it for the bytes of a file."""
+def _local_landing(
+    target: str, *, overwrite: bool, source_regular: bool = True, source_mode: int | None = None
+) -> _LocalLanding:
+    """Decide ``target`` by the rule and open it for the bytes of a file. A free name
+    gets ``source_mode``'s permission bits (the default bits when None); a replace keeps
+    the replaced file's."""
     dest_mode = _local_lstat_mode(target)
     replace = _refuse_or_replace(dest_mode, overwrite=overwrite, source_regular=source_regular)
     if not source_regular:
         raise HTTPException(status_code=400, detail=_ONLY_FILES)
     try:
-        return _LocalLanding(target, replace=replace, mode=dest_mode)
+        return _LocalLanding(target, replace=replace, mode=dest_mode if replace else source_mode)
     except FileExistsError:
         _taken_after_check(_local_lstat_mode(target), source_regular=source_regular)
 
 
 def _local_copy_file(source: str, target: str, *, replace_mode: int | None = None) -> None:
     """Copy a file in chunks (never whole into memory) with its times. A free name gets
-    the source's mode; a replace (``replace_mode``, the replaced file's mode) keeps the
-    replaced file's permission bits."""
+    the source's permission bits, a replace (``replace_mode``, the replaced file's mode)
+    keeps the replaced file's; either way they are on the file before its first byte."""
     with open(source, "rb") as src:
-        landing = _LocalLanding(target, replace=replace_mode is not None, mode=replace_mode)
+        found = os.fstat(src.fileno())
+        mode = found.st_mode if replace_mode is None else replace_mode
+        landing = _LocalLanding(target, replace=replace_mode is not None, mode=mode)
         try:
             shutil.copyfileobj(src, landing.handle, COPY_CHUNK_BYTES)
             landing.commit()
         except BaseException:
             landing.abort()
             raise
+    os.utime(target, ns=(found.st_atime_ns, found.st_mtime_ns))
     if replace_mode is None:
-        shutil.copystat(source, target)
-    else:
-        found = os.stat(source)
-        os.utime(target, ns=(found.st_atime_ns, found.st_mtime_ns))
+        _local_copy_extended_attributes(source, target)
+
+
+def _local_copy_extended_attributes(source: str, target: str) -> None:
+    """Carry a file's extended attributes to its copy, where the platform has them; one
+    that cannot be read or set is left out, as ``shutil.copystat`` leaves it."""
+    if not hasattr(os, "listxattr"):
+        return
+    with contextlib.suppress(OSError):
+        for name in os.listxattr(source):
+            with contextlib.suppress(OSError):
+                os.setxattr(target, name, os.getxattr(source, name))
 
 
 def _first_copy_error(exc: BaseException) -> str:
@@ -526,16 +555,23 @@ def _local_copy_new(source: str, target: str, source_mode: int) -> None:
 def _local_replace_by_move(
     source: str, target: str, dest_mode: int, before: tuple[int, int, int]
 ) -> None:
-    """Move a regular file over a regular file, keeping the replaced file's bits."""
+    """Move a regular file over a regular file, keeping the replaced file's bits: set on
+    the source first, so the name never holds the source's own, and put back if the
+    move fails."""
+    own = stat_mod.S_IMODE(os.lstat(source).st_mode)
+    keep = kept_permission_bits(dest_mode)
+    if own != keep:
+        os.chmod(source, keep)
     try:
         os.replace(source, target)
-    except OSError as exc:
-        if exc.errno != errno.EXDEV:
+    except BaseException as exc:
+        if own != keep:
+            with contextlib.suppress(OSError):
+                os.chmod(source, own)
+        if not (isinstance(exc, OSError) and exc.errno == errno.EXDEV):
             raise
         _local_copy_file(source, target, replace_mode=dest_mode)
         _local_remove_moved_source(source, target, before)
-        return
-    os.chmod(target, kept_permission_bits(dest_mode))
 
 
 def _same_spelling(source: str, target: str) -> bool:
@@ -702,9 +738,10 @@ class _RemoteLanding:
     """Remote twin of ``_LocalLanding``: a free name is opened "xb"; a replace writes a
     temp file beside the target and posix-renames it over on ``commit``.
 
-    The file is opened with ``mode``'s permission bits: the source's on a copy within
-    the box, the replaced file's on a replace. A transfer to a free name passes None,
-    so the file gets the server's default bits."""
+    The file gets ``mode``'s permission bits: the source's on a free name, the replaced
+    file's on a replace. A free name is set exactly before the first byte (the server's
+    umask narrows what the open asks for). Without ``mode`` a free name gets the
+    server's default bits."""
 
     def __init__(self, sftp_client, target: str, temp: str | None, handle) -> None:
         self.sftp = sftp_client
@@ -717,11 +754,10 @@ class _RemoteLanding:
     async def start(
         cls, sftp_client, target: str, *, replace: bool, source_regular: bool = True, mode=None
     ) -> _RemoteLanding:
-        attrs = (
-            asyncssh.SFTPAttrs(permissions=kept_permission_bits(mode))
-            if mode
-            else asyncssh.SFTPAttrs()
-        )
+        # A mode of 0 is a server that sent none; a file with no bits set still has its
+        # type bits, and keeps none.
+        exact = kept_permission_bits(mode) if mode else None
+        attrs = asyncssh.SFTPAttrs() if exact is None else asyncssh.SFTPAttrs(permissions=exact)
         if replace:
             temp = _remote_temp_beside(target)
             landing = cls(sftp_client, target, temp, await sftp_client.open(temp, "xb", attrs))
@@ -733,6 +769,14 @@ class _RemoteLanding:
             sftp_client.open(target, "xb", attrs),
             source_regular=source_regular,
         )
+        if exact is not None:
+            try:
+                await _set_bits_exactly(handle.chmod(exact))
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await handle.close()
+                await run_to_end(_remove_quietly(sftp_client, target))
+                raise
         return cls(sftp_client, target, None, handle)
 
     async def write(self, data: bytes) -> None:
@@ -743,7 +787,7 @@ class _RemoteLanding:
         if self.temp is None:
             return
         if self.keep is not None:
-            await self.sftp.chmod(self.temp, self.keep)
+            await _set_bits_exactly(self.sftp.chmod(self.temp, self.keep))
         try:
             await self.sftp.posix_rename(self.temp, self.target)
         except asyncssh.SFTPOpUnsupported:
@@ -784,8 +828,26 @@ class _RemoteLanding:
             await self.sftp.remove(self.temp if self.temp is not None else self.target)
 
 
+async def _set_bits_exactly(chmod) -> None:
+    """Await the chmod of a file this landing has just opened with the same bits. A
+    server without the operation leaves the bits its open gave: the ones asked for,
+    narrowed by the server's umask, so never wider. Any other failure is the caller's."""
+    with contextlib.suppress(asyncssh.SFTPOpUnsupported):
+        await chmod
+
+
+async def _remove_quietly(sftp_client, path: str) -> None:
+    with contextlib.suppress(asyncssh.SFTPError):
+        await sftp_client.remove(path)
+
+
 async def _remote_landing(
-    sftp_client, target: str, *, overwrite: bool, source_regular: bool = True
+    sftp_client,
+    target: str,
+    *,
+    overwrite: bool,
+    source_regular: bool = True,
+    source_mode: int | None = None,
 ) -> _RemoteLanding:
     """Decide ``target`` by the rule and open it for the bytes of a file."""
     dest_mode = await _remote_lstat_mode(sftp_client, target)
@@ -797,7 +859,7 @@ async def _remote_landing(
         target,
         replace=replace,
         source_regular=source_regular,
-        mode=dest_mode if replace else None,
+        mode=dest_mode if replace else source_mode,
     )
 
 
@@ -1300,7 +1362,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return APISimpleMessage(status="ok", message="renamed", path=target_path)
 
-    @router.post("/boxes/{name}/touch", response_model=APISimpleMessage)
+    @placing.post("/boxes/{name}/touch", response_model=APISimpleMessage)
     async def api_touch_file(
         name: str,
         payload: APITouchRequest,
@@ -2079,7 +2141,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    @router.post("/boxes/{name}/upload", response_model=APISimpleMessage)
+    @placing.post("/boxes/{name}/upload", response_model=APISimpleMessage)
     async def api_upload(
         request: Request,
         name: str,
