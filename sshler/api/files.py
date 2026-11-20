@@ -1501,6 +1501,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
 
         if box.transport == "local":
+            if payload.new_name:
+                try:
+                    PathValidator.validate_filename(payload.new_name)
+                except ValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
             try:
                 target = await asyncio.to_thread(
                     _local_place_into,

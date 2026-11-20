@@ -2034,3 +2034,28 @@ def test_a_local_write_that_fails_removes_its_partial_file_when_close_fails_too(
         {"detail": "[Errno 28] No space left on device"},
     )
     assert files_under(s.base) == {"a.txt": b"source", "d": "dir"}
+
+
+# --- a local copy's new name is checked like every other new name ---------------------
+
+
+@pytest.mark.parametrize(
+    ("new_name", "message"),
+    [
+        ("a/b", "Filename cannot contain path separators"),
+        ("..", "Filename cannot be '.' or '..'"),
+    ],
+)
+def test_a_local_copy_validates_its_new_name(local_env, new_name, message):
+    """Before: the name went into the target path unchecked."""
+    s = side(local_env, "local")
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("d").mkdir()
+    before = files_under(s.base)
+
+    resp = s.post(
+        "copy", {"source": s.path("a.txt"), "destination": s.path("d"), "new_name": new_name}
+    )
+
+    assert (resp.status_code, resp.json()) == (400, {"detail": message})
+    assert files_under(s.base) == before
