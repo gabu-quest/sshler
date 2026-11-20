@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 from typing import TYPE_CHECKING
 
@@ -10,11 +9,18 @@ from fastapi import APIRouter, Depends
 from .. import state
 from ..config import AppConfig, Box, StoredBox, rebuild_boxes, save_config
 from ..ssh_pool import get_pool
-from ..validation import ValidationError
 from . import dependencies
 from .box_files import is_local
-from .box_runner import BoxRunner, ProgramNotFoundError, Ran, box_runner, remote_command_line
+from .box_runner import BoxRunner, Ran, box_runner, remote_command_line
 from .dependencies import APIDependencies
+from .failure import (
+    REASON_FAILED,
+    REASON_INVALID,
+    REASON_TIMEOUT,
+    REASON_UNREACHABLE,
+    Failure,
+    failure_of,
+)
 from .models import (
     APIBox,
     APIBoxStats,
@@ -26,8 +32,6 @@ from .models import (
     APIThemeResult,
     APIThemeUpdate,
 )
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from ..webapp import ServerSettings  # noqa: F401
@@ -83,7 +87,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIBox:
         return _box_to_api(deps.get_box_or_404(application_config, name))
 
-    @router.get("/boxes/{name}/status", response_model=APIBoxStatus)
+    # "offline" is an ordinary answer of this probe: it says why in `error` and
+    # `reason`, which an online answer does not carry.
+    @router.get(
+        "/boxes/{name}/status", response_model=APIBoxStatus, response_model_exclude_unset=True
+    )
     async def api_box_status(
         name: str,
         application_config: AppConfig = Depends(deps.get_application_config),
@@ -94,10 +102,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             async with box_runner(deps, box, application_config, deadline=limit) as runner:
                 seconds = await runner.reach(timeout=limit)
-        except Exception:
-            seconds = None
+        except Exception as exc:
+            return _offline(box.name, failure_of(exc))
         if seconds is None:
-            return APIBoxStatus(name=box.name, status="offline", latency_ms=None)
+            return _offline(box.name, Failure(REASON_UNREACHABLE, f"{box.name} did not answer"))
         return APIBoxStatus(name=box.name, status="online", latency_ms=seconds * 1000)
 
     @router.post("/boxes/{name}/pin", response_model=APIPinToggle)
@@ -194,12 +202,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         # The UI polls this route: the connect and every command are bounded.
         limit = dependencies.PROBE_TIMEOUT_SECONDS
-        try:
-            async with box_runner(deps, box, application_config, deadline=limit) as runner:
-                return await git_info(runner, directory)
-        except Exception as e:
-            logger.warning(f"Failed to get git info for {name}:{directory}: {e}")
-            return APIGitInfo(error=str(e))
+        async with box_runner(deps, box, application_config, deadline=limit) as runner:
+            return await git_info(runner, directory)
 
     @router.put("/boxes/{name}/theme", response_model=APIThemeResult)
     async def api_set_theme(
@@ -210,10 +214,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """Set terminal theme preference for a box."""
         theme = payload.terminal_theme
         if theme and theme not in _VALID_THEMES:
-            from fastapi import HTTPException
-
-            raise HTTPException(
-                status_code=400, detail=f"Invalid theme. Valid: {', '.join(sorted(_VALID_THEMES))}"
+            raise Failure(
+                REASON_INVALID, f"Invalid theme. Valid: {', '.join(sorted(_VALID_THEMES))}"
             )
 
         deps.get_box_or_404(application_config, name)
@@ -226,54 +228,56 @@ def get_router(deps: APIDependencies) -> APIRouter:
     return router
 
 
+def _offline(name: str, found: Failure) -> APIBoxStatus:
+    return APIBoxStatus(
+        name=name,
+        status="offline",
+        latency_ms=None,
+        error=str(found.detail),
+        reason=found.reason,
+    )
+
+
 async def _get_local_stats(name: str) -> APIBoxStats:
     """Get system stats for local machine using psutil."""
-    try:
-        import psutil
+    import time
 
-        # CPU usage (average over 0.1 second)
-        cpu_percent = psutil.cpu_percent(interval=0.1)
+    import psutil
 
-        # Memory info
-        mem = psutil.virtual_memory()
-        memory_used_mb = mem.used / (1024 * 1024)
-        memory_total_mb = mem.total / (1024 * 1024)
-        memory_percent = mem.percent
+    # CPU usage (average over 0.1 second)
+    cpu_percent = psutil.cpu_percent(interval=0.1)
 
-        # Uptime
-        import time
+    # Memory info
+    mem = psutil.virtual_memory()
+    memory_used_mb = mem.used / (1024 * 1024)
+    memory_total_mb = mem.total / (1024 * 1024)
+    memory_percent = mem.percent
 
-        uptime_seconds = int(time.time() - psutil.boot_time())
+    uptime_seconds = int(time.time() - psutil.boot_time())
 
-        return APIBoxStats(
-            name=name,
-            cpu_percent=cpu_percent,
-            memory_used_mb=round(memory_used_mb, 1),
-            memory_total_mb=round(memory_total_mb, 1),
-            memory_percent=memory_percent,
-            uptime_seconds=uptime_seconds,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to get local stats: {e}")
-        return APIBoxStats(name=name, error=str(e))
+    return APIBoxStats(
+        name=name,
+        cpu_percent=cpu_percent,
+        memory_used_mb=round(memory_used_mb, 1),
+        memory_total_mb=round(memory_total_mb, 1),
+        memory_percent=memory_percent,
+        uptime_seconds=uptime_seconds,
+    )
 
 
 async def box_stats(deps: APIDependencies, box: Box, application_config: AppConfig) -> APIBoxStats:
-    """The CPU, memory and uptime of ``box``, or its error; the stats route and the stats
-    stream both answer with this.
+    """The CPU, memory and uptime of ``box``; the stats route and the stats stream both
+    ask this. A failure is raised (the route answers it by reason, the stream puts its
+    reason in the box's event).
 
     The local box reads them with psutil. A remote box reads ``/proc`` through its
     runner, bounded by ``PROBE_TIMEOUT_SECONDS`` for the connect and every command; past
-    it the error names the step and the connection is closed, not handed on."""
+    it the failure names the step and the connection is closed, not handed on."""
     if is_local(box):
         return await _get_local_stats(box.name)
     limit = dependencies.PROBE_TIMEOUT_SECONDS
-    try:
-        async with box_runner(deps, box, application_config, deadline=limit) as runner:
-            return await _proc_stats(box.name, runner, limit)
-    except Exception as e:
-        logger.warning(f"Failed to get stats for {box.name}: {e}")
-        return APIBoxStats(name=box.name, error=str(e))
+    async with box_runner(deps, box, application_config, deadline=limit) as runner:
+        return await _proc_stats(box.name, runner, limit)
 
 
 # Two reads of /proc/stat this far apart give the CPU's use between them.
@@ -305,7 +309,7 @@ async def _proc_stats(name: str, runner: BoxRunner, timeout: float) -> APIBoxSta
     memory_info = _parse_memory_info(second)
     uptime_seconds = _parse_uptime(_uptime_line(second))
     if cpu_percent is None and "total_mb" not in memory_info and uptime_seconds is None:
-        return APIBoxStats(name=name, error=f"could not read /proc on {name}")
+        raise Failure(REASON_FAILED, f"could not read /proc on {name}")
     return APIBoxStats(
         name=name,
         cpu_percent=cpu_percent,
@@ -423,18 +427,13 @@ def remote_git_info_commands(directory: str) -> tuple[str, str, str]:
     )
 
 
-class GitTimedOutError(Exception):
-    """A command of the git badge ran past its limit."""
-
-
 async def git_info(runner: BoxRunner, directory: str) -> APIGitInfo:
     """The git badge of ``directory`` on the runner's box: the same three commands and
-    the same answer on both kinds. A command past ``GIT_INFO_TIMEOUT`` ends the badge at
-    once with an error that says so; no later command is run."""
-    try:
-        folder = await runner.folder(directory)
-    except ValidationError:
-        return APIGitInfo(is_repo=False)
+    the same answer on both kinds. A folder outside any repository is ``is_repo``
+    False. A command past ``GIT_INFO_TIMEOUT`` raises ``timeout`` at once and no later
+    command is run; a folder that fails its check, no git on the box and a box that
+    cannot be reached are raised as they are."""
+    folder = await runner.folder(directory)
 
     async def run(words: list[str], output_limit: int | None = None) -> Ran:
         try:
@@ -442,17 +441,12 @@ async def git_info(runner: BoxRunner, directory: str) -> APIGitInfo:
                 words, folder=folder, timeout=GIT_INFO_TIMEOUT, output_limit=output_limit
             )
         except TimeoutError:
-            raise GitTimedOutError(
-                f"git in {directory} timed out after {GIT_INFO_TIMEOUT:g} s"
+            raise Failure(
+                REASON_TIMEOUT, f"git in {directory} timed out after {GIT_INFO_TIMEOUT:g} s"
             ) from None
-        except ProgramNotFoundError:
-            return Ran(1, "")
 
     head_words, commit_words, status_words = git_info_words()
-    try:
-        return await _git_info_answer(run, head_words, commit_words, status_words)
-    except GitTimedOutError as exc:
-        return APIGitInfo(error=str(exc))
+    return await _git_info_answer(run, head_words, commit_words, status_words)
 
 
 async def _git_info_answer(run, head_words, commit_words, status_words) -> APIGitInfo:

@@ -3,10 +3,10 @@
 Every failure answers ``{"detail": <text>, "reason": <word>}`` with the status of its
 reason. ``Failure`` is the one exception a route, an operation or a dependency raises
 to answer by reason; ``failure_of`` is the one function that names the reason of any
-other failure (of the system, of SFTP or SSH, of a path check, of a time limit) for
-both kinds of box; ``failure_entry`` gives a batch item the same reason and text; the
-handlers ``install`` registers write the body, and ``answer`` writes it for a check
-that answers before any route runs.
+other failure (of the system, of SFTP or SSH, of a path check, of a time limit, of a
+program that is not on the box) for both kinds of box; ``failure_entry`` gives a batch
+item the same reason and text; the handlers ``install`` registers write the body, and
+``answer`` writes it for a check that answers before any route runs.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ..ssh import SSHError
 from ..validation import ValidationError
 from .file_contract import NameRefusedError
+from .run_failures import ProgramNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,12 @@ STATUS_OF_REASON: dict[str, int] = {
 }
 
 REASON_INVALID = "invalid"
+REASON_DENIED = "denied"
 REASON_NOT_FOUND = "not_found"
 REASON_EXISTS = "exists"  # a regular file has the name; `overwrite` would replace it
 REASON_CANNOT_REPLACE = "cannot_replace"  # the name is taken; `overwrite` cannot replace it
 REASON_FAILED = "failed"
+REASON_PROGRAM_MISSING = "program_missing"
 REASON_UNREACHABLE = "unreachable"
 REASON_TIMEOUT = "timeout"
 
@@ -198,6 +201,8 @@ def _named(
         )
     if isinstance(exc, (ValidationError, NameRefusedError)):
         return Failure(REASON_INVALID, _text(exc))
+    if isinstance(exc, ProgramNotFoundError):
+        return Failure(REASON_PROGRAM_MISSING, _text(exc))
     if isinstance(exc, (SSHError, ConnectionError, asyncssh.DisconnectError)):
         return Failure(REASON_UNREACHABLE, _text(exc))
     if isinstance(exc, TimeoutError):

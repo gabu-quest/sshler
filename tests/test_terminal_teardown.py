@@ -461,7 +461,7 @@ async def _tracked_session() -> str:
 @pytest.mark.parametrize(
     ("method", "path", "body", "expected_status"),
     [
-        ("PATCH", "/api/v1/boxes/local/sessions/{id}", {"session_name": "renamed"}, 500),
+        ("PATCH", "/api/v1/boxes/local/sessions/{id}", {"session_name": "renamed"}, 504),
         ("DELETE", "/api/v1/boxes/local/sessions/{id}?kill_tmux=true", None, 200),
         ("GET", f"/api/v1/boxes/local/sessions/{SESSION}/capture", None, 504),
     ],

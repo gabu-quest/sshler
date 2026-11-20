@@ -405,8 +405,10 @@ def test_a_connect_timeout_is_not_reported_as_a_capture_timeout(
     )
     dependencies._CONNECT_FAIL_CACHE.clear()
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == "capture failed: "
+    assert (response.status_code, response.json()) == (
+        502,
+        {"detail": "connect to remote timed out", "reason": "unreachable"},
+    )
 
 
 def test_a_remote_capture_timeout_is_a_504(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -166,6 +166,14 @@ def quiet(cmd: str) -> str:
     return f"{cmd} 2>/dev/null"
 
 
+def require(program: str) -> str:
+    """A check that ends the line with status 127 (the shell's status for a command it
+    cannot find) when ``program`` is not on the box. A pipeline has the status of its
+    last command, so a line that pipes a program into another needs this before it to
+    tell a missing program from no output. ``program`` is a fixed word of ours."""
+    return f"{command('command', '-v', program)} >/dev/null 2>&1 || exit 127"
+
+
 def in_directory(directory: str, cmd: str) -> str:
     """``cmd`` run in ``directory`` (not at all when ``cd`` fails)."""
     return and_then(command("cd", path_word(directory)), cmd)

@@ -319,7 +319,7 @@ BUILDERS = {
     "rm -rf": (remove_tree_command, lambda n, p: ["rm", "-rf", p]),
     "grep": (
         lambda n: remote_grep_command(n, n, False, 100),
-        lambda n, p: ["grep", "-rn", "-i", "-m", "100", "--", n, n, "2>/dev/null"],
+        lambda n, p: ["grep", "-rn", "-i", "-m", "100", "--", n, n],
     ),
     "find": (
         lambda n: remote_find_command(n, n, "d", 4, 50),
@@ -342,6 +342,14 @@ BUILDERS = {
     "find folders and files": (
         lambda n: remote_discovery_command(n, n, 4, 50, True),
         lambda n, p: [
+            "command",
+            "-v",
+            "find",
+            ">/dev/null",
+            "2>&1",
+            "||",
+            "exit",
+            "127;",
             "find",
             p,
             "-maxdepth",

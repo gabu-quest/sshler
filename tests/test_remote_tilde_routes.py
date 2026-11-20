@@ -285,7 +285,7 @@ def test_a_local_excel_preview_takes_the_path_as_the_file_route_does(
 def test_grep_searches_the_resolved_home_directory(remote):
     """Mutation: skip `_remote_path` in grep; the command searches `'~/proj'`, which
     the shell never expands, and the response names `~/proj`."""
-    command = f"grep -rn -i -m 100 -- needle {HOME}/proj 2>/dev/null"
+    command = f"grep -rn -i -m 100 -- needle {HOME}/proj"
     remote.replies[command] = _reply(f"{HOME}/proj/a.txt:3:needle\n")
     resp = remote.client.get(
         f"/api/v1/boxes/{BOX}/grep",

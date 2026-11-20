@@ -31,12 +31,12 @@ PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class ProbeTimeoutError(SSHError):
-    """A bounded request (``box_runner(..., deadline=...)``) ran past its limit.
+    """The connect to a box timed out (on its own limit, or past the deadline of a
+    bounded request, ``box_runner(..., deadline=...)``): the box was not reached.
 
-    The message names the step that was running (getting a connection, or
-    the command) and the limit. It is an ``SSHError``, not a
-    ``TimeoutError``, so routes that report ``str(exc)`` for SSH failures
-    show that message instead of a generic one.
+    It is an ``SSHError``, so it answers ``unreachable``; the message names the box. A
+    command on a reached box past the deadline is the runner's ``CommandTimeoutError``
+    instead (``timeout``).
     """
 
 

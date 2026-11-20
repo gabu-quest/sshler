@@ -427,6 +427,7 @@ async def test_stream_emits_parsed_stats_and_keeps_one_pooled_connection(app, le
         "memory_percent": 50.0,
         "uptime_seconds": 3600,
         "error": None,
+        "reason": None,
     }
     assert len(ledger.opened) == 1
     assert ledger.live() == 1
@@ -474,25 +475,39 @@ async def test_status_stats_and_git_polls_reuse_one_connection(app, ledger):
                 "commit": "abc1234",
                 "is_repo": True,
                 "dirty": False,
-                "error": None,
             }
 
     assert len(ledger.opened) == 1
     assert ledger.live() == 1
 
 
+HUNG_COMMAND_FAILURE = {"detail": HUNG_COMMAND_ERROR, "reason": "timeout"}
+
+
 @pytest.mark.parametrize(
-    ("method", "path", "params", "expected"),
+    ("method", "path", "params", "status", "expected"),
     [
-        ("GET", "/status", None, {"name": BOX, "status": "offline", "latency_ms": None}),
-        ("GET", "/stats", None, {"name": BOX, "error": HUNG_COMMAND_ERROR}),
-        ("GET", "/git", {"directory": "/srv"}, {"error": HUNG_COMMAND_ERROR}),
-        ("POST", "/sessions/sync", None, []),
+        (
+            "GET",
+            "/status",
+            None,
+            200,
+            {
+                "name": BOX,
+                "status": "offline",
+                "latency_ms": None,
+                "error": HUNG_COMMAND_ERROR,
+                "reason": "timeout",
+            },
+        ),
+        ("GET", "/stats", None, 504, HUNG_COMMAND_FAILURE),
+        ("GET", "/git", {"directory": "/srv"}, 504, HUNG_COMMAND_FAILURE),
+        ("POST", "/sessions/sync", None, 504, HUNG_COMMAND_FAILURE),
     ],
 )
 @pytest.mark.asyncio
 async def test_polled_route_on_a_hung_box_times_out_and_closes(
-    app, ledger, monkeypatch, method, path, params, expected
+    app, ledger, monkeypatch, method, path, params, status, expected
 ):
     """A hung box answers each polled route within the probe timeout and the
     connection the request held is closed.
@@ -510,12 +525,7 @@ async def test_polled_route_on_a_hung_box_times_out_and_closes(
         except TimeoutError:
             pytest.fail(f"{method} {path} did not return within 5 s on a hung box")
 
-    assert resp.status_code == 200
-    body = resp.json()
-    if isinstance(expected, dict):
-        assert {key: body[key] for key in expected} == expected
-    else:
-        assert body == expected
+    assert (resp.status_code, resp.json()) == (status, expected)
     await wait_until(lambda: ledger.live() == 0)
     assert len(ledger.opened) == 1
     assert ledger.live() == 0
@@ -548,8 +558,7 @@ async def test_a_hung_connect_is_reported_as_a_connect_timeout(
     async with _client(app) as client:
         resp = await asyncio.wait_for(client.get(f"/api/v1/boxes/{BOX}/stats"), 10.0)
 
-    assert resp.status_code == 200
-    assert resp.json()["error"] == expected
+    assert (resp.status_code, resp.json()) == (502, {"detail": expected, "reason": "unreachable"})
     assert ledger.connect_attempts == 1
     assert len(ledger.opened) == 0
 
@@ -626,7 +635,13 @@ async def test_refresh_lets_the_next_probe_reconnect_at_once(app, ledger):
         refreshed = await client.post(f"/api/v1/boxes/{BOX}/refresh")
         up = await client.get(f"/api/v1/boxes/{BOX}/status")
 
-    assert down.json() == {"name": BOX, "status": "offline", "latency_ms": None}
+    assert down.json() == {
+        "name": BOX,
+        "status": "offline",
+        "latency_ms": None,
+        "error": f"{BOX}: connection refused",
+        "reason": "unreachable",
+    }
     assert refreshed.json() == {"name": BOX, "refreshed": True}
     assert up.status_code == 200, up.text
     assert up.json()["status"] == "online"
@@ -1348,13 +1363,9 @@ async def test_renames_share_one_pooled_connection(app, ledger):
 
 
 @pytest.mark.asyncio
-async def test_a_failed_remote_rename_answers_400_tmux_rename_failed(app, ledger):
-    """tmux refusing the rename is 400 "tmux rename failed", as before, and
-    the stored name is unchanged.
-
-    Passes on the code before the pool change too (an answer that must not
-    move).
-    """
+async def test_a_failed_remote_rename_is_a_failure_of_tmux(app, ledger):
+    """tmux refusing the rename (status 1, no words) is ``failed`` with its exit
+    status, and the stored name is unchanged."""
     ledger.tmux_reply = lambda command: _result(1)
     async with _client(app) as client:
         session_id = await _new_session(client)
@@ -1363,18 +1374,18 @@ async def test_a_failed_remote_rename_answers_400_tmux_rename_failed(app, ledger
         )
         stored = await state.get_session_by_id_async(session_id)
 
-    assert resp.status_code == 400
-    assert resp.json() == {"detail": "tmux rename failed", "reason": "invalid"}
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": "tmux rename-session exited with status 1", "reason": "failed"},
+    )
     assert stored is not None
     assert stored.session_name == "work"
 
 
 @pytest.mark.asyncio
-async def test_a_rename_on_an_unreachable_box_answers_500(app, ledger):
-    """An unreachable box is 500 "Failed to rename session", as before.
-
-    Passes on the code before the pool change too.
-    """
+async def test_a_rename_on_an_unreachable_box_is_unreachable(app, ledger):
+    """An unreachable box is ``unreachable`` with the connect's words, and the
+    stored name is unchanged."""
     ledger.fail_connect = True
     async with _client(app) as client:
         session_id = await _new_session(client)
@@ -1382,14 +1393,22 @@ async def test_a_rename_on_an_unreachable_box_answers_500(app, ledger):
             f"/api/v1/boxes/{BOX}/sessions/{session_id}", json={"session_name": "alpha"}
         )
 
-    assert resp.status_code == 500
-    assert resp.json() == {"detail": "Failed to rename session", "reason": "failed"}
+        stored = await state.get_session_by_id_async(session_id)
+
+    assert (resp.status_code, resp.json()) == (
+        502,
+        {"detail": f"{BOX}: connection refused", "reason": "unreachable"},
+    )
+    assert stored is not None
+    assert stored.session_name == "work"
 
 
 @pytest.mark.asyncio
-async def test_a_capture_and_a_kill_on_an_unreachable_box_answer_as_before(app, ledger):
-    """The capture names the connect's failure in its 500; the kill still deletes
-    the row. Both pass on the code before the runner too."""
+async def test_a_capture_on_an_unreachable_box_is_unreachable_and_a_kill_deletes_the_row(
+    app, ledger
+):
+    """The capture is ``unreachable`` with the connect's words; the kill still
+    deletes the row (its failure is not answered)."""
     ledger.fail_connect = True
     async with _client(app) as client:
         session_id = await _new_session(client)
@@ -1397,8 +1416,8 @@ async def test_a_capture_and_a_kill_on_an_unreachable_box_answer_as_before(app, 
         kill = await client.delete(f"/api/v1/boxes/{BOX}/sessions/{session_id}?kill_tmux=true")
 
     assert (capture.status_code, capture.json()) == (
-        500,
-        {"detail": "capture failed: remote1: connection refused", "reason": "failed"},
+        502,
+        {"detail": f"{BOX}: connection refused", "reason": "unreachable"},
     )
     assert kill.json() == {"status": "ok", "message": "deleted", "path": session_id}
 
@@ -1462,24 +1481,19 @@ async def test_captures_share_one_pooled_connection(app, ledger):
 
 
 @pytest.mark.asyncio
-async def test_a_failed_capture_answers_400_with_tmux_stderr(app, ledger):
-    """tmux failing the capture is 400 "tmux capture-pane failed: <stderr>",
-    and the connection goes back to the pool.
-
-    Passes on the code before the pool change too (the answer), except the
-    pooled connection.
-    """
+async def test_a_failed_capture_is_a_failure_with_tmux_stderr(app, ledger):
+    """tmux failing the capture is ``failed`` "tmux capture-pane failed: <stderr>",
+    and the connection goes back to the pool."""
     ledger.tmux_reply = lambda command: SimpleNamespace(
         exit_status=1, returncode=1, stdout="", stderr="no such session\n"
     )
     async with _client(app) as client:
         resp = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
 
-    assert resp.status_code == 400
-    assert resp.json() == {
-        "detail": "tmux capture-pane failed: no such session",
-        "reason": "invalid",
-    }
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": "tmux capture-pane failed: no such session", "reason": "failed"},
+    )
     assert ledger.live() == 1
 
 

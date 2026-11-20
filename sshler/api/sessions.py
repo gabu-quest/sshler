@@ -5,6 +5,10 @@ same words on both kinds, the local box's tmux on this machine and a remote box'
 its pooled connection. Two things the kinds really do differently each live in one
 function here: ``live_sessions`` (which sessions are running) and
 ``force_kill_supported`` (a force kill is built for the local box only).
+
+A failure of tmux or of the box is raised and answered by its reason: a box that
+cannot be reached is ``unreachable``, tmux past its limit ``timeout``, no tmux on the
+box ``program_missing``, and a refusal by tmux itself ``failed`` with tmux's words.
 """
 
 from __future__ import annotations
@@ -12,8 +16,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import shutil
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from .. import state
 from .. import tmux as tmux_module
@@ -22,8 +27,16 @@ from ..tmux import discover_local_sessions, force_kill_local_session
 from ..validation import PathValidator, ValidationError
 from . import dependencies
 from .box_files import is_local
-from .box_runner import TmuxTimeoutError, box_runner
+from .box_runner import Ran, TmuxTimeoutError, box_runner
 from .dependencies import APIDependencies
+from .failure import (
+    REASON_FAILED,
+    REASON_INVALID,
+    REASON_NOT_FOUND,
+    REASON_TIMEOUT,
+    Failure,
+    failure_of,
+)
 from .models import (
     APILayout,
     APILayoutCreate,
@@ -33,14 +46,17 @@ from .models import (
     APISessionUpdate,
     APISimpleMessage,
 )
+from .run_failures import ProgramNotFoundError
 
 logger = logging.getLogger(__name__)
 
 
 # Lists sessions on the remote default tmux server and on every per-session
 # ``ts-*`` server, so sessions opened by sshler or by ``ts`` both count as live.
+# No tmux on the box exits 127, the shell's status for a command it cannot find.
 # A fixed text, never built from a request; sent as one word to ``sh -c``.
-REMOTE_LIST_SESSIONS = """tmux list-sessions -F '#{session_name}' 2>/dev/null || true
+REMOTE_LIST_SESSIONS = """command -v tmux >/dev/null 2>&1 || exit 127
+tmux list-sessions -F '#{session_name}' 2>/dev/null || true
 socket_dir=/tmp/tmux-$(id -u)
 for socket in "$socket_dir"/ts-*; do
     [ -S "$socket" ] || continue
@@ -52,25 +68,40 @@ done
 
 async def live_sessions(deps: APIDependencies, box: Box, application_config: AppConfig) -> set[str]:
     """The names of the tmux sessions running on ``box``: those of its default server
-    and of every ``ts-*`` server. Empty when they cannot be read.
+    and of every ``ts-*`` server; empty when the box runs none. When they cannot be
+    read the failure is raised as a ``Failure`` by its reason, never taken for "no
+    sessions": no tmux on the box is ``program_missing``; on a remote box, a box that
+    cannot be reached is ``unreachable``, a listing past its limit ``timeout``, and a
+    listing that exits non-zero ``failed``.
 
     The local box scans its own socket folder in Python (``discover_local_sessions``).
     A remote box runs ``REMOTE_LIST_SESSIONS`` in one command on its pooled connection,
     the connect and the command bounded by ``PROBE_TIMEOUT_SECONDS`` (the overview polls
-    this every 30 s per box); a failure of any kind is an empty set.
+    this every 30 s per box).
     """
     if is_local(box):
+        if shutil.which(tmux_module.default_tmux_command()[0]) is None:
+            raise failure_of(ProgramNotFoundError("tmux", box.name))
         return await discover_local_sessions()
     limit = dependencies.PROBE_TIMEOUT_SECONDS
-    try:
-        async with box_runner(deps, box, application_config, deadline=limit) as runner:
-            ran = await runner.run(["sh", "-c", REMOTE_LIST_SESSIONS], folder=None, timeout=limit)
-    except Exception as exc:
-        logger.warning(f"Failed to list the tmux sessions of {box.name}: {exc}")
-        return set()
+    async with box_runner(deps, box, application_config, deadline=limit) as runner:
+        ran = await runner.run(
+            ["sh", "-c", REMOTE_LIST_SESSIONS], folder=None, timeout=limit, program="tmux"
+        )
     if not ran.ok:
-        return set()
+        raise Failure(
+            REASON_FAILED,
+            f"listing the tmux sessions of {box.name} exited with status {ran.status}",
+        )
     return {line.strip() for line in ran.output.splitlines() if line.strip()}
+
+
+def _refused(command: str, ran: Ran) -> str:
+    """The text of tmux refusing ``command``: its error output, else its exit status."""
+    words = ran.errors.strip()
+    if words:
+        return f"tmux {command} failed: {words}"
+    return f"tmux {command} exited with status {ran.status}"
 
 
 def force_kill_supported(box: Box) -> bool:
@@ -111,7 +142,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     async def api_delete_layout(layout_id: str) -> dict:
         deleted = await state.delete_layout_async(layout_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Layout not found")
+            raise Failure(REASON_NOT_FOUND, "Layout not found")
         return {"status": "ok"}
 
     @router.get("/sessions", response_model=APISessionInfo)
@@ -185,34 +216,27 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         record = await state.get_session_by_id_async(session_id)
         if record is None or record.box != name:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise Failure(REASON_NOT_FOUND, "Session not found")
 
         # Handle session rename via tmux
         if payload.session_name is not None and payload.session_name != record.session_name:
             new_name = payload.session_name.strip()
             if not new_name or len(new_name) > 64:
-                raise HTTPException(status_code=400, detail="Invalid session name")
+                raise Failure(REASON_INVALID, "Invalid session name")
             # Only allow safe characters
             if not re.match(r"^[a-zA-Z0-9_.-]+$", new_name):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Session name may only contain alphanumeric, underscore, dot, and dash",
+                raise Failure(
+                    REASON_INVALID,
+                    "Session name may only contain alphanumeric, underscore, dot, and dash",
                 )
             limit = dependencies.PROBE_TIMEOUT_SECONDS
-            try:
-                async with box_runner(deps, box, application_config, deadline=limit) as runner:
-                    # The server keeps the old name: its socket is named after it.
-                    ran = await runner.tmux(
-                        record.session_name, ["rename-session", "-t", record.session_name, new_name]
-                    )
-                if not ran.ok:
-                    logger.warning(f"tmux rename failed: {ran.errors.strip()}")
-                    raise HTTPException(status_code=400, detail="tmux rename failed")
-            except HTTPException:
-                raise
-            except Exception as exc:
-                logger.warning(f"Failed to rename tmux session: {exc}")
-                raise HTTPException(status_code=500, detail="Failed to rename session") from exc
+            async with box_runner(deps, box, application_config, deadline=limit) as runner:
+                # The server keeps the old name: its socket is named after it.
+                ran = await runner.tmux(
+                    record.session_name, ["rename-session", "-t", record.session_name, new_name]
+                )
+            if not ran.ok:
+                raise Failure(REASON_FAILED, _refused("rename-session", ran))
             await state.rename_session_async(record.id, new_name)
 
         if payload.metadata is not None or payload.window_count is not None:
@@ -225,7 +249,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             await state.update_session_activity_async(record.id, active=payload.active)
         record = await state.get_session_by_id_async(session_id)
         if record is None:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise Failure(REASON_NOT_FOUND, "Session not found")
         return APISession(
             id=record.id,
             box=record.box,
@@ -250,7 +274,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         record = await state.get_session_by_id_async(session_id)
         if record is None or record.box != name:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise Failure(REASON_NOT_FOUND, "Session not found")
 
         # Native Windows shells persist in the registry (no tmux). Deleting a
         # session must terminate the live ConPTY too, not just drop the DB row.
@@ -282,7 +306,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         deleted = await state.delete_session_async(session_id)
         if not deleted:
-            raise HTTPException(status_code=500, detail="Failed to delete session")
+            raise Failure(REASON_FAILED, "Failed to delete session")
         return APISimpleMessage(status="ok", message="deleted", path=session_id)
 
     @router.post(
@@ -303,12 +327,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """
         box = deps.get_box_or_404(application_config, name)
         if not force_kill_supported(box):
-            raise HTTPException(
-                status_code=400,
-                detail="force-kill by name is supported for the local box only",
-            )
+            raise Failure(REASON_INVALID, "force-kill by name is supported for the local box only")
         if not session_name.strip() or any(c in session_name for c in "\r\n\x00"):
-            raise HTTPException(status_code=400, detail="Invalid session name")
+            raise Failure(REASON_INVALID, "Invalid session name")
 
         await force_kill_local_session(session_name)
         # Drop any DB rows tracking this local session so the switcher updates.
@@ -345,7 +366,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         try:
             safe_name = PathValidator.sanitize_session_name(session_name)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
 
         # Terminate the live ConPTY (no-op returning False if it's already gone).
         killed = False
@@ -374,7 +395,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """Sync DB sessions with actual tmux sessions.
 
         Queries tmux for live sessions and marks DB sessions as inactive
-        if they no longer exist. Returns the updated session list.
+        if they no longer exist. Returns the updated session list. When the live
+        sessions cannot be read the failure is answered and no session changes.
         """
         box = deps.get_box_or_404(application_config, name)
         running = await live_sessions(deps, box, application_config)
@@ -407,11 +429,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
             for item in records
         ]
 
-    def _capture_timeout(box_name: str, session_name: str, limit: float) -> HTTPException:
+    def _capture_timeout(box_name: str, session_name: str, limit: float) -> Failure:
         logger.warning(f"capture-pane timed out for {box_name}:{session_name} after {limit:g} s")
-        return HTTPException(
-            status_code=504, detail=f"tmux capture-pane timed out after {limit:g} s"
-        )
+        return Failure(REASON_TIMEOUT, f"tmux capture-pane timed out after {limit:g} s")
 
     @router.get("/boxes/{name}/sessions/{session_name}/capture")
     async def api_capture_tmux_pane(
@@ -431,11 +451,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         # Validate session name with the same charset other endpoints use
         if not re.match(r"^[a-zA-Z0-9_.-]+$", session_name):
-            raise HTTPException(status_code=400, detail="Invalid session name")
+            raise Failure(REASON_INVALID, "Invalid session name")
         if window is not None and not re.match(r"^[a-zA-Z0-9_.@:-]+$", window):
-            raise HTTPException(status_code=400, detail="Invalid window")
+            raise Failure(REASON_INVALID, "Invalid window")
         if pane is not None and not re.match(r"^[a-zA-Z0-9_.@:%-]+$", pane):
-            raise HTTPException(status_code=400, detail="Invalid pane")
+            raise Failure(REASON_INVALID, "Invalid pane")
 
         target = session_name
         if window:
@@ -451,23 +471,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
         # The capture's own limit is tmux's alone; the bound of the request adds the
         # time a connect may take, so a slow connect does not eat into the capture.
         deadline = limit + dependencies.PROBE_TIMEOUT_SECONDS
-        try:
-            async with box_runner(deps, box, application_config, deadline=deadline) as runner:
-                try:
-                    ran = await runner.tmux(session_name, capture_args, timeout=limit)
-                except TmuxTimeoutError as exc:
-                    raise _capture_timeout(name, session_name, limit) from exc
-            if not ran.ok:
-                raise HTTPException(
-                    status_code=400,
-                    detail="tmux capture-pane failed: " + ran.errors.strip(),
-                )
-            text = ran.output
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.warning(f"capture-pane error for {name}:{session_name}: {exc}")
-            raise HTTPException(status_code=500, detail=f"capture failed: {exc}") from exc
+        async with box_runner(deps, box, application_config, deadline=deadline) as runner:
+            try:
+                ran = await runner.tmux(session_name, capture_args, timeout=limit)
+            except TmuxTimeoutError as exc:
+                raise _capture_timeout(name, session_name, limit) from exc
+        if not ran.ok:
+            raise Failure(REASON_FAILED, _refused("capture-pane", ran))
+        text = ran.output
 
         # Trim trailing blank lines so the dump doesn't end with a wall of empties
         stripped = text.rstrip("\n")

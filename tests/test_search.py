@@ -490,13 +490,14 @@ class TestLocalDiscovery:
 
 
 class TestBuiltinDiscoveryTimeout:
-    def test_past_the_deadline_returns_nothing(self, tmp_path):
+    def test_past_the_deadline_raises_the_discovery_timeout(self, tmp_path):
         """As the GNU path does when find is killed. Mutation killed: the
         built-in walk ignoring its timeout."""
-        from sshler.api.search import _discover_local_builtin
+        from sshler.api.search import DiscoveryTimeoutError, _discover_local_builtin
 
         root = make_tree(tmp_path)
-        assert _discover_local_builtin(str(root), "*", 6, 50, True, -1) == []
+        with pytest.raises(DiscoveryTimeoutError, match=r"^directory search timed out after -1 s$"):
+            _discover_local_builtin(str(root), "*", 6, 50, True, -1)
         everything = _discover_local_builtin(str(root), "*", 6, 50, True, 60)
         # gadgets, captures, capture_x, exports, the png, docs, blue-notes
         assert len(everything) == 7
@@ -650,7 +651,10 @@ class TestLocalChildrenKilledOnTimeout:
         gone = stalled_program("find")
         monkeypatch.setattr("sshler.api.helpers.LOCAL_IS_WINDOWS", False)
         monkeypatch.setattr(search, "LOCAL_DISCOVERY_TIMEOUT", 0.5)
-        assert asyncio.run(search._discover_local(str(tmp_path), "*x*")) == []
+        with pytest.raises(
+            search.DiscoveryTimeoutError, match=r"^directory search timed out after 0\.5 s$"
+        ):
+            asyncio.run(search._discover_local(str(tmp_path), "*x*"))
         gone()
 
     def test_zoxide_is_gone_after_its_timeout(self, monkeypatch, stalled_program):
@@ -680,6 +684,10 @@ class _Home:
         return SimpleNamespace(stdout="", exit_status=0)
 
 
+# What every remote discovery line begins with: status 127 when the box has no find.
+FIND_CHECK = "command -v find >/dev/null 2>&1 || exit 127; "
+
+
 def _remote_find(root, **kw):
     from sshler.api.search import _discover_remote_directories
 
@@ -704,30 +712,45 @@ class TestRemoteRootUnderHome:
         """Mutation killed: shlex.quote on '~/projects', which the remote shell takes literally."""
         _, commands = _remote_find(root)
         assert commands == [
-            f"find {sent} -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+            f"{FIND_CHECK}find {sent} -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
         ]
 
     @pytest.mark.parametrize("root", [None, ""])
     def test_no_root_still_means_the_remote_home(self, root):
         _, commands = _remote_find(root)
         assert commands == [
-            "find /home/u -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+            f"{FIND_CHECK}find /home/u -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
         ]
 
     def test_another_users_home_is_quoted_whole(self):
         _, commands = _remote_find("~other/x")
         assert commands == [
-            "find '~other/x' -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+            f"{FIND_CHECK}find '~other/x' -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
         ]
 
     @pytest.mark.parametrize("kw", [{"home_stdout": ""}, {"status": 1}])
-    def test_a_failed_home_lookup_finds_nothing_and_sends_no_find(self, kw):
-        result, commands = _remote_find("~/p", **kw)
-        assert (result, commands) == ([], [])
+    def test_a_failed_home_lookup_is_unreachable_and_sends_no_find(self, kw):
+        from sshler.api.failure import Failure
+        from sshler.api.search import _discover_remote_directories
 
-    def test_an_invalid_root_finds_nothing(self):
-        result, commands = _remote_find("~/a\x00b")
-        assert (result, commands) == ([], [])
+        conn = _Home(**kw)
+        with pytest.raises(Failure) as caught:
+            asyncio.run(_discover_remote_directories(conn, "*x*", root="~/p"))
+        assert (caught.value.status_code, caught.value.reason, caught.value.detail) == (
+            502,
+            "unreachable",
+            "Could not resolve the remote home directory",
+        )
+        assert conn.commands == []
+
+    def test_an_invalid_root_is_refused_and_sends_no_find(self):
+        from sshler.api.search import _discover_remote_directories
+        from sshler.validation import ValidationError
+
+        conn = _Home()
+        with pytest.raises(ValidationError, match=r"^Path cannot contain null bytes$"):
+            asyncio.run(_discover_remote_directories(conn, "*x*", root="~/a\x00b"))
+        assert conn.commands == []
 
 
 class TestRemoteRootNamedLikeAnOption:
@@ -735,7 +758,7 @@ class TestRemoteRootNamedLikeAnOption:
         """Mutation: send the root as it came; find reads `-delete` as an expression."""
         _, commands = _remote_find("-delete")
         assert commands == [
-            "find ./-delete -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+            f"{FIND_CHECK}find ./-delete -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
         ]
 
 
@@ -813,7 +836,7 @@ class TestRemoteSearchRoute:
         ]
         assert resp.json()["results"][1]["score"] == 0.1
         assert box.commands == [
-            "find /home/u -maxdepth 4 -type d -iname '*proj*' 2>/dev/null | head -n 20"
+            f"{FIND_CHECK}find /home/u -maxdepth 4 -type d -iname '*proj*' 2>/dev/null | head -n 20"
         ]
 
     def test_a_box_that_cannot_be_reached_gives_the_frecency_results(self, remote_search):
@@ -853,6 +876,14 @@ class TestRemoteSearchRoute:
         assert len(box.commands) == 1
         words = shlex.split(box.commands[0])
         assert words == [
+            "command",
+            "-v",
+            "find",
+            ">/dev/null",
+            "2>&1",
+            "||",
+            "exit",
+            "127;",
             "find",
             sent_root,
             "-maxdepth",

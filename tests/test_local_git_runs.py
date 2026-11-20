@@ -13,7 +13,6 @@ from fastapi import HTTPException
 from sshler.api import boxes, local_files
 from sshler.api.box_runner import LocalRunner
 from sshler.api.git import _git
-from sshler.api.models import APIGitInfo
 
 
 @pytest.mark.posix_only("a #!/bin/sh stand-in for git first on PATH")
@@ -44,15 +43,20 @@ def test_a_stuck_gitignore_check_gives_up_and_marks_nothing(tmp_path, monkeypatc
 
 
 @pytest.mark.posix_only("a #!/bin/sh stand-in for git first on PATH")
-def test_a_stuck_git_gives_the_git_info_an_error(tmp_path, monkeypatch, stalled_program):
+def test_a_stuck_git_gives_the_git_info_a_timeout(tmp_path, monkeypatch, stalled_program):
     """Mutation killed: communicate() with no limit in the git info of a local folder."""
     gone = stalled_program("git")
     monkeypatch.setattr(boxes, "GIT_INFO_TIMEOUT", 0.5)
 
     started = time.monotonic()
-    info = asyncio.run(boxes.git_info(LocalRunner(), str(tmp_path)))
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(boxes.git_info(LocalRunner(), str(tmp_path)))
 
-    assert info == APIGitInfo(error=f"git in {tmp_path} timed out after 0.5 s")
+    assert (caught.value.status_code, caught.value.reason, caught.value.detail) == (
+        504,
+        "timeout",
+        f"git in {tmp_path} timed out after 0.5 s",
+    )
     assert time.monotonic() - started < 10
     gone()
 

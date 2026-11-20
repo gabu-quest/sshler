@@ -12,15 +12,18 @@ It answers the pool's health check and the home lookup; it emulates in Python th
 test programs of the table (``python -c SCRIPT``, by the exact script), ``true``, and
 ``cat`` of files under ``/proc`` (from canned text, ``Counts.proc``); and it runs
 ``git`` only when every word is plain (letters, digits and ``_./%:=()|,+-`` and the
-log's field separator), never a word from a hostile input. A tmux line is answered from
+log's field separator), never a word from a hostile input: a git line with any other
+word is answered with git's own status for a refusal, 128. A tmux line is answered from
 canned text by ``_tmux_reply`` (no tmux runs), and the session-listing script of
-``api/sessions.py`` by its exact text. Any other line is recorded and refused with
-status 127.
+``api/sessions.py`` by its exact text. Any other line is recorded and answered with
+status 127, the shell's status for a program the box does not have (so grep, for one,
+is not on this box).
 """
 
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import re
@@ -42,10 +45,12 @@ from fastapi.testclient import TestClient
 
 from sshler import ssh_pool, state
 from sshler import tmux as tmux_module
+from sshler.api import box_runner as box_runner_api
 from sshler.api import boxes as boxes_api
 from sshler.api import dependencies as dependencies_api
 from sshler.api import sessions as sessions_api
 from sshler.api.box_runner import BoxRunner, LocalRunner, Ran, TmuxTimeoutError, over
+from sshler.api.failure import Failure
 from sshler.ssh import connect
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
@@ -54,8 +59,8 @@ pytestmark = pytest.mark.posix_only("a loopback SSH server and git repositories 
 
 TOKEN = "runner-token"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
-# The reason a failure answer carries for each status these routes answer with.
-FALLBACK_REASON = {400: "invalid", 404: "not_found", 500: "failed", 504: "timeout"}
+# git's exit status for a command it refuses (a path or a revision it does not have).
+GIT_REFUSED = 128
 HOME_CMD = 'printf %s "$HOME"'
 HEALTH_CMD = "echo test"
 PY = sys.executable
@@ -154,9 +159,12 @@ def _parse(line: str) -> tuple[str | None, list[str], int | None] | None:
         cut, tokens = int(tokens[-1]), tokens[:-4]
     elif len(tokens) > 3 and tokens[-3:] == ["|", "head", "-1"]:
         cut, tokens = -1, tokens[:-3]
-    if not tokens or tokens[-1] != "2>/dev/null" or len(tokens) < 2:
+    # Every line drops the error output, except grep's, which keeps it to say why it
+    # could not search.
+    quiet = tokens[-1:] == ["2>/dev/null"]
+    words = tokens[:-1] if quiet else tokens
+    if not words or not (quiet or words[0] == "grep"):
         return None
-    words = tokens[:-1]
     if any(word in {"&&", "|", ";", "2>/dev/null"} for word in words):
         return None
     return folder, words, cut
@@ -207,10 +215,13 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         await asyncio.sleep(60)  # a repository whose status never comes
     if words[0] == "git" and all(_PLAIN_WORD.fullmatch(word) for word in words):
         status, out = await _git(words, cwd)
+    elif words[0] == "git":
+        status, out = GIT_REFUSED, ""
     elif words == ["true"]:
         status, out = 0, ""
     elif words == ["sh", "-c", sessions_api.REMOTE_LIST_SESSIONS]:
-        status, out = 0, LIVE_SESSIONS
+        # The script's first line exits 127 when the box has no tmux.
+        status, out = (0, LIVE_SESSIONS) if counts.tmux_installed else (127, "")
     elif words[0] == "cat" and len(words) > 1 and all(w.startswith("/proc/") for w in words[1:]):
         texts = [counts.read_proc(name) for name in words[1:]]
         status = 0 if all(text is not None for text in texts) else 1  # what cat gives
@@ -398,6 +409,17 @@ async def test_a_folder_that_does_not_exist_runs_nothing(kind):
 
 
 @pytest.mark.asyncio
+async def test_a_local_program_that_cannot_start_for_another_reason_raises_that_error(monkeypatch):
+    async def cannot_start(argv, timeout, cwd=None, **_):
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    monkeypatch.setattr(box_runner_api, "run_bounded", cannot_start)
+    with pytest.raises(OSError) as caught:
+        await LocalRunner().run([PY, "-c", ECHO], folder=None, timeout=20)
+    assert caught.value.errno == errno.EMFILE
+
+
+@pytest.mark.asyncio
 async def test_every_word_reaches_the_program_as_that_one_word(kind):
     ran = await _ran(kind, [PY, "-c", ECHO, *HOSTILE_WORDS])
     assert ran == Ran(0, json.dumps([kind.folder, HOSTILE_WORDS]) + "\n")
@@ -534,16 +556,15 @@ def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
 def _badge(repos: Repos, name: str) -> dict:
     """The answer the local badge gave before for each folder."""
     if name in ("plain", "missing"):
-        return {"is_repo": False, "branch": None, "commit": None, "dirty": False, "error": None}
+        return {"is_repo": False, "branch": None, "commit": None, "dirty": False}
     if name == "empty":
-        return {"is_repo": True, "branch": None, "commit": None, "dirty": False, "error": None}
+        return {"is_repo": True, "branch": None, "commit": None, "dirty": False}
     branch = "HEAD" if name == "detached" else "main"
     return {
         "is_repo": True,
         "branch": branch,
         "commit": repos.commits[name],
         "dirty": name == "changed",
-        "error": None,
     }
 
 
@@ -556,10 +577,10 @@ def test_the_git_badge_gives_one_answer_for_one_folder_on_both_kinds(served, rep
     assert (resp.status_code, resp.json()) == (200, _badge(repos, name))
 
 
-def test_a_remote_git_badge_on_a_box_that_stops_answering_is_an_error_and_sends_nothing_more(
+def test_a_remote_git_badge_on_a_box_that_stops_answering_is_a_timeout_and_sends_nothing_more(
     served, repos, monkeypatch
 ):
-    """The first command past its limit ends the badge with an error that says so; no
+    """The first command past its limit ends the badge with a timeout that says so; no
     later command is sent. The probe limit is set well above the command limit."""
     monkeypatch.setattr(boxes_api, "GIT_INFO_TIMEOUT", 0.3)
     monkeypatch.setattr(dependencies_api, "PROBE_TIMEOUT_SECONDS", 5.0)
@@ -567,14 +588,8 @@ def test_a_remote_git_badge_on_a_box_that_stops_answering_is_an_error_and_sends_
     started = time.monotonic()
     resp = served.get("lb", "git", directory=folder)
     assert (resp.status_code, resp.json()) == (
-        200,
-        {
-            "is_repo": False,
-            "branch": None,
-            "commit": None,
-            "dirty": False,
-            "error": f"git in {folder} timed out after 0.3 s",
-        },
+        504,
+        {"detail": f"git in {folder} timed out after 0.3 s", "reason": "timeout"},
     )
     assert time.monotonic() - started < 4.0
     assert [_parse(line) for line in served.remote_commands()] == [
@@ -582,7 +597,7 @@ def test_a_remote_git_badge_on_a_box_that_stops_answering_is_an_error_and_sends_
     ]
 
 
-def test_a_remote_git_badge_whose_status_never_comes_is_an_error_and_sends_nothing_more(
+def test_a_remote_git_badge_whose_status_never_comes_is_a_timeout_and_sends_nothing_more(
     served, repos, monkeypatch
 ):
     monkeypatch.setattr(boxes_api, "GIT_INFO_TIMEOUT", 0.3)
@@ -591,14 +606,8 @@ def test_a_remote_git_badge_whose_status_never_comes_is_an_error_and_sends_nothi
     started = time.monotonic()
     resp = served.get("lb", "git", directory=folder)
     assert (resp.status_code, resp.json()) == (
-        200,
-        {
-            "is_repo": False,
-            "branch": None,
-            "commit": None,
-            "dirty": False,
-            "error": f"git in {folder} timed out after 0.3 s",
-        },
+        504,
+        {"detail": f"git in {folder} timed out after 0.3 s", "reason": "timeout"},
     )
     assert time.monotonic() - started < 4.0
     assert [_parse(line)[1] for line in served.remote_commands()] == [
@@ -618,8 +627,8 @@ def test_a_remote_badge_command_past_its_limit_does_not_hand_its_connection_on(
         stuck = served.get("lb", "git", directory=repos.at("stuck"))
         clean = served.get("lb", "git", directory=repos.at("clean"))
         again = served.get("lb", "git", directory=repos.at("clean"))
-    assert (stuck.json()["error"] is None, clean.json()["is_repo"], again.json()["is_repo"]) == (
-        False,
+    assert (stuck.status_code, clean.json()["is_repo"], again.json()["is_repo"]) == (
+        504,
         True,
         True,
     )
@@ -631,25 +640,26 @@ def test_a_remote_badge_command_past_its_limit_does_not_hand_its_connection_on(
 
 
 @pytest.mark.parametrize(
-    ("route", "params", "commands"),
+    ("route", "params", "status", "commands"),
     [
-        ("git", {"directory": "clean"}, 3),
-        ("git", {"directory": "empty"}, 3),
-        ("git", {"directory": "plain"}, 1),
-        ("git/log", {"directory": "clean"}, 1),
-        ("git/log", {"directory": "empty"}, 2),
-        ("git/log", {"directory": "plain"}, 2),
-        ("git/show", {"directory": "clean", "path": "a.txt"}, 2),
-        ("git/show", {"directory": "clean", "path": "missing.txt"}, 3),
-        ("git/blame", {"directory": "clean", "path": "a.txt"}, 2),
-        ("git/branches", {"directory": "clean"}, 2),
-        ("git/branches", {"directory": "plain"}, 1),
-        ("git/diff-files", {"directory": "clean", "ref_a": "HEAD", "ref_b": "HEAD"}, 1),
-        ("grep", {"directory": "clean", "pattern": "one"}, 1),
+        ("git", {"directory": "clean"}, 200, 3),
+        ("git", {"directory": "empty"}, 200, 3),
+        ("git", {"directory": "plain"}, 200, 1),
+        ("git/log", {"directory": "clean"}, 200, 1),
+        ("git/log", {"directory": "empty"}, 200, 3),
+        ("git/log", {"directory": "plain"}, 200, 2),
+        ("git/show", {"directory": "clean", "path": "a.txt"}, 200, 2),
+        ("git/show", {"directory": "clean", "path": "missing.txt"}, 404, 3),
+        ("git/blame", {"directory": "clean", "path": "a.txt"}, 200, 2),
+        ("git/branches", {"directory": "clean"}, 200, 2),
+        ("git/branches", {"directory": "plain"}, 200, 1),
+        ("git/diff-files", {"directory": "clean", "ref_a": "HEAD", "ref_b": "HEAD"}, 200, 1),
+        # The loopback box has no grep: the shell's 127 is that failure.
+        ("grep", {"directory": "clean", "pattern": "one"}, 501, 1),
     ],
 )
 def test_a_remote_request_takes_one_connection_and_no_more_commands_than_before(
-    served, repos, route, params, commands
+    served, repos, route, params, status, commands
 ):
     """Counted on the code before the runner: one connection for each request; three
     commands for the badge of a repository and one outside a repository; one for each
@@ -660,10 +670,11 @@ def test_a_remote_request_takes_one_connection_and_no_more_commands_than_before(
     show and blame; each now asks git for the root first and works the path out here,
     so each takes two (show three for a file not at the ref, to tell it from an empty
     file). A log that fails asks for the root once more, on both kinds, to tell a
-    repository with no commit from a folder outside any repository."""
+    repository with no commit from a folder outside any repository, and in a repository
+    asks whether it has a commit, to tell one with no commit from a log that failed."""
     asked = {**params, "directory": repos.at(params["directory"])}
     resp = served.get("lb", route, **asked)
-    assert resp.status_code == (404 if params.get("path") == "missing.txt" else 200)
+    assert resp.status_code == status
     assert (served.counts.connections, len(served.remote_commands())) == (1, commands)
 
 
@@ -758,9 +769,13 @@ HOSTILE = ["-v", "a b", "it's", 'a"b', "`id`", "$(id)", "a;b", "a\nb", "--help"]
 
 @pytest.mark.parametrize("pattern", HOSTILE, ids=repr)
 def test_a_remote_grep_pattern_and_folder_reach_grep_as_one_word_each(served, pattern):
+    """The loopback box has no grep (it answers 127); what is proved is the words."""
     folder = f"{served.home}/x {pattern}y"
     resp = served.get("lb", "grep", directory=f"~/x {pattern}y", pattern=pattern)
-    assert (resp.status_code, resp.json()["matches"]) == (200, [])
+    assert (resp.status_code, resp.json()) == (
+        501,
+        {"detail": "grep is not installed on lb", "reason": "program_missing"},
+    )
     lines = served.remote_commands()
     assert len(lines) == 2
     assert shlex.split(lines[1]) == [
@@ -772,7 +787,6 @@ def test_a_remote_grep_pattern_and_folder_reach_grep_as_one_word_each(served, pa
         "--",
         pattern,
         folder,
-        "2>/dev/null",
     ]
 
 
@@ -790,20 +804,21 @@ def test_a_local_grep_pattern_reaches_grep_as_one_word(served, tmp_path, pattern
     )
 
 
-def test_a_remote_grep_with_no_grep_program_is_no_match_and_a_local_one_is_a_500(
-    served, tmp_path, monkeypatch
-):
-    """Kept as it was: the local box asks for the program before it runs it; on a
-    remote box the shell's 127 is an exit status grep's route does not read."""
+def test_grep_with_no_grep_program_is_program_missing_on_both_kinds(served, tmp_path, monkeypatch):
+    """The local box asks for the program before it runs it; on a remote box the
+    shell's 127 is the same failure."""
     empty_bin = tmp_path / "no-bin"
     empty_bin.mkdir()
     remote = served.get("lb", "grep", directory=str(served.home), pattern="x")
     monkeypatch.setenv("PATH", str(empty_bin))
     local = served.get("local", "grep", directory=str(tmp_path), pattern="x")
-    assert (remote.status_code, remote.json()["matches"]) == (200, [])
+    assert (remote.status_code, remote.json()) == (
+        501,
+        {"detail": "grep is not installed on lb", "reason": "program_missing"},
+    )
     assert (local.status_code, local.json()) == (
-        500,
-        {"detail": "grep not available", "reason": "failed"},
+        501,
+        {"detail": "grep is not installed on local", "reason": "program_missing"},
     )
 
 
@@ -885,7 +900,7 @@ def test_a_remote_folder_above_the_home_is_the_same_folder_for_grep_and_git(
 def test_a_badge_of_a_tree_whose_only_change_is_a_modified_file_is_dirty(served, repos, box):
     """The first byte of the status is a space (` M a.txt`): it is a change all the same."""
     resp = served.get(box, "git", directory=repos.at("changed"))
-    assert (resp.status_code, resp.json()["dirty"], resp.json()["error"]) == (200, True, None)
+    assert (resp.status_code, resp.json()["dirty"]) == (200, True)
 
 
 # --- a local badge command past its limit ----------------------------------------------
@@ -910,18 +925,17 @@ def _stub_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str) -> N
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
-def test_a_local_badge_whose_status_never_comes_is_an_error(tmp_path, monkeypatch):
+def test_a_local_badge_whose_status_never_comes_is_a_timeout(tmp_path, monkeypatch):
     _stub_git(tmp_path, monkeypatch, "exec sleep 30")
     monkeypatch.setattr(boxes_api, "GIT_INFO_TIMEOUT", 0.5)
     started = time.monotonic()
-    info = asyncio.run(boxes_api.git_info(LocalRunner(), str(tmp_path)))
-    assert info.model_dump() == {
-        "is_repo": False,
-        "branch": None,
-        "commit": None,
-        "dirty": False,
-        "error": f"git in {tmp_path} timed out after 0.5 s",
-    }
+    with pytest.raises(Failure) as caught:
+        asyncio.run(boxes_api.git_info(LocalRunner(), str(tmp_path)))
+    assert (caught.value.status_code, caught.value.reason, caught.value.detail) == (
+        504,
+        "timeout",
+        f"git in {tmp_path} timed out after 0.5 s",
+    )
     assert time.monotonic() - started < 4.0
 
 
@@ -940,21 +954,28 @@ def test_a_remote_show_needs_no_python_on_the_box(served, repos):
 def test_a_remote_blame_needs_no_python_on_the_box(served, repos):
     resp = served.get("lb", "git/blame", directory=repos.at("clean"), path="a.txt")
     body = resp.json()
-    assert (resp.status_code, body["error"], len(body["lines"])) == (200, None, 1)
+    assert (resp.status_code, body["truncated"], len(body["lines"])) == (200, False, 1)
     assert (body["lines"][0]["content"], body["lines"][0]["author"]) == ("one", "t")
 
 
 SHOW_ANSWERS = [
-    # (directory, path, ref, status, detail); a directory or path in braces is under
-    # the repos fixture's root.
-    ("plain", "a.txt", "HEAD", 404, "Not a git repository"),
-    ("clean", "{plain}/a.txt", "HEAD", 400, "Path is outside the git repository"),
-    ("clean", "../plain/a.txt", "HEAD", 400, "Path is outside the git repository"),
-    ("clean", "{clean}", "HEAD", 400, "Path must point to a file inside the repository"),
-    ("clean", ".", "HEAD", 400, "Path must point to a file inside the repository"),
-    ("clean", "missing.txt", "HEAD", 404, "File not found at ref HEAD"),
-    ("clean", "a.txt", "nope", 404, "File not found at ref nope"),
-    ("clean", "   ", "HEAD", 400, "Path is required"),
+    # (directory, path, ref, status, reason, detail); a directory or path in braces is
+    # under the repos fixture's root.
+    ("plain", "a.txt", "HEAD", 404, "not_found", "Not a git repository"),
+    ("clean", "{plain}/a.txt", "HEAD", 400, "invalid", "Path is outside the git repository"),
+    ("clean", "../plain/a.txt", "HEAD", 400, "invalid", "Path is outside the git repository"),
+    (
+        "clean",
+        "{clean}",
+        "HEAD",
+        400,
+        "invalid",
+        "Path must point to a file inside the repository",
+    ),
+    ("clean", ".", "HEAD", 400, "invalid", "Path must point to a file inside the repository"),
+    ("clean", "missing.txt", "HEAD", 404, "not_found", "File not found at ref HEAD"),
+    ("clean", "a.txt", "nope", 404, "not_found", "File not found at ref nope"),
+    ("clean", "   ", "HEAD", 400, "invalid", "Path is required"),
 ]
 
 
@@ -963,17 +984,14 @@ def _under(repos: Repos, text: str) -> str:
 
 
 @pytest.mark.parametrize("box", ["local", "lb"])
-@pytest.mark.parametrize(("directory", "path", "ref", "status", "detail"), SHOW_ANSWERS)
+@pytest.mark.parametrize(("directory", "path", "ref", "status", "reason", "detail"), SHOW_ANSWERS)
 def test_a_git_show_gives_one_answer_on_both_kinds(
-    served, repos, box, directory, path, ref, status, detail
+    served, repos, box, directory, path, ref, status, reason, detail
 ):
     resp = served.get(
         box, "git/show", directory=repos.at(directory), path=_under(repos, path), ref=ref
     )
-    assert (resp.status_code, resp.json()) == (
-        status,
-        {"detail": detail, "reason": FALLBACK_REASON[status]},
-    )
+    assert (resp.status_code, resp.json()) == (status, {"detail": detail, "reason": reason})
 
 
 BLAME_ANSWERS = [
@@ -993,14 +1011,8 @@ BLAME_ANSWERS = [
     (
         "nested",
         "untracked.txt",
-        200,
-        {
-            "box": "{box}",
-            "path": "untracked.txt",
-            "lines": [],
-            "truncated": False,
-            "error": "Not a git repository or file not tracked",
-        },
+        404,
+        {"detail": "File not tracked by git: untracked.txt", "reason": "not_found"},
     ),
 ]
 
@@ -1277,6 +1289,7 @@ STATS = {
     "memory_percent": 50.0,
     "uptime_seconds": 3600,
     "error": None,
+    "reason": None,
 }
 
 
@@ -1319,16 +1332,8 @@ def test_a_remote_box_with_no_proc_says_its_stats_could_not_be_read(served):
     served.counts.proc.clear()
     resp = served.get("lb", "stats")
     assert (resp.status_code, resp.json()) == (
-        200,
-        {
-            "name": "lb",
-            "cpu_percent": None,
-            "memory_used_mb": None,
-            "memory_total_mb": None,
-            "memory_percent": None,
-            "uptime_seconds": None,
-            "error": "could not read /proc on lb",
-        },
+        500,
+        {"detail": "could not read /proc on lb", "reason": "failed"},
     )
 
 
@@ -1424,13 +1429,13 @@ def test_a_capture_that_is_not_utf8_gives_its_text_with_the_bad_byte_marked_on_b
 
 
 @pytest.mark.parametrize("box", ["local", "lb"])
-def test_a_capture_tmux_refuses_is_the_400_with_its_error_output_on_both_kinds(
+def test_a_capture_tmux_refuses_is_failed_with_its_error_output_on_both_kinds(
     served, fake_tmux_on_path, box
 ):
     resp = served.get(box, "sessions/gone/capture")
     assert (resp.status_code, resp.json()) == (
-        400,
-        {"detail": "tmux capture-pane failed: can't find session: gone", "reason": "invalid"},
+        500,
+        {"detail": "tmux capture-pane failed: can't find session: gone", "reason": "failed"},
     )
 
 
@@ -1447,7 +1452,7 @@ def test_a_capture_past_its_limit_is_the_504_on_both_kinds(
 
 
 @pytest.mark.parametrize("box", ["local", "lb"])
-def test_a_rename_tmux_refuses_is_the_400_and_keeps_the_name_on_both_kinds(
+def test_a_rename_tmux_refuses_is_failed_and_keeps_the_name_on_both_kinds(
     served, fake_tmux_on_path, box
 ):
     session_id = _new_session(served, box, "gone")
@@ -1458,8 +1463,8 @@ def test_a_rename_tmux_refuses_is_the_400_and_keeps_the_name_on_both_kinds(
     )
     listed = served.client.get(f"/api/v1/boxes/{box}/sessions", headers=HEADERS)
     assert (resp.status_code, resp.json()) == (
-        400,
-        {"detail": "tmux rename failed", "reason": "invalid"},
+        500,
+        {"detail": "tmux rename-session failed: can't find session: gone", "reason": "failed"},
     )
     assert [item["session_name"] for item in listed.json()] == ["gone"]
 
@@ -1521,7 +1526,7 @@ def test_a_remote_sync_runs_the_listing_script_and_marks_the_rest_inactive(serve
 @pytest.mark.parametrize(
     ("method", "route", "body", "status", "detail"),
     [
-        ("PATCH", "sessions/{id}", {"session_name": "fresh"}, 500, "Failed to rename session"),
+        ("PATCH", "sessions/{id}", {"session_name": "fresh"}, 504, "tmux on stuck timed out"),
         ("DELETE", "sessions/{id}?kill_tmux=true", None, 200, "deleted"),
         (
             "GET",
@@ -1559,24 +1564,17 @@ def test_a_remote_tmux_that_hangs_does_not_hand_its_connection_on(
 
 
 @pytest.mark.parametrize(
-    ("method", "route", "body", "status", "detail"),
+    ("method", "route", "body"),
     [
-        ("PATCH", "sessions/{id}", {"session_name": "fresh"}, 400, "tmux rename failed"),
-        (
-            "GET",
-            "sessions/work/capture",
-            None,
-            400,
-            "tmux capture-pane failed: sh: 1: tmux: not found",
-        ),
+        ("PATCH", "sessions/{id}", {"session_name": "fresh"}),
+        ("GET", "sessions/work/capture", None),
+        ("POST", "sessions/sync", None),
     ],
-    ids=["rename", "capture"],
+    ids=["rename", "capture", "sync"],
 )
-def test_a_remote_box_with_no_tmux_is_the_400_of_a_refusal(
-    served, method, route, body, status, detail
-):
-    """As before: the remote shell answers 127 and its text, which the route reads as
-    tmux saying no. (The local box without tmux raises before anything runs, a 500.)"""
+def test_a_remote_box_with_no_tmux_is_program_missing(served, method, route, body):
+    """The remote shell answers 127: the runner raises the missing program, as the
+    local box does before anything runs."""
     served.counts.tmux_installed = False
     session_id = _new_session(served, "lb", "work")
     resp = served.client.request(
@@ -1586,8 +1584,8 @@ def test_a_remote_box_with_no_tmux_is_the_400_of_a_refusal(
         headers=HEADERS,
     )
     assert (resp.status_code, resp.json()) == (
-        status,
-        {"detail": detail, "reason": FALLBACK_REASON[status]},
+        501,
+        {"detail": "tmux is not installed on lb", "reason": "program_missing"},
     )
 
 

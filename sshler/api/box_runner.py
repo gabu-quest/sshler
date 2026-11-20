@@ -17,17 +17,21 @@ What both kinds promise:
   the local box, the login folder on a remote one). A folder that cannot be entered
   runs nothing and gives a non-zero status and no output.
 * The output is what the program wrote on its standard output, read as UTF-8 with
-  U+FFFD for each byte that is not; its error output is dropped. With ``output_limit``
-  only the first that many bytes come back (on a remote box no more is sent), and the
-  status is then not read: it is None.
+  U+FFFD for each byte that is not; its error output is dropped, unless
+  ``keep_errors`` asks for it in ``Ran.errors`` (read the same way). With
+  ``output_limit`` only the first that many bytes come back (on a remote box no more
+  is sent), and the status is then not read: it is None.
 * Past ``timeout`` seconds the call raises ``TimeoutError``. On the local box the
   program is killed and reaped first; on a remote box the connection is not handed to
   another request afterwards, as a command may still run on it.
+* A program that is not there raises ``ProgramNotFoundError`` naming the program (the
+  first word, or ``program`` where a script runs it) and the box: the local runner
+  before it starts anything, the remote one when the shell answers status 127 (the
+  shell's status for a command it cannot find; nothing the runner sends exits 127
+  otherwise). A cut output has no status, so there it is not seen.
 
 Where the kinds differ, each as the routes had it before:
 
-* A program that is not there: the local runner raises ``ProgramNotFoundError``
-  before it starts anything; on a remote box the shell answers status 127.
 * ``folder(path)``: on the local box ``~`` is this user's home and the path is made
   absolute with links resolved; on a remote box the path is checked (a bad one raises
   ``ValidationError``), ``~`` is the box's home, asked once per connection.
@@ -43,10 +47,10 @@ Where the kinds differ, each as the routes had it before:
 built by ``sshler.tmux``) with ``args``, each one word, and gives what tmux wrote on its
 error output too. Its limit is ``tmux.TMUX_COMMAND_TIMEOUT`` unless one is given; past
 it the call raises ``TmuxTimeoutError`` (a ``TimeoutError``), and only then, so a
-connect that timed out is not taken for tmux that did. Where the kinds differ: the
-local box runs ``tmux.run_local_tmux`` (no tmux there raises ``FileNotFoundError``;
-on Windows tmux runs in WSL); a remote box sends ``tmux.remote_tmux_command`` (no tmux
-there is status 127 with the shell's error text).
+connect that timed out is not taken for tmux that did. No tmux on the box raises
+``ProgramNotFoundError`` on both kinds. Where the kinds differ: the local box runs
+``tmux.run_local_tmux`` (on Windows tmux runs in WSL); a remote box sends
+``tmux.remote_tmux_command``.
 
 A remote runner takes its box's pooled connection at the first call that needs it and
 gives it back when the block ends.
@@ -69,21 +73,26 @@ from .. import tmux as tmux_module
 from ..config import AppConfig, Box
 from ..proc import run_bounded
 from ..ssh_pool import get_pool
-from ..validation import PathValidator
+from ..validation import PathValidator, ValidationError
 from .box_files import is_local
 from .dependencies import APIDependencies, ProbeTimeoutError
+from .failure import failure_of
 from .helpers import _normalize_local_path
 from .remote import command, in_directory, pipe, quiet, remote_path, resolve_tilde
+from .run_failures import ProgramNotFoundError
 
 # The status of a run whose folder could not be entered (the status `cd` gives).
 FOLDER_NOT_ENTERED = 1
+
+# The status a POSIX shell gives a command it cannot find.
+COMMAND_NOT_FOUND = 127
 
 
 @dataclass(frozen=True)
 class Ran:
     """What a program gave: its exit status (None when ``output_limit`` cut the output),
-    its standard output, and its error output (given by ``tmux`` only; empty from
-    ``run``)."""
+    its standard output, and its error output (given by ``tmux``, and by ``run`` with
+    ``keep_errors``; empty otherwise)."""
 
     status: int | None
     output: str
@@ -94,12 +103,15 @@ class Ran:
         return self.status == 0
 
 
-class ProgramNotFoundError(Exception):
-    """The local box has no program by the first word's name."""
-
-
 class TmuxTimeoutError(TimeoutError):
     """tmux itself, not the connect before it, ran past its limit."""
+
+
+class CommandTimeoutError(TimeoutError):
+    """A bounded request (``box_runner(..., deadline=...)``) ran past its limit after
+    its box was reached: a command was running. A ``TimeoutError``, so it answers
+    ``timeout``; past the limit while the connection was still being taken is
+    ``ProbeTimeoutError`` (``unreachable``) instead."""
 
 
 def _text(data: str | bytes | None) -> str:
@@ -130,7 +142,12 @@ class BoxRunner(Protocol):
         folder: str | None,
         timeout: float,
         output_limit: int | None = None,
-    ) -> Ran: ...
+        keep_errors: bool = False,
+        program: str | None = None,
+    ) -> Ran:
+        """``words`` on the box; ``program`` is the program a missing-program failure
+        names when the first word is a shell running a script."""
+        ...
 
     async def tmux(self, session: str, args: Sequence[str], *, timeout: float | None = None) -> Ran:
         """tmux on ``session``'s own server with ``args``: status, output, error output."""
@@ -138,9 +155,17 @@ class BoxRunner(Protocol):
 
 
 class LocalRunner:
-    """Runs a program on this machine with ``proc.run_bounded``; no shell."""
+    """Runs a program on this machine with ``proc.run_bounded``; no shell. ``box`` is
+    the name a missing-program failure gives the box."""
+
+    def __init__(self, box: str = "local") -> None:
+        self._box = box
 
     async def folder(self, path: str) -> str:
+        # The one check of the path a remote box makes that a local path needs too: no
+        # file system takes a name with a NUL in it.
+        if "\0" in path:
+            raise ValidationError("Path cannot contain null bytes")
         return _normalize_local_path(path)
 
     async def file(self, path: str, folder: str) -> PurePath:
@@ -158,22 +183,30 @@ class LocalRunner:
         folder: str | None,
         timeout: float,
         output_limit: int | None = None,
+        keep_errors: bool = False,
+        program: str | None = None,
     ) -> Ran:
-        program = shutil.which(words[0])
-        if program is None:
-            raise ProgramNotFoundError(words[0])
+        found = shutil.which(words[0])
+        if found is None:
+            raise ProgramNotFoundError(words[0], self._box)
+        if program is not None and shutil.which(program) is None:
+            raise ProgramNotFoundError(program, self._box)
         if folder is not None and not os.path.isdir(folder):
             return Ran(FOLDER_NOT_ENTERED, "")
         try:
-            status, stdout, _ = await run_bounded([program, *words[1:]], timeout, cwd=folder)
+            status, stdout, stderr = await run_bounded([found, *words[1:]], timeout, cwd=folder)
         except TimeoutError:
             raise  # an OSError too, but not one about the folder
         except OSError:
-            # The folder went away or cannot be entered.
-            return Ran(FOLDER_NOT_ENTERED, "")
+            # Only a folder that is no longer one is the folder's failure; any other
+            # failure to start the program is raised as it is.
+            if folder is not None and not os.path.isdir(folder):
+                return Ran(FOLDER_NOT_ENTERED, "")
+            raise
+        errors = _text(stderr) if keep_errors else ""
         if output_limit is not None:
-            return Ran(None, stdout[:output_limit].decode("utf-8", errors="replace"))
-        return Ran(status, stdout.decode("utf-8", errors="replace"))
+            return Ran(None, _text(stdout[:output_limit]), errors)
+        return Ran(status, _text(stdout), errors)
 
     async def tmux(self, session: str, args: Sequence[str], *, timeout: float | None = None) -> Ran:
         # A limit of None is run_local_tmux's own TMUX_COMMAND_TIMEOUT.
@@ -181,15 +214,22 @@ class LocalRunner:
             status, stdout, stderr = await tmux_module.run_local_tmux(session, list(args), timeout)
         except TimeoutError as exc:
             raise TmuxTimeoutError(f"tmux on {session} timed out") from exc
+        except FileNotFoundError as exc:
+            # run_local_tmux runs no program but tmux (or WSL) and gives it no folder.
+            raise ProgramNotFoundError("tmux", self._box) from exc
         return Ran(status, _text(stdout), _text(stderr))
 
 
 def remote_command_line(
-    words: Sequence[str], folder: str | None = None, output_limit: int | None = None
+    words: Sequence[str],
+    folder: str | None = None,
+    output_limit: int | None = None,
+    keep_errors: bool = False,
 ) -> str:
     """The line the remote runner sends for ``words``: each word quoted, the error
-    output dropped, cut to ``output_limit`` bytes, run in ``folder``."""
-    line = quiet(command(*words))
+    output dropped (kept with ``keep_errors``), cut to ``output_limit`` bytes, run in
+    ``folder``."""
+    line = command(*words) if keep_errors else quiet(command(*words))
     if output_limit is not None:
         line = pipe(line, command("head", "-c", str(output_limit)))
     return line if folder is None else in_directory(folder, line)
@@ -199,8 +239,9 @@ class RemoteRunner:
     """Runs a program on a remote box: one command line per call, over the connection
     ``connection()`` gives."""
 
-    def __init__(self, connection: Callable[[], Awaitable[Any]]) -> None:
+    def __init__(self, connection: Callable[[], Awaitable[Any]], box: str) -> None:
         self._connection = connection
+        self._box = box
         self.timed_out = False
 
     async def folder(self, path: str) -> str:
@@ -227,9 +268,11 @@ class RemoteRunner:
         folder: str | None,
         timeout: float,
         output_limit: int | None = None,
+        keep_errors: bool = False,
+        program: str | None = None,
     ) -> Ran:
         connection = await self._connection()
-        line = remote_command_line(words, folder, output_limit)
+        line = remote_command_line(words, folder, output_limit, keep_errors)
         try:
             # Bytes, decoded here: a byte that is not UTF-8 is marked, as on the local
             # box, where a strict decode on the channel would close the connection.
@@ -239,12 +282,14 @@ class RemoteRunner:
         except (TimeoutError, asyncio.CancelledError):
             self.timed_out = True
             raise
-        stdout = result.stdout or ""
-        output = stdout if isinstance(stdout, str) else stdout.decode("utf-8", errors="replace")
+        output = _text(result.stdout)
+        errors = _text(result.stderr) if keep_errors else ""
         if output_limit is not None:
-            return Ran(None, output)
+            return Ran(None, output, errors)
         status = result.exit_status
-        return Ran(-1 if status is None else status, output)
+        if status == COMMAND_NOT_FOUND:
+            raise ProgramNotFoundError(program or words[0], self._box)
+        return Ran(-1 if status is None else status, output, errors)
 
     async def tmux(self, session: str, args: Sequence[str], *, timeout: float | None = None) -> Ran:
         connection = await self._connection()  # outside the limit: a connect is not tmux
@@ -261,16 +306,18 @@ class RemoteRunner:
             self.timed_out = True
             raise TmuxTimeoutError(f"tmux on {session} timed out") from exc
         status = result.exit_status
+        if status == COMMAND_NOT_FOUND:
+            raise ProgramNotFoundError("tmux", self._box)
         return Ran(-1 if status is None else status, _text(result.stdout), _text(result.stderr))
 
 
-def over(connection: Any) -> RemoteRunner:
-    """A remote runner on a connection the caller holds."""
+def over(connection: Any, box: str = "remote") -> RemoteRunner:
+    """A remote runner on a connection the caller holds, for the box named ``box``."""
 
     async def given() -> Any:
         return connection
 
-    return RemoteRunner(given)
+    return RemoteRunner(given, box)
 
 
 @asynccontextmanager
@@ -281,21 +328,43 @@ async def box_runner(
     *,
     deadline: float | None = None,
 ) -> AsyncIterator[BoxRunner]:
+    """The runner of ``box`` for the block (``_runner``). Every failure in the block
+    leaves it as a ``Failure`` named by ``failure_of``, so a route answers it by its
+    reason."""
+    try:
+        async with _runner(deps, box, application_config, deadline) as runner:
+            yield runner
+    except Exception as exc:
+        answered = failure_of(exc)
+        if answered is exc:
+            raise
+        raise answered from exc
+
+
+@asynccontextmanager
+async def _runner(
+    deps: APIDependencies,
+    box: Box,
+    application_config: AppConfig,
+    deadline: float | None,
+) -> AsyncIterator[BoxRunner]:
     """The runner of ``box`` for the block.
 
     With ``deadline`` the whole block (taking the connection and every command) is
-    bounded, as a polled request is: past it ``ProbeTimeoutError`` is raised, naming the
-    step ("connect to NAME timed out after N s" while the connection was still being
-    taken, "command on NAME timed out (N s limit for connect plus command)" after).
+    bounded, as a polled request is. Past it, while the connection was still being
+    taken, ``ProbeTimeoutError`` is raised ("connect to NAME timed out after N s": the
+    box was not reached); after, ``CommandTimeoutError`` ("command on NAME timed out
+    (N s limit for connect plus command)"). The local box is always reached.
     Giving the connection back to the pool is not counted, so a block whose work
     finished is never reported as a timeout.
 
-    On a remote box the pooled connection is taken by the first call that needs it and
+    On a remote box the pooled connection is taken by the first call that needs it (a
+    connect that times out on its own limit raises ``ProbeTimeoutError`` too) and
     given back when the block ends; it is closed instead when the block ended by a
     timeout or a cancel, or a command in it ran past its limit.
     """
     if is_local(box):
-        runner = LocalRunner()
+        runner = LocalRunner(box.name)
         if deadline is None:
             yield runner
             return
@@ -304,7 +373,7 @@ async def box_runner(
                 yield runner
         except TimeoutError:
             if bound.expired():
-                raise ProbeTimeoutError(_command_timed_out(box, deadline)) from None
+                raise CommandTimeoutError(_command_timed_out(box, deadline)) from None
             raise
         return
 
@@ -313,12 +382,16 @@ async def box_runner(
 
     async def connection() -> Any:
         if not taken:
-            taken.append(
-                await pool.acquire(box, lambda: deps.connect_for_box(box, application_config))
-            )
+            try:
+                taken.append(
+                    await pool.acquire(box, lambda: deps.connect_for_box(box, application_config))
+                )
+            except TimeoutError as exc:
+                # The connect's own limit: the box was not reached.
+                raise ProbeTimeoutError(f"connect to {box.name} timed out") from exc
         return taken[0]
 
-    remote = RemoteRunner(connection)
+    remote = RemoteRunner(connection, box.name)
     spoiled = False
     try:
         if deadline is None:
@@ -332,10 +405,8 @@ async def box_runner(
                     raise
                 spoiled = True
                 if not taken:
-                    message = _connect_timed_out(box, deadline)
-                else:
-                    message = _command_timed_out(box, deadline)
-                raise ProbeTimeoutError(message) from None
+                    raise ProbeTimeoutError(_connect_timed_out(box, deadline)) from None
+                raise CommandTimeoutError(_command_timed_out(box, deadline)) from None
     except BaseException as exc:
         if taken:
             ordinary = isinstance(exc, Exception) and not isinstance(exc, TimeoutError)

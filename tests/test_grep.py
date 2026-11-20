@@ -8,6 +8,7 @@ on Windows only the built-in one exists.
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -264,20 +265,42 @@ class TestGrepSemantics:
             ),
             ("f.ob", "true", {(UTIL, 2, "foobar")}),
             ("[^a-z ]oo", "true", {(UTIL, 1, "Foo bar")}),
-            # an invalid pattern is no matches (GNU grep exits 2), not an error
-            ("[abc", "true", set()),
-            ("foo\\", "true", set()),
         ],
     )
     def test_pattern_semantics(self, tree, grep_client, pattern, case_sensitive, expected):
         """Mutations killed: the pattern compiled as a Python regex untranslated
         (`x+y`, `(total)`, `a|b`, `main\\|end` change), escaped as a literal string
         (`^def`, `main\\|end`, `\\<bar\\>` change), node_modules/.git pruned, binary
-        files read, CR stripped, an invalid pattern raising a 500."""
+        files read, CR stripped."""
         data = grep(grep_client, tree, pattern, case_sensitive=case_sensitive)
         base = client_path(tree)
         assert hits(data) == {(f"{base}/{rel}", n, line) for rel, n, line in expected}
         assert data["truncated"] is False
+
+    @pytest.mark.parametrize(
+        ("pattern", "gnu_words", "builtin_words"),
+        [
+            ("[abc", "Unmatched [, [^, [:, [., or [=", "unmatched ["),
+            ("foo\\", "Trailing backslash", "trailing backslash"),
+        ],
+    )
+    def test_a_pattern_grep_refuses_is_invalid_with_its_own_words(
+        self, tree, grep_client, local_impl, pattern, gnu_words, builtin_words
+    ):
+        """Mutation killed: grep's exit status not read, so a refused pattern answered
+        no matches."""
+        resp = grep_client.get(
+            "/api/v1/boxes/local/grep",
+            params={"pattern": pattern, "directory": str(tree), "case_sensitive": "true"},
+            headers=auth_headers(),
+        )
+        # GNU grep names itself by the path it was started with.
+        words = f"{shutil.which('grep')}: {gnu_words}" if local_impl == "gnu" else builtin_words
+        assert (resp.status_code, resp.json()) == (400, {"detail": words, "reason": "invalid"})
+
+    def test_a_pattern_that_matches_nothing_is_no_matches(self, tree, grep_client):
+        data = grep(grep_client, tree, "nothing-here", case_sensitive="true")
+        assert (data["matches"], data["truncated"]) == ([], False)
 
     def test_limit_caps_matches_and_sets_truncated(self, tmp_path, grep_client):
         """Mutations killed: no overall cap (6 matches), the cap applied per file
@@ -323,10 +346,56 @@ class TestGrepSemantics:
         data = grep(grep_client, workdir, "needle")
         assert hits(data) == {(client_path(workdir / "real.txt"), 1, "needle inside")}
 
-    def test_directory_that_does_not_exist(self, tmp_path, grep_client):
-        data = grep(grep_client, tmp_path / "missing", "x")
-        assert data["matches"] == []
-        assert data["truncated"] is False
+    def test_a_folder_that_does_not_exist_is_not_found(self, tmp_path, grep_client, local_impl):
+        """Not "no matches": the box is asked whether the folder is there."""
+        missing = tmp_path / "missing"
+        resp = grep_client.get(
+            "/api/v1/boxes/local/grep",
+            params={"pattern": "x", "directory": str(missing)},
+            headers=auth_headers(),
+        )
+        assert (resp.status_code, resp.json()) == (
+            404,
+            {"detail": f"Folder not found: {missing}", "reason": "not_found"},
+        )
+
+    @pytest.mark.posix_only("permission bits that make a folder unreadable")
+    def test_a_folder_that_cannot_be_read_is_denied(self, tmp_path, grep_client, local_impl):
+        if os.geteuid() == 0:
+            pytest.skip("root reads every folder")
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        (locked / "a.txt").write_text("needle\n", encoding="utf-8")
+        locked.chmod(0)
+        try:
+            resp = grep_client.get(
+                "/api/v1/boxes/local/grep",
+                params={"pattern": "needle", "directory": str(locked)},
+                headers=auth_headers(),
+            )
+        finally:
+            locked.chmod(0o700)
+        assert (resp.status_code, resp.json()) == (
+            403,
+            {"detail": f"Permission denied: {locked}", "reason": "denied"},
+        )
+
+    @pytest.mark.posix_only("permission bits that make a folder unreadable")
+    def test_one_unreadable_subfolder_and_nothing_found_is_no_matches(
+        self, tmp_path, grep_client, local_impl
+    ):
+        """The search ran on everything it could read: an ordinary answer, not a failure."""
+        if os.geteuid() == 0:
+            pytest.skip("root reads every folder")
+        workdir = tmp_path / "work"
+        (workdir / "locked").mkdir(parents=True)
+        (workdir / "a.txt").write_text("hay\n", encoding="utf-8")
+        (workdir / "locked").chmod(0)
+        try:
+            data = grep(grep_client, workdir, "needle")
+        finally:
+            (workdir / "locked").chmod(0o700)
+        assert (data["matches"], data["truncated"]) == ([], False)
 
 
 class TestGrepBuiltinTimeout:

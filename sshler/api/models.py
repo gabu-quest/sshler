@@ -132,9 +132,14 @@ class APIFavoriteToggle(BaseModel):
 
 
 class APIBoxStatus(BaseModel):
+    """Whether a box answers. "offline" carries why: the failure's text in ``error``
+    and its word in ``reason``; "online" carries neither."""
+
     name: str
     status: str
     latency_ms: float | None
+    error: str | None = None
+    reason: str | None = None
 
 
 class APISession(BaseModel):
@@ -264,7 +269,9 @@ class APISnapshotConfigUpdate(BaseModel):
 
 
 class APIBoxStats(BaseModel):
-    """System statistics for a box (CPU, memory, uptime)."""
+    """System statistics for a box (CPU, memory, uptime). ``error`` is set only in an
+    event of the stats stream for a box whose stats failed, beside the failure's
+    ``reason``; the stats route answers a failure by its reason instead."""
 
     name: str
     cpu_percent: float | None = None
@@ -273,6 +280,7 @@ class APIBoxStats(BaseModel):
     memory_percent: float | None = None
     uptime_seconds: int | None = None
     error: str | None = None
+    reason: str | None = None
 
 
 class APIRefreshResult(BaseModel):
@@ -289,7 +297,6 @@ class APIGitInfo(BaseModel):
     commit: str | None = None
     is_repo: bool = False
     dirty: bool = False
-    error: str | None = None
 
 
 class APISnippet(BaseModel):

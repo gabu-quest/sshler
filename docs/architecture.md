@@ -40,10 +40,24 @@ by one owner, `api/failure.py`. `STATUS_OF_REASON` there is the list of reasons,
 one status. Code that refuses a request raises `Failure(reason, text)`; `failure_of` names the
 reason of any other error by its type (errno, SFTP type), never by its words, the same for
 both kinds of box; `failure_entry` gives an item of a batch the reason a single request would
-answer; `answer` writes the body for a check that runs before any route. The file routes are
-on it (`tests/test_failure_reasons.py` is their table, run on both kinds); a route outside
-them that raises a plain `HTTPException` gets its reason from its status. Every failure
+answer; `answer` writes the body for a check that runs before any route. Every failure
 answer the suite's test client receives is checked by `tests/failure_check.py`.
+
+The file routes are on it (`tests/test_failure_reasons.py` is their table, run on both
+kinds), and so are the routes that run a program on a box: git, the git badge, grep, the
+session sync, rename and capture, a box's stats and directory search
+(`tests/test_box_program_failure_reasons.py`). For those the runner raises one type per
+cause on both kinds: `ProgramNotFoundError` for a program that is not installed (a remote
+shell's status 127), `ProbeTimeoutError` for a connect that timed out (`unreachable`),
+`CommandTimeoutError` and `TmuxTimeoutError` for work past its limit on a reached box
+(`timeout`); `box_runner` turns every failure in its block into its `Failure`. A failure is
+never a 200 with an empty result: "not a repository", an empty repository, "no matches" and
+"no sessions" are the ordinary answers, and a box that cannot be asked is a failure. Three
+answers stay a 200 and carry `error` and `reason` in the body, because they are about a
+probe or about several things: a box's status (`offline`), an event of the stats stream for
+a box that failed, and a directory search whose walk of the box did not run (it still returns
+the folders visited before). A route outside these that raises a plain `HTTPException` gets
+its reason from its status.
 
 ## Frontend details
 
