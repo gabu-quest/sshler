@@ -194,6 +194,10 @@ def test_archive_extract_resolves_tilde_in_archive_and_destination(remote, archi
 # --- batch ---------------------------------------------------------------------
 
 
+# Batch move and copy resolve `~` too: tests/test_existing_name_rule.py checks them on
+# a real SFTP server, since they now place each item through the existing-name rule.
+
+
 def test_batch_delete_resolves_tilde_paths(remote):
     """Mutation: skip `_resolve_tilde_paths` in batch delete; SFTP is asked about `~/f`."""
     resp = _post(remote, "batch/delete", {"paths": ["~/f"]})
@@ -202,28 +206,6 @@ def test_batch_delete_resolves_tilde_paths(remote):
         {"status": "ok", "succeeded": ["~/f"], "failed": []},
     )
     assert remote.sftp.calls == [("stat", f"{HOME}/f"), ("remove", f"{HOME}/f")]
-
-
-def test_batch_move_resolves_tilde_destination_and_sources(remote):
-    """Mutation: skip the `~` resolution in batch move; SFTP renames `~/f` to `~/d/f`."""
-    resp = _post(remote, "batch/move", {"paths": ["~/f"], "destination": "~/d"})
-    assert (resp.status_code, resp.json()) == (
-        200,
-        {"status": "ok", "succeeded": ["~/f"], "failed": []},
-    )
-    assert remote.sftp.calls == [("rename", f"{HOME}/f", f"{HOME}/d/f")]
-
-
-def test_batch_copy_resolves_tilde_destination_and_sources(remote):
-    """Mutation: skip the `~` resolution in batch copy; `cp -r '~/f' '~/d/f'` runs."""
-    command = f"cp -r {HOME}/f {HOME}/d/f"
-    remote.replies[command] = _reply()
-    resp = _post(remote, "batch/copy", {"paths": ["~/f"], "destination": "~/d"})
-    assert (resp.status_code, resp.json()) == (
-        200,
-        {"status": "ok", "succeeded": ["~/f"], "failed": []},
-    )
-    assert remote.log == [HOME_CMD, HOME_CMD, command]
 
 
 # --- excel and grep ------------------------------------------------------------

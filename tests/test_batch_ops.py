@@ -1,6 +1,7 @@
 """Tests for batch file operations API."""
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -274,7 +275,9 @@ class TestLocalWorkLeavesTheEventLoop:
         (workdir / "d").mkdir()
         (workdir / "d" / "f.txt").write_text("f")
         seen: list[bool] = []
-        real = {"rmtree": shutil.rmtree, "move": shutil.move, "copy2": shutil.copy2}
+        # The call that does each operation's file work: a move takes the new name
+        # with a hard link, a copy streams the bytes.
+        real = {"rmtree": shutil.rmtree, "link": os.link, "copyfileobj": shutil.copyfileobj}
 
         def spy(name):
             def wrapper(*args, **kwargs):
@@ -284,8 +287,8 @@ class TestLocalWorkLeavesTheEventLoop:
             return wrapper
 
         monkeypatch.setattr(shutil, "rmtree", spy("rmtree"))
-        monkeypatch.setattr(shutil, "move", spy("move"))
-        monkeypatch.setattr(shutil, "copy2", spy("copy2"))
+        monkeypatch.setattr(os, "link", spy("link"))
+        monkeypatch.setattr(shutil, "copyfileobj", spy("copyfileobj"))
         client = build_client(config_dir, monkeypatch)
         try:
             body: dict = {"paths": [str(workdir / ("d" if op == "delete" else "a.txt"))]}

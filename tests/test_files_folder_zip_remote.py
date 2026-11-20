@@ -843,32 +843,10 @@ def test_upload_at_tilde_writes_into_the_remote_home(remote):
     ("route", "body", "calls", "path"),
     [
         (
-            "rename",
-            {"path": "~/old.txt", "new_name": "new.txt"},
-            [("rename", f"{HOME}/old.txt", f"{HOME}/new.txt")],
-            f"{HOME}/new.txt",
-        ),
-        (
             "delete",
             {"path": "~/a.txt"},
             [("remove", f"{HOME}/a.txt")],
             f"{HOME}/a.txt",
-        ),
-        (
-            "move",
-            {"source": "~/a.txt", "destination": "~/archive"},
-            [("rename", f"{HOME}/a.txt", f"{HOME}/archive/a.txt")],
-            f"{HOME}/archive/a.txt",
-        ),
-        (
-            "copy",
-            {"source": "~/a.txt", "destination": "~/bak"},
-            [
-                ("open", f"{HOME}/a.txt", "rb"),
-                ("open", f"{HOME}/bak/a.txt", "wb"),
-                ("write", f"{HOME}/bak/a.txt", b"original"),
-            ],
-            f"{HOME}/bak/a.txt",
         ),
         (
             "write",
@@ -1261,10 +1239,16 @@ def test_a_file_that_appears_after_the_check_is_not_truncated(remote, monkeypatc
     file created between the check and the open is truncated (touch) or replaced
     (upload) and the route answers 200."""
     remote.sftp.contents["/srv/a.txt"] = b"precious"
+    real_lstat = remote.sftp.lstat
+    checks: list[str] = []
 
     async def lstat_before_it_appeared(path: str):
-        remote.sftp.calls.append(("lstat", path))
-        raise asyncssh.SFTPNoSuchFile("No such file")
+        # Each route's first check runs before the file appears; later ones see it.
+        checks.append(path)
+        if len(checks) in (1, 3):
+            remote.sftp.calls.append(("lstat", path))
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return await real_lstat(path)
 
     monkeypatch.setattr(remote.sftp, "lstat", lstat_before_it_appeared)
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})

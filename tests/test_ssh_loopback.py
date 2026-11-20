@@ -267,3 +267,85 @@ async def test_a_client_key_the_server_does_not_know_is_refused(
             known_hosts=str(loopback.known_hosts),
             allow_alias=False,
         )
+
+
+# --- what this server does on an existing name (the existing-name rule rests on it) ---
+
+
+def _names(root: Path) -> dict[str, object]:
+    found: dict[str, object] = {}
+    for path in sorted(root.iterdir()):
+        if path.is_symlink():
+            found[path.name] = f"-> {os.readlink(path)}"
+        elif path.is_dir():
+            found[path.name] = "dir"
+        else:
+            found[path.name] = path.read_bytes()
+    return found
+
+
+@pytest.mark.asyncio
+async def test_a_plain_rename_refuses_a_file_but_replaces_a_dangling_link(loopback):
+    """Measured, not assumed: the server checks with a `stat` that follows links, then
+    renames; so a plain rename is not a no-replace call to build on."""
+    root = loopback.root
+    (root / "dangling").symlink_to(root / "nowhere")
+    connection = await _connect(loopback)
+    try:
+        sftp = await connection.start_sftp_client()
+        with pytest.raises(asyncssh.SFTPFailure, match="File already exists"):
+            await sftp.rename("/b.txt", "/Z.txt")
+        await sftp.rename("/b.txt", "/dangling")
+    finally:
+        connection.close()
+        await connection.wait_closed()
+
+    assert _names(root) == {"Z.txt": "café\n".encode(), "dangling": b"hello\n", "dir_a": "dir"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["link", "open xb", "mkdir"])
+@pytest.mark.parametrize("taken_by", ["file", "dangling link"])
+async def test_the_calls_that_take_a_free_name_fail_on_any_existing_name(loopback, call, taken_by):
+    """A hard link, an exclusive open and a new folder each fail when the name exists,
+    a dangling link included; SFTPv3 says so only as FX_FAILURE."""
+    root = loopback.root
+    if taken_by == "file":
+        (root / "taken").write_bytes(b"precious")
+    else:
+        (root / "taken").symlink_to(root / "nowhere")
+    before = _names(root)
+    connection = await _connect(loopback)
+    try:
+        sftp = await connection.start_sftp_client()
+        with pytest.raises(asyncssh.SFTPFailure, match="File exists"):
+            if call == "link":
+                await sftp.link("/b.txt", "/taken")
+            elif call == "open xb":
+                await sftp.open("/taken", "xb")
+            else:
+                await sftp.mkdir("/taken")
+    finally:
+        connection.close()
+        await connection.wait_closed()
+
+    assert _names(root) == before
+    assert (root / "nowhere").exists() is False
+
+
+@pytest.mark.asyncio
+async def test_posix_rename_replaces_a_file_and_an_empty_folder(loopback):
+    """The replace call, and how a folder moves onto the empty folder made for it."""
+    root = loopback.root
+    (root / "empty").mkdir()
+    connection = await _connect(loopback)
+    try:
+        sftp = await connection.start_sftp_client()
+        await sftp.posix_rename("/b.txt", "/Z.txt")
+        await sftp.posix_rename("/dir_a", "/empty")
+    finally:
+        connection.close()
+        await connection.wait_closed()
+
+    assert _names(root) == {"Z.txt": b"hello\n", "empty": "dir"}
+    assert (root / "empty" / "latin1.txt").read_bytes() == b"caf\xe9 au lait\n"

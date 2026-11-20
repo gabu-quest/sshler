@@ -6,18 +6,31 @@ import asyncio
 import contextlib
 import json
 import logging
-import shutil
+import os
+import stat as stat_mod
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from ..config import AppConfig
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
+from .files import (
+    REASON_FAILED,
+    _local_landing,
+    _remote_landing,
+    ensure_source_unchanged,
+    failure_entry,
+    local_fingerprint,
+    refuse_a_name_this_request_placed,
+    remote_fingerprint,
+    run_to_end,
+)
 from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_transfer
 
@@ -33,6 +46,8 @@ class APITransferRequest(BaseModel):
     paths: list[str] = Field(..., max_length=MAX_TRANSFER_PATHS)
     destination: str
     mode: str = "copy"  # "copy" or "move"
+    # Applies to every file: replace a regular file that has the file's name.
+    overwrite: StrictBool = False
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -45,7 +60,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
         _rate_limit: None = Depends(rate_limit_transfer),
     ):
-        """Stream cross-box file transfer with SSE progress events."""
+        """Stream cross-box file transfer with SSE progress events.
+
+        The ``done`` event lists ``failed`` entries as a batch does: ``path``, ``error``
+        and ``reason`` ("exists", "cannot_replace" or "failed"). A move removes only the
+        sources whose copy landed."""
 
         if payload.src_box == payload.dest_box:
             raise HTTPException(
@@ -67,27 +86,36 @@ def get_router(deps: APIDependencies) -> APIRouter:
         src_box = deps.get_box_or_404(application_config, payload.src_box)
         dest_box = deps.get_box_or_404(application_config, payload.dest_box)
 
-        validated_paths: list[str] = []
-        for path in payload.paths:
+        def _validate() -> tuple[list[str], str]:
+            """Normalise every path (a local one resolves links: a worker-thread job)."""
+            paths: list[str] = []
+            for path in payload.paths:
+                try:
+                    if src_box.transport == "local":
+                        paths.append(_normalize_local_path(path))
+                    else:
+                        paths.append(PathValidator.validate_remote_path(path))
+                except (ValidationError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=400, detail=f"Invalid path {path}: {exc}"
+                    ) from exc
             try:
-                if src_box.transport == "local":
-                    validated_paths.append(_normalize_local_path(path))
+                if dest_box.transport == "local":
+                    dest = _normalize_local_path(payload.destination)
                 else:
-                    validated_paths.append(PathValidator.validate_remote_path(path))
+                    dest = PathValidator.validate_remote_path(payload.destination)
             except (ValidationError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid path {path}: {exc}") from exc
+                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+            return paths, dest
 
-        try:
-            if dest_box.transport == "local":
-                validated_dest = _normalize_local_path(payload.destination)
-            else:
-                validated_dest = PathValidator.validate_remote_path(payload.destination)
-        except (ValidationError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+        validated_paths, validated_dest = await asyncio.to_thread(_validate)
 
         async def event_generator():
             succeeded: list[str] = []
             failed: list[dict] = []
+            landed_at: dict[str, str] = {}
+            landed: set[str] = set()
+            copied_from: dict[str, tuple] = {}
             total = len(validated_paths)
             ssh_pool = get_pool()
 
@@ -132,7 +160,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         )
 
                         try:
-                            file_size = await _get_file_size(src_box, src_sftp, src_path)
+                            refuse_a_name_this_request_placed(dest_path, landed)
+                            source_mode, file_size, fingerprint = await _source_stat(
+                                src_box, src_sftp, src_path
+                            )
                             async for event in _copy_one_file(
                                 src_box,
                                 src_sftp,
@@ -140,10 +171,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 dest_sftp,
                                 src_path,
                                 dest_path,
-                                file_size,
                                 index,
                                 total,
                                 request,
+                                source_mode=source_mode,
+                                file_size=file_size,
+                                overwrite=payload.overwrite,
                             ):
                                 yield event
 
@@ -151,16 +184,37 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 break
 
                             succeeded.append(src_path)
+                            landed_at[src_path] = dest_path
+                            landed.add(dest_path)
+                            copied_from[src_path] = fingerprint
                         except Exception as exc:
                             logger.warning(f"Transfer failed for {src_path}: {exc}")
-                            failed.append({"path": src_path, "error": str(exc)})
+                            failed.append(failure_entry(src_path, exc))
 
                     if payload.mode == "move" and succeeded and not await request.is_disconnected():
-                        for src_path in succeeded:
+                        for src_path in list(succeeded):
                             try:
-                                await _delete_source(src_box, src_sftp, src_path)
+                                await _delete_source(
+                                    src_box,
+                                    src_sftp,
+                                    src_path,
+                                    copied_from[src_path],
+                                    landed_at[src_path],
+                                )
+                            except HTTPException as exc:
+                                succeeded.remove(src_path)
+                                failed.append(failure_entry(src_path, exc))
                             except Exception as exc:
                                 logger.warning(f"Delete after move failed for {src_path}: {exc}")
+                                succeeded.remove(src_path)
+                                failed.append(
+                                    {
+                                        "path": src_path,
+                                        "error": f"Copied to {landed_at[src_path]}, but the "
+                                        f"source could not be removed: {exc}",
+                                        "reason": REASON_FAILED,
+                                    }
+                                )
 
             except SSHError as exc:
                 yield _sse_event("error", {"detail": f"SSH error: {exc}"})
@@ -194,11 +248,67 @@ async def _safe_exit_sftp(sftp_client) -> None:
         sftp_client.exit()
 
 
-async def _get_file_size(box, sftp_client, path: str) -> int:
+async def _source_stat(box, sftp_client, path: str) -> tuple[int, int, tuple]:
+    """``(mode, size, fingerprint)`` of a source, links followed; the fingerprint is
+    what a move compares before it removes the source."""
     if box.transport == "local":
-        return Path(path).stat().st_size
+        st = await asyncio.to_thread(os.stat, path)
+        return st.st_mode, st.st_size, local_fingerprint(st)
     attrs = await sftp_client.stat(path)
-    return attrs.size or 0
+    return attrs.permissions or 0, attrs.size or 0, remote_fingerprint(attrs)
+
+
+@contextlib.asynccontextmanager
+async def _source_reader(
+    box, sftp_client, path: str
+) -> AsyncIterator[Callable[[int], Awaitable[bytes]]]:
+    """Yields ``read(n)`` for a source file; local reads run in a worker thread."""
+    if box.transport == "local":
+        handle = await asyncio.to_thread(open, path, "rb")
+        try:
+            yield lambda n: asyncio.to_thread(handle.read, n)
+        finally:
+            await asyncio.to_thread(handle.close)
+    else:
+        async with await sftp_client.open(path, "rb") as handle:
+            yield handle.read
+
+
+class _ThreadedLanding:
+    """The async face of a ``_LocalLanding``: each call runs in a worker thread."""
+
+    def __init__(self, landing) -> None:
+        self.landing = landing
+
+    async def write(self, data: bytes) -> None:
+        await asyncio.to_thread(self.landing.write, data)
+
+    async def commit(self) -> None:
+        await asyncio.to_thread(self.landing.commit)
+
+    async def abort(self) -> None:
+        """To the end even if the request is cancelled: a worker-thread job cancelled
+        before it starts never runs."""
+        await run_to_end(asyncio.to_thread(self.landing.abort))
+
+
+async def _open_landing(box, sftp_client, path: str, *, overwrite: bool, source_regular: bool):
+    """The destination file, decided by the rule, its folder made if missing.
+
+    A replaced file keeps its permission bits. A free name gets the destination's
+    default bits (the local umask, or the server's default), not the source's: the
+    two boxes need not share users or groups."""
+    if box.transport == "local":
+        await asyncio.to_thread(os.makedirs, os.path.dirname(path), exist_ok=True)
+        landing = await asyncio.to_thread(
+            _local_landing, path, overwrite=overwrite, source_regular=source_regular
+        )
+        return _ThreadedLanding(landing)
+    with contextlib.suppress(Exception):
+        await sftp_client.mkdir(str(PurePosixPath(path).parent))
+    return await _remote_landing(
+        sftp_client, path, overwrite=overwrite, source_regular=source_regular
+    )
 
 
 async def _copy_one_file(
@@ -208,97 +318,39 @@ async def _copy_one_file(
     dest_sftp,
     src_path: str,
     dest_path: str,
-    file_size: int,
     index: int,
     total: int,
     request: Request,
+    *,
+    source_mode: int,
+    file_size: int,
+    overwrite: bool,
 ):
-    """Copy a single file with chunked streaming. Yields SSE progress events."""
+    """Copy a single file with chunked streaming. Yields SSE progress events.
+
+    The destination follows the rule (``DestinationRefused`` for a taken name); a copy
+    that does not finish (an error, a closed browser) removes what it wrote."""
     if await request.is_disconnected():
         return
 
-    bytes_done = 0
-
-    if dest_box.transport == "local":
-        Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
-    else:
-        dest_dir = str(PurePosixPath(dest_path).parent)
-        try:
-            await dest_sftp.mkdir(dest_dir)
-        except Exception:
-            pass
-
-    if src_box.transport == "local" and dest_box.transport == "local":
-        await asyncio.to_thread(shutil.copy2, src_path, dest_path)
-        if await request.is_disconnected():
-            return
-        yield _sse_event(
-            "progress",
-            {
-                "file": src_path,
-                "bytes_done": file_size,
-                "bytes_total": file_size,
-                "index": index,
-                "total": total,
-            },
-        )
-        return
-
-    if src_box.transport == "local":
-        with open(src_path, "rb") as src_fh:
-            async with await dest_sftp.open(dest_path, "wb") as dest_fh:
-                while True:
-                    if await request.is_disconnected():
-                        return
-                    chunk = await asyncio.to_thread(src_fh.read, CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    await dest_fh.write(chunk)
-                    bytes_done += len(chunk)
-                    yield _sse_event(
-                        "progress",
-                        {
-                            "file": src_path,
-                            "bytes_done": bytes_done,
-                            "bytes_total": file_size,
-                            "index": index,
-                            "total": total,
-                        },
-                    )
-        return
-
-    if dest_box.transport == "local":
-        async with await src_sftp.open(src_path, "rb") as src_fh:
-            with open(dest_path, "wb") as dest_fh:
-                while True:
-                    if await request.is_disconnected():
-                        return
-                    chunk = await src_fh.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    await asyncio.to_thread(dest_fh.write, chunk)
-                    bytes_done += len(chunk)
-                    yield _sse_event(
-                        "progress",
-                        {
-                            "file": src_path,
-                            "bytes_done": bytes_done,
-                            "bytes_total": file_size,
-                            "index": index,
-                            "total": total,
-                        },
-                    )
-        return
-
-    async with await src_sftp.open(src_path, "rb") as src_fh:
-        async with await dest_sftp.open(dest_path, "wb") as dest_fh:
+    landing = await _open_landing(
+        dest_box,
+        dest_sftp,
+        dest_path,
+        overwrite=overwrite,
+        source_regular=stat_mod.S_ISREG(source_mode),
+    )
+    committed = False
+    try:
+        bytes_done = 0
+        async with _source_reader(src_box, src_sftp, src_path) as read:
             while True:
                 if await request.is_disconnected():
                     return
-                chunk = await src_fh.read(CHUNK_SIZE)
+                chunk = await read(CHUNK_SIZE)
                 if not chunk:
                     break
-                await dest_fh.write(chunk)
+                await landing.write(chunk)
                 bytes_done += len(chunk)
                 yield _sse_event(
                     "progress",
@@ -310,10 +362,23 @@ async def _copy_one_file(
                         "total": total,
                     },
                 )
+        await landing.commit()
+        committed = True
+    finally:
+        if not committed:
+            await landing.abort()
 
 
-async def _delete_source(box, sftp_client, path: str) -> None:
+async def _delete_source(box, sftp_client, path: str, before: tuple, target: str) -> None:
+    """Remove a moved source, only if it is still the file that was copied to
+    ``target`` (``ensure_source_unchanged``)."""
     if box.transport == "local":
-        Path(path).unlink()
+
+        def _check_and_remove() -> None:
+            ensure_source_unchanged(before, local_fingerprint(os.stat(path)), target)
+            os.unlink(path)
+
+        await asyncio.to_thread(_check_and_remove)
     else:
+        ensure_source_unchanged(before, remote_fingerprint(await sftp_client.stat(path)), target)
         await sftp_client.remove(path)

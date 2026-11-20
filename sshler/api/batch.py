@@ -2,25 +2,34 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
+import os
 import shlex
 import stat as stat_mod
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
-from ..config import AppConfig
+from ..config import AppConfig, Box
 from ..ssh import SSHError
 from ..ssh_pool import get_pool
 from ..validation import PathValidator, ValidationError
 from .dependencies import APIDependencies
-from .files import _remote_path
+from .files import (
+    _local_destination,
+    _local_make_folder,
+    _local_place,
+    _local_refuse_a_folder_into_itself,
+    _remote_path,
+    _remote_place,
+    failure_entry,
+    refuse_a_name_this_request_placed,
+)
 from .helpers import (
-    _local_batch_copy,
     _local_batch_delete,
-    _local_batch_move,
     _normalize_local_path,
 )
 from .rate_limiting import rate_limit_delete, rate_limit_file_ops
@@ -37,17 +46,22 @@ class APIBatchDeleteRequest(BaseModel):
 class APIBatchMoveRequest(BaseModel):
     paths: list[str]
     destination: str
+    # Applies to every item: replace a regular file that has the item's name.
+    overwrite: StrictBool = False
 
 
 class APIBatchCopyRequest(BaseModel):
     paths: list[str]
     destination: str
+    overwrite: StrictBool = False
 
 
 class APIBatchResult(BaseModel):
     status: str  # "ok" | "partial"
     succeeded: list[str]
-    failed: list[dict]  # [{"path": "...", "error": "..."}]
+    # [{"path", "error", "reason"}]; move and copy give `reason` as one of the
+    # REASON_* values of `files.py` ("exists", "cannot_replace", "failed").
+    failed: list[dict]
 
 
 def _validate_batch_size(paths: list[str]) -> None:
@@ -71,7 +85,7 @@ async def _resolve_tilde_paths(
         try:
             resolved.append((orig, await _remote_path(connection, vpath)))
         except ValidationError as exc:
-            failed.append({"path": orig, "error": str(exc)})
+            failed.append(failure_entry(orig, exc))
     return resolved
 
 
@@ -80,6 +94,103 @@ async def _resolve_tilde_destination(connection, destination: str) -> str:
         return await _remote_path(connection, destination)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+
+
+def _local_batch_item(
+    path: str, dest_dir: Path, landed: set[str], *, move: bool, overwrite: bool
+) -> str:
+    """Move or copy one local item into ``dest_dir`` (call from a worker thread)."""
+    source = _normalize_local_path(path)
+    if not os.path.lexists(source):
+        raise FileNotFoundError(f"No such file or directory: {path}")
+    _local_refuse_a_folder_into_itself(source, dest_dir, move=move)
+    target = str(_local_make_folder(dest_dir) / Path(source).name)
+    refuse_a_name_this_request_placed(target, landed)
+    _local_place(source, target, move=move, overwrite=overwrite)
+    return target
+
+
+async def _batch_place(
+    deps: APIDependencies,
+    box: Box,
+    application_config: AppConfig,
+    paths: list[str],
+    destination: str,
+    *,
+    move: bool,
+    overwrite: bool,
+) -> APIBatchResult:
+    """Batch move or copy: every item whose name is free is done; each refused item is
+    in ``failed`` with its reason."""
+    succeeded: list[str] = []
+    failed: list[dict] = []
+    landed: set[str] = set()
+
+    if box.transport == "local":
+        try:
+            dest_dir = await asyncio.to_thread(_local_destination, destination)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        for path in paths:
+            try:
+                target = await asyncio.to_thread(
+                    _local_batch_item, path, dest_dir, landed, move=move, overwrite=overwrite
+                )
+            except Exception as exc:
+                failed.append(failure_entry(path, exc))
+            else:
+                landed.add(target)
+                succeeded.append(path)
+        return APIBatchResult(
+            status="ok" if not failed else "partial", succeeded=succeeded, failed=failed
+        )
+
+    try:
+        dest_validated = PathValidator.validate_remote_path(destination)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
+
+    validated: list[tuple[str, str]] = []
+    for path in paths:
+        try:
+            validated.append((path, PathValidator.validate_remote_path(path)))
+        except ValidationError as exc:
+            failed.append(failure_entry(path, exc))
+
+    if validated:
+        ssh_pool = get_pool()
+        try:
+            async with ssh_pool.connection(
+                box, lambda: deps.connect_for_box(box, application_config)
+            ) as connection:
+                dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
+                validated = await _resolve_tilde_paths(connection, validated, failed)
+                sftp_client = await connection.start_sftp_client()
+                try:
+                    for orig, vpath in validated:
+                        target = str(PurePosixPath(dest_resolved) / PurePosixPath(vpath).name)
+                        try:
+                            refuse_a_name_this_request_placed(target, landed)
+                            await _remote_place(
+                                sftp_client, vpath, target, move=move, overwrite=overwrite
+                            )
+                        except Exception as exc:
+                            failed.append(failure_entry(orig, exc))
+                        else:
+                            landed.add(target)
+                            succeeded.append(orig)
+                finally:
+                    with contextlib.suppress(Exception):
+                        sftp_client.exit()
+        except SSHError as exc:
+            already = {f["path"] for f in failed} | set(succeeded)
+            for orig, _ in validated:
+                if orig not in already:
+                    failed.append(failure_entry(orig, exc))
+
+    return APIBatchResult(
+        status="ok" if not failed else "partial", succeeded=succeeded, failed=failed
+    )
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -102,7 +213,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if box.transport == "local":
             for path in payload.paths:
                 try:
-                    normalized = _normalize_local_path(path)
+                    normalized = await asyncio.to_thread(_normalize_local_path, path)
                     await _local_batch_delete(normalized)
                     succeeded.append(path)
                 except Exception as exc:
@@ -165,66 +276,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIBatchResult:
         _validate_batch_size(payload.paths)
         box = deps.get_box_or_404(application_config, name)
-
-        succeeded: list[str] = []
-        failed: list[dict] = []
-
-        if box.transport == "local":
-            dest_dir = Path(_normalize_local_path(payload.destination))
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            for path in payload.paths:
-                try:
-                    normalized = _normalize_local_path(path)
-                    source = Path(normalized)
-                    target = dest_dir / source.name
-                    await _local_batch_move(str(source), str(target))
-                    succeeded.append(path)
-                except Exception as exc:
-                    failed.append({"path": path, "error": str(exc)})
-        else:
-            try:
-                dest_validated = PathValidator.validate_remote_path(payload.destination)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
-
-            validated: list[tuple[str, str]] = []
-            for path in payload.paths:
-                try:
-                    v = PathValidator.validate_remote_path(path)
-                    validated.append((path, v))
-                except ValidationError as exc:
-                    failed.append({"path": path, "error": str(exc)})
-
-            if validated:
-                ssh_pool = get_pool()
-                try:
-                    async with ssh_pool.connection(
-                        box, lambda: deps.connect_for_box(box, application_config)
-                    ) as connection:
-                        dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
-                        validated = await _resolve_tilde_paths(connection, validated, failed)
-                        sftp_client = await connection.start_sftp_client()
-                        try:
-                            for orig, vpath in validated:
-                                try:
-                                    remote_target = str(
-                                        PurePosixPath(dest_resolved) / PurePosixPath(vpath).name
-                                    )
-                                    await sftp_client.rename(vpath, remote_target)
-                                    succeeded.append(orig)
-                                except Exception as exc:
-                                    failed.append({"path": orig, "error": str(exc)})
-                        finally:
-                            with contextlib.suppress(Exception):
-                                sftp_client.exit()
-                except SSHError as exc:
-                    already = {f["path"] for f in failed} | set(succeeded)
-                    for orig, _ in validated:
-                        if orig not in already:
-                            failed.append({"path": orig, "error": str(exc)})
-
-        status = "ok" if not failed else "partial"
-        return APIBatchResult(status=status, succeeded=succeeded, failed=failed)
+        return await _batch_place(
+            deps,
+            box,
+            application_config,
+            payload.paths,
+            payload.destination,
+            move=True,
+            overwrite=payload.overwrite,
+        )
 
     @router.post("/boxes/{name}/batch/copy", response_model=APIBatchResult)
     async def api_batch_copy(
@@ -236,63 +296,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIBatchResult:
         _validate_batch_size(payload.paths)
         box = deps.get_box_or_404(application_config, name)
-
-        succeeded: list[str] = []
-        failed: list[dict] = []
-
-        if box.transport == "local":
-            dest_dir = Path(_normalize_local_path(payload.destination))
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            for path in payload.paths:
-                try:
-                    normalized = _normalize_local_path(path)
-                    source = Path(normalized)
-                    target = dest_dir / source.name
-                    await _local_batch_copy(str(source), str(target))
-                    succeeded.append(path)
-                except Exception as exc:
-                    failed.append({"path": path, "error": str(exc)})
-        else:
-            try:
-                dest_validated = PathValidator.validate_remote_path(payload.destination)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid destination: {exc}") from exc
-
-            validated: list[tuple[str, str]] = []
-            for path in payload.paths:
-                try:
-                    v = PathValidator.validate_remote_path(path)
-                    validated.append((path, v))
-                except ValidationError as exc:
-                    failed.append({"path": path, "error": str(exc)})
-
-            if validated:
-                ssh_pool = get_pool()
-                try:
-                    async with ssh_pool.connection(
-                        box, lambda: deps.connect_for_box(box, application_config)
-                    ) as connection:
-                        dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
-                        validated = await _resolve_tilde_paths(connection, validated, failed)
-                        for orig, vpath in validated:
-                            try:
-                                remote_target = str(
-                                    PurePosixPath(dest_resolved) / PurePosixPath(vpath).name
-                                )
-                                await connection.run(
-                                    f"cp -r {shlex.quote(vpath)} {shlex.quote(remote_target)}",
-                                    check=True,
-                                )
-                                succeeded.append(orig)
-                            except Exception as exc:
-                                failed.append({"path": orig, "error": str(exc)})
-                except SSHError as exc:
-                    already = {f["path"] for f in failed} | set(succeeded)
-                    for orig, _ in validated:
-                        if orig not in already:
-                            failed.append({"path": orig, "error": str(exc)})
-
-        status = "ok" if not failed else "partial"
-        return APIBatchResult(status=status, succeeded=succeeded, failed=failed)
+        return await _batch_place(
+            deps,
+            box,
+            application_config,
+            payload.paths,
+            payload.destination,
+            move=False,
+            overwrite=payload.overwrite,
+        )
 
     return router

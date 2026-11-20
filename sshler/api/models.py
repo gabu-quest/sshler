@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 from .helpers import MAX_IMAGE_PREVIEW_BYTES
 
@@ -53,17 +53,21 @@ class APIDeleteRequest(BaseModel):
 class APIRenameRequest(BaseModel):
     path: str
     new_name: str
+    # Replace a regular file that has the name; a JSON boolean only, never "true" or 1.
+    overwrite: StrictBool = False
 
 
 class APIMoveRequest(BaseModel):
     source: str
     destination: str
+    overwrite: StrictBool = False
 
 
 class APICopyRequest(BaseModel):
     source: str
     destination: str
     new_name: str | None = None
+    overwrite: StrictBool = False
 
 
 class APIChmodRequest(BaseModel):
