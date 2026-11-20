@@ -19,6 +19,8 @@ from .models import (
     APILostSession,
     APIRecoveryPane,
     APIRecoveryWindow,
+    APIRecreateBatchRequest,
+    APIRecreateBatchResult,
     APISimpleMessage,
     APISnapshotConfig,
     APISnapshotConfigUpdate,
@@ -86,10 +88,10 @@ def get_router(deps: APIDependencies) -> APIRouter:
             status="ok", message=f"Recreated {target['session_name']}", path=session_id
         )
 
-    @router.post("/recovery/recreate-batch")
-    async def api_recreate_batch(body: dict) -> dict:
+    @router.post("/recovery/recreate-batch", response_model=APIRecreateBatchResult)
+    async def api_recreate_batch(body: APIRecreateBatchRequest) -> APIRecreateBatchResult:
         """Recreate multiple sessions. Returns per-session results."""
-        session_ids: list[str] = body.get("session_ids", [])
+        session_ids = body.session_ids
         lost = get_recovery_sessions()
         lost_map = {s["id"]: s for s in lost}
 
@@ -113,7 +115,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             results[sid] = "ok"
             logger.info("Recreated session: %s", target["session_name"])
 
-        return {"results": results}
+        return APIRecreateBatchResult(results=results)
 
     @router.get("/snapshot/status", response_model=APISnapshotStatus)
     async def api_snapshot_status() -> APISnapshotStatus:

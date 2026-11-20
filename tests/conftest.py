@@ -22,7 +22,6 @@ from sshler import (  # noqa: E402
     ssh_pool,
 )
 from sshler.api import dependencies as api_dependencies  # noqa: E402
-from sshler.api import tunnels as api_tunnels  # noqa: E402
 from sshler.session import reset_session_store  # noqa: E402
 from sshler.settings import reset_settings  # noqa: E402
 from sshler.state import reset_state  # noqa: E402
@@ -91,7 +90,6 @@ def _reset_process_globals() -> None:
     claude_sessions._CACHE.clear()
     claude_sessions._GIT_ROOT_CACHE.clear()
     snapshot._recovery_sessions.clear()
-    api_tunnels._active_tunnels.clear()
     api_dependencies._CONNECT_FAIL_CACHE.clear()
     ssh_pool._global_pool = None
 

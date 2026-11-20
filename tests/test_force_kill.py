@@ -388,7 +388,10 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
         assert resp.status_code == 200
         assert kill_recorders["force"] == []
         assert kill_recorders["plain"] == []
-        assert commands == ["tmux -L ts-rsess kill-session -t rsess"]
+        # The pool health-checks the connection it gets back with ``echo test``.
+        assert [c for c in commands if c != "echo test"] == [
+            "tmux -L ts-rsess kill-session -t rsess"
+        ]
     finally:
         client.close()
         state.reset_state()

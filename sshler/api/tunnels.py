@@ -31,8 +31,50 @@ class TunnelInfo:
     created_at: float = field(default_factory=time.time)
 
 
-# In-memory registry — tunnels are ephemeral (die with server)
-_active_tunnels: dict[str, TunnelInfo] = {}
+class TunnelRegistry:
+    """The open tunnels of one app. They are ephemeral: they die with the app.
+
+    ``make_app`` creates one per app and hands it to the routes through
+    ``APIDependencies.tunnels``; two apps never see each other's tunnels.
+    """
+
+    def __init__(self) -> None:
+        self._tunnels: dict[str, TunnelInfo] = {}
+
+    def add(self, info: TunnelInfo) -> None:
+        self._tunnels[info.id] = info
+
+    def get(self, tunnel_id: str) -> TunnelInfo | None:
+        return self._tunnels.get(tunnel_id)
+
+    def list_for_box(self, box: str) -> list[TunnelInfo]:
+        """The box's tunnels, oldest first."""
+        found = [t for t in self._tunnels.values() if t.box == box]
+        found.sort(key=lambda t: t.created_at)
+        return found
+
+    def remove(self, tunnel_id: str) -> TunnelInfo | None:
+        """Forget a tunnel and close its listener and SSH connection."""
+        info = self._tunnels.pop(tunnel_id, None)
+        if info is not None:
+            _close_tunnel(info)
+        return info
+
+    def close_all(self) -> None:
+        """Close every tunnel; one that fails to close does not stop the rest."""
+        for tunnel_id in list(self._tunnels):
+            self.remove(tunnel_id)
+
+
+def _close_tunnel(info: TunnelInfo) -> None:
+    try:
+        if info.listener is not None and hasattr(info.listener, "close"):
+            info.listener.close()
+    except Exception as exc:
+        logger.warning(f"Error closing tunnel {info.id}: {exc}")
+    if info.connection is not None:
+        with contextlib.suppress(Exception):
+            info.connection.close()  # type: ignore[attr-defined]
 
 
 def _tunnel_to_api(t: TunnelInfo) -> APITunnel:
@@ -51,15 +93,18 @@ def _tunnel_to_api(t: TunnelInfo) -> APITunnel:
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
+    def registry() -> TunnelRegistry:
+        if deps.tunnels is None:
+            raise RuntimeError("the app made no tunnel registry")
+        return deps.tunnels
+
     @router.get("/boxes/{name}/tunnels", response_model=list[APITunnel])
     async def api_list_tunnels(
         name: str,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> list[APITunnel]:
         deps.get_box_or_404(application_config, name)
-        tunnels = [t for t in _active_tunnels.values() if t.box == name]
-        tunnels.sort(key=lambda t: t.created_at)
-        return [_tunnel_to_api(t) for t in tunnels]
+        return [_tunnel_to_api(t) for t in registry().list_for_box(name)]
 
     @router.post("/boxes/{name}/tunnels", response_model=APITunnel)
     async def api_create_tunnel(
@@ -114,7 +159,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             listener=listener,
             connection=connection,
         )
-        _active_tunnels[tunnel_id] = info
+        registry().add(info)
         logger.info(
             f"Tunnel {tunnel_id} created: {payload.tunnel_type} "
             f"{payload.local_host}:{payload.local_port} <-> "
@@ -130,20 +175,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APISimpleMessage:
         deps.get_box_or_404(application_config, name)
 
-        info = _active_tunnels.get(tunnel_id)
+        info = registry().get(tunnel_id)
         if not info or info.box != name:
             raise HTTPException(status_code=404, detail="Tunnel not found")
 
-        try:
-            if info.listener and hasattr(info.listener, "close"):
-                info.listener.close()
-        except Exception as exc:
-            logger.warning(f"Error closing tunnel {tunnel_id}: {exc}")
-        if info.connection is not None:
-            with contextlib.suppress(Exception):
-                info.connection.close()  # type: ignore[attr-defined]
-
-        del _active_tunnels[tunnel_id]
+        registry().remove(tunnel_id)
         logger.info(f"Tunnel {tunnel_id} closed for {name}")
         return APISimpleMessage(status="ok", message="closed", path=tunnel_id)
 

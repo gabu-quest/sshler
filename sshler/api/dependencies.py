@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from fastapi import HTTPException, Request
 
@@ -14,6 +14,9 @@ from ..config import AppConfig, Box, find_box, get_config_path, load_config
 from ..config_cache import get_cache
 from ..ssh import SSHError, connect
 from ..ssh_pool import get_pool
+
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    from .tunnels import TunnelRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,8 @@ class APIDependencies:
         self.broadcast_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         # Optional broadcaster for the ping fan-out WebSocket.
         self.broadcast_ping: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        # The app's open tunnels; set by ``make_app``, closed at shutdown.
+        self.tunnels: TunnelRegistry | None = None
 
     def require_token(self, request: Request) -> None:
         if not self.settings.csrf_token:
@@ -119,19 +124,22 @@ class APIDependencies:
         box: Box,
         application_config: AppConfig,
         operation: Callable[[Any], Awaitable[T]],
+        *,
+        timeout: float | None = None,
     ) -> T:
         """Run ``operation(conn)`` on a pooled connection to ``box``.
 
         For the routes the UI polls: they share the pool's idle connections
         instead of opening one per request. Getting the connection plus the
-        operation is bounded by ``PROBE_TIMEOUT_SECONDS``; past it this raises
+        operation is bounded by ``timeout`` seconds (default
+        ``PROBE_TIMEOUT_SECONDS``, read at call time); past it this raises
         ``ProbeTimeoutError`` naming the step. Returning the connection to the
         pool comes after the bound, so a finished operation is never reported
         as a timeout. A connection whose operation timed out or was cancelled
         is closed, not reused (a command may still be running on it).
         """
         pool = get_pool()
-        limit = PROBE_TIMEOUT_SECONDS
+        limit = PROBE_TIMEOUT_SECONDS if timeout is None else timeout
         deadline = asyncio.timeout(limit)
         conn = None
         try:

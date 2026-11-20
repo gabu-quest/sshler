@@ -17,7 +17,7 @@ from ..tmux import (
     run_local_tmux,
 )
 from ..validation import PathValidator, ValidationError
-from .dependencies import APIDependencies
+from .dependencies import PROBE_TIMEOUT_SECONDS, APIDependencies
 from .models import (
     APILayout,
     APILayoutCreate,
@@ -61,6 +61,10 @@ async def _get_live_tmux_sessions_remote(connection) -> set[str]:
     except Exception as exc:
         logger.debug(f"Failed to list remote tmux sessions: {exc}")
     return set()
+
+
+class _CaptureTimeoutError(TimeoutError):
+    """The remote capture command, not the connect before it, ran past its limit."""
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -190,20 +194,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         logger.warning(f"tmux rename failed: {stderr.decode().strip()}")
                         raise HTTPException(status_code=400, detail="tmux rename failed")
                 else:
-                    connection = await deps.connect_for_box(box, application_config)
-                    try:
-                        result = await connection.run(
-                            remote_tmux_command(
-                                record.session_name,
-                                ["rename-session", "-t", record.session_name, new_name],
-                            ),
-                            check=False,
-                        )
-                        if result.returncode != 0:
-                            raise HTTPException(status_code=400, detail="tmux rename failed")
-                    finally:
-                        with contextlib.suppress(Exception):
-                            connection.close()
+                    command = remote_tmux_command(
+                        record.session_name,
+                        ["rename-session", "-t", record.session_name, new_name],
+                    )
+                    result = await deps.run_pooled(
+                        box,
+                        application_config,
+                        lambda connection: connection.run(command, check=False),
+                    )
+                    if result.returncode != 0:
+                        raise HTTPException(status_code=400, detail="tmux rename failed")
             except HTTPException:
                 raise
             except Exception as exc:
@@ -275,18 +276,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
                             "kill-session to avoid killing other sessions",
                             record.session_name,
                         )
-                    connection = await deps.connect_for_box(box, application_config)
-                    try:
-                        await connection.run(
-                            remote_tmux_command(
-                                record.session_name,
-                                ["kill-session", "-t", record.session_name],
-                            ),
-                            check=False,
-                        )
-                    finally:
-                        with contextlib.suppress(Exception):
-                            connection.close()
+                    command = remote_tmux_command(
+                        record.session_name, ["kill-session", "-t", record.session_name]
+                    )
+                    await deps.run_pooled(
+                        box,
+                        application_config,
+                        lambda connection: connection.run(command, check=False),
+                    )
             except Exception as exc:
                 logger.warning(f"Failed to kill tmux session {record.session_name}: {exc}")
 
@@ -487,17 +484,19 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     )
                 text = stdout_b.decode(errors="replace")
             else:
-                connection = await deps.connect_for_box(box, application_config)
-                try:
+                command = remote_tmux_command(session_name, capture_args)
+
+                async def capture(connection):
+                    # The limit is the command's own, as on the local box. Its
+                    # timeout stays a TimeoutError so the pool drops the
+                    # connection (the command may still be running on it), and
+                    # is told apart from a connect that timed out.
                     try:
                         result = await asyncio.wait_for(
-                            connection.run(
-                                remote_tmux_command(session_name, capture_args), check=False
-                            ),
-                            timeout=limit,
+                            connection.run(command, check=False), timeout=limit
                         )
                     except TimeoutError as exc:
-                        raise _capture_timeout(name, session_name, limit) from exc
+                        raise _CaptureTimeoutError from exc
                     if result.returncode != 0:
                         stderr_txt = (
                             (result.stderr or "").strip() if isinstance(result.stderr, str) else ""
@@ -506,14 +505,21 @@ def get_router(deps: APIDependencies) -> APIRouter:
                             status_code=400,
                             detail=f"tmux capture-pane failed: {stderr_txt}",
                         )
-                    text = (
+                    return (
                         result.stdout
                         if isinstance(result.stdout, str)
                         else (result.stdout or b"").decode(errors="replace")
                     )
-                finally:
-                    with contextlib.suppress(Exception):
-                        connection.close()
+
+                try:
+                    text = await deps.run_pooled(
+                        box,
+                        application_config,
+                        capture,
+                        timeout=limit + PROBE_TIMEOUT_SECONDS,
+                    )
+                except _CaptureTimeoutError as exc:
+                    raise _capture_timeout(name, session_name, limit) from exc
         except HTTPException:
             raise
         except Exception as exc:

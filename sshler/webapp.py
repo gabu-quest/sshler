@@ -44,6 +44,7 @@ from .api.helpers import (
     available_windows_shells,
     default_windows_shell,
 )
+from .api.tunnels import TunnelRegistry
 from .auth import AuthManager, PasswordHasher, PasswordPolicy, PasswordValidator
 from .config import (
     AppConfig,
@@ -742,6 +743,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     ping_broadcaster = Broadcaster()
     deps.broadcast_ping = ping_broadcaster.broadcast
 
+    # This app's open tunnels (closed at shutdown). Per app, never module-global.
+    tunnel_registry = TunnelRegistry()
+    deps.tunnels = tunnel_registry
+
     # Keeps native Windows ConPTY shells alive across websocket disconnects so
     # they can be re-attached (session persistence). Posix hosts pay nothing —
     # the reaper is only started on Windows (see lifespan). When a shell is
@@ -800,6 +805,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         finally:
             # Shutdown: Cancel snapshot loop and cleanup pools/sidecars.
             snapshot_task.cancel()
+            tunnel_registry.close_all()
             if artifact_sidecar is not None:
                 await asyncio.to_thread(artifact_sidecar.stop)
                 settings.artifact_server_port_actual = None
@@ -816,6 +822,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     application.state.settings = settings
     application.state.auth_tracker = AuthFailureTracker()
     application.state.win_terminal_registry = win_terminal_registry
+    application.state.tunnels = tunnel_registry
 
     application.add_middleware(GZipMiddleware, minimum_size=1000)
 

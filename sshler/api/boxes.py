@@ -21,6 +21,8 @@ from .models import (
     APIGitInfo,
     APIPinToggle,
     APIRefreshResult,
+    APIThemeResult,
+    APIThemeUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -214,14 +216,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             logger.warning(f"Failed to get git info for {name}:{directory}: {e}")
             return APIGitInfo(error=str(e))
 
-    @router.put("/boxes/{name}/theme")
+    @router.put("/boxes/{name}/theme", response_model=APIThemeResult)
     async def api_set_theme(
         name: str,
-        payload: dict,
+        payload: APIThemeUpdate,
         application_config: AppConfig = Depends(deps.get_application_config),
-    ) -> dict:
+    ) -> APIThemeResult:
         """Set terminal theme preference for a box."""
-        theme = payload.get("terminal_theme", "")
+        theme = payload.terminal_theme
         if theme and theme not in _VALID_THEMES:
             from fastapi import HTTPException
 
@@ -234,7 +236,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         stored.terminal_theme = theme or None
         save_config(application_config)
         rebuild_boxes(application_config)
-        return {"status": "ok", "terminal_theme": theme or None}
+        return APIThemeResult(status="ok", terminal_theme=theme or None)
 
     return router
 

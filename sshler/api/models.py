@@ -41,6 +41,29 @@ class APISimpleMessage(BaseModel):
     path: str | None = None
 
 
+class APIThemeUpdate(BaseModel):
+    """Body of ``PUT /boxes/{name}/theme``; a missing, empty or null name clears the theme."""
+
+    terminal_theme: str | None = ""
+
+
+class APIThemeResult(BaseModel):
+    status: str
+    terminal_theme: str | None
+
+
+class APIRecreateBatchRequest(BaseModel):
+    """Body of ``POST /recovery/recreate-batch``; a missing key is an empty batch."""
+
+    session_ids: list[str] = Field(default_factory=list)
+
+
+class APIRecreateBatchResult(BaseModel):
+    """Per session id: ``"ok"`` or the reason it was not recreated."""
+
+    results: dict[str, str]
+
+
 class APITouchRequest(BaseModel):
     directory: str
     filename: str

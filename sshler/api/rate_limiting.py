@@ -107,13 +107,6 @@ rate_limit_login = create_rate_limit_dependency(
     per=60,
 )
 
-# Terminal creation: 10 per minute
-rate_limit_terminal = create_rate_limit_dependency(
-    name="api_terminal",
-    rate=10,
-    per=60,
-)
-
 # File copy/move: 20 per minute
 rate_limit_file_ops = create_rate_limit_dependency(
     name="api_file_ops",
