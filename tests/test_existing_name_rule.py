@@ -54,9 +54,10 @@ pytestmark = pytest.mark.posix_only("hard links, chmod and an SFTP server rooted
 TOKEN = "rule-token"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
 REMOTE = "lb"
-EXISTS = {"detail": "File already exists"}
-NOT_REGULAR = {"detail": "Only a regular file can be replaced"}
-SAME_FILE = {"detail": "Source and destination are the same file"}
+EXISTS = {"detail": "File already exists", "reason": "exists"}
+TAKEN = {"detail": "File already exists", "reason": "cannot_replace"}
+NOT_REGULAR = {"detail": "Only a regular file can be replaced", "reason": "cannot_replace"}
+SAME_FILE = {"detail": "Source and destination are the same file", "reason": "cannot_replace"}
 HOME_CMD = 'printf %s "$HOME"'
 
 
@@ -472,7 +473,7 @@ def test_what_is_not_a_regular_file_is_never_replaced(env, box, op, kind):
     refused = single(s, op, "a.txt")
     replaced = single(s, op, "a.txt", overwrite=True)
 
-    assert (refused.status_code, refused.json()) == (409, EXISTS)
+    assert (refused.status_code, refused.json()) == (409, TAKEN)
     assert (replaced.status_code, replaced.json()) == (400, NOT_REGULAR)
     assert files_under(s.base) == before
 
@@ -492,7 +493,7 @@ def test_a_folder_as_the_source_never_replaces_a_file(env, box, op):
     refused = single(s, op, "src")
     replaced = single(s, op, "src", overwrite=True)
 
-    assert (refused.status_code, refused.json()) == (409, EXISTS)
+    assert (refused.status_code, refused.json()) == (409, TAKEN)
     assert (replaced.status_code, replaced.json()) == (400, NOT_REGULAR)
     assert files_under(s.base) == before
 
@@ -579,7 +580,7 @@ def test_copying_a_file_onto_itself_is_refused(env, box):
     body = {"source": s.path("a.txt"), "destination": folder}
     refused = s.post("copy", body)
     replaced = s.post("copy", {**body, "overwrite": True})
-    assert (refused.status_code, refused.json()) == (409, EXISTS)
+    assert (refused.status_code, refused.json()) == (409, TAKEN)
     assert (replaced.status_code, replaced.json()) == (400, SAME_FILE)
     assert s.disk("a.txt").read_bytes() == b"source"
 
@@ -594,7 +595,7 @@ def test_a_hard_link_of_the_source_is_never_replaced_by_it(local_env, op):
     os.link(s.disk("a.txt"), s.disk("d/a.txt"))
     refused = single(s, op, "a.txt")
     replaced = single(s, op, "a.txt", overwrite=True)
-    assert (refused.status_code, refused.json()) == (409, EXISTS)
+    assert (refused.status_code, refused.json()) == (409, TAKEN)
     assert (replaced.status_code, replaced.json()) == (400, SAME_FILE)
     assert files_under(s.base) == {"a.txt": b"source", "d": "dir", "d/a.txt": b"source"}
     assert s.disk("a.txt").stat().st_nlink == 2
@@ -684,7 +685,7 @@ def test_a_name_taken_after_the_check_is_refused_not_replaced(
 
     resp = single(s, op, "a", "d" if op != "rename" else "b")
 
-    assert (resp.status_code, resp.json()) == (409, EXISTS)
+    assert (resp.status_code, resp.json()) == (409, EXISTS if source_kind == "file" else TAKEN)
     assert checked[0] == s.path(target)
     assert s.disk(target).read_bytes() == b"intruder"
     if source_kind == "file":
@@ -705,7 +706,7 @@ def test_a_dangling_link_made_after_the_check_is_refused_and_not_written_through
 
     resp = single(s, "copy", "a.txt")
 
-    assert (resp.status_code, resp.json()) == (409, EXISTS)
+    assert (resp.status_code, resp.json()) == (409, TAKEN)
     assert outside.exists() is False
     assert os.readlink(s.disk("d/a.txt")) == str(outside)
 
@@ -1127,7 +1128,10 @@ def test_a_folder_is_never_copied_or_moved_into_itself(env, box, op, into):
 
     if op == "move":
         resp = s.post("move", {"source": s.path("a"), "destination": s.path(into)})
-        assert (resp.status_code, resp.json()) == (400, {"detail": INTO_ITSELF})
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": INTO_ITSELF, "reason": "cannot_replace"},
+        )
     else:
         resp = s.post(op, {"paths": [s.path("a")], "destination": s.path(into)})
         assert (resp.status_code, resp.json()) == (
@@ -1523,7 +1527,7 @@ def test_a_folder_moves_on_a_server_without_posix_rename(env, box, op):
 
     assert (moved.status_code, moved.json()["path"]) == (200, s.path(target))
     assert s.disk(f"{target}/sub/inner.txt").read_bytes() == b"inner"
-    assert (refused.status_code, refused.json()) == (409, EXISTS)
+    assert (refused.status_code, refused.json()) == (409, TAKEN)
     assert s.disk(f"{target}/sub/inner.txt").read_bytes() == b"inner"
 
 
@@ -1696,7 +1700,10 @@ def test_a_folder_into_a_missing_folder_under_itself_leaves_nothing(env, box, op
 
     if op in ("move", "copy"):
         resp = s.post(op, {"source": s.path("a"), "destination": s.path(into)})
-        assert (resp.status_code, resp.json()) == (400, {"detail": INTO_ITSELF})
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": INTO_ITSELF, "reason": "cannot_replace"},
+        )
     else:
         resp = s.post(op, {"paths": [s.path("a")], "destination": s.path(into)})
         assert (resp.status_code, resp.json()) == (
@@ -2059,3 +2066,123 @@ def test_a_local_copy_validates_its_new_name(local_env, new_name, message):
 
     assert (resp.status_code, resp.json()) == (400, {"detail": message})
     assert files_under(s.base) == before
+
+
+# --- the response of a refused single operation, and the paths a transfer answers with ---
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("op", ["rename", "move", "copy"])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_a_refused_single_operation_says_why_and_a_folder_in_the_way_cannot_be_replaced(
+    env, box, op, overwrite
+):
+    """Before: the body was only ``detail``, so a view could not tell a name it may ask
+    to replace from a folder it never can."""
+    s = side(env, box)
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("taken.txt").write_bytes(b"precious")
+    if op != "rename":
+        s.disk("d/a.txt").mkdir(parents=True)
+        s.disk("d/taken.txt").write_bytes(b"precious")
+    else:
+        s.disk("folder").mkdir()
+    free = {"overwrite": True} if overwrite else {}
+    before = files_under(s.base)
+
+    onto_folder = single(s, op, "a.txt", "folder" if op == "rename" else "d", **free)
+    onto_file = single(
+        s,
+        op,
+        "a.txt" if op == "rename" else "taken.txt",
+        "taken.txt" if op == "rename" else "d",
+        **free,
+    )
+
+    expected_folder = (
+        (400, {"detail": "Only a regular file can be replaced", "reason": "cannot_replace"})
+        if overwrite
+        else (409, {"detail": "File already exists", "reason": "cannot_replace"})
+    )
+    assert (onto_folder.status_code, onto_folder.json()) == expected_folder
+    if not overwrite:
+        assert (onto_file.status_code, onto_file.json()) == (
+            409,
+            {"detail": "File already exists", "reason": "exists"},
+        )
+    if not overwrite and op != "rename":
+        assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_a_rename_onto_a_link_says_it_cannot_be_replaced(env, box):
+    s = side(env, box)
+    s.disk("a.txt").write_bytes(b"source")
+    s.disk("target.txt").write_bytes(b"other")
+    os.symlink("target.txt", s.disk("link.txt"))
+
+    resp = single(s, "rename", "a.txt", "link.txt")
+
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
+
+
+def _through_a_linked_folder(s: Side) -> tuple[str, str]:
+    """``real/`` holds the files; ``link`` is a link to it. Returns the two paths as a
+    pane would show them, through the link."""
+    s.disk("real").mkdir()
+    s.disk("real/a.txt").write_bytes(b"source a")
+    s.disk("real/b.txt").write_bytes(b"source b")
+    os.symlink(s.disk("real"), s.disk("link"))
+    return str(s.disk("link/a.txt")), str(s.disk("link/b.txt"))
+
+
+@pytest.mark.parametrize("server", ["refusing-rename"])
+@pytest.mark.parametrize("mode", ["copy", "move"])
+def test_a_cross_box_transfer_answers_with_the_paths_it_was_sent(env, server, mode):
+    """Before: a local source was resolved first and the answer carried the resolved path,
+    which no row of the pane matched."""
+    a, b = side(env, "local"), side(env, REMOTE)
+    sent_a, sent_b = _through_a_linked_folder(a)
+    b.disk("in").mkdir()
+    b.disk("in/a.txt").write_bytes(b"precious")
+
+    events = transfer(env, "local", REMOTE, [sent_a, sent_b], "/in", mode=mode)
+
+    assert events[-1] == (
+        "done",
+        {
+            "succeeded": [sent_b],
+            "failed": [{"path": sent_a, "error": "File already exists", "reason": "exists"}],
+        },
+    )
+    # The refused item is said when it is refused, before the next item's progress.
+    assert [(kind, data.get("file") or data.get("path")) for kind, data in events[:-1]] == [
+        ("failed", sent_a),
+        ("progress", sent_b),
+    ]
+    assert events[0][1] == {"path": sent_a, "error": "File already exists", "reason": "exists"}
+    assert b.disk("in/a.txt").read_bytes() == b"precious"
+    assert b.disk("in/b.txt").read_bytes() == b"source b"
+    # A move removes the source it copied, through the link, and keeps the refused one.
+    assert a.disk("real/a.txt").read_bytes() == b"source a"
+    assert a.disk("real/b.txt").exists() == (mode == "copy")
+
+
+@pytest.mark.parametrize("op", ["copy", "move"])
+def test_a_same_box_batch_answers_with_the_paths_it_was_sent(local_env, op):
+    s = side(local_env, "local")
+    sent_a, sent_b = _through_a_linked_folder(s)
+    s.disk("d").mkdir()
+    s.disk("d/a.txt").write_bytes(b"precious")
+
+    resp = s.post(f"batch/{op}", {"paths": [sent_a, sent_b], "destination": s.path("d")})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "partial",
+        "succeeded": [sent_b],
+        "failed": [{"path": sent_a, "error": "File already exists", "reason": "exists"}],
+    }

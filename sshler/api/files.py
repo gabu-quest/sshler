@@ -14,15 +14,16 @@ import shutil
 import stat as stat_mod
 import tempfile
 import zipfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path, PurePosixPath
-from typing import NoReturn
+from typing import Any, NoReturn
 from urllib.parse import quote
 
 import anyio
 import asyncssh
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.routing import APIRoute
 
 from .. import state
 from ..config import AppConfig
@@ -173,6 +174,27 @@ class DestinationRefused(HTTPException):
     def __init__(self, status_code: int, detail: str, reason: str) -> None:
         super().__init__(status_code=status_code, detail=detail)
         self.reason = reason
+
+
+class _RefusalAnswers(APIRoute):
+    """A route that places a file under a new name: a ``DestinationRefused`` that reaches
+    the route's edge is answered as ``{"detail": text, "reason": reason}`` with its
+    status, so a caller can tell a name it may ask to replace from one it never can."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def answer(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except DestinationRefused as exc:
+                return JSONResponse(
+                    {"detail": exc.detail, "reason": exc.reason},
+                    status_code=exc.status_code,
+                    headers=exc.headers,
+                )
+
+        return answer
 
 
 def failure_entry(path: str, exc: BaseException) -> dict[str, str]:
@@ -1131,6 +1153,8 @@ def _local_entry_stats(
 
 def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
+    # The routes that place a file under a new name answer a refusal with its reason.
+    placing = APIRouter(route_class=_RefusalAnswers)
 
     @router.get("/boxes/{name}/ls", response_model=APIDirectoryListing)
     async def api_list_directory(
@@ -1209,7 +1233,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         return APIDirectoryListing(box=box.name, directory=normalized_remote, entries=entries)
 
-    @router.post("/boxes/{name}/rename", response_model=APISimpleMessage)
+    @placing.post("/boxes/{name}/rename", response_model=APISimpleMessage)
     async def api_rename(
         name: str,
         payload: APIRenameRequest,
@@ -1428,7 +1452,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         return APISimpleMessage(status="ok", message="deleted", path=validated_path)
 
-    @router.post("/boxes/{name}/move", response_model=APISimpleMessage)
+    @placing.post("/boxes/{name}/move", response_model=APISimpleMessage)
     async def api_move(
         name: str,
         payload: APIMoveRequest,
@@ -1492,7 +1516,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return APISimpleMessage(status="ok", message="moved", path=remote_target)
 
-    @router.post("/boxes/{name}/copy", response_model=APISimpleMessage)
+    @placing.post("/boxes/{name}/copy", response_model=APISimpleMessage)
     async def api_copy(
         name: str,
         payload: APICopyRequest,
@@ -2171,4 +2195,5 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         return APISimpleMessage(status="ok", message="chmod applied", path=validated_path)
 
+    router.include_router(placing)
     return router

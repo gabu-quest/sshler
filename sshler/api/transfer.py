@@ -115,7 +115,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             failed: list[dict] = []
             landed_at: dict[str, str] = {}
             landed: set[str] = set()
-            copied_from: dict[str, tuple] = {}
+            copied_from: dict[str, tuple[str, tuple]] = {}
             total = len(validated_paths)
             ssh_pool = get_pool()
 
@@ -145,6 +145,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         stack.push_async_callback(_safe_exit_sftp, dest_sftp)
 
                     for index, src_path in enumerate(validated_paths):
+                        # Every answer and event names the item as the request spelled
+                        # it; the work runs on the validated path.
+                        sent_path = payload.paths[index]
                         if await request.is_disconnected():
                             break
 
@@ -174,6 +177,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 index,
                                 total,
                                 request,
+                                sent_path=sent_path,
                                 source_mode=source_mode,
                                 file_size=file_size,
                                 overwrite=payload.overwrite,
@@ -183,34 +187,39 @@ def get_router(deps: APIDependencies) -> APIRouter:
                             if await request.is_disconnected():
                                 break
 
-                            succeeded.append(src_path)
-                            landed_at[src_path] = dest_path
+                            succeeded.append(sent_path)
+                            landed_at[sent_path] = dest_path
                             landed.add(dest_path)
-                            copied_from[src_path] = fingerprint
+                            copied_from[sent_path] = (src_path, fingerprint)
                         except Exception as exc:
                             logger.warning(f"Transfer failed for {src_path}: {exc}")
-                            failed.append(failure_entry(src_path, exc))
+                            entry = failure_entry(sent_path, exc)
+                            failed.append(entry)
+                            # Said at once: no progress event follows for this item, and
+                            # the next item's would otherwise read as this one finished.
+                            yield _sse_event("failed", entry)
 
                     if payload.mode == "move" and succeeded and not await request.is_disconnected():
-                        for src_path in list(succeeded):
+                        for sent_path in list(succeeded):
+                            src_path, fingerprint = copied_from[sent_path]
                             try:
                                 await _delete_source(
                                     src_box,
                                     src_sftp,
                                     src_path,
-                                    copied_from[src_path],
-                                    landed_at[src_path],
+                                    fingerprint,
+                                    landed_at[sent_path],
                                 )
                             except HTTPException as exc:
-                                succeeded.remove(src_path)
-                                failed.append(failure_entry(src_path, exc))
+                                succeeded.remove(sent_path)
+                                failed.append(failure_entry(sent_path, exc))
                             except Exception as exc:
                                 logger.warning(f"Delete after move failed for {src_path}: {exc}")
-                                succeeded.remove(src_path)
+                                succeeded.remove(sent_path)
                                 failed.append(
                                     {
-                                        "path": src_path,
-                                        "error": f"Copied to {landed_at[src_path]}, but the "
+                                        "path": sent_path,
+                                        "error": f"Copied to {landed_at[sent_path]}, but the "
                                         f"source could not be removed: {exc}",
                                         "reason": REASON_FAILED,
                                     }
@@ -322,6 +331,7 @@ async def _copy_one_file(
     total: int,
     request: Request,
     *,
+    sent_path: str,
     source_mode: int,
     file_size: int,
     overwrite: bool,
@@ -355,7 +365,7 @@ async def _copy_one_file(
                 yield _sse_event(
                     "progress",
                     {
-                        "file": src_path,
+                        "file": sent_path,
                         "bytes_done": bytes_done,
                         "bytes_total": file_size,
                         "index": index,
