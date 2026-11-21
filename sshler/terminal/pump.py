@@ -1,6 +1,8 @@
 """Join one WebSocket to one terminal transport.
 
-What the client receives: output as binary frames; ``{"op": "windows", ...}`` text
+What the client receives: first, once, ``{"op": "shell", "kind": "tmux" | "plain",
+"fallback": bool}`` (``fallback``: tmux was wanted, the box has none, a plain shell was
+opened in its place); then output as binary frames; ``{"op": "windows", ...}`` text
 frames while the transport has tmux windows; ``{"op": "ping"}`` text frames. What it
 sends: binary frames are input; text frames are JSON control messages (``resize``,
 ``select-window``, ``rename-window``, ``send``); text that is not JSON is ignored.
@@ -182,13 +184,25 @@ CLOSE_WHEN = {
 }
 
 
-async def run_pump(websocket: WebSocket, transport: Transport, seen: WindowsSeen) -> PumpEnd:
+def shell_message(transport: Transport, *, fallback: bool) -> str:
+    """What the terminal is: tmux when the transport has tmux windows, else a plain shell."""
+    kind = "plain" if transport.tmux is None else "tmux"
+    return json.dumps({"op": "shell", "kind": kind, "fallback": fallback})
+
+
+async def run_pump(
+    websocket: WebSocket, transport: Transport, seen: WindowsSeen, *, fallback: bool = False
+) -> PumpEnd:
     """Carry the session until the client leaves or the terminal ends.
 
-    *seen* is called with each window list sent. Whatever ends it, every task the
-    pump started is cancelled and awaited before it returns or raises. When the
-    terminal ended first, the socket is closed as ``CLOSE_WHEN`` says.
+    The shell message goes first, before any output. *seen* is called with each
+    window list sent. Whatever ends it, every task the pump started is cancelled and
+    awaited before it returns or raises. When the terminal ended first, the socket is
+    closed as ``CLOSE_WHEN`` says.
     """
+    with contextlib.suppress(Exception):
+        # A client that left already is seen by the input pump.
+        await websocket.send_text(shell_message(transport, fallback=fallback))
     end = await _carry(websocket, transport, seen)
     if end in CLOSE_WHEN:
         code, reason = CLOSE_WHEN[end]

@@ -13,12 +13,12 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
-from typing import IO, cast
+from typing import IO, Any, cast
 
 import asyncssh
 from fastapi import (
@@ -45,7 +45,7 @@ from .api.helpers import (
     available_windows_shells,
     default_windows_shell,
 )
-from .api.remote import command, remote_directory, require
+from .api.remote import command, login_shell_in, remote_directory, require
 from .api.run_failures import ProgramNotFoundError
 from .api.sessions import require_local_tmux
 from .api.tunnels import TunnelRegistry
@@ -63,13 +63,14 @@ from .settings import get_settings as get_app_settings
 from .spa import mount_spa
 from .ssh import (
     connect,
+    open_pty_process,
     open_tmux,
     sftp_is_directory,
 )
 from .ssh_pool import get_pool, initialize_pool, shutdown_pool
 from .terminal import OpenedTerminal, TerminalOpenError, run_pump, take_early_message
 from .terminal.conpty import ConPtyTransport
-from .terminal.local import LocalPtyTransport, LocalTmuxWindows
+from .terminal.local import LocalPtyTransport, LocalTmuxWindows, login_shell
 from .terminal.remote import RemoteTmuxWindows, SshTransport, close_connection
 from .terminal.transport import open_or_close_on_cancel, teardown_scope
 from .tmux import (
@@ -536,16 +537,48 @@ async def _open_local_pty_tmux(
     command = local_tmux_command(session) + ["new", "-As", session]
     if working_directory:
         command.extend(["-c", working_directory])
+    return await _spawn_local_pty(command, _terminal_environment(), cols=cols, rows=rows)
 
+
+async def _open_local_pty_shell(
+    working_directory: str, cols: int = 80, rows: int = 24
+) -> LocalPTYProcess:
+    """The user's login shell on a local PTY in *working_directory*, with no tmux
+    (POSIX only). The shell is the one tmux would start (``login_shell``), started as
+    tmux starts it: as a login shell, its name with a ``-`` in front."""
+    env = _terminal_environment()
+    # Not inside tmux, whatever the server itself runs in.
+    env.pop("TMUX", None)
+    env.pop("TMUX_PANE", None)
+    shell = login_shell(env)
+    env["SHELL"] = shell
+    arg0 = "-" + os.path.basename(shell)
+    return await _spawn_local_pty(
+        [shell], env, cols=cols, rows=rows, cwd=working_directory or None, arg0=arg0
+    )
+
+
+def _terminal_environment() -> dict[str, str]:
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
+    return env
 
-    master_fd, pid = await asyncio.to_thread(spawn_on_pty, command, env=env, rows=rows, cols=cols)
 
+async def _spawn_local_pty(
+    argv: list[str],
+    env: dict[str, str],
+    *,
+    cols: int,
+    rows: int,
+    cwd: str | None = None,
+    arg0: str | None = None,
+) -> LocalPTYProcess:
+    master_fd, pid = await asyncio.to_thread(
+        spawn_on_pty, argv, env=env, rows=rows, cols=cols, cwd=cwd, arg0=arg0
+    )
     stdin = os.fdopen(master_fd, "wb", buffering=0, closefd=False)
     stdout = os.fdopen(master_fd, "rb", buffering=0, closefd=False)
-
-    logger.info(f"[PTY] Spawned local tmux with PID {pid}, fd {master_fd}")
+    logger.info(f"[PTY] Spawned {os.path.basename(argv[0])} with PID {pid}, fd {master_fd}")
     return LocalPTYProcess(master_fd, pid, stdin, stdout)
 
 
@@ -1082,7 +1115,8 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             session: Requested tmux session name.
             columns: Terminal width reported by the client.
             rows: Terminal height reported by the client.
-            shell: Native Windows shell id (Windows hosts only).
+            shell: ``""`` or ``"tmux"`` (tmux) or ``"plain"`` (a plain shell); on a
+                Windows local box, a native Windows shell id.
 
         Returns:
             None: The coroutine completes when the websocket terminates.
@@ -1100,6 +1134,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         except ValidationError as exc:
             logger.warning(f"[Security] Invalid session name rejected: {exc}")
             await websocket.close(code=4400, reason="Invalid session name")
+            return
+        if _shell_refused(host, shell):
+            logger.warning("[Security] Invalid shell value rejected")
+            await websocket.close(code=4400, reason="Invalid shell")
             return
 
         await websocket.accept()
@@ -1209,6 +1247,25 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
     return application
 
 
+# What ``shell`` may be on a POSIX local box and on a remote box: tmux (``""`` or
+# ``"tmux"``, the default) or a plain shell.
+PLAIN_SHELL = "plain"
+TERMINAL_SHELLS = frozenset({"", "tmux", PLAIN_SHELL})
+
+
+def _shell_refused(host: str, shell: str) -> bool:
+    """Whether *shell* is a value the box named *host* does not take. A Windows local
+    box takes its own shell ids, and opens its default shell for one it does not know;
+    every other box takes ``TERMINAL_SHELLS`` only."""
+    if shell in TERMINAL_SHELLS:
+        return False
+    if not LOCAL_IS_WINDOWS:
+        return True
+    box = find_box(load_config(), host)
+    # A box the server does not know is answered as one (4404), not here.
+    return box is not None and getattr(box, "transport", "ssh") != "local"
+
+
 @dataclass(frozen=True)
 class TerminalRequest:
     """What a client asked ``/ws/term`` for, its session name already sanitized."""
@@ -1277,21 +1334,18 @@ async def _open_terminal(
 
 
 async def _local_directory_or_default(box: Box, directory: str) -> str:
+    """The folder a local terminal starts in: *directory*, or the box's default folder
+    when that is not a folder this user can enter."""
     try:
-        is_directory = await _local_is_directory(directory)
+        usable = await _local_is_directory(directory) and os.access(directory, os.X_OK)
     except Exception as exc:
         logger.debug(f"Failed to check if directory exists (using fallback): {exc}")
-        is_directory = False
-    return directory if is_directory else _normalize_local_path(box.default_dir)
+        usable = False
+    return directory if usable else _normalize_local_path(box.default_dir)
 
 
 async def _discard_pty(process: LocalPTYProcess) -> None:
     await LocalPtyTransport(process, None).close()
-
-
-def _tmux_not_installed(missing: ProgramNotFoundError) -> TerminalOpenError:
-    """A box without tmux, the same answer on both kinds of box."""
-    return TerminalOpenError(f"{missing}\r\n", 4501, "tmux not installed")
 
 
 _SHOWN_NAME_LIMIT = 64
@@ -1312,27 +1366,44 @@ def _shown_box_name(name: str) -> str:
 async def _open_local_terminal(
     box: Box, request: TerminalRequest, directory: str
 ) -> OpenedTerminal:
-    """A tmux client on a local PTY, attached to (or creating) the session; a box
-    without tmux is refused before anything is started."""
+    """A tmux client on a local PTY, attached to (or creating) the session; or the
+    user's plain shell on one, when it is asked for or the box has no tmux."""
     session = request.session
-    try:
-        require_local_tmux(box.name, local_tmux_command(session))
-    except ProgramNotFoundError as missing:
-        raise _tmux_not_installed(missing) from missing
+    plain = request.shell == PLAIN_SHELL
+    fallback = not plain and not _local_has_tmux(box, session)
+    if plain or fallback:
+        logger.info(f"[Connection] Starting a local plain shell: dir={directory}")
+        process = await _started_local_pty(_open_local_pty_shell(directory), "plain shell")
+        return OpenedTerminal(LocalPtyTransport(process, None), directory, fallback=fallback)
     logger.info(f"[Connection] Starting local tmux: dir={directory}, session={session}")
-    try:
-        process = await open_or_close_on_cancel(
-            _open_local_pty_tmux(directory, session), _discard_pty
-        )
-    except Exception as exc:
-        logger.error(f"[Connection] Failed to start local tmux: {exc}", exc_info=True)
-        raise TerminalOpenError(f"Connection failed: {exc}\r\n") from exc
-    logger.info("[Connection] Local PTY tmux process started successfully")
+    process = await _started_local_pty(_open_local_pty_tmux(directory, session), "tmux")
     # Ctrl+B c opens new windows in the pane's directory, and the session is recorded
     # in ts history so it appears in ts's picker.
     background = (_configure_tmux_bindings(session), record_ts_history(session, directory))
     transport = LocalPtyTransport(process, LocalTmuxWindows(session), background)
     return OpenedTerminal(transport, directory)
+
+
+def _local_has_tmux(box: Box, session: str) -> bool:
+    try:
+        require_local_tmux(box.name, local_tmux_command(session))
+    except ProgramNotFoundError as missing:
+        logger.info(f"[Connection] {missing}: opening a plain shell in its place")
+        return False
+    return True
+
+
+async def _started_local_pty(
+    opening: Coroutine[Any, Any, LocalPTYProcess], what: str
+) -> LocalPTYProcess:
+    """The PTY child *opening* starts; a spawn that fails is a ``TerminalOpenError``."""
+    try:
+        process = await open_or_close_on_cancel(opening, _discard_pty)
+    except Exception as exc:
+        logger.error(f"[Connection] Failed to start local {what}: {exc}", exc_info=True)
+        raise TerminalOpenError(f"Connection failed: {exc}\r\n") from exc
+    logger.info(f"[Connection] Local PTY {what} started")
+    return process
 
 
 async def _open_windows_terminal(
@@ -1385,13 +1456,15 @@ async def _open_windows_terminal(
 async def _open_remote_terminal(
     box: Box, config: AppConfig, request: TerminalRequest, directory: str
 ) -> OpenedTerminal:
-    """tmux on a remote box over a connection of its own, closed with the terminal.
+    """tmux on a remote box over a connection of its own, closed with the terminal; or
+    the user's login shell on a PTY there (``login_shell_in``), when a plain shell is
+    asked for or the box has no tmux.
 
     Before tmux is started the box is asked, on that connection, whether it has tmux:
-    a status of 127 refuses the terminal. A check that cannot run (it fails for any
-    other cause, or past its limit) opens the terminal as before. A tmux that cannot be
-    started raises ``TerminalOpenError``, as on a local box. Every way out of the open
-    other than a terminal that opened closes the connection."""
+    a status of 127 opens a plain shell in its place. A check that cannot run (it fails
+    for any other cause, or past its limit) opens tmux as before. A terminal that cannot
+    be started raises ``TerminalOpenError``, as on a local box. Every way out of the
+    open other than a terminal that opened closes the connection."""
     logger.info(
         f"[Connection] Connecting to SSH: host={box.connect_host}, user={box.user}, port={box.port}"
     )
@@ -1409,37 +1482,53 @@ async def _open_remote_terminal(
         logger.error(f"[Connection] SSH connection failed: {exc}", exc_info=True)
         raise TerminalOpenError(f"Connection failed: {exc}") from exc
     logger.info("[Connection] SSH connection established successfully")
+    plain = request.shell == PLAIN_SHELL
     try:
-        try:
-            # `sh -c`: the box's login shell may not read a POSIX line (csh cannot read `2>&1`).
-            checked = await asyncio.wait_for(
-                connection.run(command("sh", "-c", require("tmux")), check=False),
-                timeout=TMUX_COMMAND_TIMEOUT,
-            )
-            status = checked.exit_status
-        except Exception as exc:
-            logger.warning("Cannot check for tmux on %s (opening anyway): %s", box.name, exc)
-            status = None
-        if status == 127:
-            raise _tmux_not_installed(ProgramNotFoundError("tmux", box.name))
+        fallback = not plain and await _remote_tmux_missing(connection, box)
         try:
             directory = await _remote_directory_or_default(connection, box, directory)
-            process = await open_tmux(
-                connection,
-                working_directory=directory,
-                session=request.session,
-                columns=request.columns,
-                rows=request.rows,
-            )
+            if plain or fallback:
+                process = await open_pty_process(
+                    connection,
+                    login_shell_in(directory),
+                    columns=request.columns,
+                    rows=request.rows,
+                )
+            else:
+                process = await open_tmux(
+                    connection,
+                    working_directory=directory,
+                    session=request.session,
+                    columns=request.columns,
+                    rows=request.rows,
+                )
         except Exception as exc:
-            logger.error(f"[Connection] Failed to start remote tmux: {exc}", exc_info=True)
+            logger.error(f"[Connection] Failed to start the remote terminal: {exc}", exc_info=True)
             raise TerminalOpenError(f"Connection failed: {exc}\r\n") from exc
     except BaseException:
         with teardown_scope():
             await close_connection(connection)
         raise
-    tmux = RemoteTmuxWindows(connection, request.session)
-    return OpenedTerminal(SshTransport(connection, process, tmux), directory)
+    tmux = None if plain or fallback else RemoteTmuxWindows(connection, request.session)
+    transport = SshTransport(connection, process, tmux)
+    return OpenedTerminal(transport, directory, fallback=fallback)
+
+
+async def _remote_tmux_missing(connection: asyncssh.SSHClientConnection, box: Box) -> bool:
+    """True only when the box answers the tmux check with status 127."""
+    try:
+        # `sh -c`: the box's login shell may not read a POSIX line (csh cannot read `2>&1`).
+        checked = await asyncio.wait_for(
+            connection.run(command("sh", "-c", require("tmux")), check=False),
+            timeout=TMUX_COMMAND_TIMEOUT,
+        )
+    except Exception as exc:
+        logger.warning("Cannot check for tmux on %s (opening tmux anyway): %s", box.name, exc)
+        return False
+    if checked.exit_status != 127:
+        return False
+    logger.info("[Connection] tmux is not installed on %s: opening a plain shell", box.name)
+    return True
 
 
 async def _remote_directory_or_default(
@@ -1486,7 +1575,12 @@ async def _run_terminal(
         return
     session_id = await _track_terminal(opened, box, kind, request)
     try:
-        await run_pump(websocket, opened.transport, partial(_record_windows, session_id))
+        await run_pump(
+            websocket,
+            opened.transport,
+            partial(_record_windows, session_id),
+            fallback=opened.fallback,
+        )
     finally:
         # A persisted Windows shell's row is the registry's to mark (see on_tracked).
         if session_id and opened.on_tracked is None:
@@ -1501,7 +1595,13 @@ async def _run_terminal(
 async def _track_terminal(
     opened: OpenedTerminal, box: Box, kind: str, request: TerminalRequest
 ) -> str | None:
-    """Record the session row; its id, or None when it could not be recorded."""
+    """Record the session row; its id, or None when there is none.
+
+    A row is a session that can be opened again by its name: a tmux session, or a
+    persisted Windows shell. A plain shell ends with its socket, so it gets no row:
+    the session routes (list, sync, rename, kill) would read one as a tmux session."""
+    if opened.transport.tmux is None and opened.on_tracked is None:
+        return None
     try:
         tracked = await state.create_or_update_session_async(
             box_name=box.name,

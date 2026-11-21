@@ -66,11 +66,14 @@ class OpenedTerminal:
     requested directory that does not exist falls back to the box's default).
     ``on_tracked``, when set, takes the id of the session row: the transport's owner
     then marks the row inactive itself, so the socket must not when it closes.
+    ``fallback`` is true when tmux was wanted and the box has none, so the transport
+    is a plain shell opened in its place.
     """
 
     transport: Transport
     directory: str
     on_tracked: Callable[[str], None] | None = None
+    fallback: bool = False
 
 
 class TerminalOpenError(Exception):

@@ -177,3 +177,15 @@ def require(program: str) -> str:
 def in_directory(directory: str, cmd: str) -> str:
     """``cmd`` run in ``directory`` (not at all when ``cd`` fails)."""
     return and_then(command("cd", path_word(directory)), cmd)
+
+
+# The folder is the script's first argument, never part of its text. A folder that
+# cannot be entered (gone since it was checked) leaves the shell in the login folder.
+_LOGIN_SHELL_SCRIPT = 'cd -- "$1" 2>/dev/null; exec "${SHELL:-/bin/sh}" -l'
+
+
+def login_shell_in(directory: str) -> str:
+    """The box's login shell for this user (``$SHELL``, else ``/bin/sh``), started as a
+    login shell in ``directory``. Run through ``sh -c`` so any login shell can read
+    the line."""
+    return command("sh", "-c", _LOGIN_SHELL_SCRIPT, "sh", directory)
