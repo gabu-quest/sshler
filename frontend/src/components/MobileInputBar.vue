@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, watch, type Component } from 'vue'
+import { ref, computed, nextTick, onMounted, watch, type Component } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   PhKeyReturn,
@@ -33,11 +33,14 @@ interface Emits {
 interface Props {
   rawMode?: boolean
   connected?: boolean
+  /** False for a plain shell: the tmux keys (and their divider and legend rows) are not shown. */
+  tmux?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   rawMode: false,
   connected: false,
+  tmux: true,
 })
 
 const emit = defineEmits<Emits>()
@@ -60,6 +63,8 @@ interface QuickKey {
   isCommand?: boolean
   color?: 'blue' | 'purple' | 'yellow' | 'red' | 'orange' | 'teal'
   divider?: boolean
+  /** A key that only means something inside tmux (a Ctrl+B sequence). */
+  tmux?: boolean
 }
 
 const quickKeys: QuickKey[] = [
@@ -77,19 +82,21 @@ const quickKeys: QuickKey[] = [
   // Interrupt (red - dangerous, kills processes)
   { icon: PhHandPalm, raw: '\x03', title: 'Interrupt (Ctrl+C)', color: 'red' },
   // Tmux scroll (orange group)
-  { icon: PhScroll, raw: '\x02[', title: 'Scroll mode', color: 'orange' },
+  { icon: PhScroll, raw: '\x02[', title: 'Scroll mode', color: 'orange', tmux: true },
   { icon: PhArrowFatLinesUp, raw: '\x1b[5~', title: 'Page Up', color: 'orange' },
   { icon: PhArrowFatLinesDown, raw: '\x1b[6~', title: 'Page Down', color: 'orange' },
   // Exit (teal - graceful exit, sends EOF)
   { icon: PhSignOut, raw: '\x04', title: 'Exit (Ctrl+D)', color: 'teal' },
   // Tmux keys (after divider, scrolled right)
-  { divider: true, title: 'tmux', raw: '' },
-  { icon: PhArrowLineLeft, raw: '\x02p', title: 'Prev window', color: 'yellow' },
-  { icon: PhPlus, raw: '\x02c', title: 'New window', color: 'yellow' },
-  { icon: PhArrowLineRight, raw: '\x02n', title: 'Next window', color: 'yellow' },
-  { icon: PhSplitVertical, raw: '\x02%', title: 'Split vertical', color: 'purple' },
-  { icon: PhSplitHorizontal, raw: '\x02"', title: 'Split horizontal', color: 'purple' },
+  { divider: true, title: 'tmux', raw: '', tmux: true },
+  { icon: PhArrowLineLeft, raw: '\x02p', title: 'Prev window', color: 'yellow', tmux: true },
+  { icon: PhPlus, raw: '\x02c', title: 'New window', color: 'yellow', tmux: true },
+  { icon: PhArrowLineRight, raw: '\x02n', title: 'Next window', color: 'yellow', tmux: true },
+  { icon: PhSplitVertical, raw: '\x02%', title: 'Split vertical', color: 'purple', tmux: true },
+  { icon: PhSplitHorizontal, raw: '\x02"', title: 'Split horizontal', color: 'purple', tmux: true },
 ]
+
+const shownKeys = computed(() => (props.tmux ? quickKeys : quickKeys.filter((key) => !key.tmux)))
 
 const handleSubmit = () => {
   const text = inputText.value
@@ -195,7 +202,7 @@ watch(() => props.rawMode, (raw) => {
   <div class="mobile-input-bar" :class="{ 'raw-mode': rawMode }">
     <!-- Quick keys row -->
     <div v-if="!rawMode" class="quick-keys">
-      <template v-for="(key, index) in quickKeys" :key="index">
+      <template v-for="(key, index) in shownKeys" :key="index">
         <span v-if="key.divider" class="quick-key-divider">
           <span class="divider-label">{{ key.title }}</span>
         </span>
@@ -230,7 +237,7 @@ watch(() => props.rawMode, (raw) => {
             <button class="legend-close" @click="showLegend = false">✕</button>
           </div>
           <div class="legend-grid">
-            <template v-for="(key, index) in quickKeys" :key="index">
+            <template v-for="(key, index) in shownKeys" :key="index">
               <div v-if="!key.divider" class="legend-item">
                 <span class="legend-icon" :class="key.color">
                   <component v-if="key.icon" :is="key.icon" :size="20" weight="bold" />

@@ -23,12 +23,28 @@ const stubs = vi.hoisted(() => {
       return make();
     }
   }
-  return { Stub };
+  // What the page wrote into xterm, as text, in order.
+  const written: string[] = [];
+  const decoder = new TextDecoder();
+  class RecordingTerminal {
+    constructor() {
+      const base = make();
+      return new Proxy(base, {
+        get: (target, prop) =>
+          prop === "write"
+            ? (data: Uint8Array | string) => {
+                written.push(typeof data === "string" ? data : decoder.decode(data));
+              }
+            : target[prop],
+      });
+    }
+  }
+  return { Stub, RecordingTerminal, written };
 });
 
 // xterm and its addons need a real canvas; replace them with a permissive
 // stand-in where every property is a callable no-op that returns itself.
-vi.mock("@xterm/xterm", () => ({ Terminal: stubs.Stub }));
+vi.mock("@xterm/xterm", () => ({ Terminal: stubs.RecordingTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: stubs.Stub }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: stubs.Stub }));
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: stubs.Stub }));
@@ -43,12 +59,13 @@ vi.mock("naive-ui", async (importOriginal) => ({
 
 // The owner of "the session has ended" answers a 4401 close with its sign-in navigation
 // (a promise) and any other close with null; the spec reads what the terminal asked it.
+const snapshotMock = vi.hoisted(() => vi.fn(() => ({ last_snapshot_at: null })));
 const signInMock = vi.hoisted(() =>
   vi.fn((code: number) => (code === 4401 ? Promise.resolve() : null)),
 );
 vi.mock("@/api/http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/api/http")>()),
-  fetchSnapshotStatus: vi.fn(() => ({ last_snapshot_at: null })),
+  fetchSnapshotStatus: snapshotMock,
   signInAfterSocketClose: signInMock,
 }));
 
@@ -58,7 +75,7 @@ class FakeWebSocket {
   readyState = 0;
   binaryType = "";
   onopen: (() => void) | null = null;
-  onclose: ((e: { code: number }) => void) | null = null;
+  onclose: ((e: { code: number; reason?: string }) => void) | null = null;
   onmessage: ((e: unknown) => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
   send = vi.fn();
@@ -90,6 +107,8 @@ beforeEach(async () => {
   FakeWebSocket.instances = [];
   Object.values(messageMock).forEach((m) => m.mockClear());
   signInMock.mockClear();
+  snapshotMock.mockClear();
+  stubs.written.length = 0;
   fetchMock.mockClear();
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", fetchMock);
@@ -105,9 +124,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mountConnected() {
+async function mountConnected(extra: Record<string, unknown> = {}) {
   const wrapper = mount(Terminal, {
-    props: { boxName: "box1", sessionName: "main", directory: "/tmp" },
+    props: { boxName: "box1", sessionName: "main", directory: "/tmp", ...extra },
     global: { plugins: [createPinia()], stubs: { SessionSwitcher: true } },
   });
   await vi.advanceTimersByTimeAsync(100); // the onMounted auto-connect delay
@@ -131,7 +150,6 @@ describe("Terminal.vue close codes", () => {
     [4502, "terminal.wsl_not_installed", 6000],
     [4503, "terminal.pywinpty_missing", 8000],
     [4404, "terminal.unknown_box", 6000],
-    [4501, "terminal.tmux_not_installed", 8000],
   ])("code %i shows its toast and never reconnects", async (code, key, duration) => {
     const wrapper = await mountConnected();
     socket(0).onclose!({ code });
@@ -260,6 +278,272 @@ describe("Terminal.vue handshake", () => {
     );
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/terminal/handshake");
+    wrapper.unmount();
+  });
+});
+
+const NOTICE = en["terminal.plain_fallback_notice"]!;
+const NEW_SHELL = en["terminal.plain_reconnected_notice"]!;
+
+function frame(ws: FakeWebSocket, body: unknown) {
+  ws.onmessage!({ data: JSON.stringify(body) });
+}
+
+/** Let the write queue's animation frame run, then return everything written. */
+async function written(): Promise<string> {
+  await advance(50);
+  return stubs.written.join("");
+}
+
+const toolbarGroups = (w: ReturnType<typeof mount>) => w.findAll(".toolbar-group").length;
+
+describe("Terminal.vue shell frame", () => {
+  it("a fallback frame writes the notice once, on its own line, before the shell's first output", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onopen!();
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    socket(0).onmessage!({ data: Uint8Array.from([36, 32]).buffer });
+
+    expect(await written()).toBe(NOTICE + "\r\n$ ");
+    wrapper.unmount();
+  });
+
+  it("the frame is told to the parent once, as what the server opened", async () => {
+    const wrapper = await mountConnected();
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    frame(socket(0), { op: "shell", kind: "zsh", fallback: false });
+
+    expect(wrapper.emitted("shell")).toEqual([[{ kind: "plain", fallback: true }]]);
+    wrapper.unmount();
+  });
+
+  it("a shell frame that comes twice on one socket prints the notice once", async () => {
+    const wrapper = await mountConnected();
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+
+    expect(await written()).toBe(NOTICE + "\r\n");
+    wrapper.unmount();
+  });
+
+  it("a plain shell that was asked for, with no fallback, prints no notice", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("");
+    wrapper.unmount();
+  });
+
+  it.each([
+    ["an unknown kind", { op: "shell", kind: "zsh", fallback: true }],
+    ["no fallback field", { op: "shell", kind: "plain" }],
+    ["a non-boolean fallback", { op: "shell", kind: "plain", fallback: "yes" }],
+    ["an unknown op", { op: "title", kind: "plain", fallback: true }],
+  ])("%s: nothing is printed and the terminal goes on by what was asked", async (_name, body) => {
+    const wrapper = await mountConnected();
+    frame(socket(0), body);
+
+    expect(await written()).toBe("");
+    expect(toolbarGroups(wrapper)).toBe(3);
+    wrapper.unmount();
+  });
+
+  it("a plain frame hides the three tmux toolbar groups", async () => {
+    const wrapper = await mountConnected();
+    expect(toolbarGroups(wrapper)).toBe(3);
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    await flushPromises();
+    expect(toolbarGroups(wrapper)).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("a terminal asked for tmux by name keeps the tmux toolbar before any frame", async () => {
+    const wrapper = await mountConnected({ shell: "tmux" });
+    expect(toolbarGroups(wrapper)).toBe(3);
+    wrapper.unmount();
+  });
+
+  it("a terminal asked to be plain asks for no snapshot status, ever", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    await advance(60_000);
+
+    expect(snapshotMock).toHaveBeenCalledTimes(0);
+    expect(toolbarGroups(wrapper)).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("a fallback stops the snapshot poll: no request after the frame", async () => {
+    const wrapper = await mountConnected();
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    await advance(0);
+    const before = snapshotMock.mock.calls.length;
+    await advance(60_000);
+
+    expect(snapshotMock.mock.calls.length).toBe(before);
+    wrapper.unmount();
+  });
+
+  it("a reconnected plain shell says it is a new one", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+    socket(0).onmessage!({ data: Uint8Array.from([36, 32]).buffer });
+    await written();
+    stubs.written.length = 0;
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("\r\n" + NEW_SHELL + "\r\n");
+    wrapper.unmount();
+  });
+
+  it("an ordinary drop of an asked-for plain shell prints the line exactly once, on its own row", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+    socket(0).onmessage!({ data: Uint8Array.from([36, 32]).buffer });
+    await written();
+    stubs.written.length = 0;
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("\r\n" + NEW_SHELL + "\r\n");
+    wrapper.unmount();
+  });
+
+  it("a Windows native shell that reconnects is the same shell: no line", async () => {
+    const wrapper = await mountConnected({ shell: "pwsh", nativeShell: true });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("");
+    wrapper.unmount();
+  });
+
+  it("typing exit (close 1000) and clicking Reconnect prints no line", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+    socket(0).onclose!({ code: 1000 });
+    await advance(5000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await (wrapper.vm as unknown as { connect: () => Promise<void> }).connect();
+    await flushPromises();
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("");
+    wrapper.unmount();
+  });
+
+  it("an intentional disconnect (switching session) prints no line, even if its close arrives as a drop", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+    (wrapper.vm as unknown as { switchSession: (n: string, d: string) => void }).switchSession("other", "/tmp");
+    socket(0).onclose!({ code: 1006 });
+    await advance(0);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("");
+    wrapper.unmount();
+  });
+
+  it("a terminal that was asked for tmux and got a plain shell without fallback prints no line", async () => {
+    const wrapper = await mountConnected();
+    frame(socket(0), { op: "shell", kind: "plain", fallback: false });
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe("");
+    wrapper.unmount();
+  });
+
+  it("a first frame that cannot be read, a drop, then a valid plain frame: the line prints once", async () => {
+    const wrapper = await mountConnected({ shell: "plain" });
+    frame(socket(0), { op: "shell", kind: "zsh", fallback: false });
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: false });
+
+    expect(await written()).toBe(NEW_SHELL + "\r\n");
+    wrapper.unmount();
+  });
+
+  it("a reconnect that falls back again prints the fallback line alone", async () => {
+    const wrapper = await mountConnected();
+    frame(socket(0), { op: "shell", kind: "plain", fallback: true });
+    await written();
+    stubs.written.length = 0;
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "plain", fallback: true });
+
+    expect(await written()).toBe("\r\n" + NOTICE + "\r\n");
+    wrapper.unmount();
+  });
+
+  it("a reconnected tmux terminal prints nothing", async () => {
+    const wrapper = await mountConnected();
+    frame(socket(0), { op: "shell", kind: "tmux", fallback: false });
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    frame(socket(1), { op: "shell", kind: "tmux", fallback: false });
+
+    expect(await written()).toBe("");
+    wrapper.unmount();
+  });
+
+  it("a refused shell (4400, Invalid shell) toasts its own words and never reconnects", async () => {
+    const wrapper = await mountConnected({ shell: "zsh" });
+    socket(0).onclose!({ code: 4400, reason: "Invalid shell" });
+    await advance(60_000);
+
+    expect(messageMock.error.mock.calls).toEqual([[en["terminal.shell_refused"], { duration: 6000 }]]);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
+describe("Terminal.vue tmux keys", () => {
+  type Senders = Record<string, () => void>;
+  const KEYS: [string, string][] = [
+    ["tmuxKillWindow", "\x02&"],
+    ["tmuxNewWindow", "\x02c"],
+    ["tmuxPrevWindow", "\x02p"],
+    ["tmuxNextWindow", "\x02n"],
+    ["tmuxSplitVertical", "\x02%"],
+    ["tmuxSplitHorizontal", "\x02\""],
+    ["tmuxPaneLeft", "\x02\x1b[D"],
+    ["tmuxPaneRight", "\x02\x1b[C"],
+  ];
+  const sentOn = (ws: FakeWebSocket) =>
+    ws.send.mock.calls.map((c) => new TextDecoder().decode(c[0] as Uint8Array));
+
+  it("a tmux terminal sends exactly each key's bytes", async () => {
+    const wrapper = await mountConnected();
+    socket(0).readyState = FakeWebSocket.OPEN;
+    frame(socket(0), { op: "shell", kind: "tmux", fallback: false });
+    for (const [name] of KEYS) (wrapper.vm as unknown as Senders)[name]!();
+
+    expect(sentOn(socket(0))).toEqual(KEYS.map(([, bytes]) => bytes));
+    wrapper.unmount();
+  });
+
+  it.each([
+    ["asked plain", { shell: "plain" }, null],
+    ["a Windows native shell", { shell: "pwsh", nativeShell: true }, null],
+    ["a fallback", {}, { op: "shell", kind: "plain", fallback: true }],
+  ])("%s: no key sends anything", async (_name, props, shellFrame) => {
+    const wrapper = await mountConnected(props);
+    socket(0).readyState = FakeWebSocket.OPEN;
+    if (shellFrame) frame(socket(0), shellFrame);
+    for (const [name] of KEYS) (wrapper.vm as unknown as Senders)[name]!();
+
+    expect(socket(0).send).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });

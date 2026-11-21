@@ -11,6 +11,7 @@ import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
+import { normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName } from '@/utils/sessionName'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
@@ -22,12 +23,16 @@ interface TerminalInstance {
   boxName: string
   sessionName: string
   directory: string
+  /** The kind this pane was added with; a fallback to plain is not recorded here. */
+  shell: PosixShell
 }
 
 interface SavedLayoutTerminal {
   boxName: string
   sessionName: string
   directory: string
+  /** Absent in a layout saved before the kind existed: that is tmux. */
+  shell?: unknown
 }
 
 interface SavedLayout {
@@ -53,11 +58,17 @@ const showSaveLayoutModal = ref(false)
 const showDirPicker = ref(false)
 const showLayoutMenu = ref(false)
 const newLayoutName = ref('')
-const newTerminal = ref({
+const newTerminal = ref<{ boxName: string; sessionName: string; directory: string; shell: PosixShell }>({
   boxName: '',
   sessionName: '',
-  directory: '~'
+  directory: '~',
+  shell: 'tmux',
 })
+
+const { isWindowsLocalBox, optionsOf } = useShellOptions()
+const shellOptions = optionsOf(() => newTerminal.value.boxName)
+// A Windows local box opens its default shell: no choice is offered for it.
+const showShellSelect = computed(() => !!newTerminal.value.boxName && !isWindowsLocalBox(newTerminal.value.boxName))
 
 const boxOptions = computed(() =>
   boxesStore.items.map((box) => ({
@@ -190,7 +201,8 @@ const addTerminal = () => {
     id,
     boxName: newTerminal.value.boxName,
     sessionName: newTerminal.value.sessionName || dirBasedSession,
-    directory: newTerminal.value.directory || '~'
+    directory: newTerminal.value.directory || '~',
+    shell: showShellSelect.value ? newTerminal.value.shell : 'tmux',
   })
   saveLayout()
 
@@ -198,7 +210,8 @@ const addTerminal = () => {
   newTerminal.value = {
     boxName: newTerminal.value.boxName, // Keep same box selected
     sessionName: '', // Reset to auto-generate
-    directory: '~'
+    directory: '~',
+    shell: 'tmux', // each new terminal starts as tmux
   }
 }
 
@@ -216,6 +229,7 @@ const openAddModal = () => {
   if (newTerminal.value.boxName) {
     favoritesStore.loadBox(newTerminal.value.boxName, tokenValue.value || null)
   }
+  newTerminal.value.shell = 'tmux'
   showAddModal.value = true
 }
 
@@ -251,6 +265,7 @@ function saveLayout() {
     boxName: t.boxName,
     sessionName: t.sessionName,
     directory: t.directory,
+    shell: t.shell,
   }))))
 }
 
@@ -265,6 +280,7 @@ function loadLayout(): TerminalInstance[] | null {
       boxName: item.boxName,
       sessionName: item.sessionName,
       directory: item.directory,
+      shell: normalizePosixShell(item.shell),
     }))
   } catch { return null }
 }
@@ -280,6 +296,7 @@ async function saveCurrentLayout() {
         boxName: terminal.boxName,
         sessionName: terminal.sessionName,
         directory: terminal.directory,
+        shell: terminal.shell,
       })),
       tokenValue.value || null
     )
@@ -297,6 +314,7 @@ async function applyLayout(layout: { terminals: SavedLayoutTerminal[] }) {
     boxName: item.boxName,
     sessionName: item.sessionName,
     directory: item.directory,
+    shell: normalizePosixShell(item.shell),
   }))
   saveLayout()
   showLayoutMenu.value = false
@@ -435,6 +453,7 @@ onMounted(async () => {
             :box-name="terminal.boxName"
             :session-name="terminal.sessionName"
             :directory="terminal.directory"
+            :shell="terminal.shell === 'plain' ? 'plain' : ''"
             :font-size="terminalFontSize"
           />
         </div>
@@ -457,6 +476,16 @@ onMounted(async () => {
             v-model:value="newTerminal.boxName"
             :options="boxOptions"
             :placeholder="t('multi.choose_box')"
+          />
+        </div>
+
+        <div v-if="showShellSelect">
+          <label class="form-label">{{ t('terminal.shell_label') }}</label>
+          <NSelect
+            class="shell-select"
+            v-model:value="newTerminal.shell"
+            :options="shellOptions"
+            :placeholder="t('terminal.shell_label')"
           />
         </div>
 

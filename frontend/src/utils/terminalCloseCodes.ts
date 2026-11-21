@@ -8,12 +8,12 @@
  * pure and unit-testable.
  *
  * Server-side close codes (see sshler/webapp.py `/ws/term`):
- *   4400  the session name was refused
+ *   4400  the session name was refused (reason "Invalid session name"), or the
+ *         `shell` value was (reason "Invalid shell")
  *   4401  the session ended, or none came with the socket: the page goes to the
  *         sign-in form (`signInAfterSocketClose` in api/http.ts), with no toast
  *   4403  invalid CSRF token
  *   4404  the box is not known to the server
- *   4501  tmux is not installed on the box
  *   4502  WSL selected but no distro installed
  *   4503  pywinpty missing in the server environment
  *   4504  too many concurrent terminal sessions (ConPTY cap hit)
@@ -29,10 +29,16 @@ export interface TerminalClosePolicy {
   duration?: number;
 }
 
-export function classifyTerminalCloseCode(code: number): TerminalClosePolicy {
+/** The reason the server gives when it refuses a `shell` value. */
+const INVALID_SHELL_REASON = "Invalid shell";
+
+export function classifyTerminalCloseCode(code: number, reason = ""): TerminalClosePolicy {
   switch (code) {
     case 4400:
-      // A refused session name is refused again on every attempt.
+      // A refused value is refused again on every attempt.
+      if (reason === INVALID_SHELL_REASON) {
+        return { messageKey: "terminal.shell_refused", reconnect: false, duration: 6000 };
+      }
       return { messageKey: "terminal.session_name_refused", reconnect: false, duration: 6000 };
     case 4403:
       return { messageKey: "terminal.auth_failed", reconnect: false, duration: 5000 };
@@ -41,8 +47,6 @@ export function classifyTerminalCloseCode(code: number): TerminalClosePolicy {
       return { messageKey: null, reconnect: false };
     case 4404:
       return { messageKey: "terminal.unknown_box", reconnect: false, duration: 6000 };
-    case 4501:
-      return { messageKey: "terminal.tmux_not_installed", reconnect: false, duration: 8000 };
     case 4502:
       return { messageKey: "terminal.wsl_not_installed", reconnect: false, duration: 6000 };
     case 4503:
