@@ -8,12 +8,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from ..auth import AuthManager
 from ..session import Session, get_session_store
 from ..settings import get_settings
+from .failure import REASON_INVALID, Failure
 from .rate_limiting import rate_limit_login
 
 if TYPE_CHECKING:
@@ -103,10 +104,7 @@ def create_auth_router(
         """
         # Check if auth is required
         if not settings.require_auth or auth_manager is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Authentication is not enabled",
-            )
+            raise Failure(REASON_INVALID, "Authentication is not enabled")
 
         # Get client IP for rate limiting
         client_ip = get_client_ip(request)
@@ -119,10 +117,7 @@ def create_auth_router(
                 f"[Security] Failed login attempt for user '{credentials.username}' "
                 f"from {client_ip} (failure count: {failure_count})"
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid username or password",
-            )
+            raise Failure("auth", "Invalid username or password")
 
         # Reset failure tracker on successful auth
         failure_tracker.reset_failures(client_ip)
@@ -164,10 +159,7 @@ def create_auth_router(
         # Get session cookie
         session_id = request.cookies.get(settings.cookie_name)
         if not session_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated",
-            )
+            raise Failure("auth", "Not authenticated")
 
         # Validate session
         session = session_store.get_session(
@@ -176,10 +168,7 @@ def create_auth_router(
         )
 
         if session is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session expired or invalid",
-            )
+            raise Failure("auth", "Session expired or invalid")
 
         return UserInfo(
             username=session.username,
@@ -226,7 +215,7 @@ async def get_current_session(request: Request) -> Session:
         Valid Session object
 
     Raises:
-        HTTPException: If not authenticated or session invalid
+        Failure: reason `auth`, if not authenticated or session invalid
     """
     settings = get_settings()
 
@@ -248,10 +237,7 @@ async def get_current_session(request: Request) -> Session:
     # Get session cookie
     session_id = request.cookies.get(settings.cookie_name)
     if not session_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated - session cookie missing",
-        )
+        raise Failure("auth", "Not authenticated - session cookie missing")
 
     # Validate session
     session_store = get_session_store()
@@ -261,10 +247,7 @@ async def get_current_session(request: Request) -> Session:
     )
 
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired or invalid",
-        )
+        raise Failure("auth", "Session expired or invalid")
 
     return session
 

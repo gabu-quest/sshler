@@ -15,7 +15,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
 from .. import state
 from ..claude_sessions import (
@@ -32,6 +32,7 @@ from ..tmux import (
     ts_session_name,
 )
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, REASON_NOT_FOUND, Failure
 from .models import APIClaudeOpenRequest, APIClaudeOpenResult, APIClaudeSession
 
 logger = logging.getLogger(__name__)
@@ -53,11 +54,9 @@ def _resolve_resume_command(template: str | None, session_id: str) -> str:
     """
     chosen = (template or "").strip() or DEFAULT_RESUME_TEMPLATE
     if "{id}" not in chosen:
-        raise HTTPException(status_code=400, detail="Resume command template must contain {id}")
+        raise Failure(REASON_INVALID, "Resume command template must contain {id}")
     if any(ch in chosen for ch in ("\n", "\r", "\x00")):
-        raise HTTPException(
-            status_code=400, detail="Resume command template contains illegal characters"
-        )
+        raise Failure(REASON_INVALID, "Resume command template contains illegal characters")
     return chosen.replace("{id}", session_id)
 
 
@@ -107,13 +106,13 @@ def get_router(deps: APIDependencies) -> APIRouter:
         session_id: str, body: APIClaudeOpenRequest | None = None
     ) -> APIClaudeOpenResult:
         if not is_valid_session_id(session_id):
-            raise HTTPException(status_code=400, detail="Invalid Claude session id")
+            raise Failure(REASON_INVALID, "Invalid Claude session id")
 
         command = _resolve_resume_command(body.command_template if body else None, session_id)
 
         info = await asyncio.to_thread(get_claude_session, session_id)
         if info is None or not info.cwd:
-            raise HTTPException(status_code=404, detail="Claude session not found")
+            raise Failure(REASON_NOT_FOUND, "Claude session not found")
 
         # The tmux SESSION is the repo root's, so a conversation that ran in a
         # subdirectory (e.g. repo/replay-server) lands as a tab in the repo's
@@ -126,7 +125,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         session_dir = info.repo_root or info.cwd  # repo root → the tmux session
         window_dir = info.cwd  # exact cwd → where `claude --resume` actually runs
         if not Path(window_dir).is_dir():
-            raise HTTPException(status_code=409, detail="Working directory no longer exists")
+            raise Failure(REASON_NOT_FOUND, "Working directory no longer exists")
 
         session = ts_session_name(session_dir)
         window = _window_name(session_id, info.title)

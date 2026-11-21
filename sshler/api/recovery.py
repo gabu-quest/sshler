@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from .. import state
 from ..snapshot import (
@@ -15,6 +15,7 @@ from ..snapshot import (
     set_recovery_sessions,
 )
 from .dependencies import APIDependencies
+from .failure import REASON_FAILED, REASON_NOT_FOUND, Failure, failure_of
 from .models import (
     APILostSession,
     APIRecoveryPane,
@@ -63,7 +64,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         lost = get_recovery_sessions()
         target = next((s for s in lost if s["id"] == session_id), None)
         if not target:
-            raise HTTPException(status_code=404, detail="Session not in recovery list")
+            raise Failure(REASON_NOT_FOUND, "Session not in recovery list")
 
         windows = target.get("windows", [])
         logger.info("Recreating %s with %d window(s)", target["session_name"], len(windows))
@@ -71,14 +72,14 @@ def get_router(deps: APIDependencies) -> APIRouter:
             success = await recreate_session(target["session_name"], windows)
         except Exception as exc:
             logger.exception("Exception recreating %s", target["session_name"])
-            raise HTTPException(status_code=500, detail="Exception during recreate") from exc
+            raise failure_of(exc) from exc
         if not success:
             logger.error(
                 "recreate_session returned False for %s (windows=%r)",
                 target["session_name"],
                 windows,
             )
-            raise HTTPException(status_code=500, detail="Failed to recreate tmux session")
+            raise Failure(REASON_FAILED, "Failed to recreate tmux session")
 
         await state.update_session_activity_async(session_id, active=True)
         await state.clear_session_snapshot_async(session_id)

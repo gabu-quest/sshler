@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+
+from .api.failure import REASON_NOT_FOUND, Failure
 
 SPA_DIST_DIR = Path(__file__).parent / "static" / "dist"
 
@@ -26,14 +28,14 @@ def mount_spa(app: FastAPI, serve_spa: bool) -> None:
         try:
             spa_dist.resolve()
         except Exception as exc:
-            raise HTTPException(status_code=404) from exc
+            raise Failure(REASON_NOT_FOUND, "Not found") from exc
 
         if path and target_path.is_file() and str(target_path).startswith(str(spa_dist)):
             return FileResponse(target_path)
 
         index_path = spa_dist / "index.html"
         if not index_path.exists():
-            raise HTTPException(status_code=404)
+            raise Failure(REASON_NOT_FOUND, "Not found")
         response = FileResponse(index_path)
         # Never cache index.html — hashed assets handle their own caching.
         # Without this, browsers may serve stale HTML referencing old asset hashes.

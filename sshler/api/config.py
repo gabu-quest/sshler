@@ -4,12 +4,13 @@ import logging
 import os
 import subprocess
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from .. import __version__
 from ..pdf import PDF_RENDERER
 from ..ssh_pool import get_pool
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, Failure
 from .helpers import (
     LOCAL_IS_WINDOWS,
     available_windows_shells,
@@ -116,11 +117,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         # Validate inputs
         if update.idle_timeout is not None and update.idle_timeout < 0:
-            raise HTTPException(status_code=400, detail="idle_timeout must be >= 0 or null")
+            raise Failure(REASON_INVALID, "idle_timeout must be >= 0 or null")
         if update.max_lifetime is not None and update.max_lifetime < 0:
-            raise HTTPException(status_code=400, detail="max_lifetime must be >= 0 or null")
+            raise Failure(REASON_INVALID, "max_lifetime must be >= 0 or null")
         if update.max_connections_per_box is not None and update.max_connections_per_box < 1:
-            raise HTTPException(status_code=400, detail="max_connections_per_box must be >= 1")
+            raise Failure(REASON_INVALID, "max_connections_per_box must be >= 1")
 
         # Apply updates
         pool.update_config(

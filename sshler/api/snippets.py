@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
 from .. import state
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, REASON_NOT_FOUND, Failure
 from .models import APISimpleMessage, APISnippet, APISnippetCreate, APISnippetUpdate
 
 logger = logging.getLogger(__name__)
@@ -40,9 +41,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APISnippetCreate,
     ) -> APISnippet:
         if not payload.label.strip():
-            raise HTTPException(status_code=422, detail="Label cannot be empty")
+            raise Failure(REASON_INVALID, "Label cannot be empty")
         if not payload.command.strip():
-            raise HTTPException(status_code=422, detail="Command cannot be empty")
+            raise Failure(REASON_INVALID, "Command cannot be empty")
         record = await state.create_snippet_async(
             box=payload.box,
             label=payload.label.strip(),
@@ -64,7 +65,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             sort_order=payload.sort_order,
         )
         if record is None:
-            raise HTTPException(status_code=404, detail="Snippet not found")
+            raise Failure(REASON_NOT_FOUND, "Snippet not found")
         return _snippet_to_api(record)
 
     @router.delete("/snippets/{snippet_id}", response_model=APISimpleMessage)
@@ -73,7 +74,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APISimpleMessage:
         deleted = await state.delete_snippet_async(snippet_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Snippet not found")
+            raise Failure(REASON_NOT_FOUND, "Snippet not found")
         return APISimpleMessage(status="ok", message="deleted", path=snippet_id)
 
     return router

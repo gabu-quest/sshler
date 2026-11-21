@@ -6,10 +6,11 @@ import secrets
 import time
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from ..config import AppConfig
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, REASON_NOT_FOUND, Failure, failure_of
 from .models import APISimpleMessage, APITunnel, APITunnelCreate
 
 logger = logging.getLogger(__name__)
@@ -115,11 +116,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
 
         if payload.tunnel_type not in ("local", "remote"):
-            raise HTTPException(status_code=422, detail="tunnel_type must be 'local' or 'remote'")
+            raise Failure(REASON_INVALID, "tunnel_type must be 'local' or 'remote'")
         if not (1 <= payload.local_port <= 65535):
-            raise HTTPException(status_code=422, detail="local_port must be 1-65535")
+            raise Failure(REASON_INVALID, "local_port must be 1-65535")
         if not (1 <= payload.remote_port <= 65535):
-            raise HTTPException(status_code=422, detail="remote_port must be 1-65535")
+            raise Failure(REASON_INVALID, "remote_port must be 1-65535")
 
         tunnel_id = secrets.token_urlsafe(12)
 
@@ -146,7 +147,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 with contextlib.suppress(Exception):
                     connection.close()
             logger.warning(f"Failed to create tunnel for {name}: {exc}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Tunnel creation failed") from exc
+            raise failure_of(exc) from exc
 
         info = TunnelInfo(
             id=tunnel_id,
@@ -177,7 +178,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         info = registry().get(tunnel_id)
         if not info or info.box != name:
-            raise HTTPException(status_code=404, detail="Tunnel not found")
+            raise Failure(REASON_NOT_FOUND, "Tunnel not found")
 
         registry().remove(tunnel_id)
         logger.info(f"Tunnel {tunnel_id} closed for {name}")

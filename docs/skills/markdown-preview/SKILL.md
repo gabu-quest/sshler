@@ -78,7 +78,7 @@ Separate pipeline from "Print to PDF", same visual output. Where the print path 
 **Files:**
 
 - `sshler/pdf.py` — `PDF_RENDERER` singleton; one long-lived Chromium launched in FastAPI lifespan; per-request fresh `BrowserContext` + `Page`; module-level `asyncio.Lock` serializes page creation (single-user localhost tool, no parallelism benefit).
-- `sshler/api/pdf.py` — `POST /api/v1/pdf/render`. Accepts `{html, filename}`. Returns 503 when renderer is unavailable. Filename is sanitized (path separators / quotes stripped, `.pdf` appended). HTML capped at 20 MB.
+- `sshler/api/pdf.py` — `POST /api/v1/pdf/render`. Accepts `{html, filename}`. Answers 501 `program_missing` when the renderer is unavailable. Filename is sanitized (path separators / quotes stripped, `.pdf` appended). HTML capped at 20 MB.
 - `frontend/src/composables/usePrintableHtml.ts` — `toHtml({box, path, token, theme})` returns a complete `<!DOCTYPE html>...</html>` string. Internally: fetch preview → parse markdown → render mermaid → inline images → wrap in the same print stylesheet. Mirrors the print-window pipeline but produces a string instead of writing to a popup.
 - `frontend/src/composables/usePdfExport.ts` — `exportOne(box, path)` and `exportMany(box, paths[])`. Top-of-page loading bar (`NLoadingBarProvider` mounted in `App.vue`), stage-aware spinner (`fetching` → `rendering content` → `generating PDF Ns` ticking elapsed seconds → `downloading`).
 
