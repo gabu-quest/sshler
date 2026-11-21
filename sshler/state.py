@@ -809,21 +809,6 @@ def list_all_sessions() -> list[Session]:
 list_all_sessions_async = _in_thread(list_all_sessions)
 
 
-def list_all_snapshotted_sessions() -> list[Session]:
-    """List all inactive sessions that have a snapshot (for recovery detection)."""
-    db = _require_db()
-    with _DB_LOCK:
-        inactive = list(
-            Session.using(db)
-            .filter(F("active") == False)  # noqa: E712
-            .all()
-        )
-        return [s for s in inactive if s.metadata.get("last_snapshot_at")]
-
-
-list_all_snapshotted_sessions_async = _in_thread(list_all_snapshotted_sessions)
-
-
 def update_session_snapshot(session_id: str, windows: list[dict]) -> bool:
     """Atomically update session metadata with window snapshot."""
     db = _require_db()

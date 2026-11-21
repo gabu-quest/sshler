@@ -3,8 +3,10 @@
 A session route runs tmux on a box through the box's runner (``BoxRunner.tmux``): the
 same words on both kinds, the local box's tmux on this machine and a remote box's over
 its pooled connection. Two things the kinds really do differently each live in one
-function here: ``live_sessions`` (which sessions are running) and
-``force_kill_supported`` (a force kill is built for the local box only).
+function here: ``_local_live_sessions`` (which sessions are running: the local box is
+asked in Python, a remote box by one script; ``live_sessions`` asks about every
+session of a box, ``live_sessions_on`` about one) and ``force_kill_supported`` (a
+force kill is built for the local box only).
 
 A failure of tmux or of the box is raised and answered by its reason: a box that
 cannot be reached is ``unreachable``, tmux past its limit ``timeout``, no tmux on the

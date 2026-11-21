@@ -946,7 +946,7 @@ def _local_check_readable(path: str) -> None:
     opening a pipe to read waits for a writer."""
     mode = os.stat(path).st_mode
     if not (stat_mod.S_ISREG(mode) or stat_mod.S_ISDIR(mode)):
-        raise Failure(REASON_INVALID, "Not a regular file")
+        raise Failure(REASON_INVALID, _NOT_A_FILE)
     with open(path, "rb"):
         pass
 
