@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from .. import state
+from ..session_activity import match_tmux
 from ..snapshot import (
     get_last_snapshot_at,
     get_recovery_sessions,
@@ -16,6 +17,7 @@ from ..snapshot import (
     remove_recovery_session,
     set_recovery_sessions,
 )
+from ..tmux import ask_local_session
 from .dependencies import APIDependencies
 from .failure import REASON_FAILED, REASON_NOT_FOUND, Failure, failure_entry, failure_of
 from .models import (
@@ -62,6 +64,17 @@ async def _recreate(session_id: str, lost: Mapping[str, dict[str, Any]]) -> str:
     return str(target["session_name"])
 
 
+async def _dismiss(session_id: str) -> None:
+    """Forget the snapshot of the lost session ``session_id``, so the next start does
+    not offer it again, and let its row say what tmux has now: the session may have
+    been started again by hand since it was found lost (a lost session is local)."""
+    await state.clear_session_snapshot_async(session_id)
+    row = await state.get_session_by_id_async(session_id)
+    if row is not None:
+        live = await ask_local_session(row.session_name)
+        await match_tmux(row, live.has(row.session_name))
+
+
 def _lost_by_id() -> dict[str, dict[str, Any]]:
     return {s["id"]: s for s in get_recovery_sessions()}
 
@@ -71,7 +84,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
     @router.get("/recovery", response_model=list[APILostSession])
     async def api_get_recovery() -> list[APILostSession]:
-        """Return list of lost sessions (startup + live-detected)."""
+        """Return the list of lost sessions (found when the server started)."""
         return [
             APILostSession(
                 id=s["id"],
@@ -127,19 +140,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
         """Dismiss a single recovery session permanently."""
         lost = get_recovery_sessions()
         set_recovery_sessions([s for s in lost if s["id"] != session_id])
-        # Mark inactive and clear snapshot so startup reconcile won't re-detect it
-        await state.update_session_activity_async(session_id, active=False)
-        await state.clear_session_snapshot_async(session_id)
+        await _dismiss(session_id)
         return APISimpleMessage(status="ok", message="Dismissed")
 
     @router.post("/recovery/dismiss", response_model=APISimpleMessage)
     async def api_dismiss_recovery() -> APISimpleMessage:
         """Dismiss all recovery notifications permanently."""
         lost = get_recovery_sessions()
-        # Mark all as inactive and clear snapshots so they don't get re-detected
         for s in lost:
-            await state.update_session_activity_async(s["id"], active=False)
-            await state.clear_session_snapshot_async(s["id"])
+            await _dismiss(s["id"])
         set_recovery_sessions([])
         logger.info("Dismissed %d recovery session(s)", len(lost))
         return APISimpleMessage(status="ok", message=f"Dismissed {len(lost)} session(s)")

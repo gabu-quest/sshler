@@ -47,7 +47,7 @@ from .api.helpers import (
 )
 from .api.remote import command, login_shell_in, remote_directory, require
 from .api.run_failures import ProgramNotFoundError
-from .api.sessions import require_local_tmux
+from .api.sessions import live_sessions_on, require_local_tmux
 from .api.tunnels import TunnelRegistry
 from .auth import AuthManager, PasswordHasher, PasswordPolicy, PasswordValidator
 from .config import (
@@ -59,6 +59,7 @@ from .config import (
 from .ptyspawn import spawn_on_pty
 from .rate_limit import get_rate_limiter
 from .session import live_session
+from .session_activity import match_tmux
 from .settings import get_settings as get_app_settings
 from .spa import mount_spa
 from .ssh import (
@@ -1511,7 +1512,7 @@ async def _open_remote_terminal(
         raise
     tmux = None if plain or fallback else RemoteTmuxWindows(connection, request.session)
     transport = SshTransport(connection, process, tmux)
-    return OpenedTerminal(transport, directory, fallback=fallback)
+    return OpenedTerminal(transport, directory, fallback=fallback, connection=connection)
 
 
 async def _remote_tmux_missing(connection: asyncssh.SSHClientConnection, box: Box) -> bool:
@@ -1585,11 +1586,24 @@ async def _run_terminal(
         # A persisted Windows shell's row is the registry's to mark (see on_tracked).
         if session_id and opened.on_tracked is None:
             with teardown_scope():
-                try:
-                    await state.update_session_activity_async(session_id, active=False)
-                    logger.info(f"Session marked inactive: {session_id}")
-                except Exception as exc:
-                    logger.warning(f"Failed to mark session inactive: {exc}")
+                await _match_row_to_tmux(session_id, opened, box)
+
+
+async def _match_row_to_tmux(session_id: str, opened: OpenedTerminal, box: Box) -> None:
+    """The row says what tmux says now that the socket has ended: active while tmux
+    still has the session (another tab, a detach, a closed tab), inactive once it
+    ended. Only the session's own server and the default server are asked, on the
+    terminal's own connection, within ``live_sessions_on``'s bound; when tmux cannot be
+    asked the row is left as it was. Raises nothing."""
+    try:
+        row = await state.get_session_by_id_async(session_id)
+        if row is None:
+            return
+        live = await live_sessions_on(box, opened.connection, row.session_name)
+        if not await match_tmux(row, live.has(row.session_name)) and not live.complete:
+            logger.info(f"Session {session_id} keeps its flag: tmux could not be asked")
+    except Exception as exc:
+        logger.warning(f"Session {session_id} keeps its flag: tmux could not be asked: {exc}")
 
 
 async def _track_terminal(

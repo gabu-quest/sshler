@@ -10,6 +10,7 @@ import time
 from typing import Protocol
 
 from . import state
+from .session_activity import match_tmux
 from .tmux import (
     PANE_LIST_FORMAT,
     WINDOW_LIST_FORMAT,
@@ -44,7 +45,7 @@ def get_last_snapshot_at() -> float | None:
 
 
 def get_recovery_sessions() -> list[dict]:
-    """Return the current list of lost sessions (startup + live-detected)."""
+    """Return the current list of lost sessions (found when the server started)."""
     return _recovery_sessions
 
 
@@ -105,38 +106,32 @@ async def capture_local_windows(session_name: str) -> list[dict] | None:
 async def snapshot_all_sessions() -> int:
     """Capture window state for all active local sessions. Returns count.
 
-    Also detects dead sessions: if an active session's tmux is gone but we
-    have a previous snapshot, it's added to the recovery list.
+    A session whose windows cannot be read has usually ended. What tmux has is asked of
+    the one listing (``discover_local_sessions``), and a row tmux no longer has goes
+    inactive and keeps its snapshot; a row whose server could not be asked is left. It
+    is not offered for recovery here: while the server runs, nothing tells a session
+    that ended in the ordinary way (its shell exited, here or in another terminal) from
+    one whose tmux server died. A session that is gone when the server starts is
+    offered then (``reconcile_on_startup``).
     """
     global _last_snapshot_at
     sessions = await state.list_all_active_sessions_async()
     count = 0
+    unread: list[state.Session] = []
     for session in sessions:
-        meta = session.metadata
-        transport = meta.get("transport", "local")
-        if transport != "local":
+        if session.metadata.get("transport", "local") != "local":
             continue
 
         windows = await capture_local_windows(session.session_name)
         if windows is not None:
             await state.update_session_snapshot_async(session.id, windows)
             count += 1
-        elif meta.get("last_snapshot_at") and meta.get("windows"):
-            # tmux is gone but we have a snapshot — session died mid-run
-            existing_ids = {s["id"] for s in _recovery_sessions}
-            if session.id not in existing_ids:
-                _recovery_sessions.append(
-                    {
-                        "id": session.id,
-                        "box": session.box,
-                        "session_name": session.session_name,
-                        "working_directory": session.working_directory,
-                        "last_snapshot_at": meta["last_snapshot_at"],
-                        "windows": meta["windows"],
-                    }
-                )
-                logger.warning("Detected dead session: %s", session.session_name)
-                await state.update_session_activity_async(session.id, active=False)
+        else:
+            unread.append(session)
+    if unread:
+        live = await discover_local_sessions()
+        for session in unread:
+            await match_tmux(session, live.has(session.session_name))
     if count > 0:
         _last_snapshot_at = time.time()
     return count
@@ -168,34 +163,25 @@ async def snapshot_loop(settings: SnapshotSettings) -> None:
 
 
 async def reconcile_on_startup() -> list[dict]:
-    """Detect lost vs recovered sessions at startup. Returns list of lost sessions."""
-    live_sessions = await discover_local_sessions()
-    all_sessions = await state.list_all_active_sessions_async()
-
-    # Also check inactive sessions that have snapshots (they may have been marked
-    # inactive by a previous clean shutdown but the tmux died in a crash)
-    inactive = await state.list_all_snapshotted_sessions_async()
-    seen_ids = {s.id for s in all_sessions}
-    for s in inactive:
-        if s.id not in seen_ids:
-            all_sessions.append(s)
-
+    """Match every local tmux row to what tmux has at the start, and return the lost
+    sessions: a row with a snapshot whose session tmux does not have. A row whose
+    session could not be asked about is left as it is and is not called lost."""
+    live = await discover_local_sessions()
     lost: list[dict] = []
-    for session in all_sessions:
+    for session in await state.list_all_sessions_async():
         meta = session.metadata
-        transport = meta.get("transport", "local")
-        if transport != "local":
+        if meta.get("transport", "local") != "local":
             continue
-
-        if session.session_name in live_sessions:
-            # Tmux survived — mark as active
-            await state.update_session_activity_async(session.id, active=True)
-            meta = session.metadata
+        # The rows the start has always reported on: those sshler last knew running,
+        # and those with a snapshot. Read before the match changes ``active``.
+        watched = session.active or bool(meta.get("last_snapshot_at"))
+        alive = live.has(session.session_name)
+        await match_tmux(session, alive)
+        if alive and watched:
             meta["recovered_at"] = time.time()
             await state.update_session_metadata_async(session.id, meta)
             logger.info("Recovered session: %s", session.session_name)
-        elif meta.get("last_snapshot_at"):
-            # Has snapshot but no live tmux — lost
+        elif alive is False and meta.get("last_snapshot_at"):
             lost.append(
                 {
                     "id": session.id,

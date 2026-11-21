@@ -6,6 +6,7 @@ folders. A running session is made by opening a terminal in a folder, as a user 
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import socket
@@ -168,25 +169,53 @@ async def row_texts(page) -> list[str]:
     return texts
 
 
-async def wait_for_session(e2e_tmux_dir: Path, name: str) -> list[str]:
-    """The sessions of the ``ts-<name>`` server of the fixture, read through tmux itself."""
+async def tmux_lines(e2e_tmux_dir: Path, name: str, *args: str) -> list[str] | None:
+    """What ``tmux -L ts-<name> ARGS`` prints in the fixture's socket folder, by word;
+    None when tmux answers with an error. Run without blocking the event loop."""
     env = {**os.environ, "TMUX_TMPDIR": str(e2e_tmux_dir)}
     env.pop("TMUX", None)
     tmux = shutil.which("tmux")
     assert tmux
+    process = await asyncio.create_subprocess_exec(
+        tmux,
+        "-L",
+        f"ts-{name}",
+        *args,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        env=env,
+    )
+    try:
+        out, _ = await asyncio.wait_for(process.communicate(), timeout=5)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise
+    return out.decode().split() if process.returncode == 0 else None
+
+
+async def tmux_until(e2e_tmux_dir: Path, name: str, args: list[str], done, what: str):
+    """``tmux_lines`` until ``done`` holds for its answer, at most ``TIMEOUT_MS``; the
+    last answer."""
     deadline = time.monotonic() + TIMEOUT_MS / 1000
     while True:
-        ran = subprocess.run(
-            [tmux, "-L", f"ts-{name}", "list-sessions", "-F", "#{session_name}"],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=5,
-        )
-        if ran.returncode == 0 and ran.stdout.strip():
-            return ran.stdout.split()
-        assert time.monotonic() < deadline, f"no tmux session on ts-{name}: {ran.stderr!r}"
-        time.sleep(0.1)
+        lines = await tmux_lines(e2e_tmux_dir, name, *args)
+        if done(lines):
+            return lines
+        assert time.monotonic() < deadline, f"waited for {what} on ts-{name}: {lines!r}"
+        await asyncio.sleep(0.1)
+
+
+async def wait_for_session(e2e_tmux_dir: Path, name: str) -> list[str]:
+    """The sessions of the ``ts-<name>`` server of the fixture, read through tmux itself."""
+    return await tmux_until(
+        e2e_tmux_dir,
+        name,
+        ["list-sessions", "-F", "#{session_name}"],
+        bool,
+        "a tmux session",
+    )
 
 
 async def test_a_running_session_lists_above_folders_and_a_folder_opens_its_ts_session(
@@ -229,6 +258,33 @@ async def test_a_session_row_opens_the_terminal_of_that_session(open_search_page
     await page.wait_for_url("**/app/terminal?**", timeout=TIMEOUT_MS)
     query = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)
     assert query["session"] == ["beta-proj"]
+
+
+async def test_a_session_whose_tab_closed_is_still_listed_as_running(
+    open_search_page, search_server, e2e_tmux_dir
+):
+    _url, _token, home = search_server
+    make_folders(home, "epsilon-proj")
+    terminal_tab = await open_search_page(DESKTOP)
+    await start_session(terminal_tab, home / "epsilon-proj")
+    assert await wait_for_session(e2e_tmux_dir, "epsilon-proj") == ["epsilon-proj"]
+    await terminal_tab.close()
+    # The server has ended the socket once tmux has no client on the session left.
+    await tmux_until(
+        e2e_tmux_dir,
+        "epsilon-proj",
+        ["list-clients", "-F", "#{client_tty}"],
+        lambda clients: not clients,
+        "the closed tab's tmux client to leave",
+    )
+    assert await tmux_lines(
+        e2e_tmux_dir, "epsilon-proj", "list-sessions", "-F", "#{session_name}"
+    ) == ["epsilon-proj"]
+    page = await open_search_page(DESKTOP)
+
+    await type_in_card(page, "epsilon", sessions_loaded=True)
+    await expect(page.locator(ROWS)).to_have_count(1, timeout=TIMEOUT_MS)
+    assert await row_texts(page) == [f"session: epsilon-proj {home}/epsilon-proj"]
 
 
 async def test_nothing_matching_says_so_in_one_line(open_search_page):

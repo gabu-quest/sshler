@@ -39,6 +39,7 @@ ASYNC_NAMES = [
     "get_session_by_id_async",
     "get_session_by_name_async",
     "list_all_active_sessions_async",
+    "list_all_sessions_async",
     "list_all_snapshotted_sessions_async",
     "list_artifact_projects_async",
     "list_artifact_registrations_async",
@@ -170,7 +171,7 @@ def test_the_store_raises_no_deprecation_warning(tmp_path: Path) -> None:
 def test_every_async_name_is_pinned_and_a_coroutine_function() -> None:
     present = sorted(name for name in dir(state) if name.endswith("_async"))
     assert present == ASYNC_NAMES
-    assert len(ASYNC_NAMES) == 46
+    assert len(ASYNC_NAMES) == 47
     for name in ASYNC_NAMES:
         twin = getattr(state, name)
         sync = getattr(state, name.removesuffix("_async"))

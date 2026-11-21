@@ -66,14 +66,22 @@ function goHome() {
   }
 }
 
+// Loaded by a sync, as the overview's card is, so a session tmux no longer has shows
+// as not running here too. When the sync fails (a box that cannot be reached, a box
+// without tmux) the stored sessions are listed as they were last known, with the
+// failure's line; when they cannot be read either, the line alone.
 async function load() {
   loading.value = true
   loadError.value = null
   try {
-    sessions.value = await fetchBoxSessions(props.boxName, props.token)
+    sessions.value = await syncBoxSessions(props.boxName, props.token)
   } catch (err) {
-    sessions.value = []
     loadError.value = errorText(err)
+    try {
+      sessions.value = await fetchBoxSessions(props.boxName, props.token)
+    } catch {
+      sessions.value = []
+    }
   } finally {
     loading.value = false
   }
@@ -176,6 +184,7 @@ watch(() => props.boxName, load)
     <NEmpty v-else-if="sortedSessions.length === 0" :description="loadError ?? t('sessions.empty')" size="small" />
 
     <div v-else class="session-list">
+      <div v-if="loadError" class="load-error" data-testid="load-error">{{ loadError }}</div>
       <div
         v-for="session in sortedSessions"
         :key="session.id"
@@ -243,6 +252,12 @@ watch(() => props.boxName, load)
 </template>
 
 <style scoped>
+.load-error {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .home-item {
   display: flex;
   align-items: center;

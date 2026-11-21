@@ -799,6 +799,16 @@ def list_all_active_sessions() -> list[Session]:
 list_all_active_sessions_async = _in_thread(list_all_active_sessions)
 
 
+def list_all_sessions() -> list[Session]:
+    """List every session row across all boxes, active or not."""
+    db = _require_db()
+    with _DB_LOCK:
+        return list(Session.using(db).all())
+
+
+list_all_sessions_async = _in_thread(list_all_sessions)
+
+
 def list_all_snapshotted_sessions() -> list[Session]:
     """List all inactive sessions that have a snapshot (for recovery detection)."""
     db = _require_db()

@@ -18,17 +18,24 @@ import logging
 import re
 import shutil
 from collections.abc import Sequence
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from .. import state
 from .. import tmux as tmux_module
 from ..config import AppConfig, Box
-from ..tmux import discover_local_sessions, force_kill_local_session
+from ..session_activity import match_tmux_all
+from ..tmux import (
+    LiveSessions,
+    ask_local_session,
+    discover_local_sessions,
+    force_kill_local_session,
+)
 from ..validation import PathValidator, ValidationError
 from . import dependencies
 from .box_files import is_local
-from .box_runner import Ran, TmuxTimeoutError, box_runner
+from .box_runner import BoxRunner, Ran, TmuxTimeoutError, box_runner, over
 from .dependencies import APIDependencies
 from .failure import (
     REASON_FAILED,
@@ -52,18 +59,45 @@ from .run_failures import ProgramNotFoundError
 logger = logging.getLogger(__name__)
 
 
-# Lists sessions on the remote default tmux server and on every per-session
-# ``ts-*`` server, so sessions opened by sshler or by ``ts`` both count as live.
-# No tmux on the box exits 127, the shell's status for a command it cannot find.
-# A fixed text, never built from a request; sent as one word to ``sh -c``.
+# Lists the sessions of the remote default tmux server and of every per-session
+# ``ts-*`` server, so sessions opened by sshler or by ``ts`` both count as live; given
+# a session name as its first argument, of that session's own ``ts-<name>`` server and
+# the default server only. The names are its output, one per line. Its exit status says
+# what it learnt: 0 when every server it asked answered (a socket with no server behind
+# it answers "none", in the words ``tmux._NO_SERVER`` reads), ``REMOTE_LISTING_INCOMPLETE``
+# when one could not be asked (past ``timeout``'s limit, or another refusal), 127 when
+# the box has no tmux (the shell's status for a command it cannot find). The socket
+# folder is tmux's own: ``$TMUX_TMPDIR``, else ``/tmp``. A fixed text, never built from
+# a request; sent as one word to ``sh -c``, the session name as its own word after it.
+REMOTE_LISTING_INCOMPLETE = 75
 REMOTE_LIST_SESSIONS = """command -v tmux >/dev/null 2>&1 || exit 127
-tmux list-sessions -F '#{session_name}' 2>/dev/null || true
-socket_dir=/tmp/tmux-$(id -u)
-for socket in "$socket_dir"/ts-*; do
-    [ -S "$socket" ] || continue
-    server=${socket##*/}
-    timeout 2 tmux -L "$server" list-sessions -F '#{session_name}' 2>/dev/null || true
-done
+limit=
+command -v timeout >/dev/null 2>&1 && limit="timeout 2"
+unasked=0
+ask() {
+    errors=$($limit tmux "$@" list-sessions -F '#{session_name}' 2>&1 >&3)
+    case $? in
+        0) ;;
+        1) case $errors in
+               "no server running on "*) ;;
+               "error connecting to "*"(No such file or directory)"*) ;;
+               *) unasked=1 ;;
+           esac ;;
+        *) unasked=1 ;;
+    esac
+}
+{
+    ask
+    if [ $# -gt 0 ]; then
+        ask -L "ts-$1"
+    else
+        for socket in "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"/ts-*; do
+            [ -S "$socket" ] || continue
+            ask -L "${socket##*/}"
+        done
+    fi
+} 3>&1
+[ "$unasked" -eq 0 ] || exit 75
 """
 
 
@@ -74,36 +108,81 @@ def require_local_tmux(box: str, command: Sequence[str]) -> None:
         raise ProgramNotFoundError("tmux", box)
 
 
-async def live_sessions(deps: APIDependencies, box: Box, application_config: AppConfig) -> set[str]:
-    """The names of the tmux sessions running on ``box``: those of its default server
-    and of every ``ts-*`` server; empty when the box runs none. When they cannot be
-    read the failure is raised as a ``Failure`` by its reason, never taken for "no
+async def live_sessions(
+    deps: APIDependencies, box: Box, application_config: AppConfig
+) -> LiveSessions:
+    """The tmux sessions running on ``box``: those of its default server and of every
+    ``ts-*`` server, as ``LiveSessions`` (``complete`` False when a server could not be
+    asked, so a session it did not see may still run). When the box cannot be asked at
+    all the failure is raised as a ``Failure`` by its reason, never taken for "no
     sessions": no tmux on the box is ``program_missing``; on a remote box, a box that
     cannot be reached is ``unreachable``, a listing past its limit ``timeout``, and a
-    listing that exits non-zero ``failed``.
+    listing that exits with another status ``failed``.
 
     The local box scans its own socket folder in Python (``discover_local_sessions``).
     A remote box runs ``REMOTE_LIST_SESSIONS`` in one command on its pooled connection,
     the connect and the command bounded by ``PROBE_TIMEOUT_SECONDS`` (the overview polls
     this every 30 s per box).
     """
-    if is_local(box):
-        try:
-            require_local_tmux(box.name, tmux_module.default_tmux_command())
-        except ProgramNotFoundError as exc:
-            raise failure_of(exc) from exc
-        return await discover_local_sessions()
+    local = await _local_live_sessions(box)
+    if local is not None:
+        return local
     limit = dependencies.PROBE_TIMEOUT_SECONDS
     async with box_runner(deps, box, application_config, deadline=limit) as runner:
-        ran = await runner.run(
-            ["sh", "-c", REMOTE_LIST_SESSIONS], folder=None, timeout=limit, program="tmux"
+        return await _remote_live_sessions(runner, box, limit)
+
+
+async def live_sessions_on(box: Box, connection: Any, session: str) -> LiveSessions:
+    """What tmux on ``box`` says about ``session`` alone, asked on a connection the
+    caller holds (a terminal's own), so nothing connects: its own ``ts-<session>``
+    server and the default server are asked, whatever the number of other servers (on
+    the local box two tmux commands, ``ask_local_session``; on a remote box one command
+    on *connection*, bounded by one tmux command's limit ``tmux.TMUX_COMMAND_TIMEOUT``).
+    Read with ``LiveSessions.has(session)``. Fails as ``live_sessions`` does."""
+    local = await _local_live_sessions(box, session)
+    if local is not None:
+        return local
+    try:
+        return await _remote_live_sessions(
+            over(connection, box.name), box, tmux_module.TMUX_COMMAND_TIMEOUT, session
         )
-    if not ran.ok:
+    except Exception as exc:
+        answered = failure_of(exc)
+        if answered is exc:
+            raise
+        raise answered from exc
+
+
+async def _local_live_sessions(box: Box, session: str | None = None) -> LiveSessions | None:
+    """The live sessions of the local box, asked in Python: every server, or with
+    *session* that session's own server and the default one. None for a remote box,
+    which its caller asks with ``REMOTE_LIST_SESSIONS``. The one place the live sessions
+    tell the kinds of box apart."""
+    if not is_local(box):
+        return None
+    try:
+        require_local_tmux(box.name, tmux_module.default_tmux_command())
+    except ProgramNotFoundError as exc:
+        raise failure_of(exc) from exc
+    if session is None:
+        return await discover_local_sessions()
+    return await ask_local_session(session)
+
+
+async def _remote_live_sessions(
+    runner: BoxRunner, box: Box, limit: float, session: str | None = None
+) -> LiveSessions:
+    words = ["sh", "-c", REMOTE_LIST_SESSIONS]
+    if session is not None:
+        words += ["sh", session]
+    ran = await runner.run(words, folder=None, timeout=limit, program="tmux")
+    if ran.status not in (0, REMOTE_LISTING_INCOMPLETE):
         raise Failure(
             REASON_FAILED,
             f"listing the tmux sessions of {box.name} exited with status {ran.status}",
         )
-    return {line.strip() for line in ran.output.splitlines() if line.strip()}
+    names = frozenset(line.strip() for line in ran.output.splitlines() if line.strip())
+    return LiveSessions(names, complete=ran.ok)
 
 
 def _refused(command: str, ran: Ran) -> str:
@@ -402,25 +481,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
         name: str,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> list[APISession]:
-        """Sync DB sessions with actual tmux sessions.
-
-        Queries tmux for live sessions and marks DB sessions as inactive
-        if they no longer exist. Returns the updated session list. When the live
-        sessions cannot be read the failure is answered and no session changes.
+        """Make every tmux row of the box say whether tmux has its session
+        (``match_tmux_all``), both ways, and answer the box's rows. When the live
+        sessions cannot be read the failure is answered and no row changes.
         """
         box = deps.get_box_or_404(application_config, name)
         running = await live_sessions(deps, box, application_config)
-
-        # Get DB sessions and mark stale ones inactive
         db_sessions = await state.list_sessions_async(name, active_only=False)
-        updated_count = 0
-        for session in db_sessions:
-            if session.active and session.session_name not in running:
-                await state.update_session_activity_async(session.id, active=False)
-                updated_count += 1
-
-        if updated_count > 0:
-            logger.info(f"Synced {name}: marked {updated_count} stale sessions inactive")
+        changed = await match_tmux_all(db_sessions, running)
+        if changed > 0:
+            logger.info(f"Synced {name}: {changed} session(s) changed")
 
         # Return updated list
         records = await state.list_sessions_async(name, active_only=False)

@@ -8,6 +8,7 @@ import yaml
 from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient as SyncClient
 
+from sshler.tmux import LiveSessions
 from sshler.webapp import ServerSettings, make_app
 
 TEST_TOKEN = "token-async"
@@ -43,8 +44,8 @@ def test_ws_connect(tmp_path, monkeypatch, fake_tmux, tmux_tripwire):
     async def no_history(_session: str, _directory: str) -> None:
         return None
 
-    async def no_live_sessions() -> set[str]:
-        return set()
+    async def no_live_sessions() -> LiveSessions:
+        return LiveSessions()
 
     monkeypatch.setattr("sshler.webapp.record_ts_history", no_history)
     # Startup recovery lists live sessions with the bare tmux binary.

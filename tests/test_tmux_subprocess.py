@@ -128,9 +128,11 @@ async def _expect_timeout(call: Awaitable[Any]) -> str:
     return "timed out"
 
 
+UNASKED = tmux.LiveSessions(complete=False)
 SITES: list[tuple[str, Callable[[], Awaitable[Any]], Any]] = [
-    ("query_server", lambda: tmux._query_server(f"ts-{SESSION}"), set()),
-    ("query_default_server", lambda: tmux._query_default_server(), set()),
+    # A server past its limit was not asked: nothing seen, and nothing known missing.
+    ("query_server", lambda: tmux._query_server(f"ts-{SESSION}"), UNASKED),
+    ("query_default_server", lambda: tmux._query_default_server(), UNASKED),
     ("list_local_window_names", lambda: tmux.list_local_window_names(SESSION), set()),
     ("list_local_pane_pids", lambda: tmux._list_local_pane_pids(SESSION), []),
     ("ts_add", lambda: tmux.record_ts_history(SESSION, "/tmp"), None),

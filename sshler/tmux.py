@@ -21,7 +21,10 @@ import re
 import shlex
 import shutil
 import signal
+from collections.abc import Coroutine
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .proc import run_bounded as run_bounded
 
@@ -122,62 +125,101 @@ def _socket_dir() -> Path:
     return Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / f"tmux-{os.getuid()}"
 
 
-async def _query_server(server_name: str) -> set[str]:
-    """Query a single tmux server for session names, with timeout."""
+@dataclass(frozen=True)
+class LiveSessions:
+    """What tmux answered when asked which sessions it has: the one answer of every
+    listing (local here, remote in ``api/sessions.py``).
+
+    ``names`` are the sessions of the servers that answered. ``complete`` is False when
+    a server could not be asked (past its limit, or tmux could not be run): a session
+    it did not see may still run there. A socket with no server behind it is an answer,
+    no sessions, as tmux's own "no server running" is.
+    """
+
+    names: frozenset[str] = frozenset()
+    complete: bool = True
+
+    def has(self, session: str) -> bool | None:
+        """Whether tmux has *session*: True when it was seen, False when every server
+        answered without it, None when that could not be learnt."""
+        if session in self.names:
+            return True
+        return False if self.complete else None
+
+    def __or__(self, other: LiveSessions) -> LiveSessions:
+        return LiveSessions(self.names | other.names, self.complete and other.complete)
+
+
+# What tmux says, on its error output, when no server is behind the socket: the
+# socket is stale (``ECONNREFUSED``), or there is none (``ENOENT``). tmux sets only
+# ``LC_CTYPE``, so the reason is in English. ``REMOTE_LIST_SESSIONS`` reads the same two.
+_NO_SERVER = re.compile(
+    r"^(no server running on |error connecting to .*\(No such file or directory\))"
+)
+
+
+async def _ask(argv: list[str], server: str) -> LiveSessions:
+    """``argv`` (a ``list-sessions`` of one server) run and read as ``LiveSessions``."""
+    try:
+        returncode, stdout, stderr = await run_bounded(argv, SOCKET_TIMEOUT)
+    except Exception as exc:  # past its limit, or tmux could not be run
+        logger.info("tmux server %s could not be asked: %s", server, exc)
+        return LiveSessions(complete=False)
+    if returncode == 0:
+        return LiveSessions(frozenset(_session_names(stdout)))
+    errors = stderr.decode("utf-8", errors="replace").strip()
+    if _NO_SERVER.match(errors):
+        return LiveSessions()
+    logger.info("tmux server %s could not be asked: status %s, %s", server, returncode, errors)
+    return LiveSessions(complete=False)
+
+
+async def _query_server(server_name: str) -> LiveSessions:
+    """The sessions of the tmux server ``server_name`` (``ts-<name>``)."""
     cmd = local_tmux_command(server_name.removeprefix(SOCKET_PREFIX)) + [
         "list-sessions",
         "-F",
         "#{session_name}",
     ]
-    try:
-        returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
-        if returncode == 0:
-            return _session_names(stdout)
-    except (TimeoutError, Exception) as exc:
-        logger.debug("Failed to query tmux server %s: %s", server_name, exc)
-    return set()
+    return await _ask(cmd, server_name)
 
 
-async def _query_default_server() -> set[str]:
-    """Query the default tmux server (backward compat for pre-ts sessions)."""
+async def _query_default_server() -> LiveSessions:
+    """The sessions of the default tmux server (sessions made before the ts convention)."""
     cmd = default_tmux_command() + ["list-sessions", "-F", "#{session_name}"]
-    try:
-        returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
-        if returncode == 0:
-            return _session_names(stdout)
-    except (TimeoutError, Exception) as exc:
-        logger.debug("Failed to query default tmux server: %s", exc)
-    return set()
+    return await _ask(cmd, "default")
 
 
-async def discover_local_sessions() -> set[str]:
-    """Discover live local tmux sessions across all ts-* servers.
+async def _gather(queries: list[Coroutine[Any, Any, LiveSessions]]) -> LiveSessions:
+    answered = LiveSessions()
+    for result in await asyncio.gather(*queries):
+        answered |= result
+    return answered
 
-    Scans the ``tmux-<UID>/ts-*`` sockets in ``_socket_dir()`` and queries each for session
-    names.  Also checks the default tmux server as a backward-compat
-    fallback for sessions created before the ts convention was adopted.
 
-    Queries run concurrently.  Stale sockets are logged but NOT deleted
-    (sshler is a daemon — deleting sockets could race with the user's
+async def discover_local_sessions() -> LiveSessions:
+    """The live local tmux sessions: those of every ts-* server and of the default one.
+
+    Scans the ``tmux-<UID>/ts-*`` sockets in ``_socket_dir()`` and asks each, and the
+    default server, concurrently, each within ``SOCKET_TIMEOUT``. Stale sockets are
+    NOT deleted (sshler is a daemon: deleting sockets could race with the user's
     ``ts`` commands).
     """
     sock_dir = _socket_dir()
-    tasks: list[asyncio.Task] = []
-
+    queries: list[Coroutine[Any, Any, LiveSessions]] = []
     if sock_dir.is_dir():
         for entry in sock_dir.iterdir():
             if entry.name.startswith(SOCKET_PREFIX) and entry.is_socket():
-                tasks.append(asyncio.ensure_future(_query_server(entry.name)))
+                queries.append(_query_server(entry.name))
+    queries.append(_query_default_server())
+    return await _gather(queries)
 
-    # Also check default server for legacy sessions
-    tasks.append(asyncio.ensure_future(_query_default_server()))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    sessions: set[str] = set()
-    for result in results:
-        if isinstance(result, set):
-            sessions |= result
-    return sessions
+async def ask_local_session(session: str) -> LiveSessions:
+    """What tmux says about the local session *session* alone: its own ``ts-<session>``
+    server and the default server are asked (two tmux commands, concurrently), however
+    many other servers run. Read with ``LiveSessions.has(session)``."""
+    return await _gather([_query_server(f"{SOCKET_PREFIX}{session}"), _query_default_server()])
 
 
 # Window list: the fields that cannot hold free text come first and the window name

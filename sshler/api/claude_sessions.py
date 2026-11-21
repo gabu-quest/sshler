@@ -132,7 +132,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         target = f"{session}:{window}"
 
         # Ensure the repo-root session exists.
-        if session not in await discover_local_sessions():
+        if session not in (await discover_local_sessions()).names:
             await _run_local_tmux_command(
                 session, ["new-session", "-d", "-s", session, "-c", session_dir]
             )
