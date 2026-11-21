@@ -362,9 +362,9 @@ const getContextMenuItems = () => {
   if (!file) return [];
   const items = [];
   if (file.is_directory) {
-    items.push({ id: 'open', label: 'Open', icon: PhFolder }, { id: 'download-dir', label: 'Download as .zip', icon: PhDownloadSimple });
+    items.push({ id: 'open', label: t('common.open'), icon: PhFolder }, { id: 'download-dir', label: t('files.download_as_zip'), icon: PhDownloadSimple });
   } else {
-    items.push({ id: 'preview', label: 'Preview', icon: PhEye }, { id: 'print', label: 'Print', icon: PhPrinter }, { id: 'edit', label: 'Edit', icon: PhPencil }, { id: 'download', label: 'Download', icon: PhDownloadSimple });
+    items.push({ id: 'preview', label: t('common.preview'), icon: PhEye }, { id: 'print', label: t('files.print'), icon: PhPrinter }, { id: 'edit', label: t('common.edit'), icon: PhPencil }, { id: 'download', label: t('common.download'), icon: PhDownloadSimple });
     if (bootstrapStore.pdfAvailable) {
       items.push({ id: 'pdf', label: t('files.download_pdf'), icon: PhFilePdf });
     }
@@ -373,20 +373,20 @@ const getContextMenuItems = () => {
   const archiveExts = ['.tar.gz', '.tgz', '.zip'];
   const isArchive = !file.is_directory && archiveExts.some((ext: string) => file.name.toLowerCase().endsWith(ext));
 
-  items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: 'Rename', icon: PhTextAa }, { id: 'chmod', label: 'Chmod', icon: PhGear }, { id: 'copy', label: 'Copy', icon: PhCopy }, { id: 'copy-path', label: 'Copy Path', icon: PhClipboard });
+  items.push({ separator: true, id: 'sep1', label: '' }, { id: 'rename', label: t('common.rename'), icon: PhTextAa }, { id: 'chmod', label: t('files.chmod'), icon: PhGear }, { id: 'copy', label: t('common.copy'), icon: PhCopy }, { id: 'copy-path', label: t('files.copy_path'), icon: PhClipboard });
   if (bootstrapStore.wslDistro && selectedBox.value === 'local') {
     items.push({ id: 'copy-wsl-path', label: t('files.copy_windows_path'), icon: PhClipboard });
   }
-  items.push({ id: 'favorite', label: file.is_directory ? 'Add to Favorites' : 'Favorite Directory', icon: PhStar });
+  items.push({ id: 'favorite', label: file.is_directory ? t('files.add_to_favorites') : t('files.favorite_directory'), icon: PhStar });
   if (!file.is_directory) {
-    items.push({ id: 'compare', label: 'Compare with...', icon: PhEye });
+    items.push({ id: 'compare', label: t('files.compare_with'), icon: PhEye });
   }
   items.push({ separator: true, id: 'sep-archive', label: '' });
   if (isArchive) {
-    items.push({ id: 'extract', label: 'Extract Here', icon: PhArchive });
+    items.push({ id: 'extract', label: t('files.extract_here'), icon: PhArchive });
   }
-  items.push({ id: 'compress-tgz', label: 'Compress as .tar.gz', icon: PhArchive }, { id: 'compress-zip', label: 'Compress as .zip', icon: PhArchive });
-  items.push({ separator: true, id: 'sep2', label: '' }, { id: 'delete', label: 'Delete', icon: PhTrash, danger: true });
+  items.push({ id: 'compress-tgz', label: t('files.compress_tgz'), icon: PhArchive }, { id: 'compress-zip', label: t('files.compress_zip'), icon: PhArchive });
+  items.push({ separator: true, id: 'sep2', label: '' }, { id: 'delete', label: t('common.delete'), icon: PhTrash, danger: true });
   return items;
 };
 
