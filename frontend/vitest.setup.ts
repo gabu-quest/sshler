@@ -24,6 +24,7 @@ vi.mock("@/i18n", async () => {
     return result;
   };
   return {
+    translate: t,
     useI18n: () => ({
       locale: computed(() => locale.value),
       t,

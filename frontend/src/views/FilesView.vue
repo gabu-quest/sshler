@@ -28,7 +28,8 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { UploadError, errorStatus, errorReason, touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { ApiError } from "@/api/apiError";
+import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 
@@ -727,7 +728,7 @@ async function doRename() {
     } catch (err) {
       // A taken name the server would replace asks; "No" leaves the dialog open and
       // everything as it was. Any other refusal shows the server's text.
-      if (errorStatus(err) !== 409 || errorReason(err) !== "exists") throw err;
+      if (!(err instanceof ApiError && err.reason === "exists")) throw err;
       if (!(await askReplace(newName))) return;
       await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null, { overwrite: true });
     }
@@ -745,7 +746,7 @@ async function doRename() {
 
 /**
  * Upload one file: "uploaded", or "skipped" when it already exists and the user keeps
- * it. A 409 with the reason "exists" asks to replace (Yes re-sends with the overwrite
+ * it. The reason "exists" asks to replace (Yes re-sends with the overwrite
  * flag); any other 4xx is final; a network or server failure is retried with backoff.
  */
 async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
@@ -758,15 +759,17 @@ async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
       await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null);
       return "uploaded";
     } catch (err) {
-      const status = err instanceof UploadError ? err.status : null;
-      // Only a file the server says it may replace is asked about; any other refusal
-      // is final and shows the server's own text.
-      if (status === 409 && err instanceof UploadError && err.reason === "exists") {
+      // Only a file the server says it may replace is asked about.
+      if (err instanceof ApiError && err.reason === "exists") {
         filesStore.uploadError = null; // the prompt answers this one
         if (!(await askReplace(file.name))) return "skipped";
         await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null, { overwrite: true });
         return "uploaded";
       }
+      // Whether to retry is a rule about the answer, not about what failed: a refusal
+      // (4xx) is final and shows its text; no answer (status 0) or a server failure
+      // (5xx) is tried again.
+      const status = err instanceof ApiError ? err.status : null;
       if (status !== null && status >= 400 && status < 500) throw err;
       lastError = err;
       if (attempt < maxAttempts) {

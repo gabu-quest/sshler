@@ -57,7 +57,7 @@ FastAPI + uvicorn (Python 3.12+, async) · asyncssh · SQLite via sqler · Vue 3
 
 ### Frontend
 
-**Pinia stores** (`stores/`) hold all state: `app` (theme, terminal settings, `activeBox`), `bootstrap` (config from `/api/v1/bootstrap`), `boxes`, `files`, `favorites`. The API client in `src/api/http.ts` adds auth headers. The terminal component wraps xterm.js and its WebSocket. Emoji favicons, active-box tracking, directory search and the mobile terminal: `docs/architecture.md` "Frontend details".
+**Pinia stores** (`stores/`) hold all state: `app` (theme, terminal settings, `activeBox`), `bootstrap` (config from `/api/v1/bootstrap`), `boxes`, `files`, `favorites`. `src/api/http.ts`: one request function, one `ApiError`. The terminal component wraps xterm.js and its WebSocket. Requests, emoji favicons, active-box tracking, directory search, the mobile terminal: `docs/architecture.md` "Frontend details".
 
 ## Project CLI (just)
 

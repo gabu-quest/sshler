@@ -10,7 +10,7 @@ points here; each section stands alone.
 2. Client connects to `/ws/term?host=...&dir=...&session=...&token=...`
 3. `terminal_socket` checks access and the session name, then `webapp.py` opens one transport from `sshler/terminal/`: `LocalPtyTransport` (tmux client on a local PTY), `SshTransport` (tmux over its own SSH connection) or `ConPtyTransport` (a tab of a persisted native Windows shell). Each keeps the contract in `terminal/transport.py` (read, write, resize, close) and knows nothing of the WebSocket
 4. `terminal/pump.py` `run_pump` carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects)
-5. A terminal that cannot open is a `TerminalOpenError(message, code, reason)`, answered only in `_serve_terminal`: the message is sent as text, then the socket closes with the code. The close codes: 4400 a refused session name, 4401 credentials, 4403 the token or the Origin, 4404 a box the server does not know, 4501 tmux is not installed on the box, 4502 WSL is not installed, 4503 pywinpty is missing, 4504 too many terminals. A box is asked for tmux before anything is started: the local box by `require_local_tmux` (`api/sessions.py`), a remote box by one command (`remote.require`) on the terminal's own connection, where only status 127 refuses and a check that cannot run opens the terminal. The page's words for each code are in `frontend/src/utils/terminalCloseCodes.ts`, and the page reconnects after any code not named there: a new code is named there in the same change
+5. A terminal that cannot open is a `TerminalOpenError(message, code, reason)`, answered only in `_serve_terminal`: the message is sent as text, then the socket closes with the code. The close codes: 4400 a refused session name, 4401 credentials, 4403 the token or the Origin, 4404 a box the server does not know, 4501 tmux is not installed on the box, 4502 WSL is not installed, 4503 pywinpty is missing, 4504 too many terminals. A box is asked for tmux before anything is started: the local box by `require_local_tmux` (`api/sessions.py`), a remote box by one command (`remote.require`, sent as `sh -c` so any login shell can read it) on the terminal's own connection, where only status 127 refuses and a check that cannot run opens the terminal. A tmux that cannot be started answers "Connection failed" and an ordinary close on both kinds. The page's words for each code are in `frontend/src/utils/terminalCloseCodes.ts`, and the page reconnects after any code not named there: a new code is named there in the same change
 6. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
 
 ## A command on a box, and the files of a box
@@ -66,6 +66,23 @@ the folders visited before). A route outside these that raises a plain `HTTPExce
 its reason from its status.
 
 ## Frontend details
+
+**A request and its failure**: every request of the page goes through `request` in
+`src/api/http.ts` (the JSON calls, the `http` object's verbs, downloads, the PDF export, a
+transfer's first answer, the terminal handshake, the start-up token check); the upload keeps
+`XMLHttpRequest` for its progress and runs under the same policy. A failed request is an
+`ApiError` (`src/api/apiError.ts`): `status` (0 when no answer came), `reason` (one of the
+server's words, `network` when no answer came, null when an answer had none) and `detail` (the
+server's text). Its `message` is the translated line of the reason (`error.reason.<word>`,
+`error.reason.network`, `error.reason.none`, in both locales), then " — " and the detail; an
+answer with no reason and no text shows its status in brackets instead. The page acts on the
+reason only, never on the status or the words: `token` refreshes the token once and sends once
+more, never a second time and never for the bootstrap call; `auth` goes to the sign-in route
+through the router (`handleAuthErrors`), and does nothing on the sign-in page itself; anything
+else is thrown at once. "Replace?" is asked on `exists`, the diff view's missing side is
+`not_found`. One rule reads the status on purpose: the upload retries a 5xx or no answer, which
+is about retrying, not about what failed. `FAILURE_REASONS` there is the server's list
+(`tests/test_page_failure_reasons.py` fails when the two differ).
 
 **Emoji favicon system** in `src/utils/emoji-favicon.ts`:
 - Two disjoint pools: `BOX_EMOJIS` (vehicles/buildings) and `DIR_EMOJIS` (animals/nature/food)

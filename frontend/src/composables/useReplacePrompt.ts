@@ -2,9 +2,10 @@ import { h, ref } from "vue";
 import { NButton, useDialog } from "naive-ui";
 
 import { useI18n } from "@/i18n";
+import type { FailureReason } from "@/api/apiError";
 
-/** Why the server refused one item of a batch or transfer. */
-export type FailReason = "exists" | "cannot_replace" | "failed";
+/** Why the server refused one item of a batch or transfer: any reason of a failure. */
+export type FailReason = FailureReason;
 
 export interface FailedItem {
   path: string;

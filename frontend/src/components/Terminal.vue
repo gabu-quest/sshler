@@ -39,7 +39,7 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName } from '@/api/http'
+import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
@@ -1270,18 +1270,7 @@ const connect = async () => {
 
   try {
     // Get WebSocket URL from backend handshake to ensure proper host resolution
-    const handshakeResponse = await fetch('/api/v1/terminal/handshake', {
-      headers: {
-        'Accept': 'application/json',
-        ...(tokenValue.value ? { 'X-SSHLER-TOKEN': tokenValue.value } : {})
-      }
-    })
-
-    if (!handshakeResponse.ok) {
-      throw new Error(`Handshake failed: ${handshakeResponse.status}`)
-    }
-
-    const handshake = await handshakeResponse.json()
+    const handshake = await fetchTerminalHandshake(tokenValue.value || null)
     let wsUrl = handshake.ws_url
 
     // Add required query parameters

@@ -20,20 +20,30 @@ type I18nContext = {
   setLocale: (value: Locale) => void;
 };
 
-export function createI18n(app: App) {
+function storedLocale(): Locale {
   const stored = (typeof localStorage !== "undefined" && localStorage.getItem(LOCALE_KEY)) as Locale | null;
-  const locale = ref<Locale>(stored === "ja" ? "ja" : "en");
+  return stored === "ja" ? "ja" : "en";
+}
 
-  const t = (key: string, params?: Record<string, string | number>): string => {
-    const table = messages[locale.value] || messages.en;
-    let result = table[key] ?? messages.en[key] ?? key;
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        result = result.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
-      }
+// One locale for the whole page: the app's `t` and `translate` (used by code outside a
+// component, as the request module's errors) read the same value.
+const locale = ref<Locale>(storedLocale());
+
+/** The text of `key` in the page's locale, else in English, else the key itself. */
+export function translate(key: string, params?: Record<string, string | number>): string {
+  const table = messages[locale.value] || messages.en;
+  let result = table[key] ?? messages.en[key] ?? key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      result = result.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
     }
-    return result;
-  };
+  }
+  return result;
+}
+
+export function createI18n(app: App) {
+  locale.value = storedLocale();
+  const t = translate;
 
   const setLocale = (value: Locale) => {
     locale.value = value;

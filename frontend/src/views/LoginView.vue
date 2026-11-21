@@ -5,6 +5,7 @@ import { NCard, NForm, NFormItem, NInput, NButton, NAlert, NIcon } from 'naive-u
 import { PhLock } from '@phosphor-icons/vue'
 import { useAuthStore } from '@/stores/auth'
 import { http } from '@/api/http'
+import { ApiError } from '@/api/apiError'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -44,14 +45,12 @@ const handleLogin = async () => {
     // Redirect to the page they were trying to access or home
     const redirect = router.currentRoute.value.query.redirect as string || '/'
     router.push(redirect)
-  } catch (err: any) {
-    // Handle errors
-    if (err?.response?.status === 401) {
+  } catch (err) {
+    if (err instanceof ApiError && err.reason === 'auth') {
       error.value = t('login.error_invalid')
-    } else if (err?.response?.status === 429) {
-      const retryAfter = err.response?.headers?.['retry-after'] || 'a few minutes'
-      error.value = t('login.error_rate_limit', { seconds: retryAfter })
-    } else if (err?.message) {
+    } else if (err instanceof ApiError && err.reason === 'rate_limited') {
+      error.value = t('login.error_rate_limit')
+    } else if (err instanceof Error && err.message) {
       error.value = err.message
     } else {
       error.value = t('login.error_generic')

@@ -39,6 +39,8 @@ import type {
   ArtifactProjectList,
   ArtifactRegistration,
 } from "./types";
+import { ApiError, apiErrorOf, apiErrorOfBody, networkError } from "./apiError";
+import type { FailureReason } from "./apiError";
 
 export interface TransferProgress {
   file: string;
@@ -50,30 +52,7 @@ export interface TransferProgress {
 
 export interface TransferResult {
   succeeded: string[];
-  failed: { path: string; error: string; reason?: "exists" | "cannot_replace" | "failed" }[];
-}
-
-/**
- * An error answer: a plain Error with the server's text, plus the HTTP status (not
- * enumerable, so the error still compares equal to `new Error(text)`). `errorStatus`
- * reads it, so a view can tell a taken name (409) from any other failure.
- */
-function statusError(message: string, status: number, reason?: string): Error {
-  const err = new Error(message);
-  Object.defineProperty(err, "status", { value: status, enumerable: false });
-  if (reason) Object.defineProperty(err, "reason", { value: reason, enumerable: false });
-  return err;
-}
-
-/** The server's `reason` of a refused single operation ("exists", "cannot_replace"), if any. */
-export function errorReason(err: unknown): string | null {
-  const reason = (err as { reason?: unknown } | null)?.reason;
-  return typeof reason === "string" ? reason : null;
-}
-
-export function errorStatus(err: unknown): number | null {
-  const status = (err as { status?: unknown } | null)?.status;
-  return typeof status === "number" ? status : null;
+  failed: { path: string; error: string; reason?: FailureReason }[];
 }
 
 /** Sent only when true, so a request without it is the plain, refusing one. */
@@ -95,6 +74,7 @@ function overwriteField(options: OverwriteOption): { overwrite?: true } {
 }
 
 const API_BASE = "/api/v1";
+const TOKEN_HEADER = "X-SSHLER-TOKEN";
 
 // Deduplication: only one token refresh at a time
 let _refreshPromise: Promise<string | null> | null = null;
@@ -114,83 +94,117 @@ function refreshTokenOnce(): Promise<string | null> {
   return _refreshPromise;
 }
 
-async function handle<T>(response: Response, requestInfo?: { url: string, options: RequestInit }): Promise<T> {
-  if (!response.ok) {
-    // Auto-retry on 403 (token mismatch after server restart)
-    if (response.status === 403 && !response.url.includes('/bootstrap') && requestInfo) {
-      console.warn('[API] 403 received, refreshing token...');
-      try {
-        const newToken = await refreshTokenOnce();
-        if (newToken) {
-          const existingHeaders: Record<string, string> = {};
-          const origHeaders = requestInfo.options.headers;
-          if (origHeaders) {
-            if (origHeaders instanceof Headers) {
-              origHeaders.forEach((v, k) => { existingHeaders[k] = v; });
-            } else if (Array.isArray(origHeaders)) {
-              origHeaders.forEach(([k, v]) => { existingHeaders[k] = v; });
-            } else {
-              Object.assign(existingHeaders, origHeaders);
-            }
-          }
-          const retryResponse = await fetch(requestInfo.url, {
-            ...requestInfo.options,
-            headers: { ...existingHeaders, ...buildHeaders(newToken) },
-            credentials: 'include',
-          });
-          if (retryResponse.ok) {
-            return retryResponse.json() as Promise<T>;
-          }
-          const retryError = await safeParseError(retryResponse);
-          console.error('[API] Retry also failed:', retryResponse.status, retryError);
-        }
-      } catch (retryError) {
-        console.error('[API] Token refresh failed:', retryError);
-      }
-    }
+/** The page's current token, for a request whose caller sent none. */
+async function currentToken(): Promise<string | null> {
+  const { useBootstrapStore } = await import('@/stores/bootstrap');
+  return useBootstrapStore().token;
+}
 
-    if (response.status === 401) {
-      await handleAuthErrors(response);
-    }
+/** How a request acts on a failure besides throwing it. */
+interface FailurePolicy {
+  /** On `token`: refresh the token once and send once more (false for the bootstrap
+   * call, which is the refresh itself). Default true. */
+  refresh?: boolean;
+  /** On `auth`: go to the sign-in page. Default true. */
+  signIn?: boolean;
+}
 
-    const { detail, reason } = await parseError(response);
-    throw statusError(detail || `request failed with ${response.status}`, response.status, reason);
-  }
-  return response.json() as Promise<T>;
+interface RequestOptions extends FailurePolicy {
+  /** Abort after this many ms (frees the browser's connection on a slow backend). */
+  timeoutMs?: number;
 }
 
 /**
- * Fetch wrapper that always passes request info to handle() for 403 retry.
- * Use this instead of raw fetch() for all authenticated API calls.
- * @param timeoutMs - optional request timeout in ms (frees browser connection on slow backends)
+ * Run `attempt` and act on its failure by the reason, never by the status: `token`
+ * refreshes the token once and runs it once more with the new token (a second failure
+ * is thrown, never retried); `auth` goes to the sign-in page; every failure is then
+ * thrown. Anything that is not an `ApiError` (an `AbortError`) passes untouched.
  */
-async function apiFetch<T>(url: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
-  const options: RequestInit = { ...init, credentials: 'include' };
-  if (timeoutMs) {
-    options.signal = AbortSignal.timeout(timeoutMs);
-  }
-  const res = await fetch(url, options);
-  return handle<T>(res, { url, options });
-}
-
-async function parseError(response: Response): Promise<{ detail: string | null; reason?: string }> {
+async function withFailurePolicy<T>(
+  attempt: (freshToken?: string) => Promise<T>,
+  policy: FailurePolicy,
+): Promise<T> {
   try {
-    const data = await response.json();
-    const reason = typeof data?.reason === "string" ? data.reason : undefined;
-    if (data?.detail) {
-      if (Array.isArray(data.detail)) {
-        return { detail: data.detail.map((item: any) => item?.msg || String(item)).join(", "), reason };
-      }
-      return { detail: String(data.detail), reason };
-    }
+    return await attempt();
   } catch (err) {
-    return { detail: null };
+    if (!(err instanceof ApiError)) throw err;
+    if (err.reason === "token" && policy.refresh !== false) {
+      let fresh: string | null = null;
+      try {
+        fresh = await refreshTokenOnce();
+      } catch (refreshError) {
+        // A refresh that fails leaves the first failure as the answer.
+        console.error('[API] Token refresh failed:', refreshError);
+      }
+      if (!fresh) throw err;
+      try {
+        return await attempt(fresh);
+      } catch (again) {
+        if (again instanceof ApiError && again.reason === "auth" && policy.signIn !== false) {
+          await handleAuthErrors();
+        }
+        throw again;
+      }
+    }
+    if (err.reason === "auth" && policy.signIn !== false) {
+      await handleAuthErrors();
+    }
+    throw err;
   }
-  return { detail: null };
 }
 
-async function safeParseError(response: Response): Promise<string | null> {
-  return (await parseError(response)).detail;
+function headerRecord(headers: HeadersInit | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!headers) return out;
+  if (headers instanceof Headers) {
+    headers.forEach((v, k) => { out[k] = v; });
+  } else if (Array.isArray(headers)) {
+    headers.forEach(([k, v]) => { out[k] = v; });
+  } else {
+    Object.assign(out, headers);
+  }
+  return out;
+}
+
+/**
+ * The one request of the page: every fetch goes through it. It sends the session
+ * cookie and the token header (the caller's, else the page's current token), and
+ * answers the response of a request that worked; a failed one throws an `ApiError`
+ * (status 0 and the reason `network` when no answer came) after `withFailurePolicy`
+ * has acted on its reason. An aborted request throws its own `AbortError` (or
+ * `TimeoutError`), untouched.
+ */
+async function request(url: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<Response> {
+  const once = async (freshToken?: string): Promise<Response> => {
+    const headers = headerRecord(init.headers);
+    if (freshToken) {
+      headers[TOKEN_HEADER] = freshToken;
+    } else if (!headers[TOKEN_HEADER]) {
+      const token = await currentToken();
+      if (token) headers[TOKEN_HEADER] = token;
+    }
+    const sent: RequestInit = { ...init, headers, credentials: 'include' };
+    if (options.timeoutMs) sent.signal = AbortSignal.timeout(options.timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(url, sent);
+    } catch (err) {
+      const name = (err as { name?: unknown } | null)?.name;
+      if (name === "AbortError" || name === "TimeoutError") throw err;
+      throw networkError();
+    }
+    if (!response.ok) {
+      throw apiErrorOf(response.status, await response.text().catch(() => ""));
+    }
+    return response;
+  };
+  return withFailurePolicy(once, options);
+}
+
+/** `request`, answering the JSON body. */
+async function apiFetch<T>(url: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  const response = await request(url, init, { timeoutMs });
+  return response.json() as Promise<T>;
 }
 
 export function buildHeaders(token?: string | null): HeadersInit {
@@ -198,134 +212,89 @@ export function buildHeaders(token?: string | null): HeadersInit {
     Accept: "application/json",
   };
   if (token) {
-    headers["X-SSHLER-TOKEN"] = token;
+    headers[TOKEN_HEADER] = token;
   }
   // NOTE: Do NOT include Authorization header - we use httpOnly cookies
   return headers;
 }
 
+async function verb<T>(method: string, url: string, body: unknown, headers: HeadersInit | undefined): Promise<{ data: T }> {
+  const hasBody = body !== undefined;
+  const response = await request(url, {
+    method,
+    headers: hasBody ? { 'Content-Type': 'application/json', ...headerRecord(headers) } : headerRecord(headers),
+    body: hasBody && body ? JSON.stringify(body) : undefined,
+  });
+  return { data: (await response.json()) as T };
+}
+
 /**
- * Axios-style HTTP client with automatic cookie-based auth
- * All requests include credentials: 'include' for httpOnly session cookies
+ * Axios-style HTTP client over `request`: the cookie, the token header, the refresh
+ * and the sign-in redirect are the same as every other request's.
  */
 export const http = {
-  async get<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const headers = { ...config?.headers };
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-      credentials: 'include' // Include httpOnly cookies
-    });
-
-    if (!response.ok) {
-      await handleAuthErrors(response);
-      const detail = await safeParseError(response);
-      throw createHttpError(response.status, detail || `GET ${url} failed with ${response.status}`);
-    }
-
-    const data = await response.json();
-    return { data };
+  get<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    return verb<T>('GET', url, undefined, config?.headers);
   },
-
-  async post<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const headers = {
-      'Content-Type': 'application/json',
-      ...config?.headers
-    };
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include' // Include httpOnly cookies
-    });
-
-    if (!response.ok) {
-      await handleAuthErrors(response);
-      const detail = await safeParseError(response);
-      throw createHttpError(response.status, detail || `POST ${url} failed with ${response.status}`);
-    }
-
-    const data = await response.json();
-    return { data };
+  post<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    return verb<T>('POST', url, body ?? null, config?.headers);
   },
-
-  async put<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const headers = {
-      'Content-Type': 'application/json',
-      ...config?.headers
-    };
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include' // Include httpOnly cookies
-    });
-
-    if (!response.ok) {
-      await handleAuthErrors(response);
-      const detail = await safeParseError(response);
-      throw createHttpError(response.status, detail || `PUT ${url} failed with ${response.status}`);
-    }
-
-    const data = await response.json();
-    return { data };
+  put<T = any>(url: string, body?: any, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    return verb<T>('PUT', url, body ?? null, config?.headers);
   },
-
-  async delete<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
-    const headers = { ...config?.headers };
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers,
-      credentials: 'include' // Include httpOnly cookies
-    });
-
-    if (!response.ok) {
-      await handleAuthErrors(response);
-      const detail = await safeParseError(response);
-      throw createHttpError(response.status, detail || `DELETE ${url} failed with ${response.status}`);
-    }
-
-    const data = await response.json();
-    return { data };
+  delete<T = any>(url: string, config?: { headers?: HeadersInit }): Promise<{ data: T }> {
+    return verb<T>('DELETE', url, undefined, config?.headers);
   },
 };
 
-/**
- * Handle authentication-specific errors
- */
-async function handleAuthErrors(response: Response): Promise<void> {
-  if (response.status === 401) {
-    // Unauthorized - clear auth state and redirect to login
-    try {
-      const { useAuthStore } = await import('@/stores/auth');
-      const authStore = useAuthStore();
-      authStore.clearUser();
+// The sign-in navigation in flight: failures that arrive together share it.
+let _signInPromise: Promise<void> | null = null;
 
-      // Redirect to login page with return URL
-      const currentPath = window.location.pathname;
-      if (!currentPath.startsWith('/login')) {
-        window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`;
-      }
-    } catch (err) {
-      console.error('Failed to handle 401 error:', err);
+/**
+ * The sign-in redirect: clear the signed-in user and go to the sign-in page through
+ * the router, carrying the current route as `redirect`. On the sign-in page itself it
+ * does not navigate, and failures that arrive together navigate once.
+ */
+async function handleAuthErrors(): Promise<void> {
+  try {
+    const { useAuthStore } = await import('@/stores/auth');
+    useAuthStore().clearUser();
+
+    const { default: router } = await import('@/router');
+    const current = router.currentRoute.value;
+    if (current.name === 'login') return;
+    if (!_signInPromise) {
+      _signInPromise = Promise.resolve(
+        router.push({ name: 'login', query: { redirect: current.fullPath } }),
+      ).then(() => undefined).finally(() => { _signInPromise = null; });
     }
+    await _signInPromise;
+  } catch (err) {
+    console.error('Failed to handle 401 error:', err);
   }
 }
 
-/**
- * Create HTTP error with response details
- */
-function createHttpError(status: number, message: string): Error {
-  const error = new Error(message) as any;
-  error.response = { status };
-  return error;
-}
-
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
-  return apiFetch<BootstrapPayload>(`${API_BASE}/bootstrap?_t=${Date.now()}`, {
+  // The bootstrap call is the token refresh itself: a `token` failure is never refreshed.
+  const response = await request(`${API_BASE}/bootstrap?_t=${Date.now()}`, {
     headers: buildHeaders(),
     cache: 'no-cache',
-  });
+  }, { refresh: false });
+  return response.json() as Promise<BootstrapPayload>;
+}
+
+/**
+ * Whether the server accepts `token`: false on any failed answer or none. It neither
+ * refreshes the token nor goes to the sign-in page; the caller decides.
+ */
+export async function tokenWorks(token: string): Promise<boolean> {
+  try {
+    await request(`${API_BASE}/boxes`, { headers: buildHeaders(token) }, { refresh: false, signIn: false });
+    return true;
+  } catch (err) {
+    if (err instanceof ApiError) return false;
+    throw err;
+  }
 }
 
 export async function fetchBoxes(token: string | null): Promise<ApiBox[]> {
@@ -560,22 +529,11 @@ export async function writeFile(
   });
 }
 
-/** A refused upload: ``status`` is the HTTP status (0 for a network error), so a caller
- * can tell client errors (4xx, not worth retrying) from a server or network failure.
- * ``reason`` is the server's ("exists": a file the caller may ask to replace;
- * "cannot_replace": a name that can never be replaced), null when it gave none. */
-export class UploadError extends Error {
-  readonly status: number;
-  readonly reason: string | null;
-
-  constructor(message: string, status: number, reason: string | null = null) {
-    super(message);
-    this.name = "UploadError";
-    this.status = status;
-    this.reason = reason;
-  }
-}
-
+/**
+ * Upload one file. It keeps `XMLHttpRequest` (that reports progress), and its failure is
+ * the same `ApiError` as every request's, acted on the same way (`token` refreshes and
+ * sends once more, `auth` goes to the sign-in page).
+ */
 export async function uploadFile(
   name: string,
   directory: string,
@@ -591,58 +549,48 @@ export async function uploadFile(
   }
   form.append("file", file);
 
-  // Build headers (excluding Content-Type for FormData)
-  const headers = buildHeaders(token);
+  const once = async (freshToken?: string): Promise<SimpleMessage> => {
+    // Build headers (excluding Content-Type for FormData)
+    const headers = buildHeaders(freshToken ?? token ?? (await currentToken()));
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_BASE}/boxes/${encodeURIComponent(name)}/upload`, true);
 
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_BASE}/boxes/${encodeURIComponent(name)}/upload`, true);
+      Object.entries(headers).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, String(value));
+      });
 
-    // Set headers
-    Object.entries(headers).forEach(([key, value]) => {
-      xhr.setRequestHeader(key, String(value));
-    });
+      // IMPORTANT: Include credentials for cookie-based auth
+      xhr.withCredentials = true;
 
-    // IMPORTANT: Include credentials for cookie-based auth
-    xhr.withCredentials = true;
-
-    if (xhr.upload && onProgress) {
-      xhr.upload.onprogress = (event) => {
-        if (!event.lengthComputable) return;
-        const percent = Math.round((event.loaded / event.total) * 100);
-        onProgress(percent);
-      };
-    }
-
-    xhr.onerror = () => reject(new UploadError("upload failed: network error", 0));
-    xhr.onload = async () => {
-      const status = xhr.status;
-      const body = xhr.responseText || "{}";
-      if (status >= 200 && status < 300) {
-        try {
-          resolve(JSON.parse(body) as SimpleMessage);
-        } catch (err) {
-          reject(new UploadError(`upload parse failed: ${err}`, status));
-        }
-        return;
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        };
       }
-      try {
-        const parsed = JSON.parse(body);
-        if (parsed?.detail) {
-          const reason = typeof parsed.reason === "string" ? parsed.reason : null;
-          reject(
-            new UploadError(Array.isArray(parsed.detail) ? parsed.detail.join(", ") : String(parsed.detail), status, reason),
-          );
+
+      xhr.onerror = () => reject(networkError());
+      xhr.onload = () => {
+        const status = xhr.status;
+        if (status >= 200 && status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText || "{}") as SimpleMessage);
+          } catch {
+            // An answer that worked but is not JSON: a failure with no reason.
+            reject(apiErrorOf(status, ""));
+          }
           return;
         }
-      } catch {
-        // ignore parse errors
-      }
-      reject(new UploadError(`upload failed with ${status}`, status));
-    };
+        reject(apiErrorOf(status, xhr.responseText));
+      };
 
-    xhr.send(form);
-  });
+      xhr.send(form);
+    });
+  };
+
+  return withFailurePolicy(once, {});
 }
 
 export async function boxStatus(name: string, token: string | null) {
@@ -894,13 +842,9 @@ export async function downloadFile(
 ): Promise<Blob> {
   const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/download`, window.location.origin);
   url.searchParams.set("path", path);
-  const res = await fetch(url.toString().replace(window.location.origin, ""), {
+  const res = await request(url.toString().replace(window.location.origin, ""), {
     headers: buildHeaders(token),
-    credentials: 'include'
   });
-  if (!res.ok) {
-    throw new Error(`download failed ${res.status}`);
-  }
   return res.blob();
 }
 
@@ -921,19 +865,14 @@ export async function exportPdf(
   filename: string,
   token: string | null,
 ): Promise<Blob> {
-  const res = await fetch(`${API_BASE}/pdf/render`, {
+  const res = await request(`${API_BASE}/pdf/render`, {
     method: "POST",
     headers: {
       ...buildHeaders(token),
       "Content-Type": "application/json",
     },
-    credentials: "include",
     body: JSON.stringify({ html, filename }),
   });
-  if (!res.ok) {
-    const detail = await safeParseError(res);
-    throw new Error(detail || `PDF export failed (${res.status})`);
-  }
   return res.blob();
 }
 
@@ -965,14 +904,9 @@ export async function downloadDirectory(
 ): Promise<{ blob: Blob; filename: string | null }> {
   const url = new URL(`${API_BASE}/boxes/${encodeURIComponent(name)}/download-dir`, window.location.origin);
   url.searchParams.set("path", path);
-  const res = await fetch(url.toString().replace(window.location.origin, ""), {
+  const res = await request(url.toString().replace(window.location.origin, ""), {
     headers: buildHeaders(token),
-    credentials: 'include'
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`download failed ${res.status}: ${detail}`);
-  }
   const filename = filenameFromContentDisposition(res.headers.get("Content-Disposition"));
   return { blob: await res.blob(), filename };
 }
@@ -1059,6 +993,8 @@ export function crossBoxTransfer(
   token: string | null,
   onProgress: (progress: TransferProgress) => void,
   onDone: (result: TransferResult) => void,
+  /** The text a person reads: an `ApiError`'s message for a failed request or a
+   * failed transfer. */
   onError: (error: string) => void,
   options: CrossBoxOptions = {},
 ): AbortController {
@@ -1066,7 +1002,7 @@ export function crossBoxTransfer(
 
   const run = async () => {
     try {
-      const res = await fetch(`${API_BASE}/transfer`, {
+      const res = await request(`${API_BASE}/transfer`, {
         method: "POST",
         headers: {
           ...buildHeaders(token),
@@ -1083,18 +1019,6 @@ export function crossBoxTransfer(
         }),
         signal: controller.signal,
       });
-
-      if (!res.ok) {
-        const text = await res.text();
-        let detail: string;
-        try {
-          detail = JSON.parse(text).detail || text;
-        } catch {
-          detail = text;
-        }
-        onError(detail);
-        return;
-      }
 
       const reader = res.body?.getReader();
       if (!reader) {
@@ -1135,7 +1059,8 @@ export function crossBoxTransfer(
                 onDone(parsed as TransferResult);
               } else if (currentEvent === "error") {
                 finished = true;
-                onError(parsed.detail || "Transfer error");
+                // The event carries the failure body: its `detail` and its `reason`.
+                onError(apiErrorOfBody(0, parsed).message);
               }
             } catch {
               // Ignore malformed JSON

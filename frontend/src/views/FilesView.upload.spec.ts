@@ -14,26 +14,14 @@ import { ref } from "vue";
 
 import { createI18n } from "@/i18n";
 import * as http from "@/api/http";
+import { ApiError } from "@/api/apiError";
 import FilesView from "./FilesView.vue";
 import { REPLACE_ARM_MS } from "@/composables/useReplacePrompt";
 
-const { messageSpy, dialogSpy, UploadErrorMock } = vi.hoisted(() => {
-  class UploadErrorMock extends Error {
-    readonly status: number;
-    readonly reason: string | null;
-    constructor(message: string, status: number, reason: string | null = null) {
-      super(message);
-      this.name = "UploadError";
-      this.status = status;
-      this.reason = reason;
-    }
-  }
-  return {
-    messageSpy: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
-    dialogSpy: { warning: vi.fn() },
-    UploadErrorMock,
-  };
-});
+const { messageSpy, dialogSpy } = vi.hoisted(() => ({
+  messageSpy: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+  dialogSpy: { warning: vi.fn() },
+}));
 
 vi.mock("vue-router", () => ({
   useRoute: () => ({ query: { box: "local", dir: "/home/u/proj" }, path: "/files", params: {}, name: "files" }),
@@ -41,7 +29,6 @@ vi.mock("vue-router", () => ({
 }));
 
 vi.mock("@/api/http", () => ({
-  UploadError: UploadErrorMock,
   uploadFile: vi.fn(),
   fetchBootstrap: vi.fn(async () => ({
     token: "tok", token_header: "X-SSHLER-TOKEN", version: "test",
@@ -123,7 +110,7 @@ vi.mock("@phosphor-icons/vue", () => {
 
 const i18nPlugin = { install(app: App) { createI18n(app); } };
 const uploadFile = vi.mocked(http.uploadFile);
-const exists = () => new UploadErrorMock("File already exists", 409, "exists");
+const exists = () => new ApiError(409, "exists", "File already exists");
 const OK = { status: "ok", message: "uploaded" };
 
 async function mountLoaded() {
@@ -269,12 +256,12 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
   // Mutation: retry every failure (the pre-5d loop); a 400 is sent three times with
   // "retrying" warnings.
   it("a 4xx other than 409 is reported once, not retried, and no prompt is shown", async () => {
-    uploadFile.mockRejectedValueOnce(new UploadErrorMock("Upload exceeds 1024 KB limit", 400));
+    uploadFile.mockRejectedValueOnce(new ApiError(413, "too_large", "Upload exceeds 1024 KB limit"));
     const { container } = await mountLoaded();
     await choose(container, ["big.bin"]);
     await waitFor(() => expect(messageSpy.error).toHaveBeenCalledTimes(1));
     expect(messageSpy.error).toHaveBeenCalledWith(
-      "big.bin: Upload exceeds 1024 KB limit", { closable: true, duration: 0 },
+      "big.bin: Too large — Upload exceeds 1024 KB limit", { closable: true, duration: 0 },
     );
     expect(uploadFile).toHaveBeenCalledTimes(1);
     expect(messageSpy.warning).not.toHaveBeenCalled();
@@ -285,15 +272,17 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
   // Mutation: ask "Replace?" on every 409 (the old rule); a folder's name asks, and Yes
   // fails with "Only a regular file can be replaced".
   it.each([
-    ["a name that can never be replaced", new UploadErrorMock("File already exists", 409, "cannot_replace")],
-    ["a name refused with no reason", new UploadErrorMock("File already exists", 409)],
-  ])("a 409 for %s shows the server's text, is not retried and asks nothing", async (_label, refusal) => {
+    ["a name that can never be replaced", new ApiError(409, "cannot_replace", "File already exists"),
+      "a.txt: That name is taken and cannot be replaced — File already exists"],
+    ["a name refused with no reason", new ApiError(409, null, "File already exists"),
+      "a.txt: The request failed — File already exists"],
+  ])("a 409 for %s shows the failure's line and text, is not retried and asks nothing", async (_label, refusal, shown) => {
     uploadFile.mockRejectedValueOnce(refusal);
     const { container } = await mountLoaded();
     await choose(container, ["a.txt"]);
     await waitFor(() => expect(messageSpy.error).toHaveBeenCalledTimes(1));
     expect(messageSpy.error).toHaveBeenCalledWith(
-      "a.txt: File already exists", { closable: true, duration: 0 },
+      shown, { closable: true, duration: 0 },
     );
     expect(uploadFile).toHaveBeenCalledTimes(1);
     expect(dialogSpy.warning).not.toHaveBeenCalled();
@@ -303,7 +292,7 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
   // Negative control for the 4xx rule. Mutation: treat every failure as final (no
   // retry); a 502 would be reported as failed instead of retried after 1 s.
   it("a 5xx is still retried after the 1 s backoff", async () => {
-    uploadFile.mockRejectedValueOnce(new UploadErrorMock("upload failed with 502", 502)).mockResolvedValueOnce(OK);
+    uploadFile.mockRejectedValueOnce(new ApiError(502, null, "")).mockResolvedValueOnce(OK);
     const { container } = await mountLoaded();
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     await choose(container, ["a.txt"]);

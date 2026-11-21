@@ -10,6 +10,7 @@ import { defineComponent, h, ref } from "vue";
 
 import { createI18n } from "@/i18n";
 import * as http from "@/api/http";
+import { ApiError } from "@/api/apiError";
 import { useFilesStore } from "@/stores/files";
 import FilesView from "./FilesView.vue";
 import { REPLACE_ARM_MS } from "@/composables/useReplacePrompt";
@@ -25,9 +26,6 @@ vi.mock("vue-router", () => ({
 }));
 
 vi.mock("@/api/http", () => ({
-  errorStatus: (err: any) => (typeof err?.status === "number" ? err.status : null),
-  errorReason: (err: any) => (typeof err?.reason === "string" ? err.reason : null),
-  UploadError: class extends Error {},
   uploadFile: vi.fn(),
   renameFile: vi.fn(),
   batchMove: vi.fn(),
@@ -139,7 +137,7 @@ const i18nPlugin = { install(app: App) { createI18n(app); } };
 const renameFile = vi.mocked(http.renameFile);
 const batchMove = vi.mocked(http.batchMove);
 const batchCopy = vi.mocked(http.batchCopy);
-const taken = () => Object.assign(new Error("File already exists"), { status: 409, reason: "exists" });
+const taken = () => new ApiError(409, "exists", "File already exists");
 const exists = (path: string) => ({ path, error: "File already exists", reason: "exists" as const });
 const blocked = (path: string) => ({ path, error: "Only a regular file can be replaced", reason: "cannot_replace" as const });
 const done = (succeeded: string[], failed: any[] = []) => ({ status: failed.length ? "partial" as const : "ok" as const, succeeded, failed });
@@ -242,13 +240,13 @@ describe("FilesView: rename onto an existing name", () => {
 
   // Mutation: every 409 asks (a Yes would then fail: the server never replaces these).
   it.each([
-    ["a folder or link in the way", { status: 409, reason: "cannot_replace" }],
-    ["a 409 that does not say why", { status: 409 }],
-  ])("%s shows the server's text and asks nothing", async (_label, fields) => {
-    renameFile.mockRejectedValueOnce(Object.assign(new Error("File already exists"), fields));
+    ["a folder or link in the way", "cannot_replace", "That name is taken and cannot be replaced — File already exists"],
+    ["a 409 that does not say why", null, "The request failed — File already exists"],
+  ] as const)("%s shows the failure's line and text and asks nothing", async (_label, reason, shown) => {
+    renameFile.mockRejectedValueOnce(new ApiError(409, reason, "File already exists"));
     const { container } = await mountLoaded();
     await startRename(container, "b.txt");
-    await waitFor(() => expect(messageSpy.error).toHaveBeenCalledWith("File already exists"));
+    await waitFor(() => expect(messageSpy.error).toHaveBeenCalledWith(shown));
     expect(dialogSpy.warning).not.toHaveBeenCalled();
     expect(renameFile).toHaveBeenCalledTimes(1);
   });

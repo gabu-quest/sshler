@@ -210,3 +210,25 @@ describe("Terminal.vue close codes", () => {
     wrapper.unmount();
   });
 });
+
+describe("Terminal.vue handshake", () => {
+  // A refused handshake shows the failure's line and the server's detail.
+  it("a refused handshake shows its reason's line and detail, and opens no socket", async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      new Response(JSON.stringify({ detail: "build-box: connection timed out after 10 s", reason: "unreachable" }), { status: 502 }),
+    );
+    const wrapper = mount(Terminal, {
+      props: { boxName: "box1", sessionName: "main", directory: "/tmp" },
+      global: { plugins: [createPinia()], stubs: { SessionSwitcher: true } },
+    });
+    await advance(100);
+
+    expect(messageMock.error).toHaveBeenCalledTimes(1);
+    expect(messageMock.error).toHaveBeenCalledWith(
+      `${en["terminal.connection_failed"]}: Cannot connect to the box — build-box: connection timed out after 10 s`,
+    );
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/terminal/handshake");
+    wrapper.unmount();
+  });
+});

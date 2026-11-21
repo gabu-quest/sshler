@@ -8,6 +8,7 @@ import "./styles/main.css";
 import { createI18n } from "./i18n";
 import { useAppStore } from "./stores/app";
 import { useBootstrapStore } from "./stores/bootstrap";
+import { tokenWorks } from "./api/http";
 
 async function initApp() {
   const app = createApp(App);
@@ -24,20 +25,10 @@ async function initApp() {
   // Initialize bootstrap to get token BEFORE mounting
   const bootstrapStore = useBootstrapStore();
 
-  // Clear any cached token that might be stale
+  // Clear a cached token the server no longer accepts
   const cachedToken = bootstrapStore.token;
-  if (cachedToken) {
-    // Test if cached token is still valid
-    try {
-      const testResponse = await fetch('/api/v1/boxes', {
-        headers: { 'X-SSHLER-TOKEN': cachedToken }
-      });
-      if (!testResponse.ok) {
-        bootstrapStore.setToken(null);
-      }
-    } catch {
-      bootstrapStore.setToken(null);
-    }
+  if (cachedToken && !(await tokenWorks(cachedToken))) {
+    bootstrapStore.setToken(null);
   }
 
   await bootstrapStore.bootstrap();

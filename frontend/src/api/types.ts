@@ -1,3 +1,5 @@
+import type { FailureReason } from "./apiError";
+
 export interface WindowsShell {
   id: string;
   label: string;
@@ -146,8 +148,9 @@ export interface BatchResult {
   status: "ok" | "partial";
   succeeded: string[];
   /** `reason` is "exists" when a regular file has the name (a retry with overwrite replaces it),
-   * "cannot_replace" when the name is taken by something overwrite cannot replace. */
-  failed: { path: string; error: string; reason?: "exists" | "cannot_replace" | "failed" }[];
+   * "cannot_replace" when the name is taken by something overwrite cannot replace, else
+   * the reason the item failed. */
+  failed: { path: string; error: string; reason?: FailureReason }[];
 }
 
 export interface GrepMatch {
