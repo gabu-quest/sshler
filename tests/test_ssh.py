@@ -143,3 +143,33 @@ async def test_connect_skips_alias_when_disabled(monkeypatch):
     assert result == "connection"
     assert expand_called is False
     assert calls["host"] == "test-server"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exists", [False, True], ids=["no-config-file", "config-file"])
+async def test_connect_gives_asyncssh_only_a_config_file_that_exists(monkeypatch, tmp_path, exists):
+    """A machine without `~/.ssh/config` connects with no config; asyncssh raises
+    FileNotFoundError for a config path it cannot open."""
+    calls = {}
+
+    async def fake_asyncssh_connect(**kwargs):
+        calls.update(kwargs)
+        return "connection"
+
+    monkeypatch.setattr(ssh_module.asyncssh, "connect", fake_asyncssh_connect)
+    config_path = tmp_path / "config"
+    if exists:
+        config_path.write_text("Host *\n")
+
+    result = await connect(
+        host="10.0.0.5",
+        user="alice",
+        port=22,
+        keyfile=None,
+        known_hosts=None,
+        ssh_config_path=str(config_path),
+        allow_alias=False,
+    )
+
+    assert result == "connection"
+    assert calls["config"] == ([str(config_path)] if exists else None)

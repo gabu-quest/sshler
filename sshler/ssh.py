@@ -104,7 +104,8 @@ async def connect(
         port=connect_port,
         username=connect_user,
         known_hosts=known_hosts_path,
-        config=[ssh_config_path] if ssh_config_path else None,
+        # asyncssh fails on a config file it cannot open; a machine without one has no config.
+        config=[ssh_config_path] if ssh_config_path and os.path.isfile(ssh_config_path) else None,
         login_timeout=10,  # Fail fast if host is unreachable (default is OS TCP timeout ~30s)
         keepalive_interval=30,  # Send keepalive every 30 seconds
         keepalive_count_max=3,  # Give up after 3 failed keepalives (90s total)
