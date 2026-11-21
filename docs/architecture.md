@@ -97,6 +97,10 @@ settings view's sign-out row calls the sign-out route, forgets the user, the boo
 token, and loads the sign-in page. A session that ended answers 401 `auth` on the next
 request, and `handleAuthErrors` forgets the user and the bootstrap and goes to the sign-in route. The page starts its sockets, progress bars and recovery poll only when it is signed in. One function, `live_session` in `session.py`, decides whether a session id is live (the configured idle timeout included) for the door, the sockets and the auth routes.
 
+## The state store
+
+`sshler/state.py` keeps favourites, sessions, directory visits, snippets, layouts, progress bars, notebooks and artifact projects and registrations in one SQLite file through sqler. The models are not bound to a database: every query is `Model.using(db)` with the database `_require_db()` returns, a new row is saved with `save(db=db)`, and a row read through `using(db)` knows its own database. To add a model: write the class beside the others (with `__tablename__`); add one `_Table` row to `_TABLES` naming its single-field indexes (and any composite index as raw SQL), which is all `initialize()` needs; write each operation once as a sync function under `_DB_LOCK`, and give it an async form on the next line, `<name>_async = _in_thread(<name>)`.
+
 ## The event loop
 
 The server runs on the stdlib event loop, named in one place (`_EVENT_LOOP` in `sshler/cli/server.py`), never uvloop: uvloop runs Python in the forked child of every subprocess it starts, and a thread-end hook there can block the child for good and the whole server with it. Start a local command with `run_bounded` (`sshler/proc.py`) or `spawn_on_pty`; never fork from Python.

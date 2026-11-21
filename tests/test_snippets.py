@@ -13,7 +13,7 @@ def _init_state(tmp_path):
     state.reset_state()
     state.initialize(tmp_path)
     # Clear seeded demo snippets so tests start from a blank slate
-    for s in state.Snippet.query().all():
+    for s in state.Snippet.using(state._require_db()).all():
         s.delete()
     yield
     state.reset_state()

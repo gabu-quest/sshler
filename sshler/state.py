@@ -9,10 +9,10 @@ import secrets
 import threading
 import time
 import unicodedata
-from collections.abc import Iterable, Sequence
-from functools import partial
+from collections.abc import Callable, Coroutine, Iterable, Sequence
+from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 from uuid import uuid4
 
 from pydantic import Field
@@ -30,66 +30,20 @@ _DB_PATH: Path | None = None
 _INITIALISED = False
 
 
-def _ensure_composite_indexes(db: SQLerDB) -> None:
-    """Create composite indexes for performance optimization.
+def _in_thread[**P, R](function: Callable[P, R]) -> Callable[P, Coroutine[None, None, R]]:
+    """Return the async form of ``function``: the same call, run in a worker thread.
 
-    Composite indexes improve query performance for multi-column WHERE clauses.
-    SQLite can use a composite index for queries filtering on the leftmost columns.
-
-    Performance improvements:
-    - Session lookups by (box, session_name): O(log n) instead of O(n)
-    - Session cleanup by (active, last_accessed_at): O(log n) instead of O(n)
-    - Favorite lookups by (box, path): O(log n) instead of O(n)
-
-    Index strategy:
-    - Put most selective column first for best performance
-    - box is typically selective (10-100 boxes)
-    - session_name is unique per box
-    - active is binary (low selectivity) but combined with time is useful
+    Positional and keyword arguments pass through unchanged, and the async function
+    carries the sync function's signature and the name ``<name>_async``.
     """
 
-    adapter = db.adapter
+    @wraps(function)
+    async def run(*args: P.args, **kwargs: P.kwargs) -> R:
+        return await asyncio.to_thread(function, *args, **kwargs)
 
-    # Composite index for session lookups by box and name
-    # Used by: get_session_by_name(), create_or_update_session()
-    # Query: WHERE box = ? AND session_name = ?
-    # Note: sqler uses JSON storage, so we must use json_extract()
-    adapter.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_sessions_box_name
-        ON sessions(json_extract(data, '$.box'), json_extract(data, '$.session_name'))
-        """
-    )
-
-    # Composite index for session cleanup queries
-    # Used by: cleanup_old_sessions()
-    # Query: WHERE active = 0 AND last_accessed_at < ?
-    adapter.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_sessions_active_accessed
-        ON sessions(json_extract(data, '$.active'), json_extract(data, '$.last_accessed_at'))
-        """
-    )
-
-    # Composite index for favorite lookups
-    # Used by: toggle_favorite()
-    # Query: WHERE box = ? AND path = ?
-    adapter.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_favorites_box_path
-        ON favorites(json_extract(data, '$.box'), json_extract(data, '$.path'))
-        """
-    )
-
-    # Composite index for directory visit lookups
-    # Used by: record_directory_visit(), search_directories()
-    # Query: WHERE box = ? AND path = ?
-    adapter.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_directory_visits_box_path
-        ON directory_visits(json_extract(data, '$.box'), json_extract(data, '$.path'))
-        """
-    )
+    run.__name__ = f"{function.__name__}_async"
+    run.__qualname__ = run.__name__
+    return run
 
 
 class Favorite(SQLerModel):
@@ -269,6 +223,70 @@ class Layout(SQLerModel):
         self.terminals_json = json.dumps(value)
 
 
+class _Table(NamedTuple):
+    """A model, its single-field indexes and its composite indexes (raw SQL)."""
+
+    model: type[SQLerModel]
+    fields: tuple[str, ...]
+    composite: tuple[str, ...] = ()
+
+
+# Every model the store keeps. ``initialize()`` creates each table, index and composite
+# index from this list, so a new model is one class and one row here.
+#
+# sqler stores a row as a JSON document, so a composite index is over ``json_extract``
+# expressions. The statements are raw SQL, not ``create_index``, because sqlite keeps the
+# statement text and a database made today must hold the same text as one made before.
+_TABLES: tuple[_Table, ...] = (
+    _Table(
+        Favorite,
+        ("box", "position"),
+        (
+            # Favorite lookups in toggle_favorite(): WHERE box = ? AND path = ?
+            "CREATE INDEX IF NOT EXISTS idx_favorites_box_path\n"
+            "        ON favorites(json_extract(data, '$.box'), json_extract(data, '$.path'))\n"
+            "        ",
+        ),
+    ),
+    _Table(
+        Session,
+        ("box", "last_accessed_at", "active", "session_name"),
+        (
+            # Session lookups: WHERE box = ? AND session_name = ?
+            "CREATE INDEX IF NOT EXISTS idx_sessions_box_name\n"
+            "        ON sessions(json_extract(data, '$.box'), "
+            "json_extract(data, '$.session_name'))\n"
+            "        ",
+            # Session cleanup: WHERE active = 0 AND last_accessed_at < ?
+            "CREATE INDEX IF NOT EXISTS idx_sessions_active_accessed\n"
+            "        ON sessions(json_extract(data, '$.active'), "
+            "json_extract(data, '$.last_accessed_at'))\n"
+            "        ",
+        ),
+    ),
+    _Table(
+        DirectoryVisit,
+        ("box", "path", "last_visited"),
+        (
+            # Directory visit lookups: WHERE box = ? AND path = ?
+            "CREATE INDEX IF NOT EXISTS idx_directory_visits_box_path\n"
+            "        ON directory_visits(json_extract(data, '$.box'), "
+            "json_extract(data, '$.path'))\n"
+            "        ",
+        ),
+    ),
+    _Table(Snippet, ("box", "sort_order")),
+    _Table(Layout, ("name", "created_at")),
+    _Table(ProgressBar, ("name", "updated_at")),
+    _Table(DiffNotebook, ("id", "created_at")),
+    _Table(ArtifactProject, ("id", "normalized_name", "slug")),
+    _Table(
+        ArtifactRegistration,
+        ("id", "project_id", "source_path", "slug", "mount_path"),
+    ),
+)
+
+
 def artifact_slug(value: str, fallback: str = "artifact") -> str:
     """Convert a human label into a URL-safe artifact alias."""
     ascii_value = (
@@ -294,10 +312,10 @@ def _unique_artifact_slug(base: str, used: set[str], stable_id: str) -> str:
     return candidate
 
 
-def _ensure_artifact_aliases() -> None:
+def _ensure_artifact_aliases(db: SQLerDB) -> None:
     """Backfill stable slugs for rows created before alias routing existed."""
     used_projects: set[str] = set()
-    projects = list(ArtifactProject.query().order_by("created_at").all())
+    projects = list(ArtifactProject.using(db).order_by("created_at").all())
     for project in projects:
         base = artifact_slug(project.slug or project.name, "project")
         chosen = _unique_artifact_slug(base, used_projects, project.id)
@@ -307,7 +325,7 @@ def _ensure_artifact_aliases() -> None:
             project.save()
 
     used_by_project: dict[str, set[str]] = {}
-    registrations = list(ArtifactRegistration.query().order_by("created_at").all())
+    registrations = list(ArtifactRegistration.using(db).order_by("created_at").all())
     for registration in registrations:
         used = used_by_project.setdefault(registration.project_id, set())
         source_name = Path(registration.source_path).stem or Path(registration.source_path).name
@@ -349,60 +367,14 @@ def initialize(config_dir: Path) -> None:
         adapter = SQLiteAdapter(path=str(target_path))
         db = SQLerDB(adapter)
 
-        # Initialize Favorite model
-        Favorite.set_db(db)
-        Favorite.ensure_index("box")
-        Favorite.ensure_index("position")
+        for table in _TABLES:
+            for field in table.fields:
+                table.model.ensure_index(field, db=db)
+        _ensure_artifact_aliases(db)
 
-        # Initialize Session model
-        Session.set_db(db)
-        Session.ensure_index("box")
-        Session.ensure_index("last_accessed_at")
-        Session.ensure_index("active")
-        Session.ensure_index("session_name")
-
-        # Initialize DirectoryVisit model
-        DirectoryVisit.set_db(db)
-        DirectoryVisit.ensure_index("box")
-        DirectoryVisit.ensure_index("path")
-        DirectoryVisit.ensure_index("last_visited")
-
-        # Initialize Snippet model
-        Snippet.set_db(db)
-        Snippet.ensure_index("box")
-        Snippet.ensure_index("sort_order")
-
-        # Initialize Layout model
-        Layout.set_db(db)
-        Layout.ensure_index("name")
-        Layout.ensure_index("created_at")
-
-        # Initialize ProgressBar model
-        ProgressBar.set_db(db)
-        ProgressBar.ensure_index("name")
-        ProgressBar.ensure_index("updated_at")
-
-        DiffNotebook.set_db(db)
-        DiffNotebook.ensure_index("id")
-        DiffNotebook.ensure_index("created_at")
-
-        ArtifactProject.set_db(db)
-        ArtifactProject.ensure_index("id")
-        ArtifactProject.ensure_index("normalized_name")
-        ArtifactProject.ensure_index("slug")
-
-        ArtifactRegistration.set_db(db)
-        ArtifactRegistration.ensure_index("id")
-        ArtifactRegistration.ensure_index("project_id")
-        ArtifactRegistration.ensure_index("source_path")
-        ArtifactRegistration.ensure_index("slug")
-        ArtifactRegistration.ensure_index("mount_path")
-        _ensure_artifact_aliases()
-
-        # Create composite indexes for performance optimization
-        # Note: sqler only supports single-column indexes via ensure_index(),
-        # so we create composite indexes using raw SQL for optimal query performance.
-        _ensure_composite_indexes(db)
+        for table in _TABLES:
+            for statement in table.composite:
+                db.adapter.execute(statement)
 
         _DB = db
         _DB_PATH = target_path
@@ -417,9 +389,9 @@ def seed_default_snippets() -> None:
     Only inserts when zero __global__ snippets exist, so users who
     deleted the defaults won't see them reappear on restart.
     """
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        existing = Snippet.query().filter(F("box") == "__global__").first()
+        existing = Snippet.using(db).filter(F("box") == "__global__").first()
         if existing:
             return
 
@@ -436,7 +408,7 @@ def seed_default_snippets() -> None:
                 command=command,
                 category=category,
                 sort_order=order,
-            ).save()
+            ).save(db=db)
 
     logger.info("Seeded %d default global snippets", len(defaults))
 
@@ -484,25 +456,24 @@ def migrate_legacy_favorites(stored: dict[str, StoredBox]) -> bool:
 def list_favorites(box_name: str) -> list[str]:
     """Return the ordered favourites for ``box_name``."""
 
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        rows = Favorite.query().filter(F("box") == box_name).order_by("position").all()
+        rows = Favorite.using(db).filter(F("box") == box_name).order_by("position").all()
         return [row.path for row in rows]
 
 
-async def list_favorites_async(box_name: str) -> list[str]:
-    return await asyncio.to_thread(list_favorites, box_name)
+list_favorites_async = _in_thread(list_favorites)
 
 
 def favorites_map(box_names: Sequence[str] | None = None) -> dict[str, list[str]]:
     """Return favourites for the supplied ``box_names``."""
 
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         if box_names is not None:
             return {name: list_favorites(name) for name in box_names}
 
-        rows = Favorite.query().order_by("box").order_by("position").all()
+        rows = Favorite.using(db).order_by("box").order_by("position").all()
         mapping: dict[str, list[str]] = {}
         for row in rows:
             mapping.setdefault(row.box, []).append(row.path)
@@ -515,28 +486,29 @@ def toggle_favorite(box_name: str, path: str) -> bool:
     if not path:
         return False
 
-    _require_db()
+    db = _require_db()
     now = time.time()
     with _DB_LOCK:
-        query = Favorite.query().filter((F("box") == box_name) & (F("path") == path))
+        query = Favorite.using(db).filter((F("box") == box_name) & (F("path") == path))
         existing = query.first()
         if existing:
             existing.delete()
             return False
 
-        position = _next_position(box_name)
-        Favorite(box=box_name, path=path, position=position, created_at=now, updated_at=now).save()
+        position = _next_position(box_name, db)
+        Favorite(box=box_name, path=path, position=position, created_at=now, updated_at=now).save(
+            db=db
+        )
         return True
 
 
-async def toggle_favorite_async(box_name: str, path: str) -> bool:
-    return await asyncio.to_thread(toggle_favorite, box_name, path)
+toggle_favorite_async = _in_thread(toggle_favorite)
 
 
 def replace_favorites(box_name: str, paths: Iterable[str]) -> None:
     """Replace all favourites for ``box_name`` with ``paths`` preserving order."""
 
-    _require_db()
+    db = _require_db()
     deduped: list[str] = []
     seen: set[str] = set()
     for raw in paths:
@@ -548,7 +520,7 @@ def replace_favorites(box_name: str, paths: Iterable[str]) -> None:
 
     now = time.time()
     with _DB_LOCK:
-        existing = {fav.path: fav for fav in Favorite.query().filter(F("box") == box_name).all()}
+        existing = {fav.path: fav for fav in Favorite.using(db).filter(F("box") == box_name).all()}
 
         for position, path in enumerate(deduped):
             favourite = existing.pop(path, None)
@@ -559,7 +531,7 @@ def replace_favorites(box_name: str, paths: Iterable[str]) -> None:
                     position=position,
                     created_at=now,
                     updated_at=now,
-                ).save()
+                ).save(db=db)
                 continue
 
             if favourite.position != position:
@@ -578,15 +550,17 @@ async def replace_favorites_async(box_name: str, paths: Iterable[str]) -> None:
 def remove_box(box_name: str) -> None:
     """Delete all persisted state for ``box_name``."""
 
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        rows = Favorite.query().filter(F("box") == box_name).all()
+        rows = Favorite.using(db).filter(F("box") == box_name).all()
         for row in rows:
             row.delete()
 
 
-def _next_position(box_name: str) -> int:
-    existing = Favorite.query().filter(F("box") == box_name).order_by("position", desc=True).first()
+def _next_position(box_name: str, db: SQLerDB) -> int:
+    existing = (
+        Favorite.using(db).filter(F("box") == box_name).order_by("position", desc=True).first()
+    )
     if not existing:
         return 0
     return existing.position + 1
@@ -602,13 +576,13 @@ def create_or_update_session(
     metadata: dict | None = None,
 ) -> Session:
     """Create or update a session record."""
-    _require_db()
+    db = _require_db()
     now = time.time()
 
     with _DB_LOCK:
         # Check if session already exists
         existing = (
-            Session.query()
+            Session.using(db)
             .filter((F("box") == box_name) & (F("session_name") == session_name))
             .first()
         )
@@ -635,19 +609,11 @@ def create_or_update_session(
         )
         if metadata:
             session.metadata = metadata
-        session.save()
+        session.save(db=db)
         return session
 
 
-async def create_or_update_session_async(
-    box_name: str,
-    session_name: str,
-    working_directory: str,
-    metadata: dict | None = None,
-) -> Session:
-    return await asyncio.to_thread(
-        create_or_update_session, box_name, session_name, working_directory, metadata
-    )
+create_or_update_session_async = _in_thread(create_or_update_session)
 
 
 def list_sessions(
@@ -656,10 +622,10 @@ def list_sessions(
     limit: int = 50,
 ) -> list[Session]:
     """List sessions for a box, ordered by last accessed (most recent first)."""
-    _require_db()
+    db = _require_db()
 
     with _DB_LOCK:
-        query = Session.query().filter(F("box") == box_name)
+        query = Session.using(db).filter(F("box") == box_name)
 
         if active_only:
             query = query.filter(F("active") == True)  # noqa: E712
@@ -668,50 +634,43 @@ def list_sessions(
         return list(rows)
 
 
-async def list_sessions_async(
-    box_name: str,
-    active_only: bool = False,
-    limit: int = 50,
-) -> list[Session]:
-    return await asyncio.to_thread(list_sessions, box_name, active_only, limit)
+list_sessions_async = _in_thread(list_sessions)
 
 
 def get_session_by_id(session_id: str) -> Session | None:
     """Get a session by its ID."""
-    _require_db()
+    db = _require_db()
 
     with _DB_LOCK:
-        return Session.query().filter(F("id") == session_id).first()
+        return Session.using(db).filter(F("id") == session_id).first()
 
 
-async def get_session_by_id_async(session_id: str) -> Session | None:
-    return await asyncio.to_thread(get_session_by_id, session_id)
+get_session_by_id_async = _in_thread(get_session_by_id)
 
 
 def get_session_by_name(box_name: str, session_name: str) -> Session | None:
     """Get a session by box and session name."""
-    _require_db()
+    db = _require_db()
 
     with _DB_LOCK:
         return (
-            Session.query()
+            Session.using(db)
             .filter((F("box") == box_name) & (F("session_name") == session_name))
             .first()
         )
 
 
-async def get_session_by_name_async(box_name: str, session_name: str) -> Session | None:
-    return await asyncio.to_thread(get_session_by_name, box_name, session_name)
+get_session_by_name_async = _in_thread(get_session_by_name)
 
 
 def update_session_activity(
     session_id: str, active: bool = True, window_count: int | None = None
 ) -> bool:
     """Update session activity status and optionally window count."""
-    _require_db()
+    db = _require_db()
 
     with _DB_LOCK:
-        session = Session.query().filter(F("id") == session_id).first()
+        session = Session.using(db).filter(F("id") == session_id).first()
         if not session:
             return False
 
@@ -723,18 +682,15 @@ def update_session_activity(
         return True
 
 
-async def update_session_activity_async(
-    session_id: str, active: bool = True, window_count: int | None = None
-) -> bool:
-    return await asyncio.to_thread(update_session_activity, session_id, active, window_count)
+update_session_activity_async = _in_thread(update_session_activity)
 
 
 def delete_session(session_id: str) -> bool:
     """Delete a session record."""
-    _require_db()
+    db = _require_db()
 
     with _DB_LOCK:
-        session = Session.query().filter(F("id") == session_id).first()
+        session = Session.using(db).filter(F("id") == session_id).first()
         if not session:
             return False
 
@@ -750,7 +706,7 @@ def create_session(
 ) -> Session:
     """Create and persist a session record."""
 
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         record = Session(
             box=box_name,
@@ -758,23 +714,14 @@ def create_session(
             working_directory=working_directory,
             metadata_json=json.dumps(metadata or {}),
         )
-        record.save()
+        record.save(db=db)
         return record
 
 
-async def create_session_async(
-    box_name: str,
-    session_name: str,
-    working_directory: str,
-    metadata: dict | None = None,
-) -> Session:
-    return await asyncio.to_thread(
-        create_session, box_name, session_name, working_directory, metadata
-    )
+create_session_async = _in_thread(create_session)
 
 
-async def delete_session_async(session_id: str) -> bool:
-    return await asyncio.to_thread(delete_session, session_id)
+delete_session_async = _in_thread(delete_session)
 
 
 def update_session_metadata(
@@ -782,9 +729,9 @@ def update_session_metadata(
 ) -> bool:
     """Update metadata and optionally window count."""
 
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        session = Session.query().filter(F("id") == session_id).first()
+        session = Session.using(db).filter(F("id") == session_id).first()
         if not session:
             return False
         if metadata is not None:
@@ -796,17 +743,14 @@ def update_session_metadata(
         return True
 
 
-async def update_session_metadata_async(
-    session_id: str, metadata: dict | None = None, window_count: int | None = None
-) -> bool:
-    return await asyncio.to_thread(update_session_metadata, session_id, metadata, window_count)
+update_session_metadata_async = _in_thread(update_session_metadata)
 
 
 def rename_session(session_id: str, new_name: str) -> bool:
     """Rename a session in the database."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        session = Session.query().filter(F("id") == session_id).first()
+        session = Session.using(db).filter(F("id") == session_id).first()
         if not session:
             return False
         session.session_name = new_name
@@ -815,18 +759,17 @@ def rename_session(session_id: str, new_name: str) -> bool:
         return True
 
 
-async def rename_session_async(session_id: str, new_name: str) -> bool:
-    return await asyncio.to_thread(rename_session, session_id, new_name)
+rename_session_async = _in_thread(rename_session)
 
 
 def cleanup_old_sessions(max_age_days: int = 30) -> int:
     """Delete sessions older than max_age_days that are inactive."""
-    _require_db()
+    db = _require_db()
 
     cutoff = time.time() - (max_age_days * 24 * 60 * 60)
     with _DB_LOCK:
         sessions = (
-            Session.query()
+            Session.using(db)
             .filter((F("active") == False) & (F("last_accessed_at") < cutoff))  # noqa: E712
             .all()
         )
@@ -839,46 +782,43 @@ def cleanup_old_sessions(max_age_days: int = 30) -> int:
         return count
 
 
-async def cleanup_old_sessions_async(max_age_days: int = 30) -> int:
-    return await asyncio.to_thread(cleanup_old_sessions, max_age_days)
+cleanup_old_sessions_async = _in_thread(cleanup_old_sessions)
 
 
 def list_all_active_sessions() -> list[Session]:
     """List all active sessions across all boxes."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         return list(
-            Session.query()
+            Session.using(db)
             .filter(F("active") == True)  # noqa: E712
             .all()
         )
 
 
-async def list_all_active_sessions_async() -> list[Session]:
-    return await asyncio.to_thread(list_all_active_sessions)
+list_all_active_sessions_async = _in_thread(list_all_active_sessions)
 
 
 def list_all_snapshotted_sessions() -> list[Session]:
     """List all inactive sessions that have a snapshot (for recovery detection)."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         inactive = list(
-            Session.query()
+            Session.using(db)
             .filter(F("active") == False)  # noqa: E712
             .all()
         )
         return [s for s in inactive if s.metadata.get("last_snapshot_at")]
 
 
-async def list_all_snapshotted_sessions_async() -> list[Session]:
-    return await asyncio.to_thread(list_all_snapshotted_sessions)
+list_all_snapshotted_sessions_async = _in_thread(list_all_snapshotted_sessions)
 
 
 def update_session_snapshot(session_id: str, windows: list[dict]) -> bool:
     """Atomically update session metadata with window snapshot."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        session = Session.query().filter(F("id") == session_id).first()
+        session = Session.using(db).filter(F("id") == session_id).first()
         if not session:
             return False
         meta = session.metadata
@@ -889,15 +829,14 @@ def update_session_snapshot(session_id: str, windows: list[dict]) -> bool:
         return True
 
 
-async def update_session_snapshot_async(session_id: str, windows: list[dict]) -> bool:
-    return await asyncio.to_thread(update_session_snapshot, session_id, windows)
+update_session_snapshot_async = _in_thread(update_session_snapshot)
 
 
 def clear_session_snapshot(session_id: str) -> bool:
     """Remove snapshot data from a session so it won't be re-detected as lost."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        session = Session.query().filter(F("id") == session_id).first()
+        session = Session.using(db).filter(F("id") == session_id).first()
         if not session:
             return False
         meta = session.metadata
@@ -908,8 +847,7 @@ def clear_session_snapshot(session_id: str) -> bool:
         return True
 
 
-async def clear_session_snapshot_async(session_id: str) -> bool:
-    return await asyncio.to_thread(clear_session_snapshot, session_id)
+clear_session_snapshot_async = _in_thread(clear_session_snapshot)
 
 
 def purge_stale_snapshots(max_age_days: int = 7) -> int:
@@ -917,12 +855,12 @@ def purge_stale_snapshots(max_age_days: int = 7) -> int:
 
     Returns the number of sessions purged.
     """
-    _require_db()
+    db = _require_db()
     cutoff = time.time() - (max_age_days * 86400)
     purged = 0
     with _DB_LOCK:
         inactive = list(
-            Session.query()
+            Session.using(db)
             .filter(F("active") == False)  # noqa: E712
             .all()
         )
@@ -934,8 +872,7 @@ def purge_stale_snapshots(max_age_days: int = 7) -> int:
     return purged
 
 
-async def purge_stale_snapshots_async(max_age_days: int = 7) -> int:
-    return await asyncio.to_thread(purge_stale_snapshots, max_age_days)
+purge_stale_snapshots_async = _in_thread(purge_stale_snapshots)
 
 
 # Directory Visit Tracking (Frecency)
@@ -956,12 +893,12 @@ def _calculate_frecency_score(visit_count: int, last_visited: float) -> float:
 
 def record_directory_visit(box_name: str, path: str) -> DirectoryVisit:
     """Record or update a directory visit for frecency tracking."""
-    _require_db()
+    db = _require_db()
     now = time.time()
 
     with _DB_LOCK:
         existing = (
-            DirectoryVisit.query().filter((F("box") == box_name) & (F("path") == path)).first()
+            DirectoryVisit.using(db).filter((F("box") == box_name) & (F("path") == path)).first()
         )
 
         if existing:
@@ -977,12 +914,11 @@ def record_directory_visit(box_name: str, path: str) -> DirectoryVisit:
             last_visited=now,
             first_visited=now,
         )
-        visit.save()
+        visit.save(db=db)
         return visit
 
 
-async def record_directory_visit_async(box_name: str, path: str) -> DirectoryVisit:
-    return await asyncio.to_thread(record_directory_visit, box_name, path)
+record_directory_visit_async = _in_thread(record_directory_visit)
 
 
 def search_directories(
@@ -994,11 +930,11 @@ def search_directories(
 
     Returns list of (path, score) tuples sorted by score descending.
     """
-    _require_db()
+    db = _require_db()
     query_lower = query.lower()
 
     with _DB_LOCK:
-        all_visits = DirectoryVisit.query().filter(F("box") == box_name).all()
+        all_visits = DirectoryVisit.using(db).filter(F("box") == box_name).all()
 
         results: list[tuple[str, float]] = []
         for visit in all_visits:
@@ -1010,12 +946,7 @@ def search_directories(
         return results[:limit]
 
 
-async def search_directories_async(
-    box_name: str,
-    query: str,
-    limit: int = 20,
-) -> list[tuple[str, float]]:
-    return await asyncio.to_thread(search_directories, box_name, query, limit)
+search_directories_async = _in_thread(search_directories)
 
 
 # Layout CRUD Functions
@@ -1023,41 +954,38 @@ async def search_directories_async(
 
 def list_layouts() -> list[Layout]:
     """List saved multi-terminal layouts."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return list(Layout.query().all())
+        return list(Layout.using(db).all())
 
 
-async def list_layouts_async() -> list[Layout]:
-    return await asyncio.to_thread(list_layouts)
+list_layouts_async = _in_thread(list_layouts)
 
 
 def save_layout(name: str, terminals: list[dict]) -> Layout:
     """Create and persist a named layout preset."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         layout = Layout(name=name, terminals_json=json.dumps(terminals))
-        layout.save()
+        layout.save(db=db)
         return layout
 
 
-async def save_layout_async(name: str, terminals: list[dict]) -> Layout:
-    return await asyncio.to_thread(save_layout, name, terminals)
+save_layout_async = _in_thread(save_layout)
 
 
 def delete_layout(layout_id: str) -> bool:
     """Delete a saved layout preset."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        layout = Layout.query().filter(F("id") == layout_id).first()
+        layout = Layout.using(db).filter(F("id") == layout_id).first()
         if not layout:
             return False
         layout.delete()
         return True
 
 
-async def delete_layout_async(layout_id: str) -> bool:
-    return await asyncio.to_thread(delete_layout, layout_id)
+delete_layout_async = _in_thread(delete_layout)
 
 
 # Snippet CRUD Functions
@@ -1065,10 +993,10 @@ async def delete_layout_async(layout_id: str) -> bool:
 
 def list_snippets(box_name: str) -> list[Snippet]:
     """Return snippets for a box plus global snippets, ordered by sort_order."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         rows = (
-            Snippet.query()
+            Snippet.using(db)
             .filter((F("box") == box_name) | (F("box") == "__global__"))
             .order_by("sort_order")
             .all()
@@ -1076,8 +1004,7 @@ def list_snippets(box_name: str) -> list[Snippet]:
         return list(rows)
 
 
-async def list_snippets_async(box_name: str) -> list[Snippet]:
-    return await asyncio.to_thread(list_snippets, box_name)
+list_snippets_async = _in_thread(list_snippets)
 
 
 def create_snippet(
@@ -1087,10 +1014,12 @@ def create_snippet(
     category: str = "",
 ) -> Snippet:
     """Create a new snippet."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         # Determine next sort_order
-        existing = Snippet.query().filter(F("box") == box).order_by("sort_order", desc=True).first()
+        existing = (
+            Snippet.using(db).filter(F("box") == box).order_by("sort_order", desc=True).first()
+        )
         next_order = (existing.sort_order + 1) if existing else 0
 
         snippet = Snippet(
@@ -1100,19 +1029,18 @@ def create_snippet(
             category=category,
             sort_order=next_order,
         )
-        snippet.save()
+        snippet.save(db=db)
         return snippet
 
 
-async def create_snippet_async(box: str, label: str, command: str, category: str = "") -> Snippet:
-    return await asyncio.to_thread(create_snippet, box, label, command, category)
+create_snippet_async = _in_thread(create_snippet)
 
 
 def get_snippet_by_id(snippet_id: str) -> Snippet | None:
     """Get a snippet by ID."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return Snippet.query().filter(F("id") == snippet_id).first()
+        return Snippet.using(db).filter(F("id") == snippet_id).first()
 
 
 def update_snippet(
@@ -1123,9 +1051,9 @@ def update_snippet(
     sort_order: int | None = None,
 ) -> Snippet | None:
     """Update a snippet. Returns updated snippet or None if not found."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        snippet = Snippet.query().filter(F("id") == snippet_id).first()
+        snippet = Snippet.using(db).filter(F("id") == snippet_id).first()
         if not snippet:
             return None
         if label is not None:
@@ -1140,29 +1068,21 @@ def update_snippet(
         return snippet
 
 
-async def update_snippet_async(
-    snippet_id: str,
-    label: str | None = None,
-    command: str | None = None,
-    category: str | None = None,
-    sort_order: int | None = None,
-) -> Snippet | None:
-    return await asyncio.to_thread(update_snippet, snippet_id, label, command, category, sort_order)
+update_snippet_async = _in_thread(update_snippet)
 
 
 def delete_snippet(snippet_id: str) -> bool:
     """Delete a snippet. Returns True if deleted."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        snippet = Snippet.query().filter(F("id") == snippet_id).first()
+        snippet = Snippet.using(db).filter(F("id") == snippet_id).first()
         if not snippet:
             return False
         snippet.delete()
         return True
 
 
-async def delete_snippet_async(snippet_id: str) -> bool:
-    return await asyncio.to_thread(delete_snippet, snippet_id)
+delete_snippet_async = _in_thread(delete_snippet)
 
 
 # Progress Bar CRUD Functions
@@ -1191,10 +1111,10 @@ def upsert_progress(
     When ``apply_metadata`` is False the bag and error are left untouched, so a
     long loop that only sends current/total never wipes earlier metadata.
     """
-    _require_db()
+    db = _require_db()
     now = time.time()
     with _DB_LOCK:
-        existing = ProgressBar.query().filter(F("name") == name).first()
+        existing = ProgressBar.using(db).filter(F("name") == name).first()
         if existing:
             existing.current = current
             existing.total = total
@@ -1227,75 +1147,45 @@ def upsert_progress(
         if apply_metadata and metadata_error is None:
             bar.metadata = metadata or {}
         bar.metadata_error = metadata_error if apply_metadata else None
-        bar.save()
+        bar.save(db=db)
         return bar
 
 
-async def upsert_progress_async(
-    name: str,
-    current: float,
-    total: float,
-    color: str | None = None,
-    label: str | None = None,
-    status: str = "running",
-    *,
-    apply_metadata: bool = False,
-    metadata: dict | None = None,
-    metadata_error: str | None = None,
-    merge_metadata: bool = False,
-) -> ProgressBar:
-    return await asyncio.to_thread(
-        partial(
-            upsert_progress,
-            name,
-            current,
-            total,
-            color,
-            label,
-            status,
-            apply_metadata=apply_metadata,
-            metadata=metadata,
-            metadata_error=metadata_error,
-            merge_metadata=merge_metadata,
-        )
-    )
+upsert_progress_async = _in_thread(upsert_progress)
 
 
 def list_progress() -> list[ProgressBar]:
     """Return all progress bars ordered by most-recently updated first."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return list(ProgressBar.query().order_by("updated_at", desc=True).all())
+        return list(ProgressBar.using(db).order_by("updated_at", desc=True).all())
 
 
-async def list_progress_async() -> list[ProgressBar]:
-    return await asyncio.to_thread(list_progress)
+list_progress_async = _in_thread(list_progress)
 
 
 def get_progress(name: str) -> ProgressBar | None:
     """Return the progress bar named ``name`` or None."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return ProgressBar.query().filter(F("name") == name).first()
+        return ProgressBar.using(db).filter(F("name") == name).first()
 
 
-async def get_progress_async(name: str) -> ProgressBar | None:
-    return await asyncio.to_thread(get_progress, name)
+get_progress_async = _in_thread(get_progress)
 
 
 def delete_progress(name: str) -> bool:
     """Delete a progress bar by name. Returns True if a row was removed."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        bar = ProgressBar.query().filter(F("name") == name).first()
+        bar = ProgressBar.using(db).filter(F("name") == name).first()
         if not bar:
             return False
         bar.delete()
         return True
 
 
-async def delete_progress_async(name: str) -> bool:
-    return await asyncio.to_thread(delete_progress, name)
+delete_progress_async = _in_thread(delete_progress)
 
 
 # --- Diff notebooks ---
@@ -1303,7 +1193,7 @@ async def delete_progress_async(name: str) -> bool:
 
 def save_diff_notebook(label: str, envelope_json: str, cell_count: int) -> DiffNotebook:
     """Persist a new diff notebook. Always creates a new row (no upsert)."""
-    _require_db()
+    db = _require_db()
     now = time.time()
     with _DB_LOCK:
         nb = DiffNotebook(
@@ -1313,48 +1203,44 @@ def save_diff_notebook(label: str, envelope_json: str, cell_count: int) -> DiffN
             created_at=now,
             updated_at=now,
         )
-        nb.save()
+        nb.save(db=db)
         return nb
 
 
-async def save_diff_notebook_async(label: str, envelope_json: str, cell_count: int) -> DiffNotebook:
-    return await asyncio.to_thread(save_diff_notebook, label, envelope_json, cell_count)
+save_diff_notebook_async = _in_thread(save_diff_notebook)
 
 
 def get_diff_notebook(notebook_id: str) -> DiffNotebook | None:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return DiffNotebook.query().filter(F("id") == notebook_id).first()
+        return DiffNotebook.using(db).filter(F("id") == notebook_id).first()
 
 
-async def get_diff_notebook_async(notebook_id: str) -> DiffNotebook | None:
-    return await asyncio.to_thread(get_diff_notebook, notebook_id)
+get_diff_notebook_async = _in_thread(get_diff_notebook)
 
 
 def list_diff_notebooks() -> list[DiffNotebook]:
     """Return all saved diff notebooks ordered by newest first."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return list(DiffNotebook.query().order_by("created_at", desc=True).all())
+        return list(DiffNotebook.using(db).order_by("created_at", desc=True).all())
 
 
-async def list_diff_notebooks_async() -> list[DiffNotebook]:
-    return await asyncio.to_thread(list_diff_notebooks)
+list_diff_notebooks_async = _in_thread(list_diff_notebooks)
 
 
 def delete_diff_notebook(notebook_id: str) -> bool:
     """Delete a diff notebook by id. Returns True if a row was removed."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        nb = DiffNotebook.query().filter(F("id") == notebook_id).first()
+        nb = DiffNotebook.using(db).filter(F("id") == notebook_id).first()
         if not nb:
             return False
         nb.delete()
         return True
 
 
-async def delete_diff_notebook_async(notebook_id: str) -> bool:
-    return await asyncio.to_thread(delete_diff_notebook, notebook_id)
+delete_diff_notebook_async = _in_thread(delete_diff_notebook)
 
 
 # --- Artifact projects and registrations ---
@@ -1366,15 +1252,15 @@ def _normalize_project_name(name: str) -> str:
 
 def get_or_create_artifact_project(name: str) -> tuple[ArtifactProject, bool]:
     """Return a case-insensitively named project and whether it was created."""
-    _require_db()
+    db = _require_db()
     clean_name = " ".join(name.split())
     normalized = _normalize_project_name(clean_name)
     now = time.time()
     with _DB_LOCK:
-        existing = ArtifactProject.query().filter(F("normalized_name") == normalized).first()
+        existing = ArtifactProject.using(db).filter(F("normalized_name") == normalized).first()
         if existing:
             return existing, False
-        used = {row.slug for row in ArtifactProject.query().all()}
+        used = {row.slug for row in ArtifactProject.using(db).all()}
         project_id = secrets.token_urlsafe(12)
         slug = _unique_artifact_slug(artifact_slug(clean_name, "project"), used, project_id)
         project = ArtifactProject(
@@ -1385,46 +1271,41 @@ def get_or_create_artifact_project(name: str) -> tuple[ArtifactProject, bool]:
             created_at=now,
             updated_at=now,
         )
-        project.save()
+        project.save(db=db)
         return project, True
 
 
-async def get_or_create_artifact_project_async(
-    name: str,
-) -> tuple[ArtifactProject, bool]:
-    return await asyncio.to_thread(get_or_create_artifact_project, name)
+get_or_create_artifact_project_async = _in_thread(get_or_create_artifact_project)
 
 
 def get_artifact_project(project_id: str) -> ArtifactProject | None:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return ArtifactProject.query().filter(F("id") == project_id).first()
+        return ArtifactProject.using(db).filter(F("id") == project_id).first()
 
 
-async def get_artifact_project_async(project_id: str) -> ArtifactProject | None:
-    return await asyncio.to_thread(get_artifact_project, project_id)
+get_artifact_project_async = _in_thread(get_artifact_project)
 
 
 def list_artifact_projects() -> list[ArtifactProject]:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return list(ArtifactProject.query().order_by("name").all())
+        return list(ArtifactProject.using(db).order_by("name").all())
 
 
-async def list_artifact_projects_async() -> list[ArtifactProject]:
-    return await asyncio.to_thread(list_artifact_projects)
+list_artifact_projects_async = _in_thread(list_artifact_projects)
 
 
 def rename_artifact_project(project_id: str, name: str) -> ArtifactProject | None:
-    _require_db()
+    db = _require_db()
     clean_name = " ".join(name.split())
     normalized = _normalize_project_name(clean_name)
     now = time.time()
     with _DB_LOCK:
-        project = ArtifactProject.query().filter(F("id") == project_id).first()
+        project = ArtifactProject.using(db).filter(F("id") == project_id).first()
         if not project:
             return None
-        collision = ArtifactProject.query().filter(F("normalized_name") == normalized).first()
+        collision = ArtifactProject.using(db).filter(F("normalized_name") == normalized).first()
         if collision and collision.id != project_id:
             raise ValueError("A project with that name already exists")
         project.name = clean_name
@@ -1434,72 +1315,62 @@ def rename_artifact_project(project_id: str, name: str) -> ArtifactProject | Non
         return project
 
 
-async def rename_artifact_project_async(project_id: str, name: str) -> ArtifactProject | None:
-    return await asyncio.to_thread(rename_artifact_project, project_id, name)
+rename_artifact_project_async = _in_thread(rename_artifact_project)
 
 
 def list_artifact_registrations(
     project_id: str | None = None,
 ) -> list[ArtifactRegistration]:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        query = ArtifactRegistration.query()
+        query = ArtifactRegistration.using(db)
         if project_id is not None:
             query = query.filter(F("project_id") == project_id)
         return list(query.order_by("created_at", desc=True).all())
 
 
-async def list_artifact_registrations_async(
-    project_id: str | None = None,
-) -> list[ArtifactRegistration]:
-    return await asyncio.to_thread(list_artifact_registrations, project_id)
+list_artifact_registrations_async = _in_thread(list_artifact_registrations)
 
 
 def get_artifact_registration(registration_id: str) -> ArtifactRegistration | None:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return ArtifactRegistration.query().filter(F("id") == registration_id).first()
+        return ArtifactRegistration.using(db).filter(F("id") == registration_id).first()
 
 
-async def get_artifact_registration_async(
-    registration_id: str,
-) -> ArtifactRegistration | None:
-    return await asyncio.to_thread(get_artifact_registration, registration_id)
+get_artifact_registration_async = _in_thread(get_artifact_registration)
 
 
 def find_artifact_registration(
     source_path: str, mode: str, entrypoint: str | None
 ) -> ArtifactRegistration | None:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        rows = ArtifactRegistration.query().filter(F("source_path") == source_path).all()
+        rows = ArtifactRegistration.using(db).filter(F("source_path") == source_path).all()
         return next(
             (row for row in rows if row.mode == mode and row.entrypoint == entrypoint),
             None,
         )
 
 
-async def find_artifact_registration_async(
-    source_path: str, mode: str, entrypoint: str | None
-) -> ArtifactRegistration | None:
-    return await asyncio.to_thread(find_artifact_registration, source_path, mode, entrypoint)
+find_artifact_registration_async = _in_thread(find_artifact_registration)
 
 
 def get_artifact_project_by_slug(slug: str) -> ArtifactProject | None:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        return ArtifactProject.query().filter(F("slug") == slug).first()
+        return ArtifactProject.using(db).filter(F("slug") == slug).first()
 
 
 def get_artifact_registration_by_alias(
     project_slug: str, registration_slug: str
 ) -> ArtifactRegistration | None:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        project = ArtifactProject.query().filter(F("slug") == project_slug).first()
+        project = ArtifactProject.using(db).filter(F("slug") == project_slug).first()
         if project is None:
             return None
-        rows = ArtifactRegistration.query().filter(F("project_id") == project.id).all()
+        rows = ArtifactRegistration.using(db).filter(F("project_id") == project.id).all()
         return next((row for row in rows if row.slug == registration_slug), None)
 
 
@@ -1507,11 +1378,11 @@ def find_artifact_registration_by_mount(
     request_path: str,
 ) -> tuple[ArtifactRegistration, str] | None:
     """Resolve the longest registered root mount and return its remaining path."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
         rows = [
             row
-            for row in ArtifactRegistration.query().all()
+            for row in ArtifactRegistration.using(db).all()
             if row.mount_path
             and (request_path == row.mount_path or request_path.startswith(f"{row.mount_path}/"))
         ]
@@ -1533,10 +1404,10 @@ def create_artifact_registration(
     slug: str | None = None,
     mount_path: str = "",
 ) -> ArtifactRegistration:
-    _require_db()
+    db = _require_db()
     now = time.time()
     with _DB_LOCK:
-        project_rows = ArtifactRegistration.query().filter(F("project_id") == project_id).all()
+        project_rows = ArtifactRegistration.using(db).filter(F("project_id") == project_id).all()
         used = {row.slug for row in project_rows}
         source_name = Path(source_path).stem or Path(source_path).name
         slug_base = artifact_slug(slug or title_override or source_name, "artifact")
@@ -1544,7 +1415,7 @@ def create_artifact_registration(
             raise ValueError("An artifact with that alias already exists in the project")
         chosen_slug = _unique_artifact_slug(slug_base, used, secrets.token_urlsafe(16))
         if mount_path and any(
-            row.mount_path == mount_path for row in ArtifactRegistration.query().all()
+            row.mount_path == mount_path for row in ArtifactRegistration.using(db).all()
         ):
             raise ValueError("That artifact mount path is already registered")
         registration = ArtifactRegistration(
@@ -1559,39 +1430,18 @@ def create_artifact_registration(
             created_at=now,
             updated_at=now,
         )
-        registration.save()
+        registration.save(db=db)
         return registration
 
 
-async def create_artifact_registration_async(
-    *,
-    project_id: str,
-    group_path: str,
-    source_path: str,
-    mode: str,
-    entrypoint: str | None,
-    title_override: str | None,
-    slug: str | None = None,
-    mount_path: str = "",
-) -> ArtifactRegistration:
-    return await asyncio.to_thread(
-        create_artifact_registration,
-        project_id=project_id,
-        group_path=group_path,
-        source_path=source_path,
-        mode=mode,
-        entrypoint=entrypoint,
-        title_override=title_override,
-        slug=slug,
-        mount_path=mount_path,
-    )
+create_artifact_registration_async = _in_thread(create_artifact_registration)
 
 
 def update_artifact_registration(
     registration_id: str,
     **changes: object,
 ) -> ArtifactRegistration | None:
-    _require_db()
+    db = _require_db()
     allowed = {
         "project_id",
         "group_path",
@@ -1603,7 +1453,7 @@ def update_artifact_registration(
         "mount_path",
     }
     with _DB_LOCK:
-        registration = ArtifactRegistration.query().filter(F("id") == registration_id).first()
+        registration = ArtifactRegistration.using(db).filter(F("id") == registration_id).first()
         if not registration:
             return None
         next_project_id = str(changes.get("project_id", registration.project_id))
@@ -1611,7 +1461,7 @@ def update_artifact_registration(
         slug_collision = next(
             (
                 row
-                for row in ArtifactRegistration.query()
+                for row in ArtifactRegistration.using(db)
                 .filter(F("project_id") == next_project_id)
                 .all()
                 if row.id != registration_id and row.slug == next_slug
@@ -1625,7 +1475,7 @@ def update_artifact_registration(
             mount_collision = next(
                 (
                     row
-                    for row in ArtifactRegistration.query().all()
+                    for row in ArtifactRegistration.using(db).all()
                     if row.id != registration_id and row.mount_path == next_mount
                 ),
                 None,
@@ -1640,35 +1490,31 @@ def update_artifact_registration(
         return registration
 
 
-async def update_artifact_registration_async(
-    registration_id: str, **changes: object
-) -> ArtifactRegistration | None:
-    return await asyncio.to_thread(update_artifact_registration, registration_id, **changes)
+update_artifact_registration_async = _in_thread(update_artifact_registration)
 
 
 def delete_artifact_registration(registration_id: str) -> bool:
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        registration = ArtifactRegistration.query().filter(F("id") == registration_id).first()
+        registration = ArtifactRegistration.using(db).filter(F("id") == registration_id).first()
         if not registration:
             return False
         registration.delete()
         return True
 
 
-async def delete_artifact_registration_async(registration_id: str) -> bool:
-    return await asyncio.to_thread(delete_artifact_registration, registration_id)
+delete_artifact_registration_async = _in_thread(delete_artifact_registration)
 
 
 def delete_artifact_project(project_id: str, *, cascade: bool = False) -> tuple[bool, int]:
     """Delete a project, optionally unregistering its artifacts first."""
-    _require_db()
+    db = _require_db()
     with _DB_LOCK:
-        project = ArtifactProject.query().filter(F("id") == project_id).first()
+        project = ArtifactProject.using(db).filter(F("id") == project_id).first()
         if not project:
             return False, 0
         registrations = list(
-            ArtifactRegistration.query().filter(F("project_id") == project_id).all()
+            ArtifactRegistration.using(db).filter(F("project_id") == project_id).all()
         )
         if registrations and not cascade:
             raise ValueError("Project still contains artifact registrations")
@@ -1678,7 +1524,4 @@ def delete_artifact_project(project_id: str, *, cascade: bool = False) -> tuple[
         return True, len(registrations)
 
 
-async def delete_artifact_project_async(
-    project_id: str, *, cascade: bool = False
-) -> tuple[bool, int]:
-    return await asyncio.to_thread(delete_artifact_project, project_id, cascade=cascade)
+delete_artifact_project_async = _in_thread(delete_artifact_project)
