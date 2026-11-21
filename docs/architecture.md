@@ -97,6 +97,10 @@ settings view's sign-out row calls the sign-out route, forgets the user, the boo
 token, and loads the sign-in page. A session that ended answers 401 `auth` on the next
 request, and `handleAuthErrors` forgets the user and the bootstrap and goes to the sign-in route. The page starts its sockets, progress bars and recovery poll only when it is signed in. One function, `live_session` in `session.py`, decides whether a session id is live (the configured idle timeout included) for the door, the sockets and the auth routes.
 
+## The event loop
+
+The server runs on the stdlib event loop, named in one place (`_EVENT_LOOP` in `sshler/cli/server.py`), never uvloop: uvloop runs Python in the forked child of every subprocess it starts, and a thread-end hook there can block the child for good and the whole server with it. Start a local command with `run_bounded` (`sshler/proc.py`) or `spawn_on_pty`; never fork from Python.
+
 ## Frontend details
 
 **A request and its failure**: every request of the page goes through `request` in

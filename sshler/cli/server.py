@@ -18,6 +18,16 @@ from ..webapp import ServerSettings, make_app
 from . import runtime_token
 
 _RELOAD_ENV_KEY = "SSHLER_RELOAD_SETTINGS"
+
+# The server's event loop is the stdlib one, by name. uvicorn's default, "auto", picks uvloop
+# where it is installed, and uvloop starts a subprocess with fork() and runs Python in the
+# child before exec (PyOS_AfterFork_Child), which ends every other thread's state there. A
+# thread-end hook that needs a lock some thread held at the fork (a SQLite connection in the
+# middle of a statement) then blocks the child for good, and uvloop waits for the child's
+# exec while holding the GIL: every request stops. The stdlib loop runs no Python in the
+# child. sshler starts a command (tmux, git, grep) on most requests while worker threads
+# read and write the state database.
+_EVENT_LOOP = "asyncio"
 _PID_FILE = (
     Path(os.environ.get("TEMP", "/tmp")) / "sshler.pid"
     if sys.platform == "win32"
@@ -438,6 +448,7 @@ def serve(
                 factory=True,
                 # Watch the installed package, not the cwd sshler happens to start in.
                 reload_dirs=[str(Path(__file__).resolve().parent.parent)],
+                loop=_EVENT_LOOP,
             )
         else:
             uvicorn.run(
@@ -446,6 +457,7 @@ def serve(
                 port=port,
                 reload=False,
                 log_level=log_level,
+                loop=_EVENT_LOOP,
             )
     finally:
         _remove_pid()

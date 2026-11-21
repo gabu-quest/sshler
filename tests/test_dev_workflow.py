@@ -97,6 +97,7 @@ class TestServeDev:
             log_level="info",
             factory=True,
             reload_dirs=[str(Path(sshler.__file__).resolve().parent)],
+            loop="asyncio",
         )
         # uvicorn would now import the factory in its reloader child; do the same.
         client = TestClient(server._reload_app())
@@ -196,6 +197,22 @@ class TestServeDev:
 
         assert excinfo.value.code == 0
         vite.terminate.assert_called_once_with()
+
+
+class TestEventLoop:
+    def test_the_plain_server_runs_on_the_stdlib_event_loop(self, dev_project):
+        """``serve`` asks uvicorn for the stdlib loop by name, never ``auto``.
+
+        ``auto`` picks uvloop where it is installed, and uvloop runs Python in the forked
+        child of every subprocess it starts (see ``_EVENT_LOOP``). The reloading server's
+        call is pinned whole in ``test_reload_app_factory_trusts_vite_origins``.
+        """
+        with patch("sshler.cli.server.uvicorn.run") as run:
+            server.serve(port=8124, token="plain-token", open_browser=False, serve_artifacts=False)
+
+        assert run.call_count == 1
+        assert run.call_args.kwargs["loop"] == "asyncio"
+        assert run.call_args.kwargs["reload"] is False
 
 
 class TestViteAndCleanup:
