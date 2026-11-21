@@ -44,7 +44,9 @@ from .api.helpers import (
     available_windows_shells,
     default_windows_shell,
 )
-from .api.remote import remote_directory
+from .api.remote import command, remote_directory, require
+from .api.run_failures import ProgramNotFoundError
+from .api.sessions import require_local_tmux
 from .api.tunnels import TunnelRegistry
 from .auth import AuthManager, PasswordHasher, PasswordPolicy, PasswordValidator
 from .config import (
@@ -70,6 +72,7 @@ from .terminal.local import LocalPtyTransport, LocalTmuxWindows
 from .terminal.remote import RemoteTmuxWindows, SshTransport, close_connection
 from .terminal.transport import open_or_close_on_cancel, teardown_scope
 from .tmux import (
+    TMUX_COMMAND_TIMEOUT,
     _configure_tmux_bindings,
     local_tmux_command,
     record_ts_history,
@@ -1184,24 +1187,29 @@ class TerminalRequest:
 
 
 async def _serve_terminal(websocket: WebSocket, request: TerminalRequest) -> None:
-    """Open the terminal *request* names on an accepted socket, run it, tear it down."""
+    """Open the terminal *request* names on an accepted socket, run it, tear it down.
+
+    A terminal that cannot open (the box is not known, or the open fails) is answered
+    here only: its message is sent, then the socket closes with its code and reason."""
     config = load_config()
     box = find_box(config, request.host)
-    if not box:
-        await websocket.close()
-        return
     kind = getattr(box, "transport", "ssh")
-    directory = (
-        _normalize_local_path(request.directory)
-        if kind == "local"
-        else request.directory  # a remote folder is resolved on the terminal's connection
-    )
     client_host = websocket.client.host if websocket.client else "unknown"
-    logger.info(
-        f"[Connection] WebSocket connected: box={box.name}, transport={kind}, "
-        f"dir={directory}, session={request.session}, client={client_host}"
-    )
     try:
+        if not box:
+            # The name goes only in the text: a close reason must fit 123 bytes.
+            raise TerminalOpenError(
+                f"Unknown box: {_shown_box_name(request.host)}\r\n", 4404, "Unknown box"
+            )
+        directory = (
+            _normalize_local_path(request.directory)
+            if kind == "local"
+            else request.directory  # a remote folder is resolved on the terminal's connection
+        )
+        logger.info(
+            f"[Connection] WebSocket connected: box={box.name}, transport={kind}, "
+            f"dir={directory}, session={request.session}, client={client_host}"
+        )
         opened = await _open_terminal(websocket, box, config, request, directory)
     except TerminalOpenError as exc:
         with contextlib.suppress(Exception):
@@ -1230,7 +1238,7 @@ async def _open_terminal(
     if LOCAL_IS_WINDOWS:
         registry = websocket.app.state.win_terminal_registry
         return await _open_windows_terminal(registry, box, request, directory)
-    return await _open_local_terminal(request, directory)
+    return await _open_local_terminal(box, request, directory)
 
 
 async def _local_directory_or_default(box: Box, directory: str) -> str:
@@ -1246,9 +1254,36 @@ async def _discard_pty(process: LocalPTYProcess) -> None:
     await LocalPtyTransport(process, None).close()
 
 
-async def _open_local_terminal(request: TerminalRequest, directory: str) -> OpenedTerminal:
-    """A tmux client on a local PTY, attached to (or creating) the session."""
+def _tmux_not_installed(missing: ProgramNotFoundError) -> TerminalOpenError:
+    """A box without tmux, the same answer on both kinds of box."""
+    return TerminalOpenError(f"{missing}\r\n", 4501, "tmux not installed")
+
+
+_SHOWN_NAME_LIMIT = 64
+
+
+def _shown_box_name(name: str) -> str:
+    """A client's box name as text that is safe to write into its terminal.
+
+    The page writes the sent text straight into xterm, which obeys escape sequences
+    (a clipboard write among them), so every character that is not printable becomes
+    ``?`` and a name past 64 characters is cut and ends in ``…``."""
+    cleaned = "".join(char if char.isprintable() else "?" for char in name)
+    if len(cleaned) > _SHOWN_NAME_LIMIT:
+        return cleaned[:_SHOWN_NAME_LIMIT] + "\u2026"
+    return cleaned
+
+
+async def _open_local_terminal(
+    box: Box, request: TerminalRequest, directory: str
+) -> OpenedTerminal:
+    """A tmux client on a local PTY, attached to (or creating) the session; a box
+    without tmux is refused before anything is started."""
     session = request.session
+    try:
+        require_local_tmux(box.name, local_tmux_command(session))
+    except ProgramNotFoundError as missing:
+        raise _tmux_not_installed(missing) from missing
     logger.info(f"[Connection] Starting local tmux: dir={directory}, session={session}")
     try:
         process = await open_or_close_on_cancel(
@@ -1315,7 +1350,13 @@ async def _open_windows_terminal(
 async def _open_remote_terminal(
     box: Box, config: AppConfig, request: TerminalRequest, directory: str
 ) -> OpenedTerminal:
-    """tmux on a remote box over a connection of its own, closed with the terminal."""
+    """tmux on a remote box over a connection of its own, closed with the terminal.
+
+    Before tmux is started the box is asked, on that connection, whether it has tmux:
+    a status of 127 refuses the terminal. A check that cannot run (it fails for any
+    other cause, or past its limit) opens the terminal as before. A tmux that cannot be
+    started raises ``TerminalOpenError``, as on a local box. Every way out of the open
+    other than a terminal that opened closes the connection."""
     logger.info(
         f"[Connection] Connecting to SSH: host={box.connect_host}, user={box.user}, port={box.port}"
     )
@@ -1334,14 +1375,30 @@ async def _open_remote_terminal(
         raise TerminalOpenError(f"Connection failed: {exc}") from exc
     logger.info("[Connection] SSH connection established successfully")
     try:
-        directory = await _remote_directory_or_default(connection, box, directory)
-        process = await open_tmux(
-            connection,
-            working_directory=directory,
-            session=request.session,
-            columns=request.columns,
-            rows=request.rows,
-        )
+        try:
+            # `sh -c`: the box's login shell may not read a POSIX line (csh cannot read `2>&1`).
+            checked = await asyncio.wait_for(
+                connection.run(command("sh", "-c", require("tmux")), check=False),
+                timeout=TMUX_COMMAND_TIMEOUT,
+            )
+            status = checked.exit_status
+        except Exception as exc:
+            logger.warning("Cannot check for tmux on %s (opening anyway): %s", box.name, exc)
+            status = None
+        if status == 127:
+            raise _tmux_not_installed(ProgramNotFoundError("tmux", box.name))
+        try:
+            directory = await _remote_directory_or_default(connection, box, directory)
+            process = await open_tmux(
+                connection,
+                working_directory=directory,
+                session=request.session,
+                columns=request.columns,
+                rows=request.rows,
+            )
+        except Exception as exc:
+            logger.error(f"[Connection] Failed to start remote tmux: {exc}", exc_info=True)
+            raise TerminalOpenError(f"Connection failed: {exc}\r\n") from exc
     except BaseException:
         with teardown_scope():
             await close_connection(connection)

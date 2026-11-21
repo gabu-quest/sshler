@@ -10,7 +10,8 @@ points here; each section stands alone.
 2. Client connects to `/ws/term?host=...&dir=...&session=...&token=...`
 3. `terminal_socket` checks access and the session name, then `webapp.py` opens one transport from `sshler/terminal/`: `LocalPtyTransport` (tmux client on a local PTY), `SshTransport` (tmux over its own SSH connection) or `ConPtyTransport` (a tab of a persisted native Windows shell). Each keeps the contract in `terminal/transport.py` (read, write, resize, close) and knows nothing of the WebSocket
 4. `terminal/pump.py` `run_pump` carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects)
-5. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
+5. A terminal that cannot open is a `TerminalOpenError(message, code, reason)`, answered only in `_serve_terminal`: the message is sent as text, then the socket closes with the code. The close codes: 4400 a refused session name, 4401 credentials, 4403 the token or the Origin, 4404 a box the server does not know, 4501 tmux is not installed on the box, 4502 WSL is not installed, 4503 pywinpty is missing, 4504 too many terminals. A box is asked for tmux before anything is started: the local box by `require_local_tmux` (`api/sessions.py`), a remote box by one command (`remote.require`) on the terminal's own connection, where only status 127 refuses and a check that cannot run opens the terminal. The page's words for each code are in `frontend/src/utils/terminalCloseCodes.ts`, and the page reconnects after any code not named there: a new code is named there in the same change
+6. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
 
 ## A command on a box, and the files of a box
 
@@ -40,11 +41,16 @@ by one owner, `api/failure.py`. `STATUS_OF_REASON` there is the list of reasons,
 one status. Code that refuses a request raises `Failure(reason, text)`; `failure_of` names the
 reason of any other error by its type (errno, SFTP type), never by its words, the same for
 both kinds of box; `failure_entry` gives an item of a batch the reason a single request would
-answer; `answer` writes the body for a check that runs before any route. Every failure
+answer; `failure_body` is the body itself, which the `error` event of a cross-box transfer
+carries too; `answer` writes the body for a check that runs before any route. No route
+picks a status: no `raise HTTPException(` is left under `sshler/`. Every failure
 answer the suite's test client receives is checked by `tests/failure_check.py`.
 
-The file routes are on it (`tests/test_failure_reasons.py` is their table, run on both
-kinds), and so are the routes that run a program on a box: git, the git badge, grep, the
+Each group of routes has its table of failures, every row an exact status, reason and
+text: the file routes (`tests/test_failure_reasons.py`, run on both kinds), the routes with
+no box behind them such as tunnels, artifacts, PDF export and the login
+(`tests/test_route_failure_reasons.py`), the terminal socket's closes
+(`tests/test_terminal_closes.py`), and the routes that run a program on a box: git, the git badge, grep, the
 session sync, rename and capture, a box's stats and directory search
 (`tests/test_box_program_failure_reasons.py`). For those the runner raises one type per
 cause on both kinds: `ProgramNotFoundError` for a program that is not installed (a remote

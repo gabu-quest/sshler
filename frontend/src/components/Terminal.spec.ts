@@ -123,6 +123,8 @@ describe("Terminal.vue close codes", () => {
     [4401, "terminal.auth_denied", 5000],
     [4502, "terminal.wsl_not_installed", 6000],
     [4503, "terminal.pywinpty_missing", 8000],
+    [4404, "terminal.unknown_box", 6000],
+    [4501, "terminal.tmux_not_installed", 8000],
   ])("code %i shows its toast and never reconnects", async (code, key, duration) => {
     const wrapper = await mountConnected();
     socket(0).onclose!({ code });

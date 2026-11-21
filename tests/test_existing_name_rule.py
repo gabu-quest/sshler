@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import json
 import os
 import posixpath
 import shutil
@@ -42,6 +41,7 @@ import pytest
 import uvicorn
 import yaml
 from fastapi.testclient import TestClient
+from transfer_events import transfer_events
 
 from sshler import ssh_pool, state
 from sshler.api import local_files as local_files_api
@@ -421,11 +421,7 @@ def transfer(env: Env, src: str, dest: str, paths: list[str], destination: str, 
         headers=HEADERS,
     )
     assert resp.status_code == 200, resp.text
-    events = []
-    for block in resp.text.strip().split("\n\n"):
-        lines = dict(line.split(": ", 1) for line in block.splitlines())
-        events.append((lines["event"], json.loads(lines["data"])))
-    return events
+    return transfer_events(resp.text)
 
 
 # --- item 2: single rename, move and copy -----------------------------------------

@@ -6,17 +6,17 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictBool
 
 from ..config import AppConfig
-from ..ssh import SSHError
 from ..validation import ValidationError
 from .box_files import box_files
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, Failure, failure_body, failure_entry
 from .file_contract import BoxFiles
-from .placement import REASON_FAILED, failure_entry, refuse_a_name_this_request_placed
+from .placement import refuse_a_name_this_request_placed, source_not_removed
 from .rate_limiting import rate_limit_transfer
 
 logger = logging.getLogger(__name__)
@@ -49,24 +49,21 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         The ``done`` event lists ``failed`` entries as a batch does: ``path``, ``error``
         and ``reason`` ("exists", "cannot_replace" or "failed"). A move removes only the
-        sources whose copy landed."""
+        sources whose copy landed. A transfer that fails as a whole after the stream
+        began ends with one ``error`` event, the body a failed request would answer:
+        ``detail`` and ``reason``."""
 
         if payload.src_box == payload.dest_box:
-            raise HTTPException(
-                status_code=400, detail="Use batch copy/move for same-box transfers"
-            )
+            raise Failure(REASON_INVALID, "Use batch copy/move for same-box transfers")
 
         if not payload.paths:
-            raise HTTPException(status_code=400, detail="No paths provided")
+            raise Failure(REASON_INVALID, "No paths provided")
 
         if len(payload.paths) > MAX_TRANSFER_PATHS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Maximum {MAX_TRANSFER_PATHS} paths per transfer",
-            )
+            raise Failure(REASON_INVALID, f"Maximum {MAX_TRANSFER_PATHS} paths per transfer")
 
         if payload.mode not in ("copy", "move"):
-            raise HTTPException(status_code=400, detail="mode must be 'copy' or 'move'")
+            raise Failure(REASON_INVALID, "mode must be 'copy' or 'move'")
 
         src_box = deps.get_box_or_404(application_config, payload.src_box)
         dest_box = deps.get_box_or_404(application_config, payload.dest_box)
@@ -86,15 +83,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
                     try:
                         paths.append(source.check_path(path))
                     except (ValidationError, ValueError) as exc:
-                        raise HTTPException(
-                            status_code=400, detail=f"Invalid path {path}: {exc}"
-                        ) from exc
+                        raise Failure(REASON_INVALID, f"Invalid path {path}: {exc}") from exc
                 try:
                     checked_dest = dest.check_path(payload.destination)
                 except (ValidationError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400, detail=f"Invalid destination: {exc}"
-                    ) from exc
+                    raise Failure(REASON_INVALID, f"Invalid destination: {exc}") from exc
                 return paths, checked_dest
 
             validated_paths, validated_dest = await asyncio.to_thread(_validate)
@@ -170,29 +163,17 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 await source.remove_if_unchanged(
                                     src_path, fingerprint, landed_at[sent_path]
                                 )
-                            except HTTPException as exc:
+                            except Failure as exc:
                                 succeeded.remove(sent_path)
                                 failed.append(failure_entry(sent_path, exc))
                             except Exception as exc:
                                 logger.warning(f"Delete after move failed for {src_path}: {exc}")
                                 succeeded.remove(sent_path)
-                                failed.append(
-                                    {
-                                        "path": sent_path,
-                                        "error": f"Copied to {landed_at[sent_path]}, but the "
-                                        f"source could not be removed: {exc}",
-                                        "reason": REASON_FAILED,
-                                    }
-                                )
+                                not_removed = source_not_removed(landed_at[sent_path], str(exc))
+                                failed.append(failure_entry(sent_path, not_removed))
 
-            except SSHError as exc:
-                yield _sse_event("error", {"detail": f"SSH error: {exc}"})
-                return
-            except HTTPException as exc:
-                yield _sse_event("error", {"detail": str(exc.detail)})
-                return
             except Exception as exc:
-                yield _sse_event("error", {"detail": str(exc)})
+                yield _sse_event("error", failure_body(exc))
                 return
 
             if not await request.is_disconnected():

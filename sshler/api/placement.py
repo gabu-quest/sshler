@@ -11,9 +11,7 @@ from typing import NoReturn
 
 import anyio
 
-from .failure import REASON_CANNOT_REPLACE, REASON_EXISTS, Failure
-from .failure import REASON_FAILED as REASON_FAILED  # the transfer's own failed items
-from .failure import failure_entry as failure_entry  # a batch's and a transfer's items
+from .failure import REASON_CANNOT_REPLACE, REASON_EXISTS, REASON_FAILED, Failure
 
 # --- No file lands on an existing name unless the caller said replace -------------
 #
@@ -125,6 +123,14 @@ def ensure_source_unchanged(before: object, after: object, target: str) -> None:
             REASON_FAILED,
             f"Copied to {target}, but the source changed during the copy and was kept",
         )
+
+
+def source_not_removed(target: str, cause: str) -> Failure:
+    """A move whose copy landed at ``target`` and whose source could not be removed
+    for ``cause``: the one failure a single move, a batch and a transfer give it."""
+    return Failure(
+        REASON_FAILED, f"Copied to {target}, but the source could not be removed: {cause}"
+    )
 
 
 async def run_to_end[T](call: Awaitable[T]) -> T:

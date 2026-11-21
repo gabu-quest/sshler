@@ -63,6 +63,7 @@ from .placement import (
     kept_permission_bits,
     refuse_a_name_this_request_placed,
     run_to_end,
+    source_not_removed,
 )
 from .remote import (
     and_then,
@@ -329,9 +330,7 @@ async def _remote_remove_moved_source(
             ensure_source_unchanged(before, after, target)
         await sftp_client.remove(source)
     except asyncssh.SFTPError as exc:
-        raise Failure(
-            REASON_FAILED, f"Copied to {target}, but the source could not be removed: {exc.reason}"
-        ) from exc
+        raise source_not_removed(target, exc.reason) from exc
 
 
 async def _remote_move_new(sftp_client, source: str, target: str, source_attrs) -> None:

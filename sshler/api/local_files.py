@@ -62,6 +62,7 @@ from .placement import (
     kept_permission_bits,
     refuse_a_name_this_request_placed,
     run_to_end,
+    source_not_removed,
 )
 
 # --- local transport (every function here runs in a worker thread) ---------------
@@ -316,10 +317,7 @@ def _local_remove_moved_source(
         else:
             os.unlink(source)
     except OSError as exc:
-        raise Failure(
-            REASON_FAILED,
-            f"Copied to {target}, but the source could not be removed: {exc.strerror or exc}",
-        ) from exc
+        raise source_not_removed(target, str(exc.strerror or exc)) from exc
 
 
 def _local_move_new(source: str, target: str, source_stat: os.stat_result) -> None:

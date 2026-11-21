@@ -5,7 +5,8 @@ reason. ``Failure`` is the one exception a route, an operation or a dependency r
 to answer by reason; ``failure_of`` is the one function that names the reason of any
 other failure (of the system, of SFTP or SSH, of a path check, of a time limit, of a
 program that is not on the box) for both kinds of box; ``failure_entry`` gives a batch
-item the same reason and text; the handlers ``install`` registers write the body, and
+item the same reason and text; ``failure_body`` is the body itself, which a stream's
+``error`` event carries too; the handlers ``install`` registers write the body, and
 ``answer`` writes it for a check that answers before any route runs.
 """
 
@@ -246,6 +247,13 @@ def failure_entry(
     return {"path": path, "error": str(found.detail), "reason": found.reason}
 
 
+def failure_body(exc: BaseException) -> dict[str, str]:
+    """The body of the failure ``exc``: ``{"detail": <text>, "reason": <word>}``, as a
+    failed request answers it and as a stream's ``error`` event carries it."""
+    found = failure_of(exc)
+    return {"detail": _text(found.detail), "reason": found.reason}
+
+
 def answer(
     reason: str, detail: str, *, status: int | None = None, headers: Mapping[str, str] | None = None
 ) -> JSONResponse:
@@ -255,7 +263,7 @@ def answer(
 
 def _body(failure: Failure) -> JSONResponse:
     return JSONResponse(
-        {"detail": _text(failure.detail), "reason": failure.reason},
+        failure_body(failure),
         status_code=failure.status_code,
         headers=failure.headers,
     )

@@ -463,6 +463,8 @@ export const en: Record<string, string> = {
   "terminal.auth_denied": "Authorization failed",
   "terminal.connection_failed": "Connection failed:",
   "terminal.wsl_not_installed": "WSL is not installed. Run 'wsl --install', then pick another shell.",
+  "terminal.unknown_box": "This box is not known to the server. Check its name in the box list.",
+  "terminal.tmux_not_installed": "tmux is not installed on this box. Install it there to open a terminal.",
   "terminal.pywinpty_missing": "pywinpty is not installed on the server. Run 'uv pip install pywinpty' (or reinstall sshler) to use native Windows shells.",
   "terminal.shell_label": "Shell",
   "terminal.open_terminal": "Open Terminal",

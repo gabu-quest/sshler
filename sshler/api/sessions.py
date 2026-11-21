@@ -17,6 +17,7 @@ import contextlib
 import logging
 import re
 import shutil
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -66,6 +67,13 @@ done
 """
 
 
+def require_local_tmux(box: str, command: Sequence[str]) -> None:
+    """The one check that the local box has tmux: raises ``ProgramNotFoundError`` when
+    the program of the tmux command line ``command`` (its first word) is not on PATH."""
+    if shutil.which(command[0]) is None:
+        raise ProgramNotFoundError("tmux", box)
+
+
 async def live_sessions(deps: APIDependencies, box: Box, application_config: AppConfig) -> set[str]:
     """The names of the tmux sessions running on ``box``: those of its default server
     and of every ``ts-*`` server; empty when the box runs none. When they cannot be
@@ -80,8 +88,10 @@ async def live_sessions(deps: APIDependencies, box: Box, application_config: App
     this every 30 s per box).
     """
     if is_local(box):
-        if shutil.which(tmux_module.default_tmux_command()[0]) is None:
-            raise failure_of(ProgramNotFoundError("tmux", box.name))
+        try:
+            require_local_tmux(box.name, tmux_module.default_tmux_command())
+        except ProgramNotFoundError as exc:
+            raise failure_of(exc) from exc
         return await discover_local_sessions()
     limit = dependencies.PROBE_TIMEOUT_SECONDS
     async with box_runner(deps, box, application_config, deadline=limit) as runner:

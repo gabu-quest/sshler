@@ -43,6 +43,7 @@ import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName 
 import { getColorForSession } from '@/utils/sessionName'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
+import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
 import type { ApiSession } from '@/api/types'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
 
@@ -1383,40 +1384,15 @@ const connect = async () => {
       connecting.value = false
       emit('disconnected')
 
-      if (event.code === 4403) {
-        message.error(t('terminal.auth_failed'), {
-          duration: 5000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4401) {
-        message.error(t('terminal.auth_denied'), {
-          duration: 5000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4502) {
-        // WSL selected but no distro installed — toast, don't reconnect.
-        message.error(t('terminal.wsl_not_installed'), {
-          duration: 6000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4503) {
-        // pywinpty missing in the server environment — toast, don't reconnect.
-        message.error(t('terminal.pywinpty_missing'), {
-          duration: 8000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4504) {
-        // Server-side terminal cap hit — toast, don't reconnect-loop.
-        message.error(t('terminal.too_many_terminals'), {
-          duration: 8000
-        })
-        reconnecting.value = false
-      } else if (event.code === 1000) {
-        // Normal closure - don't reconnect
-        reconnecting.value = false
-      } else {
+      const policy = classifyTerminalCloseCode(event.code)
+      if (policy.messageKey) {
+        message.error(t(policy.messageKey), { duration: policy.duration })
+      }
+      if (policy.reconnect) {
         // Unexpected disconnect - attempt reconnect with backoff
         scheduleReconnect()
+      } else {
+        reconnecting.value = false
       }
     }
 

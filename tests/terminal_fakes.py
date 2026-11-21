@@ -11,6 +11,11 @@ import queue
 import threading
 from types import SimpleNamespace
 
+from sshler.api.remote import command, require
+
+# The line the terminal sends to ask whether the box has tmux.
+TMUX_CHECK_LINE = command("sh", "-c", require("tmux"))
+
 
 class ShellEmulator:
     """``sh`` on a terminal, for ``echo WORD`` and ``stty size``.
@@ -100,7 +105,8 @@ class FakeSshChannel:
 
 
 class FakeSshConnection:
-    """An asyncssh connection: tmux commands fail, so no window list is sent."""
+    """An asyncssh connection: the tmux check passes (a box with tmux), every other
+    command fails, so no window list is sent."""
 
     def __init__(self) -> None:
         self.closed = False
@@ -113,8 +119,12 @@ class FakeSshConnection:
     async def wait_closed(self) -> None:
         self.wait_closed_calls += 1
 
-    async def run(self, command: str, check: bool = False) -> SimpleNamespace:
+    async def run(
+        self, command: str, check: bool = False, encoding: str | None = "utf-8"
+    ) -> SimpleNamespace:
         self.commands.append(command)
+        if command == TMUX_CHECK_LINE:
+            return SimpleNamespace(exit_status=0, returncode=0, stdout="", stderr="")
         return SimpleNamespace(returncode=1, stdout="")
 
 

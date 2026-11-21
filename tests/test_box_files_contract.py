@@ -36,12 +36,14 @@ import yaml
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from fastapi.testclient import TestClient
+from transfer_events import transfer_events
 
 import sshler.api
 from sshler import ssh_pool, state
 from sshler.api import archive as archive_api
 from sshler.api import remote_files as remote_files_api
 from sshler.api.box_files import DEFAULT_ANSWERS, Answers, box_files
+from sshler.api.dependencies import APIDependencies
 from sshler.api.placement import DestinationRefused
 from sshler.config import Box
 from sshler.ssh import SSHError, connect
@@ -1323,11 +1325,7 @@ def _transfer(counted: Counted, src: str, dest: str, paths: list[str], destinati
         headers=HEADERS,
     )
     assert resp.status_code == 200, resp.text
-    events = []
-    for block in resp.text.strip().split("\n\n"):
-        lines = dict(line.split(": ", 1) for line in block.splitlines())
-        events.append((lines["event"], json.loads(lines["data"])))
-    return events
+    return transfer_events(resp.text)
 
 
 def test_a_transfer_between_two_remote_boxes_takes_one_connection_and_one_session_each(counted):
@@ -1369,9 +1367,44 @@ def test_a_transfer_whose_sftp_session_cannot_open_is_one_error_before_any_item(
         events = _transfer(counted, "lb", "local", ["/home/a.txt", "/home/dot.png"], str(local))
     else:
         events = _transfer(counted, "local", "lb", [str(local / "x.txt")], "/home/in")
-    assert events == [("error", {"detail": "no sftp"})]
+    assert events == [("error", {"detail": "no sftp", "reason": "failed"})]
     assert sorted(p.name for p in local.iterdir()) == ["x.txt"]
     assert not (counted.root / "home" / "in").exists()
+
+
+@pytest.mark.parametrize(
+    ("raised", "body"),
+    [
+        (
+            SSHError("lb: connection refused"),
+            {"detail": "lb: connection refused", "reason": "unreachable"},
+        ),
+        (
+            ConnectionError("lb: unreachable (cached)"),
+            {"detail": "lb: unreachable (cached)", "reason": "unreachable"},
+        ),
+        (
+            TimeoutError("lb: the connect timed out"),
+            {"detail": "lb: the connect timed out", "reason": "timeout"},
+        ),
+    ],
+    ids=["ssh-error", "connection-error", "timeout"],
+)
+def test_a_transfer_whose_source_box_cannot_be_reached_ends_with_its_reason(
+    counted, tmp_path, monkeypatch, raised, body
+):
+    """The stream has begun when the source box is reached, so its failure is the one
+    ``error`` event, with the text and reason a failed request would answer."""
+    landing = tmp_path / "landing"
+    landing.mkdir()
+
+    async def unreachable(self, box, application_config):
+        raise raised
+
+    monkeypatch.setattr(APIDependencies, "connect_for_box", unreachable)
+    events = _transfer(counted, "lb", "local", ["/home/a.txt"], str(landing))
+    assert events == [("error", body)]
+    assert sorted(landing.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -1396,6 +1429,29 @@ def test_a_bad_transfer_path_is_a_400_before_any_connection(
         headers=HEADERS,
     )
     assert (resp.status_code, resp.json()) == (400, {"detail": detail, "reason": "invalid"})
+    assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("change", "status", "detail"),
+    [
+        ({"dest_box": "lb"}, 400, "Use batch copy/move for same-box transfers"),
+        ({"paths": []}, 400, "No paths provided"),
+        ({"mode": "swap"}, 400, "mode must be 'copy' or 'move'"),
+        (
+            {"paths": [f"/home/{n}.txt" for n in range(101)]},
+            422,
+            "body.paths: List should have at most 100 items after validation, not 101",
+        ),
+    ],
+    ids=["same-box", "no-paths", "bad-mode", "too-many-paths"],
+)
+def test_a_refused_transfer_answers_invalid_with_its_text_before_any_connection(
+    counted, change, status, detail
+):
+    body = {"src_box": "lb", "dest_box": "local", "paths": ["/home/a.txt"], "destination": "/x"}
+    resp = counted.client.post("/api/v1/transfer", json={**body, **change}, headers=HEADERS)
+    assert (resp.status_code, resp.json()) == (status, {"detail": detail, "reason": "invalid"})
     assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
 
 
@@ -1433,6 +1489,7 @@ def test_a_remote_write_that_fails_half_way_leaves_no_file_and_no_temp_name(
     )
     entry = {"path": sent, "error": "disk full", "reason": "failed"}
     progress = {"file": sent, "bytes_done": CHUNK, "bytes_total": len(BIG), "index": 0, "total": 1}
+    transfer_events(resp.text)
     assert resp.text == (
         f"event: progress\ndata: {json.dumps(progress)}\n\n"
         f"event: failed\ndata: {json.dumps(entry)}\n\n"

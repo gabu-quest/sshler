@@ -13,17 +13,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import anyio
 import psutil
 import pytest
 import yaml
-from terminal_fakes import FakeSshChannel, FakeSshConnection
+from terminal_fakes import TMUX_CHECK_LINE, FakeSshChannel, FakeSshConnection
 
 from sshler import state
 from sshler.webapp import ServerSettings, make_app
@@ -500,9 +502,10 @@ async def test_remote_open_error_closes_the_connection(
     sock = AsgiSocket(app, _remote_query())
     sock.start()
 
-    with pytest.raises(RuntimeError, match="no tmux on the box"):
-        await sock.finished()
+    await sock.finished()
 
+    assert sock.texts() == ["Connection failed: no tmux on the box\r\n"]
+    assert sock.closes() == [(1000, "")]
     assert (remote.connection.closed, remote.connection.wait_closed_calls) == (True, 1)
     assert _left_since(before) == (0, 0, 0)
 
@@ -520,6 +523,99 @@ async def test_remote_cancelled_handler_closes_the_channel(app, remote: Remote) 
 
     assert _channel_and_connection_closed(remote) == (True, True, True)
     assert _left_since(before) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_remote_cancelled_while_the_tmux_check_runs_closes_the_connection(
+    app, remote: Remote, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checking = asyncio.Event()
+
+    async def check_never_answers(command: str, check: bool = False, encoding: Any = "utf-8"):
+        checking.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(remote.connection, "run", check_never_answers)
+    await _warm_state()
+    before = _snapshot()
+    sock = AsgiSocket(app, _remote_query())
+    sock.start()
+    await asyncio.wait_for(checking.wait(), 10)
+    assert sock.task is not None
+
+    sock.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await sock.finished()
+
+    assert (remote.opened.is_set(), remote.connection.closed) == (False, True)
+    assert remote.connection.wait_closed_calls == 1
+    assert _left_since(before) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [ConnectionResetError("channel refused"), 1, 126],
+    ids=["check-raises", "status-1", "status-126"],
+)
+async def test_remote_whose_tmux_check_cannot_run_opens_its_terminal(
+    app, remote: Remote, monkeypatch: pytest.MonkeyPatch, answer: BaseException | int
+) -> None:
+    """Only status 127 says tmux is missing; any other end of the check opens as before."""
+
+    async def check(command: str, check: bool = False, encoding: Any = "utf-8"):
+        if isinstance(answer, BaseException):
+            raise answer
+        return SimpleNamespace(exit_status=answer, returncode=answer, stdout="", stderr="")
+
+    monkeypatch.setattr(remote.connection, "run", check)
+    await _warm_state()
+    before = _snapshot()
+    sock = await _open_remote(app, remote)
+
+    sock.disconnect()
+    await sock.finished()
+
+    assert (remote.opened.is_set(), sock.closes()) == (True, [])
+    assert _channel_and_connection_closed(remote) == (True, True, True)
+    assert _left_since(before) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_remote_whose_tmux_check_runs_past_its_limit_opens_its_terminal(
+    app, remote: Remote, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[str] = []
+
+    async def check_never_returns(command: str, check: bool = False, encoding: Any = "utf-8"):
+        asked.append(command)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(remote.connection, "run", check_never_returns)
+    monkeypatch.setattr("sshler.webapp.TMUX_COMMAND_TIMEOUT", 0.1)
+    await _warm_state()
+    before = _snapshot()
+    sock = await _open_remote(app, remote)
+
+    assert (asked.count(TMUX_CHECK_LINE), remote.opened.is_set(), remote.connection.closed) == (
+        1,
+        True,
+        False,
+    )
+    sock.disconnect()
+    await sock.finished()
+
+    assert sock.closes() == []
+    assert _channel_and_connection_closed(remote) == (True, True, True)
+    assert _left_since(before) == (0, 0, 0)
+
+
+def test_the_tmux_check_goes_to_the_box_as_a_posix_shell_line() -> None:
+    assert shlex.split(TMUX_CHECK_LINE) == [
+        "sh",
+        "-c",
+        "command -v tmux >/dev/null 2>&1 || exit 127",
+    ]
 
 
 # --- hostile input ------------------------------------------------------------------

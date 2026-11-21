@@ -463,6 +463,8 @@ export const ja: Record<string, string> = {
   "terminal.auth_denied": "認可に失敗しました",
   "terminal.connection_failed": "接続に失敗:",
   "terminal.wsl_not_installed": "WSL がインストールされていません。'wsl --install' を実行するか、別のシェルを選択してください。",
+  "terminal.unknown_box": "このボックスはサーバーに登録されていません。ボックス一覧で名前を確認してください。",
+  "terminal.tmux_not_installed": "このボックスに tmux がインストールされていません。ターミナルを開くには、そのボックスに tmux をインストールしてください。",
   "terminal.pywinpty_missing": "サーバーに pywinpty がインストールされていません。'uv pip install pywinpty' を実行する（または sshler を再インストールする）と、ネイティブ Windows シェルが利用できます。",
   "terminal.shell_label": "シェル",
   "terminal.open_terminal": "ターミナルを開く",

@@ -18,6 +18,7 @@ import asyncssh
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from transfer_events import transfer_events
 
 from sshler import ssh_pool, state
 from sshler.api.dependencies import APIDependencies
@@ -364,6 +365,7 @@ def _transfer(client, paths: list[str], destination: str) -> str:
         headers=HEADERS,
     )
     assert resp.status_code == 200
+    transfer_events(resp.text)
     return resp.text
 
 
@@ -415,7 +417,8 @@ def test_a_transfer_with_a_failed_home_lookup_ends_with_an_error_event_and_copie
     finally:
         client.close()
     assert (text, sides["alpha"].sftp.calls, sides["beta"].sftp.calls) == (
-        'event: error\ndata: {"detail": "Could not resolve the remote home directory"}\n\n',
+        'event: error\ndata: {"detail": "Could not resolve the remote home directory", '
+        '"reason": "unreachable"}\n\n',
         [],
         [],
     )
