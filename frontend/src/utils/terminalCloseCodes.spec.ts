@@ -52,6 +52,14 @@ describe("classifyTerminalCloseCode", () => {
     });
   });
 
+  it("4400 (refused session name) toasts session_name_refused and stops reconnecting", () => {
+    expect(classifyTerminalCloseCode(4400)).toEqual({
+      messageKey: "terminal.session_name_refused",
+      reconnect: false,
+      duration: 6000,
+    });
+  });
+
   it("1000 (normal closure) is silent and does NOT reconnect", () => {
     const policy = classifyTerminalCloseCode(1000);
     expect(policy.reconnect).toBe(false);

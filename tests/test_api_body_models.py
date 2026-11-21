@@ -108,7 +108,11 @@ def test_a_batch_of_ids_is_answered_per_id(client, recreated):
     resp = client.post("/api/v1/recovery/recreate-batch", json={"session_ids": ["a", "zzz"]})
 
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"results": {"a": "ok", "zzz": "not found"}}
+    assert resp.json() == {
+        "status": "partial",
+        "succeeded": ["a"],
+        "failed": [{"path": "zzz", "error": "Session not in recovery list", "reason": "not_found"}],
+    }
     assert recreated == ["a"]
 
 
@@ -116,7 +120,7 @@ def test_a_batch_without_the_key_is_an_empty_result(client, recreated):
     resp = client.post("/api/v1/recovery/recreate-batch", json={})
 
     assert resp.status_code == 200
-    assert resp.json() == {"results": {}}
+    assert resp.json() == {"status": "ok", "succeeded": [], "failed": []}
     assert recreated == []
 
 
@@ -143,5 +147,12 @@ def test_a_batch_of_ten_thousand_ids_is_answered_per_id(client, recreated):
     resp = client.post("/api/v1/recovery/recreate-batch", json={"session_ids": ids})
 
     assert resp.status_code == 200
-    assert resp.json() == {"results": {"a": "ok"} | {str(n): "not found" for n in range(10_000)}}
+    assert resp.json() == {
+        "status": "partial",
+        "succeeded": ["a"],
+        "failed": [
+            {"path": str(n), "error": "Session not in recovery list", "reason": "not_found"}
+            for n in range(10_000)
+        ],
+    }
     assert recreated == ["a"]

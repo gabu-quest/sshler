@@ -9,6 +9,7 @@ import type { App } from "vue";
 import { defineComponent, h, ref } from "vue";
 
 import { createI18n } from "@/i18n";
+import { en } from "@/locales/en";
 import * as http from "@/api/http";
 import { ApiError } from "@/api/apiError";
 import { useFilesStore } from "@/stores/files";
@@ -138,6 +139,8 @@ const renameFile = vi.mocked(http.renameFile);
 const batchMove = vi.mocked(http.batchMove);
 const batchCopy = vi.mocked(http.batchCopy);
 const taken = () => new ApiError(409, "exists", "File already exists");
+/** What a person reads for a failed item: the line of its reason, " — ", the server's text. */
+const line = (reason: string, text: string) => `${en[`error.reason.${reason}`]} — ${text}`;
 const exists = (path: string) => ({ path, error: "File already exists", reason: "exists" as const });
 const blocked = (path: string) => ({ path, error: "Only a regular file can be replaced", reason: "cannot_replace" as const });
 const done = (succeeded: string[], failed: any[] = []) => ({ status: failed.length ? "partial" as const : "ok" as const, succeeded, failed });
@@ -335,7 +338,7 @@ describe.each([
       [["/p/b", "/p/d"], { overwrite: true }],
     ]);
     expect(messageSpy.error).toHaveBeenCalledWith(
-      "e: Only a regular file can be replaced", { closable: true, duration: 0 },
+      `e: ${line("cannot_replace", "Only a regular file can be replaced")}`, { closable: true, duration: 0 },
     );
     expect(dialogSpy.warning).toHaveBeenCalledTimes(3);
     expect(useFilesStore().selectedFiles).toEqual([]);
@@ -351,11 +354,22 @@ describe.each([
     await startBatch(container, label, ["/p/f", "/p/g"]);
     await waitFor(() => expect(messageSpy.warning).toHaveBeenCalledWith(`${verb} 0, skipped 0, failed 2`));
     expect(messageSpy.error.mock.calls).toEqual([
-      ["f: Could not copy /p/f to /dest/f: disk full", { closable: true, duration: 0 }],
-      ["g: Only a regular file can be replaced", { closable: true, duration: 0 }],
+      [`f: ${line("failed", "Could not copy /p/f to /dest/f: disk full")}`, { closable: true, duration: 0 }],
+      [`g: ${line("cannot_replace", "Only a regular file can be replaced")}`, { closable: true, duration: 0 }],
     ]);
     expect(dialogSpy.warning).not.toHaveBeenCalled();
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("a denied item shows its file name, the line of its reason and the server's text", async () => {
+    call.mockResolvedValueOnce(done([], [
+      { path: "/a/x.txt", error: "Permission denied: /a/x.txt", reason: "denied" },
+    ]));
+    const { container } = await mountLoaded();
+    await startBatch(container, label, ["/a/x.txt"]);
+    await waitFor(() => expect(messageSpy.error.mock.calls).toEqual([
+      [`x.txt: ${en["error.reason.denied"]} — Permission denied: /a/x.txt`, { closable: true, duration: 0 }],
+    ]));
   });
 
   // Mutation: No sends the paths anyway; or an error toast / cleared selection for a user's own choice.
@@ -381,7 +395,7 @@ describe.each([
     await startBatch(container, label, ["/p/b"]);
     (await prompt(1)).onPositiveClick();
     await waitFor(() => expect(messageSpy.error).toHaveBeenCalledWith(
-      "b: Could not replace /dest/b: disk full", { closable: true, duration: 0 },
+      `b: ${line("failed", "Could not replace /dest/b: disk full")}`, { closable: true, duration: 0 },
     ));
     expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
     expect(call).toHaveBeenCalledTimes(2);

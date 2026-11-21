@@ -34,6 +34,7 @@ import { useBoxesStore } from "@/stores/boxes";
 import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
 import { boxStats, statsStreamUrl } from "@/api/http";
+import { failureText } from "@/api/apiError";
 import type { BoxStats } from "@/api/types";
 import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
@@ -53,9 +54,13 @@ const totalFavorites = computed(() =>
 
 // System stats per box
 const statsMap = ref<Map<string, BoxStats>>(new Map());
+// Why a box's stats could not be read: shown on its card in place of its numbers, and
+// replaced by the next answer, so a failure that repeats stays one line.
+const statsFailure = ref<Map<string, string>>(new Map());
 const statsLoading = ref<Set<string>>(new Set());
 const lastUpdated = ref<Date | null>(null);
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
+let statsPollInterval: ReturnType<typeof setInterval> | null = null;
 let statsEventSource: EventSource | null = null;
 
 function startStatsStream(boxNames: string[]) {
@@ -70,7 +75,7 @@ function startStatsStream(boxNames: string[]) {
     try {
       const stats: BoxStats = JSON.parse(event.data)
       if (stats.name) {
-        statsMap.value.set(stats.name, stats)
+        recordStats(stats.name, stats)
         statsLoading.value.delete(stats.name)
         lastUpdated.value = new Date()
       }
@@ -78,8 +83,10 @@ function startStatsStream(boxNames: string[]) {
   })
 
   statsEventSource.onerror = () => {
-    // SSE failed — fall back to polling
+    // SSE failed — fall back to polling. The stream's wait for a first event is over, so
+    // the poll's own requests are not skipped as "already loading".
     stopStatsStream()
+    boxNames.forEach(n => statsLoading.value.delete(n))
     startPollingFallback(boxNames)
   }
 }
@@ -91,24 +98,35 @@ function stopStatsStream() {
   }
 }
 
+/** A box's stats answer: its numbers, or the text of why its stats failed. */
+function recordStats(boxName: string, stats: BoxStats) {
+  if (stats.error != null || stats.reason != null) {
+    statsMap.value.delete(boxName)
+    statsFailure.value.set(boxName, failureText(stats))
+    return
+  }
+  statsFailure.value.delete(boxName)
+  statsMap.value.set(boxName, stats)
+}
+
 // Polling fallback if SSE fails
 async function loadBoxStats(boxName: string) {
   if (statsLoading.value.has(boxName)) return;
   statsLoading.value.add(boxName);
   try {
-    const stats = await boxStats(boxName, tokenValue.value || null);
-    statsMap.value.set(boxName, stats);
-  } catch (e) {
-    // Stats are optional, don't break the UI
+    recordStats(boxName, await boxStats(boxName, tokenValue.value || null));
+  } catch (err) {
+    statsMap.value.delete(boxName);
+    statsFailure.value.set(boxName, err instanceof Error ? err.message : String(err));
   } finally {
     statsLoading.value.delete(boxName);
   }
 }
 
 function startPollingFallback(boxNames: string[]) {
-  if (refreshInterval) return  // Already polling
+  if (statsPollInterval) return  // Already polling
   boxNames.forEach(n => loadBoxStats(n))
-  refreshInterval = setInterval(() => {
+  statsPollInterval = setInterval(() => {
     boxNames.forEach(n => loadBoxStats(n))
   }, 30_000)
 }
@@ -250,6 +268,10 @@ onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval);
     refreshInterval = null;
+  }
+  if (statsPollInterval) {
+    clearInterval(statsPollInterval);
+    statsPollInterval = null;
   }
 });
 
@@ -407,7 +429,8 @@ const handleBrowseServerFiles = (serverName: string) => {
               <p class="server-host">{{ box.host }}</p>
 
               <!-- System Stats -->
-              <div v-if="getBoxStats(box.name)" class="server-stats">
+              <div v-if="statsFailure.get(box.name)" class="server-stats-loading">{{ statsFailure.get(box.name) }}</div>
+              <div v-else-if="getBoxStats(box.name)" class="server-stats">
                 <div class="stat-row">
                   <NIcon size="14" class="stat-icon"><PhCpu weight="duotone" /></NIcon>
                   <span class="stat-label">{{ t('overview.cpu') }}</span>

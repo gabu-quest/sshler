@@ -2,7 +2,7 @@ import { h, ref } from "vue";
 import { NButton, useDialog } from "naive-ui";
 
 import { useI18n } from "@/i18n";
-import type { FailureReason } from "@/api/apiError";
+import { ApiError, type FailureReason } from "@/api/apiError";
 
 /** Why the server refused one item of a batch or transfer: any reason of a failure. */
 export type FailReason = FailureReason;
@@ -245,8 +245,14 @@ export function useReplacePrompt() {
         outcome.failed.push(item.reason === "exists" ? { ...item, reason: "failed" } : item);
       }
     } catch (err) {
+      // A retry the server refused keeps the refusal's own reason and text, like an item
+      // the server refused; any other failure is its message under the reason "failed".
+      const failure =
+        err instanceof ApiError && err.reason !== null && err.reason !== "network"
+          ? { error: err.detail, reason: err.reason }
+          : { error: errorText(err), reason: "failed" as const };
       for (const item of accepted) {
-        outcome.failed.push({ path: item.path, error: errorText(err), reason: "failed" });
+        outcome.failed.push({ path: item.path, ...failure });
       }
     }
     return outcome;

@@ -232,6 +232,8 @@ async function inlineMarkdownImages() {
           inlinedImageCache.set(p, ''); // sentinel: known-bad, don't retry
         }
       } catch {
+        // Silent on purpose: an image that cannot be read stays a broken image in the
+        // rendered text, which still shows whole.
         inlinedImageCache.set(p, '');
       }
     }),

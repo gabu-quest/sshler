@@ -61,7 +61,8 @@ async function loadSnapshotStatus() {
     const status = await fetchSnapshotStatus(tokenValue.value || null);
     lastSnapshotAt.value = status.last_snapshot_at;
   } catch {
-    // Best effort
+    // Silent on purpose: the snapshot dot is a decoration this poll asks about again in
+    // ten seconds; it keeps its last state meanwhile.
   }
 }
 
@@ -69,8 +70,10 @@ async function loadLocalStats() {
   try {
     const stats = await boxStats('local', tokenValue.value || null);
     localStats.value = stats;
-  } catch (e) {
-    // Stats are optional
+  } catch {
+    // Silent on purpose: the header has no room for a sentence, and this poll asks again
+    // in ten seconds. Its widget is hidden while the stats fail, never left with old numbers.
+    localStats.value = null;
   }
 }
 

@@ -235,8 +235,9 @@ const LAYOUT_KEY = 'sshler:multi-terminal:layout'
 async function loadSavedLayouts() {
   try {
     savedLayouts.value = await fetchLayouts(tokenValue.value || null)
-  } catch {
-    // Ignore layout load failures so the local layout still works.
+  } catch (error) {
+    // The local layout still works; the message says the saved ones could not be listed.
+    message.error(error instanceof Error ? error.message : String(error))
   }
 }
 

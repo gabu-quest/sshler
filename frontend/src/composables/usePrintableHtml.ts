@@ -201,6 +201,8 @@ async function inlineImages(
           cache.set(p, "");
         }
       } catch {
+        // Silent on purpose: an image that cannot be read stays a broken image in the
+        // printed text, which still prints whole.
         cache.set(p, "");
       }
     }),

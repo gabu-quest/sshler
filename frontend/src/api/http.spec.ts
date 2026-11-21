@@ -551,6 +551,46 @@ describe("a name that is taken", () => {
       expect(await readCut([bytes(text)], 1)).toEqual([["error", "The operation failed — Transfer error: boom"]]);
     });
 
+    it("a read that breaks in the middle of the stream reaches onError as the no-answer failure", async () => {
+      let sent = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) {
+            controller.error(new TypeError("network error"));
+            return;
+          }
+          sent = true;
+          controller.enqueue(bytes('event: progress\ndata: {"file":"/s/b","bytes_done":1,"bytes_total":1,"index":1,"total":2}\n\n'));
+        },
+      });
+      fetchMock.mockImplementation(async () => new Response(body, { status: 200 }));
+      const calls: unknown[] = [];
+      crossBoxTransfer(
+        "x", "y", ["/s/b"], "/d", "copy", "t",
+        (progress) => calls.push(["progress", progress.file]),
+        () => calls.push(["done"]),
+        (error) => calls.push(["error", error]),
+      );
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      expect(calls).toEqual([["progress", "/s/b"], ["error", "No answer from sshler; check the connection"]]);
+    });
+
+    it("the end before done or error reads in Japanese when the page is Japanese", async () => {
+      localStorage.setItem("sshler:locale", "ja");
+      createI18n({ provide() {} } as unknown as App);
+      try {
+        const cut = stream.indexOf("event: done");
+        expect(await readCut([bytes(stream.slice(0, cut))], 3)).toEqual([
+          ["failed", item],
+          ["progress", "/s/b"],
+          ["error", "転送が終わる前に途切れました。"],
+        ]);
+      } finally {
+        localStorage.setItem("sshler:locale", "en");
+        createI18n({ provide() {} } as unknown as App);
+      }
+    });
+
     it("hands a refused first answer to onError as the failure's line and detail", async () => {
       fetchMock.mockImplementation(async () => res(502, { detail: "dest: connection refused", reason: "unreachable" }));
       const errors: string[] = [];

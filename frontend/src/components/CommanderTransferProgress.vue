@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { failureText } from "@/api/apiError";
 import type { TransferProgress, TransferResult } from "@/api/http";
 import { useI18n } from "@/i18n";
 import { NButton, NModal, NProgress } from "naive-ui";
@@ -100,7 +101,7 @@ function getFileStatus(filePath: string): FileStatus {
 
 function getFileError(filePath: string): string | null {
   const failedFile = (props.result?.failed ?? props.failedSoFar).find((item) => item.path === filePath);
-  return failedFile?.error ?? null;
+  return failedFile ? failureText(failedFile) : null;
 }
 </script>
 

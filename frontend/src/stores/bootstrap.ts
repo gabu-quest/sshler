@@ -68,6 +68,8 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
             persistToken(token.value);
           }
         }).catch(err => {
+          // Silent on purpose: the page keeps its token, and a request it refuses
+          // refreshes the token on its own.
           console.warn('Background token refresh failed:', err);
         });
       }, 30 * 60 * 1000); // 30 minutes

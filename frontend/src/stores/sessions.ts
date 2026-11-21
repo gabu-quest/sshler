@@ -18,9 +18,9 @@ export const useSessionsStore = defineStore('sessions', () => {
       sessionsByBox.value.set(boxName, sessions)
       return sessions
     } catch (e) {
-      console.warn(`Failed to load sessions for ${boxName}:`, e)
-      sessionsByBox.value.set(boxName, [])
-      return []
+      // A box that could not be asked is told in `error`, never listed as having no sessions.
+      error.value = e instanceof Error ? e.message : String(e)
+      return sessionsByBox.value.get(boxName) ?? []
     }
   }
 
@@ -36,7 +36,7 @@ export const useSessionsStore = defineStore('sessions', () => {
         boxNames.map(name => loadBoxSessions(name, token, activeOnly))
       )
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to load sessions'
+      error.value = e instanceof Error ? e.message : String(e)
     } finally {
       loading.value = false
     }
@@ -52,6 +52,8 @@ export const useSessionsStore = defineStore('sessions', () => {
       sessionsByBox.value.set(boxName, sessions)
       return sessions
     } catch (e) {
+      // Silent on purpose: the overview asks again in a moment, and the box keeps the
+      // sessions it last had meanwhile.
       console.warn(`Failed to sync sessions for ${boxName}:`, e)
       return sessionsByBox.value.get(boxName) || []
     }

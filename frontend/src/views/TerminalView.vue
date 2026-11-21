@@ -121,6 +121,7 @@ const loadGitInfo = async () => {
   try {
     currentGitInfo.value = await gitInfo(selectedBox.value, initialDirectory.value, tokenValue.value)
   } catch {
+    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
     currentGitInfo.value = null
   }
 }
@@ -263,8 +264,8 @@ const handleThemeChange = async (theme: string) => {
     // Update local box data
     const box = boxesStore.items.find(b => b.name === selectedBox.value)
     if (box) box.terminal_theme = theme
-  } catch {
-    // ignore
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err))
   }
 }
 

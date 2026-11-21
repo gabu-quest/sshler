@@ -461,7 +461,9 @@ export const ja: Record<string, string> = {
   "terminal.connected_to": "{box} に接続しました",
   "terminal.auth_failed": "認証に失敗しました - ページを更新してください",
   "terminal.auth_denied": "認可に失敗しました",
-  "terminal.connection_failed": "接続に失敗:",
+  "terminal.connection_failed": "接続に失敗しました",
+  "terminal.session_name_refused": "サーバーがこのセッション名を拒否しました。別の名前でターミナルを開いてください。",
+  "terminal.file_url_copied": "ファイルのURLをコピーしました。新しいタブに貼り付けて開いてください",
   "terminal.wsl_not_installed": "WSL がインストールされていません。'wsl --install' を実行するか、別のシェルを選択してください。",
   "terminal.unknown_box": "このボックスはサーバーに登録されていません。ボックス一覧で名前を確認してください。",
   "terminal.tmux_not_installed": "このボックスに tmux がインストールされていません。ターミナルを開くには、そのボックスに tmux をインストールしてください。",
@@ -860,6 +862,7 @@ export const ja: Record<string, string> = {
   "recovery.recreating": "再作成中...",
   "recovery.recreate_selected": "選択を再作成 ({count})",
   "recovery.selected_recreated": "{count}個のセッションを再作成しました",
+  "recovery.failed_count": "{count}個のセッションを再作成できませんでした",
   "recovery.select_all": "すべて選択",
 
   // Ping notifications
@@ -875,6 +878,8 @@ export const ja: Record<string, string> = {
   "editor.discard_action": "破棄",
   "editor.keep_editing": "編集を続ける",
   // The line shown for each reason a request failed.
+  "transfer.no_body": "応答の本文がありません",
+  "transfer.ended_early": "転送が終わる前に途切れました。",
   "error.reason.invalid": "リクエストが正しくありません",
   "error.reason.auth": "サインインが必要です",
   "error.reason.token": "このページの sshler へのアクセスが切れました。ページを再読み込みしてください",

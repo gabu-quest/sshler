@@ -59,9 +59,13 @@ class APIRecreateBatchRequest(BaseModel):
 
 
 class APIRecreateBatchResult(BaseModel):
-    """Per session id: ``"ok"`` or the reason it was not recreated."""
+    """The shape of the file batch routes' answer: ``succeeded`` holds the session ids
+    recreated; ``failed`` holds ``{"path": <session id>, "error", "reason"}`` per other
+    session, from ``failure_entry`` (``failure.py``)."""
 
-    results: dict[str, str]
+    status: str  # "ok" | "partial"
+    succeeded: list[str]
+    failed: list[dict[str, str]]
 
 
 class APITouchRequest(BaseModel):

@@ -382,6 +382,7 @@ async function loadGitInfo() {
     if (requestId !== gitRequestId) return;
     currentGitInfo.value = result;
   } catch {
+    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
     if (requestId !== gitRequestId) return;
     currentGitInfo.value = null;
   }

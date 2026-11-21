@@ -102,10 +102,13 @@ export interface SimpleMessage {
   path?: string | null;
 }
 
+/** "offline" carries why in `error` and `reason`; "online" carries neither. */
 export interface BoxStatus {
   name: string;
   status: string;
   latency_ms: number | null;
+  error?: string | null;
+  reason?: string | null;
 }
 
 export interface BoxStats {
@@ -115,7 +118,9 @@ export interface BoxStats {
   memory_total_mb: number | null;
   memory_percent: number | null;
   uptime_seconds: number | null;
-  error: string | null;
+  /** Set, with `reason`, only in a stats event of a box whose stats failed. */
+  error?: string | null;
+  reason?: string | null;
 }
 
 export interface GitInfo {
@@ -123,7 +128,6 @@ export interface GitInfo {
   commit: string | null;
   is_repo: boolean;
   dirty: boolean;
-  error?: string | null;
 }
 
 export interface DownloadResponse {
@@ -138,10 +142,14 @@ export interface SearchResult {
   is_directory?: boolean;
 }
 
+/** `error` and `reason` say why the walk of the box did not run; `results` still holds
+ * the folders found before. Both are absent from an answer whose walk ran. */
 export interface SearchResponse {
   box: string;
   query: string;
   results: SearchResult[];
+  error?: string | null;
+  reason?: string | null;
 }
 
 export interface BatchResult {
@@ -230,7 +238,6 @@ export interface GitLogResponse {
   directory: string;
   commits: GitCommit[];
   is_repo: boolean;
-  error?: string | null;
 }
 
 export interface GitBlameLine {
@@ -246,7 +253,6 @@ export interface GitBlameResponse {
   path: string;
   lines: GitBlameLine[];
   truncated?: boolean;
-  error?: string | null;
 }
 
 export interface GitBranch {
@@ -261,7 +267,6 @@ export interface GitBranchesResponse {
   branches: GitBranch[];
   root: string | null;
   is_repo: boolean;
-  error?: string | null;
 }
 
 export interface GitDiffFile {
@@ -275,7 +280,6 @@ export interface GitDiffFilesResponse {
   ref_a: string;
   ref_b: string;
   files: GitDiffFile[];
-  error?: string | null;
 }
 
 export interface GitShowResponse {

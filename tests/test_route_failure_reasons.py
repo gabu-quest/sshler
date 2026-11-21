@@ -1044,35 +1044,68 @@ def test_a_failure_text_with_the_clients_quote_and_newline_comes_back_as_text(
     }
 
 
-def test_the_batch_recreate_stays_a_200_and_each_failed_item_carries_its_words(
-    world: World,
-) -> None:
+def _batch_world(world: World) -> None:
+    """Three lost sessions: "fine" is recreated, "far" is on a box that refuses the
+    connection, "stuck" is one whose tmux cannot be started."""
     lost = [
-        {"id": "unreachable", "session_name": "a", "windows": []},
-        {"id": "refused", "session_name": "b", "windows": []},
+        {"id": "fine", "session_name": "a", "windows": []},
+        {"id": "far", "session_name": "b", "windows": []},
+        {"id": "stuck", "session_name": "c", "windows": []},
     ]
     world.monkeypatch.setattr(recovery_api, "get_recovery_sessions", lambda: lost)
+    world.monkeypatch.setattr(recovery_api, "remove_recovery_session", lambda session_id: None)
 
     async def recreate(name: str, windows: list) -> bool:
-        if name == "a":
+        if name == "b":
             raise SSHError("lb: connection refused")
-        return False
+        return name == "a"
 
     world.monkeypatch.setattr(recovery_api, "recreate_session", recreate)
+
+
+_UNREACHABLE_ITEM = {"path": "far", "error": "lb: connection refused", "reason": "unreachable"}
+_STUCK_ITEM = {"path": "stuck", "error": "Failed to recreate tmux session", "reason": "failed"}
+_ABSENT_ITEM = {"path": "absent", "error": "Session not in recovery list", "reason": "not_found"}
+
+
+@pytest.mark.parametrize(
+    ("session_ids", "expected"),
+    [
+        pytest.param(
+            ["fine"],
+            {"status": "ok", "succeeded": ["fine"], "failed": []},
+            id="every-session-recreated",
+        ),
+        pytest.param(
+            ["fine", "absent"],
+            {"status": "partial", "succeeded": ["fine"], "failed": [_ABSENT_ITEM]},
+            id="one-not-in-the-recovery-list",
+        ),
+        pytest.param(
+            ["fine", "stuck"],
+            {"status": "partial", "succeeded": ["fine"], "failed": [_STUCK_ITEM]},
+            id="one-whose-tmux-cannot-start",
+        ),
+        pytest.param(
+            ["far", "stuck", "absent"],
+            {
+                "status": "partial",
+                "succeeded": [],
+                "failed": [_UNREACHABLE_ITEM, _STUCK_ITEM, _ABSENT_ITEM],
+            },
+            id="every-session-fails",
+        ),
+    ],
+)
+def test_the_batch_recreate_stays_a_200_and_each_failed_item_has_the_single_routes_failure(
+    world: World, session_ids: list[str], expected: dict[str, Any]
+) -> None:
+    _batch_world(world)
     response = world.client.post(
-        "/api/v1/recovery/recreate-batch",
-        headers=HEADERS,
-        json={"session_ids": ["unreachable", "refused", "absent"]},
+        "/api/v1/recovery/recreate-batch", headers=HEADERS, json={"session_ids": session_ids}
     )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "results": {
-            "unreachable": "lb: connection refused",
-            "refused": "tmux creation failed",
-            "absent": "not found",
-        }
-    }
+    assert (response.status_code, response.json()) == (200, expected)
 
 
 def test_a_failed_tunnel_leaves_no_tunnel_listed(world: World) -> None:

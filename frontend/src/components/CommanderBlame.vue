@@ -104,11 +104,6 @@ async function loadBlame() {
     const result = await gitBlame(props.box, props.directory, props.path, props.token);
     if (requestId !== loadRequestId) return;
 
-    if (result.error) {
-      error.value = result.error;
-      return;
-    }
-
     blameLines.value = result.lines ?? [];
     truncated.value = result.truncated ?? false;
   } catch (err) {

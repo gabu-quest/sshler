@@ -4,6 +4,7 @@ import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFolder, PhFile, PhClockCounterClockwise } from "@phosphor-icons/vue";
 import { searchDirectories } from "@/api/http";
 import type { SearchResult } from "@/api/types";
+import { failureText } from "@/api/apiError";
 import { useI18n } from "@/i18n";
 
 const props = defineProps<{
@@ -26,6 +27,12 @@ const results = ref<SearchResult[]>([]);
 const loading = ref(false);
 const showDropdown = ref(false);
 const debounceTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
+// The message of a failed search, shown where "no matches" would be.
+const failureLine = ref<string | null>(null);
+// Why the walk of the box did not run; the folders found before it still show below.
+const walkLine = ref<string | null>(null);
+// Only the newest search writes its answer: one the user replaced by typing on shows nothing.
+let searchId = 0;
 
 const hasResults = computed(() => results.value.length > 0);
 
@@ -37,8 +44,12 @@ watch(query, (newQuery) => {
 
   // Hide dropdown and clear results if query too short
   if (!newQuery || newQuery.length < 2) {
+    searchId += 1;
+    loading.value = false;
     showDropdown.value = false;
     results.value = [];
+    failureLine.value = null;
+    walkLine.value = null;
     return;
   }
 
@@ -51,6 +62,7 @@ watch(query, (newQuery) => {
 async function performSearch(searchQuery: string) {
   if (!props.box) return;
 
+  const id = ++searchId;
   loading.value = true;
   showDropdown.value = true;
 
@@ -59,12 +71,17 @@ async function performSearch(searchQuery: string) {
       root: props.root ?? undefined,
       files: props.files,
     });
+    if (id !== searchId) return;
     results.value = response.results;
+    failureLine.value = null;
+    walkLine.value = response.error != null || response.reason != null ? failureText(response) : null;
   } catch (err) {
-    console.error("Directory search failed:", err);
+    if (id !== searchId || (err as { name?: unknown } | null)?.name === "AbortError") return;
     results.value = [];
+    walkLine.value = null;
+    failureLine.value = err instanceof Error ? err.message : String(err);
   } finally {
-    loading.value = false;
+    if (id === searchId) loading.value = false;
   }
 }
 
@@ -73,6 +90,8 @@ function selectResult(result: SearchResult) {
   query.value = "";
   showDropdown.value = false;
   results.value = [];
+  failureLine.value = null;
+  walkLine.value = null;
 }
 
 function handleBlur() {
@@ -127,6 +146,7 @@ function formatPath(path: string): string {
       </div>
 
       <div v-else-if="hasResults" class="search-results">
+        <NEmpty v-if="walkLine" size="small" :description="walkLine" class="search-empty" />
         <div
           v-for="result in results"
           :key="result.path"
@@ -145,7 +165,7 @@ function formatPath(path: string): string {
       <NEmpty
         v-else
         size="small"
-        :description="t('dirsearch.no_results')"
+        :description="failureLine ?? walkLine ?? t('dirsearch.no_results')"
         class="search-empty"
       />
     </div>

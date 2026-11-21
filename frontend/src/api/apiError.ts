@@ -99,6 +99,22 @@ export function apiErrorOf(status: number, text: string): ApiError {
   return apiErrorOfBody(status, body);
 }
 
+/** A failure that arrives inside a 200 answer: a box's status, a stats event of a box
+ * that failed, a directory search whose walk did not run, a failed item of a batch. */
+export interface FailureFields {
+  error?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * The text a person reads for a failure inside a 200 answer: the same words an
+ * `ApiError` of that reason and detail has as its message. A reason the page does not
+ * know reads as the no-reason line; an empty `error` leaves the line alone.
+ */
+export function failureText(failure: FailureFields): string {
+  return apiErrorOfBody(0, { detail: failure.error ?? "", reason: failure.reason }).message;
+}
+
 /** The error of a request that got no answer at all. */
 export function networkError(): ApiError {
   return new ApiError(0, "network", "");

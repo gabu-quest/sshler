@@ -28,7 +28,7 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { ApiError } from "@/api/apiError";
+import { ApiError, failureText } from "@/api/apiError";
 import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
@@ -92,6 +92,8 @@ const renameValue = ref("");
 const copyDestination = ref("");
 const copyNewName = ref("");
 const status = ref<string>("unknown");
+// Why the box is not online, shown after the status words.
+const statusText = ref<string | null>(null);
 const viewFilter = ref<"all" | "files" | "dirs">(readViewFilter());
 const previewing = ref(false);
 const previewPath = ref("");
@@ -285,12 +287,13 @@ const toggleExpandDir = async (path: string) => {
   if (!selectedBox.value) return;
   expandingDir.value = path;
   const listing = await directoryStore.fetchChildren(selectedBox.value, path, tokenValue.value || null);
+  // A folder whose listing did not come stays closed, so the next click asks again.
   if (listing?.entries) {
     childrenCache.value.set(path, listing.entries);
     childrenCache.value = new Map(childrenCache.value);
+    expandedDirs.value.add(path);
+    expandedDirs.value = new Set(expandedDirs.value);
   }
-  expandedDirs.value.add(path);
-  expandedDirs.value = new Set(expandedDirs.value);
   expandingDir.value = null;
 };
 
@@ -304,8 +307,8 @@ const expandAllDirs = async () => {
       const listing = await directoryStore.fetchChildren(selectedBox.value!, dir.path, tokenValue.value || null);
       if (listing?.entries) {
         childrenCache.value.set(dir.path, listing.entries);
+        expandedDirs.value.add(dir.path);
       }
-      expandedDirs.value.add(dir.path);
     }
   }));
   childrenCache.value = new Map(childrenCache.value);
@@ -525,8 +528,7 @@ async function ensureData() {
 onMounted(async () => {
   await ensureData();
   if (selectedBox.value) {
-    const stat = await boxStatus(selectedBox.value, tokenValue.value || null);
-    status.value = stat.status;
+    await refreshStatus(selectedBox.value);
   }
 
   // Attach scroll indicator listener after DOM settles
@@ -550,6 +552,24 @@ onUnmounted(() => {
   scrollObserver?.disconnect();
 });
 
+/**
+ * Ask whether `box` answers. An offline answer and a failed call both show the box as
+ * offline, with the text of why after the status words. An answer for a box that is no
+ * longer the selected one writes nothing.
+ */
+async function refreshStatus(box: string) {
+  try {
+    const stat = await boxStatus(box, tokenValue.value || null);
+    if (selectedBox.value !== box) return;
+    status.value = stat.status;
+    statusText.value = stat.status === "online" ? null : failureText(stat);
+  } catch (err) {
+    if (selectedBox.value !== box) return;
+    status.value = "offline";
+    statusText.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function loadGitInfo() {
   if (!selectedBox.value || !currentDir.value) {
     currentGitInfo.value = null;
@@ -558,6 +578,7 @@ async function loadGitInfo() {
   try {
     currentGitInfo.value = await gitInfo(selectedBox.value, currentDir.value, tokenValue.value || null);
   } catch {
+    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
     currentGitInfo.value = null;
   }
 }
@@ -617,8 +638,7 @@ async function onBoxChange(val: string) {
   await refreshFavorites(val);
   await directoryStore.load(val, currentDir.value, tokenValue.value || null);
   await filesStore.load(val, currentDir.value, tokenValue.value || null);
-  const stat = await boxStatus(val, tokenValue.value || null);
-  status.value = stat.status;
+  await refreshStatus(val);
   loadGitInfo();
 }
 
@@ -1003,7 +1023,7 @@ async function handleBatchConfirm(destination: string) {
     // Names the user kept are no failure; a selection that moved nothing stays as it was.
     if (outcome.succeeded.length || outcome.failed.length) filesStore.setSelectedFiles([]);
     for (const item of outcome.failed) {
-      message.error(`${item.path.split('/').pop() || item.path}: ${item.error}`, { closable: true, duration: 0 });
+      message.error(`${item.path.split('/').pop() || item.path}: ${failureText(item)}`, { closable: true, duration: 0 });
     }
     const counts = { done: outcome.succeeded.length, skipped: outcome.skipped.length, failed: outcome.failed.length };
     if (!counts.skipped && !counts.failed) {
@@ -1324,7 +1344,7 @@ const columns = computed(() => {
           <template #icon>
             <div class="connection-indicator" :class="{ connected: status === 'online' }" />
           </template>
-          {{ selectedBox }} is {{ status }}
+          {{ selectedBox }} is {{ status }}<template v-if="statusText">: {{ statusText }}</template>
         </NAlert>
       </NSpace>
     </NCard>

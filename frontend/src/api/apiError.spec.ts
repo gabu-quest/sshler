@@ -4,7 +4,7 @@ import { en } from "@/locales/en";
 import { ja } from "@/locales/ja";
 import type { App } from "vue";
 import { createI18n } from "@/i18n";
-import { ApiError, FAILURE_REASONS, apiErrorOf, apiErrorOfBody, networkError, reasonKey } from "./apiError";
+import { ApiError, FAILURE_REASONS, apiErrorOf, apiErrorOfBody, failureText, networkError, reasonKey } from "./apiError";
 
 vi.unmock("@/i18n");
 
@@ -97,5 +97,30 @@ describe("ApiError from an answer", () => {
     expect([err.status, err.reason, err.detail, err.message]).toEqual([
       0, "network", "", "No answer from sshler; check the connection",
     ]);
+  });
+});
+
+describe("the text of a failure inside a 200 answer", () => {
+  it("reads as the line of the reason, then the text", () => {
+    expect(failureText({ error: "build-box did not answer", reason: "unreachable" })).toBe(
+      "Cannot connect to the box — build-box did not answer",
+    );
+  });
+
+  it("is the message an ApiError of the same reason and text has", () => {
+    const fields = { error: "git: not found", reason: "program_missing" };
+    expect(failureText(fields)).toBe(new ApiError(200, "program_missing", "git: not found").message);
+  });
+
+  it("a reason the page does not know reads as the no-reason line and the text, never a key", () => {
+    expect(failureText({ error: "boom", reason: "exploded" })).toBe("The request failed — boom");
+  });
+
+  it("an empty text leaves the line of the reason alone", () => {
+    expect(failureText({ error: "", reason: "timeout" })).toBe("The box took too long to answer");
+  });
+
+  it("no reason and no text reads as the no-reason line, with no status", () => {
+    expect(failureText({ error: null, reason: null })).toBe("The request failed");
   });
 });

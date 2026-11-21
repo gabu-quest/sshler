@@ -43,9 +43,12 @@ export const useDirectoryStore = defineStore("directory", () => {
   }
 
   async function fetchChildren(box: string, path: string, token: string | null): Promise<DirectoryListing | null> {
+    error.value = null;
     try {
       return await fetchDirectory(box, path, token);
-    } catch {
+    } catch (err) {
+      // A folder that could not be read is told, not shown as a folder with nothing in it.
+      error.value = err instanceof Error ? err.message : String(err);
       return null;
     }
   }

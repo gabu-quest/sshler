@@ -58,7 +58,8 @@ async function checkRecovery() {
       showRecovery.value = true;
     }
   } catch {
-    // Best-effort
+    // Silent on purpose: this check runs again in fifteen seconds, and the modal opens
+    // only for lost sessions it found.
   }
 }
 

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "vue";
 
 import { createI18n } from "@/i18n";
+import { en } from "@/locales/en";
 import * as http from "@/api/http";
 import CommanderView from "./CommanderView.vue";
 import { REPLACE_ARM_MS } from "@/composables/useReplacePrompt";
@@ -84,6 +85,8 @@ vi.mock("@phosphor-icons/vue", () => {
 const i18nPlugin = { install(app: App) { createI18n(app); } };
 const same = vi.mocked(http.sameBoxTransfer);
 const cross = vi.mocked(http.crossBoxTransfer);
+// What a person reads of a failed item: the line of its reason, then its text.
+const line = (reason: string, text: string) => `${en[`error.reason.${reason}`]} — ${text}`;
 const exists = (path: string) => ({ path, error: "File already exists", reason: "exists" as const });
 const blocked = (path: string) => ({ path, error: "Only a regular file can be replaced", reason: "cannot_replace" as const });
 const result = (succeeded: string[], failed: any[] = []) => ({ status: failed.length ? "partial" as const : "ok" as const, succeeded, failed });
@@ -194,7 +197,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     await startTransfer(container, "f5");
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
-      ["b.txt", "failed", "Only a regular file can be replaced"],
+      ["b.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
       ["c.txt", "done", null],
     ]);
     expect(dialogSpy.warning).not.toHaveBeenCalled();
@@ -211,7 +214,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     (await prompt(1)).onPositiveClick();
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
-      ["b.txt", "failed", "Could not replace /dst/b.txt: disk full"],
+      ["b.txt", "failed", line("failed", "Could not replace /dst/b.txt: disk full")],
       ["c.txt", "done", null],
     ]);
     expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
@@ -375,7 +378,7 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     expect(rowsNow(container)).toEqual([
       ["a.txt", "done", null],
       ["b.txt", "pending", null],
-      ["c.txt", "failed", "Only a regular file can be replaced"],
+      ["c.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
     ]);
   });
 
@@ -393,14 +396,14 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     await startTransfer(container, "f5");
     await waitFor(() => expect(rowsNow(container)).toEqual([
       ["a.txt", "pending", null],
-      ["b.txt", "failed", "Only a regular file can be replaced"],
+      ["b.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
       ["c.txt", "active", null],
     ]));
     finish({ succeeded: ["/src/c.txt"], failed: [exists("/src/a.txt"), blocked("/src/b.txt")] });
     await prompt(1);
     expect(rowsNow(container)).toEqual([
       ["a.txt", "waiting", "waiting for your answer"],
-      ["b.txt", "failed", "Only a regular file can be replaced"],
+      ["b.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
       ["c.txt", "done", null],
     ]);
   });

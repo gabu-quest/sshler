@@ -62,8 +62,11 @@ never a 200 with an empty result: "not a repository", an empty repository, "no m
 answers stay a 200 and carry `error` and `reason` in the body, because they are about a
 probe or about several things: a box's status (`offline`), an event of the stats stream for
 a box that failed, and a directory search whose walk of the box did not run (it still returns
-the folders visited before). A route outside these that raises a plain `HTTPException` gets
-its reason from its status.
+the folders visited before). An answer about several things has one shape: `status` (`ok` or
+`partial`), `succeeded`, and `failed` as `failure_entry` items; the file batch routes and the
+batch recreate of lost sessions answer it, and the batch recreate shares the single route's
+failures through `recovery._recreate`. A route outside these that raises a plain
+`HTTPException` gets its reason from its status.
 
 ## Frontend details
 
@@ -83,6 +86,18 @@ else is thrown at once. "Replace?" is asked on `exists`, the diff view's missing
 `not_found`. One rule reads the status on purpose: the upload retries a 5xx or no answer, which
 is about retrying, not about what failed. `FAILURE_REASONS` there is the server's list
 (`tests/test_page_failure_reasons.py` fails when the two differ).
+
+**A reader of a request shows its failure.** A catch around a request shows the `ApiError`'s
+`message` in the element where the empty result would show (the git history panel, the two
+searches, the session switcher) or as an error message, so "nothing found" is only ever an
+answer that came. A catch may stay silent only with a one-line comment that says why: a poll
+that asks again in a moment (it must never stack messages) or a decoration such as the git
+badge. An `{error, reason}` pair inside a 200 (a box's status, a stats event, a search whose
+walk did not run, a failed item of a batch) is read by one function, `failureText` in
+`apiError.ts`, which gives the words an `ApiError` of that reason and text has. A search writes
+only the newest answer; one replaced by typing on shows nothing. The terminal's close codes
+and their lines are in `utils/terminalCloseCodes.ts`; the page reconnects after any code not
+named there, so a close that would repeat (4400, a refused session name) is named.
 
 **Emoji favicon system** in `src/utils/emoji-favicon.ts`:
 - Two disjoint pools: `BOX_EMOJIS` (vehicles/buildings) and `DIR_EMOJIS` (animals/nature/food)

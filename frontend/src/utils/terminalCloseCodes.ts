@@ -8,6 +8,7 @@
  * pure and unit-testable.
  *
  * Server-side close codes (see sshler/webapp.py `/ws/term`):
+ *   4400  the session name was refused
  *   4401  unauthorized (no valid session/credentials)
  *   4403  invalid CSRF token
  *   4404  the box is not known to the server
@@ -29,6 +30,9 @@ export interface TerminalClosePolicy {
 
 export function classifyTerminalCloseCode(code: number): TerminalClosePolicy {
   switch (code) {
+    case 4400:
+      // A refused session name is refused again on every attempt.
+      return { messageKey: "terminal.session_name_refused", reconnect: false, duration: 6000 };
     case 4403:
       return { messageKey: "terminal.auth_failed", reconnect: false, duration: 5000 };
     case 4401:

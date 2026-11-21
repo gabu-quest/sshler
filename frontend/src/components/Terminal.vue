@@ -983,7 +983,7 @@ const createTerminal = () => {
             // Browsers block window.open('file://...') from http:// pages.
             // Copy the URL to clipboard so the user can paste it in a new tab.
             navigator.clipboard.writeText(linkText).then(() => {
-              message.success('File URL copied — paste in a new tab to open')
+              message.success(t('terminal.file_url_copied'))
             }).catch(() => {
               message.warning(linkText)
             })
@@ -1402,7 +1402,7 @@ const connect = async () => {
 
     // Only show error message if not already reconnecting
     if (!reconnecting.value && reconnectAttempts.value === 0) {
-      message.error(t('terminal.connection_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error'))
+      message.error(t('terminal.connection_failed') + ': ' + (error instanceof Error ? error.message : String(error)))
     }
 
     // Schedule reconnect on connection failure
@@ -1579,7 +1579,10 @@ onMounted(async () => {
     try {
       const s = await fetchSnapshotStatus(tokenValue.value)
       lastSnapshotAt.value = s.last_snapshot_at
-    } catch { /* best effort */ }
+    } catch {
+      // Silent on purpose: the snapshot mark is a decoration this poll asks about again
+      // in a moment; it keeps its last state meanwhile.
+    }
   }
   const startSnapshotPolling = () => {
     if (snapshotPollInterval) return

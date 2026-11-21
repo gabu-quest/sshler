@@ -2,7 +2,9 @@ import { render, waitFor } from "@testing-library/vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, type App } from "vue";
 
+import { ApiError, networkError } from "@/api/apiError";
 import { createI18n } from "@/i18n";
+import { en } from "@/locales/en";
 import { REPLACE_ARM_MS, useReplacePrompt, type FailedItem } from "./useReplacePrompt";
 
 const { dialogSpy } = vi.hoisted(() => ({ dialogSpy: { warning: vi.fn() } }));
@@ -349,6 +351,37 @@ describe("withReplace", () => {
       succeeded: ["/s/a"],
       skipped: [],
       failed: [{ path: "/s/b", error: "Could not replace /s/b: disk full", reason: "failed" }],
+    });
+  });
+
+  // Mutation: the retry's failure is flattened to its message under the reason "failed".
+  it("a retry the server refuses keeps the refusal's own reason and text", async () => {
+    const { withReplace } = mountComposable();
+    const send = vi.fn(async (_p: string[], overwrite: boolean) => {
+      if (overwrite) throw new ApiError(403, "denied", "Permission denied: /d/b");
+      return { succeeded: [], failed: [exists("/s/b")] };
+    });
+    const out = withReplace(["/s/b"], send);
+    (await prompt(1)).onPositiveClick();
+    expect(await out).toEqual({
+      succeeded: [],
+      skipped: [],
+      failed: [{ path: "/s/b", error: "Permission denied: /d/b", reason: "denied" }],
+    });
+  });
+
+  it("a retry that got no answer says so under the reason failed", async () => {
+    const { withReplace } = mountComposable();
+    const send = vi.fn(async (_p: string[], overwrite: boolean) => {
+      if (overwrite) throw networkError();
+      return { succeeded: [], failed: [exists("/s/b")] };
+    });
+    const out = withReplace(["/s/b"], send);
+    (await prompt(1)).onPositiveClick();
+    expect(await out).toEqual({
+      succeeded: [],
+      skipped: [],
+      failed: [{ path: "/s/b", error: en["error.reason.network"], reason: "failed" }],
     });
   });
 });

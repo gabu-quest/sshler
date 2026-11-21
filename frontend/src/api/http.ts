@@ -41,6 +41,7 @@ import type {
 } from "./types";
 import { ApiError, apiErrorOf, apiErrorOfBody, networkError } from "./apiError";
 import type { FailureReason } from "./apiError";
+import { translate } from "@/i18n";
 
 export interface TransferProgress {
   file: string;
@@ -194,6 +195,7 @@ async function request(url: string, init: RequestInit = {}, options: RequestOpti
       throw networkError();
     }
     if (!response.ok) {
+      // A failure body that cannot be read gives no detail; the error keeps its status.
       throw apiErrorOf(response.status, await response.text().catch(() => ""));
     }
     return response;
@@ -1022,7 +1024,7 @@ export function crossBoxTransfer(
 
       const reader = res.body?.getReader();
       if (!reader) {
-        onError("No response body");
+        onError(translate("transfer.no_body"));
         return;
       }
 
@@ -1069,10 +1071,12 @@ export function crossBoxTransfer(
           }
         }
       }
-      if (!finished) onError("The transfer ended before it finished.");
+      if (!finished) onError(translate("transfer.ended_early"));
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      onError(err instanceof Error ? err.message : String(err));
+      // A refused first answer is its ApiError; a read that broke in the middle of the
+      // stream got no answer, whatever the browser's own words for it.
+      onError((err instanceof ApiError ? err : networkError()).message);
     }
   };
 
@@ -1269,8 +1273,9 @@ export async function recreateSession(
 export async function recreateSessionBatch(
   sessionIds: string[],
   token: string | null,
-): Promise<{ results: Record<string, string> }> {
-  return apiFetch<{ results: Record<string, string> }>(`${API_BASE}/recovery/recreate-batch`, {
+): Promise<BatchResult> {
+  // `succeeded` holds the session ids recreated; each failed item's `path` is a session id.
+  return apiFetch<BatchResult>(`${API_BASE}/recovery/recreate-batch`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify({ session_ids: sessionIds }),

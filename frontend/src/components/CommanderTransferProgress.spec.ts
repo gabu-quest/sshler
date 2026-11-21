@@ -2,6 +2,10 @@ import { render } from "@testing-library/vue";
 import { describe, expect, it, vi } from "vitest";
 
 import CommanderTransferProgress from "./CommanderTransferProgress.vue";
+import { en } from "@/locales/en";
+
+// What a person reads of an item the server refused: the line of its reason, then its text.
+const refused = `${en["error.reason.cannot_replace"]} — Only a regular file can be replaced`;
 
 vi.mock("naive-ui", () => ({
   NModal: { props: ["show"], template: '<div v-if="show" class="stub-modal"><slot /></div>' },
@@ -44,7 +48,7 @@ describe("CommanderTransferProgress final states", () => {
     expect(rows(container)).toEqual([
       { name: "one.txt", state: ["done"], icon: "PhCheck", note: null },
       { name: "two.txt", state: ["skipped"], icon: "PhMinus", note: "skipped, the existing file was kept" },
-      { name: "three.txt", state: ["failed"], icon: "PhX", note: "Only a regular file can be replaced" },
+      { name: "three.txt", state: ["failed"], icon: "PhX", note: refused },
     ]);
     // Mutation: the count says every file once the transfer has ended.
     expect(container.querySelector(".overall-label")!.textContent).toBe("1 / 3 files");
@@ -79,7 +83,7 @@ describe("CommanderTransferProgress while a transfer runs", () => {
       ["one.txt", "done", null],
       ["two.txt", "active", null],
       ["three.txt", "skipped", "skipped, the existing file was kept"],
-      ["four.txt", "failed", "Only a regular file can be replaced"],
+      ["four.txt", "failed", refused],
     ]);
     // Mutation: the count is the retry's own index (0), not the files placed so far.
     expect(container.querySelector(".overall-label")!.textContent).toBe("1 / 4 files");
@@ -109,7 +113,7 @@ describe("CommanderTransferProgress while a transfer runs", () => {
     });
     expect(rows(container).map((r) => [r.name, r.state[0], r.note])).toEqual([
       ["one.txt", "pending", null],
-      ["two.txt", "failed", "Only a regular file can be replaced"],
+      ["two.txt", "failed", refused],
       ["three.txt", "active", null],
     ]);
   });

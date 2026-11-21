@@ -461,7 +461,9 @@ export const en: Record<string, string> = {
   "terminal.connected_to": "Connected to {box}",
   "terminal.auth_failed": "Authentication failed - please refresh the page",
   "terminal.auth_denied": "Authorization failed",
-  "terminal.connection_failed": "Connection failed:",
+  "terminal.connection_failed": "Connection failed",
+  "terminal.session_name_refused": "The server refused this session name. Open the terminal with another name.",
+  "terminal.file_url_copied": "File URL copied — paste in a new tab to open",
   "terminal.wsl_not_installed": "WSL is not installed. Run 'wsl --install', then pick another shell.",
   "terminal.unknown_box": "This box is not known to the server. Check its name in the box list.",
   "terminal.tmux_not_installed": "tmux is not installed on this box. Install it there to open a terminal.",
@@ -860,6 +862,7 @@ export const en: Record<string, string> = {
   "recovery.recreating": "Recreating...",
   "recovery.recreate_selected": "Recreate Selected ({count})",
   "recovery.selected_recreated": "{count} session(s) recreated",
+  "recovery.failed_count": "{count} session(s) could not be recreated",
   "recovery.select_all": "Select all",
 
   // Ping notifications
@@ -875,6 +878,8 @@ export const en: Record<string, string> = {
   "editor.discard_action": "Discard",
   "editor.keep_editing": "Keep editing",
   // The line shown for each reason a request failed.
+  "transfer.no_body": "No response body",
+  "transfer.ended_early": "The transfer ended before it finished.",
   "error.reason.invalid": "The request was not valid",
   "error.reason.auth": "You need to sign in",
   "error.reason.token": "This page lost its access to sshler; reload the page",
