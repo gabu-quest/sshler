@@ -1324,15 +1324,19 @@ wheels = [
 
 [[package]]
 name = "sqler"
-version = "1.2025.9.24.2"
+version = "1.2026.11.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
-    { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/62/87b16f1971bb842c87d0f13dc70544be76b618c1d044c627884599b77dc7/sqler-1.2025.9.24.2.tar.gz", hash = "sha256:8182e44c4dfacd8261ec8fa2c0f95cc0bb94b02a6f98674f578036fc40999dc4", size = 30859, upload-time = "2025-09-24T11:31:43.188Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/d0/4f48fc142daa6d5f9972722559cb89fde96b7b98f7b4d0542fa69f248412/sqler-1.2026.11.2.tar.gz", hash = "sha256:46844e5eb4e21a1b5dc804e375c7336f884dc21ba6256981808dd9a055f1a1d9", size = 259166, upload-time = "2026-11-20T08:57:07.848Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/c7/c1b997bd300346739d75d4ca01983349e85dc01c91692d406a5d92cfb4b5/sqler-1.2025.9.24.2-py3-none-any.whl", hash = "sha256:2816319fdc676492e42f6356931b1d8c3f56777be56d40d11367d1f32136f299", size = 43395, upload-time = "2025-09-24T11:31:41.73Z" },
+    { url = "https://files.pythonhosted.org/packages/89/ba/38f1d6b0d340cb4874dd3e472e47648874c0bd81fa9b8d9fc6d9667cb508/sqler-1.2026.11.2-py3-none-any.whl", hash = "sha256:b67dca69e3e37fa05e20a755304ef598b110c6e7077f0be82f448bdb6e54218b", size = 298001, upload-time = "2026-11-20T08:57:06.6Z" },
+]
+
+[package.optional-dependencies]
+pydantic = [
+    { name = "pydantic" },
 ]
 
 [[package]]
@@ -1353,7 +1357,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "pywinpty", marker = "sys_platform == 'win32'" },
     { name = "pyyaml" },
-    { name = "sqler" },
+    { name = "sqler", extra = ["pydantic"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1415,7 +1419,7 @@ requires-dist = [
     { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=3.0.3" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.6" },
-    { name = "sqler", specifier = ">=1.2025.9.24" },
+    { name = "sqler", extras = ["pydantic"], specifier = ">=1.2026.11.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 provides-extras = ["dev", "pdf"]
