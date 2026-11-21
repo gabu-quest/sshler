@@ -155,19 +155,28 @@ class _LocalLanding:
 
 
 def _local_landing(
-    target: str, *, overwrite: bool, source_regular: bool = True, source_mode: int | None = None
+    target: str,
+    *,
+    overwrite: bool,
+    source_regular: bool = True,
+    source_mode: int | None = None,
+    exists_status: int = 409,
 ) -> _LocalLanding:
     """Decide ``target`` by the rule and open it for the bytes of a file. A free name
     gets ``source_mode``'s permission bits (the default bits when None); a replace keeps
     the replaced file's."""
     dest_mode = _local_lstat_mode(target)
-    replace = _refuse_or_replace(dest_mode, overwrite=overwrite, source_regular=source_regular)
+    replace = _refuse_or_replace(
+        dest_mode, overwrite=overwrite, source_regular=source_regular, exists_status=exists_status
+    )
     if not source_regular:
         raise Failure(REASON_INVALID, _ONLY_FILES)
     try:
         return _LocalLanding(target, replace=replace, mode=dest_mode if replace else source_mode)
     except FileExistsError:
-        _taken_after_check(_local_lstat_mode(target), source_regular=source_regular)
+        _taken_after_check(
+            _local_lstat_mode(target), source_regular=source_regular, exists_status=exists_status
+        )
 
 
 class _ThreadedLanding:
@@ -188,10 +197,18 @@ class _ThreadedLanding:
         await run_to_end(asyncio.to_thread(self.landing.abort))
 
 
+_NOT_A_FILE = "Not a regular file"
+
+
 def _local_copy_file(source: str, target: str, *, replace_mode: int | None = None) -> None:
     """Copy a file in chunks (never whole into memory) with its times. A free name gets
     the source's permission bits, a replace (``replace_mode``, the replaced file's mode)
-    keeps the replaced file's; either way they are on the file before its first byte."""
+    keeps the replaced file's; either way they are on the file before its first byte.
+
+    Only a regular file is opened: opening a named pipe waits for a writer, and a device
+    has no end."""
+    if not stat_mod.S_ISREG(os.stat(source).st_mode):
+        raise OSError(errno.EINVAL, _NOT_A_FILE, source)
     with open(source, "rb") as src:
         found = os.fstat(src.fileno())
         mode = found.st_mode if replace_mode is None else replace_mode
@@ -228,7 +245,10 @@ class _FirstCopyError:
 
     def copy(self, src: str, dst: str, *, follow_symlinks: bool = True) -> object:
         try:
-            return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
+            # A link is followed (``copytree`` hands over a link only when it is
+            # to be copied as the file it points to).
+            _local_copy_file(src, dst)
+            return dst
         except OSError as exc:
             if self.first is None:
                 self.first = exc
@@ -478,18 +498,18 @@ async def _local_write_new(
     target_path: str, data: bytes, *, overwrite: bool, exists_status: int
 ) -> None:
     """Write ``data`` to a new local file, or replace a regular file with ``overwrite``
-    (in place, as the remote twin does). An existing name answers ``exists_status``."""
+    through a landing: the old file stays whole until the new one is complete. An
+    existing name answers ``exists_status``."""
 
     def _worker() -> None:
-        replace = _refuse_or_replace(
-            _local_lstat_mode(target_path), overwrite=overwrite, exists_status=exists_status
-        )
         Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+        landing = _local_landing(target_path, overwrite=overwrite, exists_status=exists_status)
         try:
-            with open(target_path, "wb" if replace else "xb") as handle:
-                handle.write(data)
-        except FileExistsError:
-            _taken_after_check(_local_lstat_mode(target_path), exists_status=exists_status)
+            landing.write(data)
+            landing.commit()
+        except BaseException:
+            landing.abort()
+            raise
 
     await asyncio.to_thread(_worker)
 

@@ -103,6 +103,9 @@ class FakeRemoteFile:
     async def __aexit__(self, *exc) -> None:
         return None
 
+    async def close(self) -> None:
+        return None
+
     async def read(self) -> bytes:
         return self.sftp.contents[self.target]
 
@@ -162,6 +165,13 @@ class FakeSFTP:
 
     async def rename(self, source: str, target: str) -> None:
         self.calls.append(("rename", source, target))
+
+    async def chmod(self, path: str, mode: int) -> None:
+        self.calls.append(("chmod", path, mode))
+
+    async def posix_rename(self, source: str, target: str) -> None:
+        self.calls.append(("posix_rename", source, target))
+        self.contents[target] = self.contents.pop(source)
 
     async def remove(self, path: str) -> None:
         self.calls.append(("remove", path))
@@ -1282,15 +1292,19 @@ def test_a_file_that_appears_after_the_check_is_not_truncated(remote, monkeypatc
 
 def test_upload_with_overwrite_replaces_an_existing_remote_file(remote):
     """Mutation: ignore the `overwrite` form field; the upload answers 409 and the old
-    bytes stay."""
+    bytes stay. The bytes go to a temp file that is renamed over the old one."""
     remote.sftp.contents["/srv/a.bin"] = b"precious"
     resp = _upload(remote, "a.bin", b"replacement", overwrite="true")
     assert (resp.status_code, resp.json()["path"]) == (200, "/srv/a.bin")
     assert remote.sftp.contents == {"/srv/a.bin": b"replacement"}
+    temp = remote.sftp.calls[1][1]
+    assert temp.startswith("/srv/.a.bin.")
     assert remote.sftp.calls == [
         ("lstat", "/srv/a.bin"),
-        ("open", "/srv/a.bin", "wb"),
-        ("write", "/srv/a.bin", b"replacement"),
+        ("open", temp, "xb"),
+        ("write", temp, b"replacement"),
+        ("chmod", temp, 0o644),
+        ("posix_rename", temp, "/srv/a.bin"),
     ]
 
 

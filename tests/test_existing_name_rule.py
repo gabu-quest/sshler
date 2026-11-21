@@ -24,10 +24,13 @@ owner's check, never by sleeping; so is every other order these tests need.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import os
 import posixpath
+import resource
 import shutil
+import signal
 import socket
 import threading
 import tracemalloc
@@ -2614,3 +2617,91 @@ def test_a_touch_onto_a_taken_name_answers_with_the_reason(env, box, kind, answe
 
     assert (resp.status_code, resp.json()) == (400 if box == "local" else 409, answer)
     assert files_under(s.base) == before
+
+
+# --- an upload that replaces a file lands whole or not at all ---------------------------
+
+
+FILE_SIZE_LIMIT = 256 * 1024
+
+
+@contextlib.contextmanager
+def _a_write_stops_part_way(monkeypatch: pytest.MonkeyPatch, box: str) -> Iterator[None]:
+    """The first big write to a file is cut short and fails, as on a disk that fills or a
+    connection that drops. Local: no file of this process can grow past a size limit.
+    Remote: the client's write sends half of the bytes, then raises."""
+    if box != "local":
+        real = asyncssh.SFTPClientFile.write
+
+        async def write(self, data: bytes, offset: int | None = None) -> int:
+            await real(self, data[: len(data) // 2], offset)
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(asyncssh.SFTPClientFile, "write", write)
+        yield
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (FILE_SIZE_LIMIT, hard))
+    try:
+        yield
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+        signal.signal(signal.SIGXFSZ, previous)
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("taken", [True, False])
+def test_an_upload_that_fails_part_way_leaves_the_old_file_and_no_other_file(
+    env, box, taken, monkeypatch
+):
+    s = side(env, box)
+    s.disk("in").mkdir()
+    if taken:
+        s.disk("in/x.txt").write_bytes(b"precious")
+    before = files_under(s.base)
+    with _a_write_stops_part_way(monkeypatch, box):
+        resp = s.env.client.post(
+            f"/api/v1/boxes/{s.box}/upload",
+            data={"directory": s.path("in"), "overwrite": "true"},
+            files={"file": ("x.txt", b"n" * (3 * FILE_SIZE_LIMIT), "application/octet-stream")},
+            headers=HEADERS,
+        )
+
+    assert (resp.status_code, resp.json()["reason"]) == (500, "failed")
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_an_upload_into_a_folder_that_takes_no_new_file_keeps_the_old_file_whole(env, box):
+    s = side(env, box)
+    s.disk("in").mkdir()
+    s.disk("in/x.txt").write_bytes(b"precious")
+    s.disk("in").chmod(0o555)
+    try:
+        resp = upload_to(s, "in", "x.txt", overwrite="true")
+        found = files_under(s.base)
+    finally:
+        s.disk("in").chmod(0o755)
+
+    assert (resp.status_code, resp.json()["reason"]) == (403, "denied")
+    assert resp.json()["detail"].startswith("Permission denied")
+    assert found == {"in": "dir", "in/x.txt": b"precious"} | (
+        {"home": "dir"} if box != "local" else {}
+    )
+
+
+@pytest.mark.parametrize("box", BOXES + ["lb-no-posix"])
+def test_an_upload_that_replaces_a_file_keeps_its_bits_and_leaves_no_other_file(env, box):
+    s = side(env, box)
+    s.disk("in").mkdir()
+    s.disk("in/x.txt").write_bytes(b"precious")
+    s.disk("in/x.txt").chmod(0o640)
+
+    resp = upload_to(s, "in", "x.txt", overwrite="true")
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path("in/x.txt"))
+    assert (s.disk("in/x.txt").stat().st_mode & 0o7777, files_under(s.disk("in"))) == (
+        0o640,
+        {"x.txt": b"uploaded"},
+    )

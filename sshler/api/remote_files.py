@@ -469,18 +469,14 @@ async def _remote_place(
 
 async def _remote_write_new(sftp_client, remote_path: str, data: bytes, *, overwrite: bool) -> None:
     """Write ``data`` to a new remote file, or replace a regular file with ``overwrite``
-    (in place: the bytes come from the request, so they cannot be the file itself)."""
-    replace = _refuse_or_replace(
-        await _remote_lstat_mode(sftp_client, remote_path), overwrite=overwrite
-    )
-    if replace:
-        remote_file = await sftp_client.open(remote_path, "wb")
-    else:
-        remote_file = await _remote_exclusive(
-            sftp_client, remote_path, sftp_client.open(remote_path, "xb")
-        )
-    async with remote_file:
-        await remote_file.write(data)
+    through a landing: the old file stays whole until the new one is complete."""
+    landing = await _remote_landing(sftp_client, remote_path, overwrite=overwrite)
+    try:
+        await landing.write(data)
+        await landing.commit()
+    except BaseException:
+        await landing.abort()
+        raise
 
 
 def du_command(flag: str, path: str) -> str:
