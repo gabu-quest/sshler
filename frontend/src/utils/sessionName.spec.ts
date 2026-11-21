@@ -24,8 +24,8 @@ describe('generateSessionName (ts parity)', () => {
   })
 
   it('uses the same ts name for remote boxes', () => {
-    expect(generateSessionName('/home/gabu/projects/blogler', 'gabu-server')).toBe('blogler')
-    expect(generateSessionName('/home/gabu/GodotProjects/countdown-crusaders', 'gabu-server')).toBe(
+    expect(generateSessionName('/home/u/projects/blogler', 'gabu-server')).toBe('blogler')
+    expect(generateSessionName('/home/u/GodotProjects/countdown-crusaders', 'gabu-server')).toBe(
       'countdown-crusaders',
     )
   })

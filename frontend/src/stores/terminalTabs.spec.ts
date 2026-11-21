@@ -300,10 +300,10 @@ describe("terminalTabs store", () => {
       expect(generateSessionName("/srv/My App!")).toBe("My_App");
     });
 
-    it("keeps dashes to match the ts CLI: '/home/gabu/projects/my-app'", () => {
+    it("keeps dashes to match the ts CLI: '/home/u/projects/my-app'", () => {
       // ts sanitizes only [.:] → _, so 'my-app' must stay 'my-app' (not 'my_app')
       // or sshler and `ts here` would land on different tmux sessions.
-      expect(generateSessionName("/home/gabu/projects/my-app")).toBe("my-app");
+      expect(generateSessionName("/home/u/projects/my-app")).toBe("my-app");
     });
 
     it("collapses dots like ts does: '/srv/v2.0'", () => {
@@ -312,7 +312,7 @@ describe("terminalTabs store", () => {
     });
 
     it("leaves a plain alphanumeric segment untouched: 'nihongoler'", () => {
-      expect(generateSessionName("/home/gabu/projects/nihongoler")).toBe("nihongoler");
+      expect(generateSessionName("/home/u/projects/nihongoler")).toBe("nihongoler");
     });
 
     it("returns 'root' for a path whose last segment is all non-alphanumeric", () => {
