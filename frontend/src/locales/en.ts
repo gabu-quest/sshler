@@ -301,6 +301,8 @@ export const en: Record<string, string> = {
   "overview.active_sessions": "active sessions",
   "overview.unnamed": "unnamed",
   "overview.no_active_sessions": "No active sessions",
+  "overview.search_placeholder": "Search sessions & folders...",
+  "overview.search_running": "Running",
   "overview.last_used": "Last used:",
   "overview.connect": "Connect",
   "overview.never": "never",

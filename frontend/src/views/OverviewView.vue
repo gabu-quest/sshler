@@ -36,6 +36,7 @@ import { useFavoritesStore } from "@/stores/favorites";
 import { boxStats, statsStreamUrl } from "@/api/http";
 import { failureText, errorText } from "@/api/apiError";
 import type { BoxStats } from "@/api/types";
+import BoxSearchInput from "@/components/BoxSearchInput.vue";
 import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
 const router = useRouter();
@@ -290,8 +291,12 @@ const getBoxSessions = (boxName: string) => {
   return sessionsStore.getBoxSessions(boxName);
 };
 
-const handleJumpToSession = (boxName: string, sessionName: string) => {
-  router.push(`/terminal?box=${boxName}&session=${sessionName}`);
+/** The one way from a card to a terminal: every part of the query is encoded. */
+const openTerminal = (boxName: string, target: { session?: string; dir?: string } = {}) => {
+  let query = `box=${encodeURIComponent(boxName)}`;
+  if (target.session !== undefined) query += `&session=${encodeURIComponent(target.session)}`;
+  if (target.dir !== undefined) query += `&dir=${encodeURIComponent(target.dir)}`;
+  router.push(`/terminal?${query}`);
 };
 
 const getServerStatus = (box: any) => {
@@ -310,7 +315,7 @@ const getStatusColor = (status: string) => {
 };
 
 const handleConnectToServer = (serverName: string) => {
-  router.push(`/terminal?box=${serverName}`);
+  openTerminal(serverName);
 };
 
 const handleBrowseServerFiles = (serverName: string) => {
@@ -480,7 +485,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                       :key="session.id"
                       class="session-item"
                       :class="{ inactive: !session.active }"
-                      @click="handleJumpToSession(box.name, session.session_name)"
+                      @click="openTerminal(box.name, { session: session.session_name })"
                     >
                       <span class="session-row">
                         <span class="session-status" :class="session.active ? 'active' : 'inactive'"></span>
@@ -496,6 +501,15 @@ const handleBrowseServerFiles = (serverName: string) => {
                 {{ t('overview.last_used') }} {{ getBoxLastUsed(box.name) }}
               </p>
             </div>
+
+            <BoxSearchInput
+              class="server-search"
+              :box="box.name"
+              :token="tokenValue || null"
+              :sessions="getBoxSessions(box.name)"
+              @pick-session="openTerminal(box.name, { session: $event })"
+              @pick-folder="openTerminal(box.name, { dir: $event })"
+            />
 
             <div class="server-actions">
               <NButton
@@ -723,6 +737,16 @@ const handleBrowseServerFiles = (serverName: string) => {
   margin: 0;
   font-size: 12px;
   color: var(--muted);
+}
+
+.server-search {
+  margin-bottom: 16px;
+}
+
+/* The card that holds the open list paints over the cards below it. */
+.server-card:focus-within {
+  position: relative;
+  z-index: 10;
 }
 
 .server-actions {

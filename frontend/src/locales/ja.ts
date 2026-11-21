@@ -301,6 +301,8 @@ export const ja: Record<string, string> = {
   "overview.active_sessions": "アクティブセッション",
   "overview.unnamed": "名前なし",
   "overview.no_active_sessions": "アクティブなセッションはありません",
+  "overview.search_placeholder": "セッションとフォルダーを検索...",
+  "overview.search_running": "実行中",
   "overview.last_used": "最終使用:",
   "overview.connect": "接続",
   "overview.never": "未使用",
