@@ -8,11 +8,14 @@ import contextlib
 import errno
 import mimetypes
 import os
+import platform
 import shutil
 import stat as stat_mod
+import sys
 import tarfile
 import tempfile
 import zipfile
+import zlib
 from collections.abc import AsyncIterator, Sequence
 from functools import partial
 from pathlib import Path, PureWindowsPath
@@ -63,9 +66,11 @@ from .placement import (
     ensure_source_unchanged,
     kept_permission_bits,
     refuse_a_name_this_request_placed,
+    refuse_taken_entries,
     run_to_end,
     source_not_removed,
     temp_stem,
+    unpacked_not_removed,
 )
 
 # --- local transport (every function here runs in a worker thread) ---------------
@@ -725,21 +730,130 @@ def _local_create_archive(
         raise
 
 
-def _local_extract_archive(archive: Path, dest_dir: Path) -> None:
-    """A tar is unpacked with tarfile's ``data`` filter (no entry outside ``dest_dir``,
-    no link that leaves it, no device file); a zip entry that would leave ``dest_dir``
-    refuses the whole zip with a 400. An archive the reader refuses (a tar entry the
-    filter refuses, a file that is no archive) is ``failed`` with its text, as a remote
-    ``tar`` or ``unzip`` that exits with an error is."""
+def tar_link_guard_is_fixed(version: tuple[int, ...] = tuple(sys.version_info[:3])) -> bool:
+    """Whether tarfile's ``data`` filter of this Python keeps a link from leading an
+    entry outside the destination: the ways round it were fixed in 3.12.11 and 3.13.4
+    (and every 3.14)."""
+    if version[:2] == (3, 12):
+        return version >= (3, 12, 11)
+    if version[:2] == (3, 13):
+        return version >= (3, 13, 4)
+    return version >= (3, 14)
+
+
+_OLD_TAR_GUARD = (
+    "This Python ({}) is too old to unpack links from a tar safely; 3.12.11 or 3.13.4 is needed"
+)
+
+
+def _tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
+    """tarfile's ``data`` filter (no entry outside the folder, no link that leaves it, no
+    device file), and on a Python whose filter has the known holes no link at all."""
+    if (member.issym() or member.islnk()) and not tar_link_guard_is_fixed():
+        raise Failure(REASON_INVALID, _OLD_TAR_GUARD.format(platform.python_version()))
+    return tarfile.data_filter(member, path)
+
+
+def _local_unpack(archive: Path, into: str) -> None:
+    """Unpack ``archive`` into the empty folder ``into``. A tar goes through
+    ``_tar_filter``; a zip entry that would leave the folder refuses the whole zip with a
+    400. An archive the reader refuses (a tar entry the filter refuses, a file that is no
+    archive or is cut short) is ``failed`` with its text, as a remote ``tar`` or
+    ``unzip`` that exits with an error is; an entry the filter refuses is named (the
+    filter's own text names a path in the temp folder, not in the destination)."""
     try:
         if archive.name.lower().endswith(TAR_SUFFIXES):
             with tarfile.open(str(archive), "r:gz") as tf:
-                tf.extractall(path=str(dest_dir), filter="data")
+                tf.extractall(path=into, filter=_tar_filter)
         else:
             with zipfile.ZipFile(str(archive), "r") as zf:
-                _safe_extract_zip(zf, dest_dir)
-    except (tarfile.TarError, zipfile.BadZipFile) as exc:
+                _safe_extract_zip(zf, Path(into))
+    except tarfile.FilterError as exc:
+        raise Failure(REASON_FAILED, f"Archive contains unsafe entry: {exc.tarinfo.name}") from exc
+    except (tarfile.TarError, zipfile.BadZipFile, EOFError, zlib.error) as exc:
         raise Failure(REASON_FAILED, str(exc)) from exc
+
+
+def _local_make_missing(folder: str) -> list[str]:
+    """Make ``folder`` and every missing folder above it; returns those made, the top
+    one first (a failure part way removes them again)."""
+    missing: list[str] = []
+    while not os.path.lexists(folder) and os.path.dirname(folder) != folder:
+        missing.append(folder)
+        folder = os.path.dirname(folder)
+    made: list[str] = []
+    try:
+        for path in reversed(missing):
+            os.mkdir(path)
+            made.append(path)
+    except BaseException:
+        _local_remove_made(made)
+        raise
+    return made
+
+
+def _local_remove_made(made: list[str]) -> None:
+    """Remove the folders ``_local_make_missing`` made, the deepest first; one that is
+    not empty by now holds something else's and stays."""
+    for path in reversed(made):
+        with contextlib.suppress(OSError):
+            os.rmdir(path)
+
+
+def _local_plan(
+    unpacked: str,
+    dest: str,
+    moves: list[tuple[str, str]],
+    taken: list[tuple[str, int, bool]],
+    shown: str = "",
+) -> None:
+    """Walk the unpacked folder against ``dest`` by the names the file system gives (a
+    link is not followed). An entry whose name is free in ``dest`` moves as it is, a
+    folder with everything in it; a folder where ``dest`` has a folder is walked into,
+    since the archive's entries go into an existing folder; any other entry is a taken
+    name for ``refuse_taken_entries``, and moves if the rule lets it replace."""
+    with os.scandir(unpacked) as found:
+        entries = sorted(found, key=lambda entry: entry.name)
+    for entry in entries:
+        target = os.path.join(dest, entry.name)
+        source_mode = entry.stat(follow_symlinks=False).st_mode
+        dest_mode = _local_lstat_mode(target)
+        if dest_mode is not None and stat_mod.S_ISDIR(source_mode) and stat_mod.S_ISDIR(dest_mode):
+            _local_plan(entry.path, target, moves, taken, f"{shown}{entry.name}/")
+            continue
+        if dest_mode is not None:
+            taken.append((f"{shown}{entry.name}", dest_mode, stat_mod.S_ISREG(source_mode)))
+        moves.append((entry.path, target))
+
+
+def _local_extract_archive(archive: Path, dest_dir: Path, *, overwrite: bool) -> None:
+    """Unpack ``archive`` into a temp folder inside ``dest_dir`` (made if missing), check
+    every entry against ``dest_dir`` by the rule, and only then move the entries into
+    place (call from a worker thread). A refused or failed extract leaves ``dest_dir``
+    as it was and no temp folder; a folder this made is removed again."""
+    made = _local_make_missing(str(dest_dir))
+    unpacked: str | None = None
+    try:
+        unpacked = tempfile.mkdtemp(dir=dest_dir, prefix=f".{temp_stem(archive.name)}.")
+        _local_unpack(archive, unpacked)
+        moves: list[tuple[str, str]] = []
+        taken: list[tuple[str, int, bool]] = []
+        _local_plan(unpacked, str(dest_dir), moves, taken)
+        refuse_taken_entries(taken, overwrite=overwrite)
+        for source, target in moves:
+            _local_place(source, target, move=True, overwrite=overwrite)
+    except Exception as exc:
+        if unpacked is not None:
+            try:
+                shutil.rmtree(unpacked)
+            except OSError as cleanup:
+                raise unpacked_not_removed(exc, unpacked, cleanup) from exc
+        _local_remove_made(made)
+        raise
+    try:
+        shutil.rmtree(unpacked)
+    except OSError as cleanup:
+        raise unpacked_not_removed(None, unpacked, cleanup) from cleanup
 
 
 def _local_batch_item(
@@ -1078,14 +1192,18 @@ class LocalFiles:
         )
         return str(archive_path)
 
-    async def extract_archive(self, archive: str, destination: str) -> str:
+    async def extract_archive(
+        self, archive: str, destination: str, *, overwrite: bool = False
+    ) -> str:
         """A missing archive fails first, then a name that is no archive is a 400."""
         archive_path = Path(self._resolve(archive))
         dest_dir = Path(self._resolve(destination))
         await asyncio.to_thread(archive_path.stat)
         if not is_archive_name(archive_path.name):
             raise Failure(REASON_INVALID, "Unsupported archive format")
-        await asyncio.to_thread(_local_extract_archive, archive_path, dest_dir)
+        await asyncio.to_thread(
+            partial(_local_extract_archive, archive_path, dest_dir, overwrite=overwrite)
+        )
         return str(dest_dir)
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:

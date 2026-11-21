@@ -1074,24 +1074,56 @@ async def test_a_remote_archive_is_made_by_one_command_on_the_quoted_paths(
 @pytest.mark.parametrize(
     ("archive", "words"),
     [
-        (f"/srv/{ODD_NAME}.TGZ", ["tar", "xzf", f"/srv/{ODD_NAME}.TGZ", "-C", "/home/d"]),
-        ("-a.zip", ["unzip", "-o", "./-a.zip", "-d", "/home/d"]),
+        (
+            f"/srv/{ODD_NAME}.TGZ",
+            ["tar", "xzf", f"/srv/{ODD_NAME}.TGZ", "-C", f"/home/d/.{ODD_NAME}.TGZ.t.sshler"],
+        ),
+        ("-a.zip", ["unzip", "-o", "./-a.zip", "-d", "/home/d/.-a.zip.t.sshler"]),
     ],
 )
 async def test_a_remote_archive_is_unpacked_by_one_command_on_the_quoted_paths(
     monkeypatch, archive, words
 ):
+    _fixed_temp_name(monkeypatch)
     home = 'printf %s "$HOME"'
     unpack = shlex.join(words)
+    sftp = _UnpackingSFTP()
     connection = RecordingConnection(
         {home: _Result(stdout="/home", exit_status=0), unpack: _Result(stdout="", exit_status=0)},
-        _StatSFTP(0o100644),
+        sftp,
     )
     deps = _recording(monkeypatch, connection)
     async with box_files(deps, _remote_box(), CONFIG) as files:
         destination = await files.extract_archive(archive, "~/d")
     assert destination == "/home/d"
     assert connection.commands == [home, unpack, HEALTH_CMD]
+    # The command unpacked into a temp folder of its own, which is gone at the end.
+    temp = words[-1]
+    assert sftp.calls == [("mkdir", temp), ("readdir", temp), ("readdir", temp), ("rmdir", temp)]
+
+
+class _UnpackingSFTP(_StatSFTP):
+    """An SFTP client for an extract: the archive is a file, ``/home/d`` a folder, and
+    the unpacked folder stays empty (the command is not run)."""
+
+    def __init__(self) -> None:
+        super().__init__(0o100644)
+        self.calls: list[tuple[str, str]] = []
+
+    async def lstat(self, path: str) -> SimpleNamespace:
+        if path != "/home/d":
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return SimpleNamespace(permissions=0o040755)
+
+    async def mkdir(self, path: str, attrs: object = None) -> None:
+        self.calls.append(("mkdir", path))
+
+    async def readdir(self, path: str) -> list:
+        self.calls.append(("readdir", path))
+        return []
+
+    async def rmdir(self, path: str) -> None:
+        self.calls.append(("rmdir", path))
 
 
 @pytest.mark.asyncio

@@ -37,7 +37,9 @@ A remote path with `~`, a remote command line built from words, and an SFTP sess
 have one owner: `remote_path` and `command` in `api/remote.py`, `sftp_session` in `ssh.py`.
 
 **A failed request** answers a failure status and `{"detail": text, "reason": word}`, written
-by one owner, `api/failure.py`. `STATUS_OF_REASON` there is the list of reasons, each with its
+by one owner, `api/failure.py`; a refusal about many names of one request (an extract onto
+files that exist) adds `"taken": {"count": n, "names": [the first five]}` (`Failure(...,
+taken=Taken(...))`). `STATUS_OF_REASON` there is the list of reasons, each with its
 one status. Code that refuses a request raises `Failure(reason, text)`; `failure_of` names the
 reason of any other error by its type (errno, SFTP type), never by its words, the same for
 both kinds of box; `failure_entry` gives an item of a batch the reason a single request would
@@ -113,8 +115,9 @@ transfer's first answer, the terminal handshake, the start-up token check); the 
 `XMLHttpRequest` for its progress and runs under the same policy. A failed request is an
 `ApiError` (`src/api/apiError.ts`): `status` (0 when no answer came), `reason` (one of the
 server's words, `network` when no answer came, null when an answer had none) and `detail` (the
-server's text), and `retryAfter` (the answer's `Retry-After` in seconds, or null; the sign-in
-page shows a lockout's wait from it). Its `message` is the translated line of the reason (`error.reason.<word>`,
+server's text), `retryAfter` (the answer's `Retry-After` in seconds, or null; the sign-in
+page shows a lockout's wait from it) and `taken` (the server's count and first names of a
+refusal about many names, or null; an extract asks about them once with `askReplaceMany`). Its `message` is the translated line of the reason (`error.reason.<word>`,
 `error.reason.network`, `error.reason.none`, in both locales), then " — " and the detail; an
 answer with no reason and no text shows its status in brackets instead. The page acts on the
 reason only, never on the status or the words: `token` refreshes the token once and sends once

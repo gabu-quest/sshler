@@ -11,7 +11,14 @@ from typing import NoReturn
 
 import anyio
 
-from .failure import REASON_CANNOT_REPLACE, REASON_EXISTS, REASON_FAILED, Failure
+from .failure import (
+    REASON_CANNOT_REPLACE,
+    REASON_EXISTS,
+    REASON_FAILED,
+    Failure,
+    Taken,
+    failure_of,
+)
 
 # --- No file lands on an existing name unless the caller said replace -------------
 #
@@ -37,10 +44,12 @@ COPY_CHUNK_BYTES = 256 * 1024
 
 class DestinationRefused(Failure):
     """A destination the rule refuses, by reason (``exists`` or ``cannot_replace``),
-    with the status the rule gives it."""
+    with the status the rule gives it (and the names it is about, for many)."""
 
-    def __init__(self, status_code: int, detail: str, reason: str) -> None:
-        super().__init__(reason, detail, status=status_code)
+    def __init__(
+        self, status_code: int, detail: str, reason: str, *, taken: Taken | None = None
+    ) -> None:
+        super().__init__(reason, detail, status=status_code, taken=taken)
 
 
 def _reason(exc: BaseException) -> str:
@@ -87,6 +96,61 @@ def _taken_after_check(
         exists_status=exists_status,
     )
     raise AssertionError("unreachable: an existing name is always refused")
+
+
+# The names a refusal of many names lists; the rest are counted.
+NAMES_SHOWN = 5
+_WOULD_REPLACE = "Files of the archive that already exist here"
+_CANNOT_REPLACE_ANY = "Names of the archive taken here by something that cannot be replaced"
+
+
+def refuse_taken_entries(taken: list[tuple[str, int, bool]], *, overwrite: bool) -> None:
+    """The rule for the many names one extract places at once, before any is placed.
+    ``taken`` holds each name whose destination exists (and is not a folder that takes
+    a folder): the name, the destination's ``lstat`` mode and whether the entry is a
+    regular file. Each is decided by ``_refuse_or_replace``; if any is refused, the
+    whole request is, by the reason that decides it (``cannot_replace`` before
+    ``exists``: a Yes to replace could not place those), with the count and the first
+    names of that reason. Returns when every name may be replaced."""
+    refused: dict[str, list[str]] = {}
+    status: dict[str, int] = {}
+    for name, dest_mode, regular in taken:
+        try:
+            _refuse_or_replace(dest_mode, overwrite=overwrite, source_regular=regular)
+        except DestinationRefused as exc:
+            refused.setdefault(exc.reason, []).append(name)
+            status[exc.reason] = exc.status_code
+    for reason, words in (
+        (REASON_CANNOT_REPLACE, _CANNOT_REPLACE_ANY),
+        (REASON_EXISTS, _WOULD_REPLACE),
+    ):
+        names = refused.get(reason)
+        if not names:
+            continue
+        shown = ", ".join(names[:NAMES_SHOWN])
+        more = len(names) - NAMES_SHOWN
+        detail = f"{words} ({len(names)}): {shown}" + (f" and {more} more" if more > 0 else "")
+        raise DestinationRefused(
+            status[reason],
+            detail,
+            reason,
+            taken=Taken(count=len(names), names=tuple(names[:NAMES_SHOWN])),
+        )
+
+
+def unpacked_not_removed(exc: Exception | None, unpacked: str, cause: BaseException) -> Exception:
+    """The answer of an extract whose unpacked folder could not be removed for
+    ``cause``: after the failure ``exc`` it keeps that failure's reason and adds where the
+    folder is (a timeout stays a ``TimeoutError``, so the connection it ran on is closed,
+    not pooled); after a completed extract (``exc`` None) it says the entries are in
+    place."""
+    where = f"the unpacked folder at {unpacked} could not be removed: {_reason(cause)}"
+    if exc is None:
+        return Failure(REASON_FAILED, f"Extracted, but {where}")
+    if isinstance(exc, TimeoutError):
+        return TimeoutError(f"{exc}; {where}")
+    found = failure_of(exc)
+    return Failure(found.reason, f"{found.detail}; {where}", status=found.status_code)
 
 
 def refuse_a_name_this_request_placed(target: str, landed: set[str]) -> None:

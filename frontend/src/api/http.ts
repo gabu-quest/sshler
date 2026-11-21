@@ -1132,11 +1132,12 @@ export async function extractArchive(
   archivePath: string,
   destination: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<SimpleMessage> {
   return apiFetch<SimpleMessage>(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/extract`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ archive_path: archivePath, destination }),
+    body: JSON.stringify({ archive_path: archivePath, destination, ...overwriteField(options) }),
   });
 }
 

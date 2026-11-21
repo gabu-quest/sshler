@@ -68,17 +68,33 @@ class FakeSFTP:
     def __init__(self, calls: list[tuple], content: bytes = b"") -> None:
         self.calls = calls
         self.content = content
+        self.folders: set[str] = set()  # folders that exist; each is empty
 
     async def stat(self, path: str):
         self.calls.append(("stat", path))
         return SimpleNamespace(permissions=0o100644)
 
     async def lstat(self, path: str):
-        """The temp file of an archive is there; every other name is free."""
+        """A folder of ``folders`` and the temp file of an archive are there; every other
+        name is free."""
         self.calls.append(("lstat", path))
+        if path in self.folders:
+            return SimpleNamespace(permissions=0o040755, size=0, mtime=0, mtime_ns=0)
         if not path.endswith(TEMP_SUFFIX):
             raise asyncssh.SFTPNoSuchFile("No such file")
         return SimpleNamespace(permissions=0o100644, size=0, mtime=0, mtime_ns=0)
+
+    async def mkdir(self, path: str, attrs: object = None) -> None:
+        self.calls.append(("mkdir", path))
+        self.folders.add(path)
+
+    async def readdir(self, path: str) -> list:
+        self.calls.append(("readdir", path))
+        return []
+
+    async def rmdir(self, path: str) -> None:
+        self.calls.append(("rmdir", path))
+        self.folders.discard(path)
 
     async def link(self, source: str, target: str) -> None:
         self.calls.append(("link", source, target))
@@ -203,12 +219,14 @@ def test_archive_create_with_a_failed_home_lookup_is_502_and_runs_nothing(remote
 @pytest.mark.parametrize(
     ("archive", "command"),
     [
-        ("~/a b.tar.gz", f"tar xzf '{HOME}/a b.tar.gz' -C {HOME}/dest"),
-        ("~/a.zip", f"unzip -o {HOME}/a.zip -d {HOME}/dest"),
+        ("~/a b.tar.gz", f"tar xzf '{HOME}/a b.tar.gz' -C '{HOME}/dest/.a b.tar.gz{TEMP_SUFFIX}'"),
+        ("~/a.zip", f"unzip -o {HOME}/a.zip -d {HOME}/dest/.a.zip{TEMP_SUFFIX}"),
     ],
 )
 def test_archive_extract_resolves_tilde_in_archive_and_destination(remote, archive, command):
-    """Mutation: skip `_remote_path` in extract; the command names `~/a...` and `~/dest`."""
+    """Mutation: skip `_remote_path` in extract; the command names `~/a...` and `~/dest`.
+    The archive is unpacked into a temp folder inside the destination."""
+    remote.sftp.folders.add(f"{HOME}/dest")
     remote.replies[command] = _reply()
     resp = _post(remote, "archive/extract", {"archive_path": archive, "destination": "~/dest"})
     assert (resp.status_code, resp.json()["path"]) == (200, f"{HOME}/dest")

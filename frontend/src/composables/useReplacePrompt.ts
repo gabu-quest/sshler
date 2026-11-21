@@ -2,7 +2,7 @@ import { h, ref } from "vue";
 import { NButton, useDialog } from "naive-ui";
 
 import { useI18n } from "@/i18n";
-import { ApiError, type FailureReason, errorText } from "@/api/apiError";
+import { ApiError, type FailureReason, type TakenNames, errorText } from "@/api/apiError";
 
 /** Why the server refused one item of a batch or transfer: any reason of a failure. */
 export type FailReason = FailureReason;
@@ -50,7 +50,8 @@ function baseName(path: string): string {
 
 /**
  * The one "Replace?" prompt every view uses. `askReplace` asks about one name;
- * `askEach` asks about several, one at a time, and while more than one name is left
+ * `askReplaceMany` asks once about many names one request would replace; `askEach`
+ * asks about several, one at a time, and while more than one name is left
  * offers "Replace all" and "Skip all" for the rest; `withReplace` runs a batch or
  * transfer call and asks about every name the server found taken; `dismiss` takes an
  * open prompt down and ends whatever was waiting on it; `leave` does that for a view
@@ -90,12 +91,12 @@ export function useReplacePrompt() {
   }
 
   /**
-   * Ask once. "No", Escape, a mask click or the dialog closing any other way is "no".
-   * With `offerAll` the two buttons are joined by "Skip all" and "Replace all"; the
-   * dialog has no close button, so its focus trap lands on "No, keep it" first and
-   * Enter presses it.
+   * Ask once, with `content` as the question. "No", Escape, a mask click or the dialog
+   * closing any other way is "no". With `offerAll` the two buttons are joined by "Skip
+   * all" and "Replace all"; the dialog has no close button, so its focus trap lands on
+   * "No, keep it" first and Enter presses it.
    */
-  function prompt(name: string, offerAll: boolean): Promise<Answer> {
+  function prompt(content: string, offerAll: boolean): Promise<Answer> {
     if (left) return Promise.resolve("no");
     return new Promise((resolve) => {
       const armed = ref(false);
@@ -118,7 +119,7 @@ export function useReplacePrompt() {
 
       const options: Parameters<typeof dialog.warning>[0] = {
         title: t("files.replace_title"),
-        content: t("files.replace_confirm", { name }),
+        content,
         closable: false,
         onEsc: () => finish("no"),
         onMaskClick: () => finish("no"),
@@ -161,10 +162,25 @@ export function useReplacePrompt() {
     });
   }
 
-  async function askReplace(name: string): Promise<boolean> {
+  /** Ask one question: true only for "Replace", and only if nothing dismissed it meanwhile. */
+  async function askOnce(content: string): Promise<boolean> {
     const started = generation;
-    const answer = await prompt(name, false);
+    const answer = await prompt(content, false);
     return answer === "yes" && started === generation;
+  }
+
+  async function askReplace(name: string): Promise<boolean> {
+    return askOnce(t("files.replace_confirm", { name }));
+  }
+
+  /**
+   * One question for many names a single request would replace (an extract): the
+   * server's count and the first names it sent, "…" when it sent fewer than it counted.
+   * One answer covers them all.
+   */
+  async function askReplaceMany(taken: TakenNames): Promise<boolean> {
+    const more = taken.count > taken.names.length ? ", …" : "";
+    return askOnce(t("files.replace_many_confirm", { count: taken.count, names: taken.names.join(", ") + more }));
   }
 
   /** One decision per name, in the order given. */
@@ -193,7 +209,7 @@ export function useReplacePrompt() {
         decide(rest);
         continue;
       }
-      const answer = await prompt(names[i]!, names.length - i > 1);
+      const answer = await prompt(t("files.replace_confirm", { name: names[i]! }), names.length - i > 1);
       if (answer === "yes_all") rest = true;
       if (answer === "no_all") rest = false;
       decide((answer === "yes" || answer === "yes_all") && started === generation);
@@ -254,5 +270,5 @@ export function useReplacePrompt() {
     return outcome;
   }
 
-  return { askReplace, askEach, withReplace, dismiss, leave };
+  return { askReplace, askReplaceMany, askEach, withReplace, dismiss, leave };
 }

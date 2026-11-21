@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import io
 import os
 import posixpath
 import resource
@@ -36,6 +37,7 @@ import socket
 import tarfile
 import threading
 import tracemalloc
+import warnings
 import zipfile
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
@@ -2732,13 +2734,48 @@ def test_an_upload_that_replaces_a_file_keeps_its_bits_and_leaves_no_other_file(
 # --- compress never writes over an archive unasked, and lands whole ----------------------
 
 
+def _unpack_tar(archive: Path, into: Path) -> int:
+    """``tar xzf archive -C into``: a missing ``into`` is an error, as for GNU tar; each
+    entry is written as it is read, so an archive cut short leaves what came before the
+    cut. tarfile's ``data`` filter stands in for GNU tar's own guard: both strip a
+    leading `/` and fail an entry with `..`; a link pointing outside is refused here,
+    where GNU tar delays it and fails a later entry written through it, so an archive
+    that writes through such a link fails on both."""
+    if not into.is_dir():
+        return 2
+    try:
+        with tarfile.open(archive, "r:gz") as opened:
+            opened.extractall(into, filter="data")
+    except (tarfile.TarError, OSError, EOFError):
+        return 2
+    return 0
+
+
+def _unpack_zip(archive: Path, into: Path) -> int:
+    """``unzip -o archive -d into``: ``into`` is made when missing, and a later entry of
+    a name replaces an earlier one (``-o``)."""
+    try:
+        into.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive) as opened:
+            opened.extractall(into)
+    except (zipfile.BadZipFile, OSError, EOFError):
+        return 9
+    return 0
+
+
 def _packing_in(root: Path) -> CommandStandIn:
     """What ``tar czf`` and ``zip -r`` do, on the temp folder that is the server's `/`:
     a tar is made new, a zip adds to the zip that is there (as the program does), and
     a source that is not there is the program's error after it began to write. The
-    archive being written is never packed into itself."""
+    archive being written is never packed into itself. ``tar xzf`` and ``unzip -o``
+    unpack as ``_unpack_tar`` and ``_unpack_zip`` say."""
 
     async def run(command: str) -> int:
+        words = shlex.split(command)
+        if words[:2] == ["tar", "xzf"] and words[3] == "-C":
+            return _unpack_tar(root / words[2].lstrip("/"), root / words[4].lstrip("/"))
+        if words[:2] == ["unzip", "-o"] and words[3] == "-d":
+            return _unpack_zip(root / words[2].lstrip("/"), root / words[4].lstrip("/"))
         zipping = command.startswith("cd / && ")
         words = shlex.split(command.removeprefix("cd / && "))
         if words[:2] == ["tar", "czf"]:
@@ -2977,3 +3014,368 @@ def test_an_extract_past_its_limit_is_504_and_closes_the_connection(env, box, mo
         {"detail": "Extraction timed out", "reason": "timeout"},
     )
     assert _pool_holds_a_connection() == 0
+
+
+# --- extract writes over nothing unasked, and is all or nothing ---------------------------
+#
+# Each archive is built here, in the test's temporary folder, and only handed to the
+# route. "outside" is a folder beside the destination that must stay as it was.
+
+Member = bytes | str | tuple[str, str]  # bytes: a file; "dir": a folder; ("link"|"hard", target)
+
+
+def make_archive(path: Path, members: list[tuple[str, Member]]) -> Path:
+    """An archive at ``path`` (a ``.zip`` or a ``.tar.gz`` by its name) holding
+    ``members`` in order, with the names exactly as given."""
+    if path.name.endswith(".zip"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # zipfile's "Duplicate name"
+            with zipfile.ZipFile(path, "w") as opened:
+                for name, value in members:
+                    if value == "dir":
+                        opened.writestr(name + "/", b"")
+                    else:
+                        assert isinstance(value, bytes)
+                        opened.writestr(name, value)
+        return path
+    with tarfile.open(path, "w:gz") as opened:
+        for name, value in members:
+            info = tarfile.TarInfo(name)
+            if value == "dir":
+                info.type, info.mode = tarfile.DIRTYPE, 0o755
+                opened.addfile(info)
+            elif isinstance(value, tuple):
+                info.type = tarfile.SYMTYPE if value[0] == "link" else tarfile.LNKTYPE
+                info.linkname = value[1]
+                opened.addfile(info)
+            else:
+                assert isinstance(value, bytes)
+                info.size, info.mode = len(value), 0o644
+                opened.addfile(info, io.BytesIO(value))
+    return path
+
+
+def extract(s: Side, archive: str, dest: str = "d", **extra):
+    return s.post(
+        "archive/extract", {"archive_path": s.path(archive), "destination": s.path(dest), **extra}
+    )
+
+
+FORMATS = ["tar.gz", "zip"]
+
+# What the destination holds before the archive below is unpacked into it.
+COLLIDING_ARCHIVE: list[tuple[str, Member]] = [
+    ("a.txt", b"new a"),
+    ("new.txt", b"new"),
+    ("sub", "dir"),
+    ("sub/b.txt", b"new b"),
+    ("sub/new.txt", b"new in sub"),
+]
+
+
+def _destination_with_two_of_its_files(s: Side) -> None:
+    s.disk("d/sub").mkdir(parents=True)
+    s.disk("d/a.txt").write_bytes(b"old a")
+    s.disk("d/a.txt").chmod(0o640)
+    s.disk("d/keep.txt").write_bytes(b"keep")
+    s.disk("d/sub/b.txt").write_bytes(b"old b")
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_an_extract_onto_existing_files_is_409_names_them_and_changes_nothing(env, box, fmt):
+    s = side(env, box)
+    _destination_with_two_of_its_files(s)
+    make_archive(s.disk(f"in.{fmt}"), COLLIDING_ARCHIVE)
+    before = files_under(s.base)
+
+    resp = extract(s, f"in.{fmt}")
+
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {
+            "detail": "Files of the archive that already exist here (2): a.txt, sub/b.txt",
+            "reason": "exists",
+            "taken": {"count": 2, "names": ["a.txt", "sub/b.txt"]},
+        },
+    )
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_an_extract_with_overwrite_replaces_files_and_leaves_the_others(env, box, fmt):
+    s = side(env, box)
+    _destination_with_two_of_its_files(s)
+    make_archive(s.disk(f"in.{fmt}"), COLLIDING_ARCHIVE)
+
+    resp = extract(s, f"in.{fmt}", overwrite=True)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path("d"))
+    assert files_under(s.disk("d")) == {
+        "a.txt": b"new a",
+        "keep.txt": b"keep",
+        "new.txt": b"new",
+        "sub": "dir",
+        "sub/b.txt": b"new b",
+        "sub/new.txt": b"new in sub",
+    }
+    assert s.disk("d/a.txt").stat().st_mode & 0o7777 == 0o640
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_an_extract_refusal_names_the_first_five_and_counts_all(env, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    names = [f"f{i}.txt" for i in range(1, 8)]
+    for name in names:
+        s.disk(f"d/{name}").write_bytes(b"old")
+    make_archive(s.disk("in.zip"), [(name, b"new") for name in names])
+    before = files_under(s.base)
+
+    resp = extract(s, "in.zip")
+
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {
+            "detail": "Files of the archive that already exist here (7): "
+            "f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more",
+            "reason": "exists",
+            "taken": {"count": 7, "names": names[:5]},
+        },
+    )
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("kind", ["file over folder", "folder over file", "file over link"])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_an_extract_onto_what_cannot_be_replaced_is_refused_whole(env, box, kind, overwrite):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("d/a.txt").write_bytes(b"old a")
+    s.disk("elsewhere.txt").write_bytes(b"keep me")
+    members: list[tuple[str, Member]] = [("a.txt", b"new a")]
+    if kind == "file over folder":
+        s.disk("d/x").mkdir()
+        s.disk("d/x/in.txt").write_bytes(b"in")
+        members.append(("x", b"file"))
+    elif kind == "folder over file":
+        s.disk("d/x").write_bytes(b"file")
+        members += [("x", "dir"), ("x/in.txt", b"in")]
+    else:
+        s.disk("d/x").symlink_to(s.disk("elsewhere.txt"))
+        members.append(("x", b"file"))
+    make_archive(s.disk("in.zip"), members)
+    before = files_under(s.base)
+
+    resp = extract(s, "in.zip", overwrite=overwrite)
+
+    assert (resp.status_code, resp.json()) == (
+        400 if overwrite else 409,
+        {
+            "detail": "Names of the archive taken here by something that cannot be replaced (1): x",
+            "reason": "cannot_replace",
+            "taken": {"count": 1, "names": ["x"]},
+        },
+    )
+    assert files_under(s.base) == before
+
+
+ODD_ENTRY_NAMES = ["line\nbreak.txt", 'it\'s "q".txt', "-rf", "-x.txt"]
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_an_extract_reads_entry_names_from_the_file_system_not_a_listing(env, box, fmt):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("d/line\nbreak.txt").write_bytes(b"old")
+    make_archive(s.disk(f"in.{fmt}"), [(name, name.encode()) for name in ODD_ENTRY_NAMES])
+    before = files_under(s.base)
+
+    refused = extract(s, f"in.{fmt}")
+    after_refusal = files_under(s.base)
+    replaced = extract(s, f"in.{fmt}", overwrite=True)
+
+    assert (refused.status_code, refused.json()["taken"]) == (
+        409,
+        {"count": 1, "names": ["line\nbreak.txt"]},
+    )
+    assert after_refusal == before
+    assert replaced.status_code == 200
+    assert files_under(s.disk("d")) == {name: name.encode() for name in ODD_ENTRY_NAMES}
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_a_tar_entry_with_a_parent_reference_after_a_good_one_changes_nothing(env, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("outside").mkdir()
+    s.disk("d/keep.txt").write_bytes(b"keep")
+    make_archive(s.disk("in.tar.gz"), [("first.txt", b"first"), ("../outside/x.txt", b"pwned")])
+    before = files_under(s.base)
+
+    resp = extract(s, "in.tar.gz")
+
+    assert (resp.status_code, resp.json()["reason"]) == (500, "failed")
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_a_tar_that_writes_through_a_link_pointing_outside_changes_nothing(env, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("outside").mkdir()
+    make_archive(s.disk("in.tar.gz"), [("ln", ("link", "../outside")), ("ln/x.txt", b"pwned")])
+    before = files_under(s.base)
+
+    resp = extract(s, "in.tar.gz")
+
+    assert (resp.status_code, resp.json()["reason"]) == (500, "failed")
+    assert files_under(s.base) == before
+
+
+def _cut_short(path: Path) -> None:
+    """Keep the first half of an archive whose second member is 200 kB of noise, so the
+    first member is whole and the second is cut."""
+    data = path.read_bytes()
+    path.write_bytes(data[: len(data) // 2])
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("fmt", FORMATS)
+@pytest.mark.parametrize("dest", ["d", "n/m"])
+def test_an_archive_cut_short_leaves_the_destination_as_it_was(env, box, fmt, dest):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("d/keep.txt").write_bytes(b"keep")
+    archive = make_archive(
+        s.disk(f"in.{fmt}"), [("first.txt", b"first"), ("noise.bin", os.urandom(200_000))]
+    )
+    _cut_short(archive)
+    before = files_under(s.base)
+
+    resp = extract(s, f"in.{fmt}", dest)
+
+    assert (resp.status_code, resp.json()["reason"]) == (500, "failed")
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_a_zip_with_two_entries_of_one_name_keeps_the_later_one(env, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    make_archive(s.disk("in.zip"), [("dup.txt", b"first"), ("dup.txt", b"second")])
+
+    resp = extract(s, "in.zip")
+
+    assert resp.status_code == 200
+    assert files_under(s.disk("d")) == {"dup.txt": b"second"}
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_an_extract_into_a_folder_that_takes_no_new_file_is_denied(env, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("d/keep.txt").write_bytes(b"keep")
+    make_archive(s.disk("in.tar.gz"), [("a.txt", b"a")])
+    s.disk("d").chmod(0o555)
+    try:
+        before = files_under(s.base)
+        resp = extract(s, "in.tar.gz")
+        after = files_under(s.base)
+    finally:
+        s.disk("d").chmod(0o755)
+
+    assert (resp.status_code, resp.json()["reason"]) == (403, "denied")
+    assert after == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_an_archive_unpacked_into_its_own_folder_is_kept(env, box, fmt):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    archive = make_archive(s.disk(f"d/o.{fmt}"), [("a.txt", b"a")])
+    archive_bytes = archive.read_bytes()
+
+    resp = extract(s, f"d/o.{fmt}")
+
+    assert resp.status_code == 200
+    assert files_under(s.disk("d")) == {f"o.{fmt}": archive_bytes, "a.txt": b"a"}
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_an_archive_that_holds_its_own_name_never_replaces_itself_unasked(env, box, fmt):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    make_archive(s.disk(f"d/o.{fmt}"), [("a.txt", b"a"), (f"o.{fmt}", b"inner")])
+    before = files_under(s.base)
+
+    refused = extract(s, f"d/o.{fmt}")
+    after_refusal = files_under(s.base)
+    replaced = extract(s, f"d/o.{fmt}", overwrite=True)
+
+    assert (refused.status_code, refused.json()["taken"]) == (
+        409,
+        {"count": 1, "names": [f"o.{fmt}"]},
+    )
+    assert after_refusal == before
+    assert replaced.status_code == 200
+    assert files_under(s.disk("d")) == {f"o.{fmt}": b"inner", "a.txt": b"a"}
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_an_extract_into_a_missing_folder_makes_it(env, box):
+    s = side(env, box)
+    make_archive(s.disk("in.tar.gz"), [("a.txt", b"a")])
+
+    resp = extract(s, "in.tar.gz", "n/m")
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path("n/m"))
+    assert files_under(s.disk("n")) == {"m": "dir", "m/a.txt": b"a"}
+
+
+@pytest.mark.parametrize("box", ["lb-refusing"])
+def test_an_extract_past_its_limit_leaves_the_destination_as_it_was(env, box, monkeypatch):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("d/keep.txt").write_bytes(b"keep")
+    make_archive(s.disk("in.tar.gz"), [("a.txt", b"a")])
+    before = files_under(s.base)
+
+    async def slow(command: str) -> int:
+        words = shlex.split(command)
+        (env.root / words[4].lstrip("/") / "a.txt").write_bytes(b"partial")
+        await asyncio.sleep(30)
+        return 0
+
+    env.server.stand_in = slow
+    monkeypatch.setattr(remote_files_api, "ARCHIVE_TIMEOUT", 0.3)
+
+    resp = extract(s, "in.tar.gz")
+
+    assert (resp.status_code, resp.json()) == (
+        504,
+        {"detail": "Extraction timed out", "reason": "timeout"},
+    )
+    assert _pool_holds_a_connection() == 0
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("value", ["true", 1, "false", 0])
+def test_an_extract_overwrite_must_be_a_json_boolean(local_env, value):
+    s = side(local_env, "local")
+    s.disk("d").mkdir()
+    s.disk("d/a.txt").write_bytes(b"precious")
+    make_archive(s.disk("in.zip"), [("a.txt", b"new")])
+
+    resp = extract(s, "in.zip", overwrite=value)
+
+    assert (resp.status_code, resp.json()) == (
+        422,
+        {"detail": "body.overwrite: Input should be a valid boolean", "reason": "invalid"},
+    )
+    assert s.disk("d/a.txt").read_bytes() == b"precious"

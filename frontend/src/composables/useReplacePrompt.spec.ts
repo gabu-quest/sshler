@@ -151,6 +151,43 @@ describe("useReplacePrompt", () => {
       i18n.setLocale("en");
     }
   });
+
+  // Mutation killed: a dialog of its own for many names, or the count or the names left out.
+  it("many names one request would replace: the one-name dialog with the count and the first names", async () => {
+    const { askReplaceMany } = mountComposable();
+    const answer = askReplaceMany({ count: 12, names: ["a.txt", "sub/b.txt"] });
+    const first = await opened(1);
+    // Replace is dead for a moment, as on every prompt.
+    expect(first.positiveButtonProps).toEqual({ disabled: true });
+    vi.advanceTimersByTime(REPLACE_ARM_MS);
+    expect([first.title, first.content, first.positiveText, first.negativeText, first.closable, first.action]).toEqual([
+      "File already exists",
+      "Files here that would be replaced: 12 (a.txt, sub/b.txt, …). Replace them?",
+      "Replace",
+      "No, keep it",
+      false,
+      undefined,
+    ]);
+    first.onPositiveClick();
+    expect(await answer).toBe(true);
+  });
+
+  it("many names in Japanese", async () => {
+    const { askReplaceMany } = mountComposable();
+    i18n.setLocale("ja");
+    try {
+      const answer = askReplaceMany({ count: 2, names: ["a.txt", "b.txt"] });
+      const opts = await prompt(1);
+      expect([opts.title, opts.content]).toEqual([
+        "ファイルが既に存在します",
+        "ここにある 2 個のファイルが置き換えられます（a.txt, b.txt）。置き換えますか？",
+      ]);
+      opts.onNegativeClick();
+      expect(await answer).toBe(false);
+    } finally {
+      i18n.setLocale("en");
+    }
+  });
 });
 
 describe("a prompt that has just appeared", () => {

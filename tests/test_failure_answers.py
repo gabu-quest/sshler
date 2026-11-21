@@ -314,6 +314,14 @@ def test_a_route_past_its_rate_limit_answers_retry_after():
         ({"detail": "x"}, "body is not exactly detail and reason"),
         ({"detail": "x", "reason": "oops"}, "reason is not a word of the list"),
         ({"detail": "x", "reason": "invalid", "more": 1}, "body is not exactly detail and reason"),
+        (
+            {"detail": "x", "reason": "exists", "taken": {"count": 1}},
+            "taken is not a count and names",
+        ),
+        (
+            {"detail": "x", "reason": "exists", "taken": {"count": "1", "names": ["a"]}},
+            "taken is not a count and names",
+        ),
     ],
 )
 def test_the_suite_wide_check_refuses_a_wrong_failure_body(body, problem):
@@ -322,8 +330,14 @@ def test_the_suite_wide_check_refuses_a_wrong_failure_body(body, problem):
     assert failure_body_problem(app, "GET", response) == f"400 {problem}: {body!r}"
 
 
-def test_the_suite_wide_check_passes_a_right_failure_body():
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"detail": "x", "reason": "invalid"},
+        {"detail": "x", "reason": "exists", "taken": {"count": 7, "names": ["a", "b"]}},
+    ],
+)
+def test_the_suite_wide_check_passes_a_right_failure_body(body):
     app = SimpleNamespace(exception_handlers={Exception: failure._unanswered})
-    body = {"detail": "x", "reason": "invalid"}
     response = SimpleNamespace(status_code=400, json=lambda: body, text=json.dumps(body))
     assert failure_body_problem(app, "GET", response) is None

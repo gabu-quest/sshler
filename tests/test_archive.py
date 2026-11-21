@@ -1,5 +1,6 @@
 """Tests for archive creation and extraction API."""
 
+import platform
 import sys
 import tarfile
 import zipfile
@@ -372,13 +373,12 @@ class TestLocalArchiveGuards:
         root, client = place
         _tar_with(root / "up.tar.gz", _member("../outside/x.txt"))
         resp = _extract(client, root / "up.tar.gz", root / "dest")
-        target = root / "outside" / "x.txt"
-        assert (resp.status_code, resp.json()["detail"]) == (
+        assert (resp.status_code, resp.json()) == (
             500,
-            f"'../outside/x.txt' would be extracted to {str(target)!r}, "
-            "which is outside the destination",
+            {"detail": "Archive contains unsafe entry: ../outside/x.txt", "reason": "failed"},
         )
         assert list((root / "outside").iterdir()) == []
+        assert list((root / "dest").iterdir()) == []
 
     def test_a_tar_entry_with_an_absolute_name_lands_inside_the_destination(self, place):
         root, client = place
@@ -394,9 +394,9 @@ class TestLocalArchiveGuards:
         root, client = place
         _tar_with(root / "ln.tar.gz", _member("ln", link_to="../outside"))
         resp = _extract(client, root / "ln.tar.gz", root / "dest")
-        assert (resp.status_code, resp.json()["detail"]) == (
+        assert (resp.status_code, resp.json()) == (
             500,
-            f"'ln' would link to {str(root / 'outside')!r}, which is outside the destination",
+            {"detail": "Archive contains unsafe entry: ln", "reason": "failed"},
         )
         assert list((root / "dest").iterdir()) == []
 
@@ -496,3 +496,82 @@ def test_a_local_archive_of_a_missing_source_is_404_with_its_text(tmp_path, monk
         404,
         {"detail": f"{words}: {missing}", "reason": "not_found"},
     )
+
+
+# --- a tar that holds links, on a Python whose tar guard has known holes ---------------
+
+
+@pytest.mark.parametrize(
+    ("version", "fixed"),
+    [
+        ((3, 12, 3), False),
+        ((3, 12, 10), False),
+        ((3, 12, 11), True),
+        ((3, 12, 12), True),
+        ((3, 13, 0), False),
+        ((3, 13, 3), False),
+        ((3, 13, 4), True),
+        ((3, 14, 0), True),
+    ],
+)
+def test_the_tar_guard_is_fixed_from_3_12_11_and_3_13_4(version, fixed):
+    from sshler.api import local_files
+
+    assert local_files.tar_link_guard_is_fixed(version) is fixed
+
+
+def _hard_link(name: str, target: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name=name)
+    info.type = tarfile.LNKTYPE
+    info.linkname = target
+    return info
+
+
+class TestATarWithLinksOnAnOldPython:
+    """The guard of this Python is taken to have the holes: a tar with a link is refused
+    before the destination changes; any other archive unpacks."""
+
+    @pytest.fixture
+    def place(self, tmp_path, monkeypatch):
+        from sshler.api import local_files
+
+        monkeypatch.setattr(
+            local_files, "tar_link_guard_is_fixed", lambda *version: False, raising=False
+        )
+        config_dir = setup_config(tmp_path)
+        (tmp_path / "dest").mkdir()
+        (tmp_path / "dest" / "keep.txt").write_text("keep")
+        client = build_client(config_dir, monkeypatch)
+        yield tmp_path.resolve(), client
+        client.close()
+
+    @pytest.mark.parametrize("kind", ["symbolic", "hard"])
+    def test_a_tar_with_a_link_inside_is_refused_and_changes_nothing(self, place, kind):
+        root, client = place
+        link = _member("ln", link_to="a.txt") if kind == "symbolic" else _hard_link("ln", "a.txt")
+        _tar_with(root / "ln.tar.gz", _member("a.txt"), link)
+        resp = _extract(client, root / "ln.tar.gz", root / "dest")
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {
+                "detail": f"This Python ({platform.python_version()}) is too old to unpack "
+                "links from a tar safely; 3.12.11 or 3.13.4 is needed",
+                "reason": "invalid",
+            },
+        )
+        assert sorted(p.name for p in (root / "dest").iterdir()) == ["keep.txt"]
+
+    def test_a_tar_without_links_unpacks(self, place):
+        root, client = place
+        _tar_with(root / "plain.tar.gz", _member("a.txt"))
+        resp = _extract(client, root / "plain.tar.gz", root / "dest")
+        assert resp.status_code == 200
+        assert (root / "dest" / "a.txt").read_bytes() == b"x"
+
+    def test_a_zip_unpacks(self, place):
+        root, client = place
+        with zipfile.ZipFile(str(root / "z.zip"), "w") as zf:
+            zf.writestr("z.txt", "z")
+        resp = _extract(client, root / "z.zip", root / "dest")
+        assert resp.status_code == 200
+        assert (root / "dest" / "z.txt").read_text() == "z"

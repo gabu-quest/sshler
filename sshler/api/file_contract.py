@@ -301,10 +301,23 @@ class BoxFiles(Protocol):
         the old archive whole and no other file."""
         ...
 
-    async def extract_archive(self, archive: str, destination: str) -> str:
+    async def extract_archive(
+        self, archive: str, destination: str, *, overwrite: bool = False
+    ) -> str:
         """Unpack ``archive`` (a ``.tar.gz``, ``.tgz`` or ``.zip`` by its name; any other
-        name is a 400) into folder ``destination``; returns the destination's path. On
-        the local box no entry is written outside ``destination``."""
+        name is a 400) into folder ``destination`` (made if missing); returns the
+        destination's path. The archive is unpacked into a temp folder inside
+        ``destination``, every entry is checked against it, and only then are the
+        entries moved into place by the rule for an existing name: an entry onto a file
+        that exists refuses the whole extract (``exists``, with the count and the first
+        names) unless ``overwrite`` lets files replace files; one onto anything else
+        refuses it (``cannot_replace``); an existing folder takes the archive's entries.
+        An extract that is refused, or fails before the moves begin (an archive that
+        cannot be read, an entry the guard refuses, a command past its limit), leaves
+        ``destination`` as it was and no temp folder. The moves are one per entry and
+        not undone: one that fails after the check (an existing subfolder that takes no
+        new file) leaves the entries moved before it in place. On the local box no
+        entry is written outside ``destination``."""
         ...
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:

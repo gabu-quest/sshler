@@ -840,6 +840,7 @@ export const ja: Record<string, string> = {
   "files.upload_failed_final": "{n}回の試行後にアップロードに失敗しました",
   "files.replace_title": "ファイルが既に存在します",
   "files.replace_confirm": "「{name}」は既に存在します。置き換えますか？",
+  "files.replace_many_confirm": "ここにある {count} 個のファイルが置き換えられます（{names}）。置き換えますか？",
   "files.replace_yes": "置き換える",
   "files.replace_no": "いいえ（残す）",
   "files.replace_all": "すべて置き換える",

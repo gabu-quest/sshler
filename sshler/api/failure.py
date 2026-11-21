@@ -1,10 +1,12 @@
 """The answer of every failed request: its reason, its status and its body.
 
 Every failure answers ``{"detail": <text>, "reason": <word>}`` with the status of its
-reason. ``Failure`` is the one exception a route, an operation or a dependency raises
-to answer by reason; ``failure_of`` is the one function that names the reason of any
-other failure (of the system, of SFTP or SSH, of a path check, of a time limit, of a
-program that is not on the box) for both kinds of box; ``failure_entry`` gives a batch
+reason; a refusal about many names of one request (an extract onto existing files) adds
+``"taken": {"count": <number>, "names": [<the first few>]}``. ``Failure`` is the one
+exception a route, an operation or a dependency raises to answer by reason;
+``failure_of`` is the one function that names the reason of any other failure (of the
+system, of SFTP or SSH, of a path check, of a time limit, of a program that is not on
+the box) for both kinds of box; ``failure_entry`` gives a batch
 item the same reason and text; ``failure_body`` is the body itself, which a stream's
 ``error`` event carries too; the handlers ``install`` registers write the body, and
 ``answer`` writes it for a check that answers before any route runs.
@@ -16,6 +18,7 @@ import errno
 import logging
 import os
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 
 import asyncssh
 from fastapi import FastAPI, HTTPException, Request
@@ -85,10 +88,19 @@ _REASON_OF_STATUS: dict[int, str] = {
 _TIMED_OUT = "Timed out"
 
 
+@dataclass(frozen=True)
+class Taken:
+    """The names one request found taken: how many, and the first few of them."""
+
+    count: int
+    names: tuple[str, ...]
+
+
 class Failure(HTTPException):
     """A failed request, raised by its reason: it answers the reason's status (or
     ``status`` where an answer kept its own, as the existing-name rule does) and
-    ``{"detail": detail, "reason": reason}``, with ``headers``."""
+    ``{"detail": detail, "reason": reason}``, with ``headers``; with ``taken`` the body
+    also carries those names."""
 
     def __init__(
         self,
@@ -97,6 +109,7 @@ class Failure(HTTPException):
         *,
         status: int | None = None,
         headers: Mapping[str, str] | None = None,
+        taken: Taken | None = None,
     ) -> None:
         if reason not in STATUS_OF_REASON:
             raise ValueError(f"not a reason of a failed request: {reason!r}")
@@ -106,6 +119,7 @@ class Failure(HTTPException):
             headers=dict(headers) if headers else None,
         )
         self.reason = reason
+        self.taken = taken
 
 
 def _reason_of_status(status: int) -> str:
@@ -254,11 +268,18 @@ def failure_entry(
     return {"path": path, "error": str(found.detail), "reason": found.reason}
 
 
-def failure_body(exc: BaseException) -> dict[str, str]:
-    """The body of the failure ``exc``: ``{"detail": <text>, "reason": <word>}``, as a
-    failed request answers it and as a stream's ``error`` event carries it."""
+def failure_body(exc: BaseException) -> dict[str, object]:
+    """The body of the failure ``exc``: ``{"detail": <text>, "reason": <word>}``, and
+    ``taken`` when it has one, as a failed request answers it and as a stream's
+    ``error`` event carries it."""
     found = failure_of(exc)
-    return {"detail": _text(found.detail), "reason": found.reason}
+    body: dict[str, object] = {"detail": _text(found.detail), "reason": found.reason}
+    if found.taken is not None:
+        body["taken"] = {
+            "count": found.taken.count,
+            "names": [_text(name) for name in found.taken.names],
+        }
+    return body
 
 
 def answer(

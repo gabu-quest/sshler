@@ -74,7 +74,7 @@ const favoritesStore = useFavoritesStore();
 const filesStore = useFilesStore();
 const appStore = useAppStore();
 const dialog = useDialog();
-const { askReplace, withReplace, leave: leavePrompt } = useReplacePrompt();
+const { askReplace, askReplaceMany, withReplace, leave: leavePrompt } = useReplacePrompt();
 const message = useMessage();
 const { exportOne: exportOnePdf, exportMany: exportManyPdf, busy: pdfBusy } = usePdfExport();
 const { isMobile } = useResponsive();
@@ -1074,7 +1074,16 @@ async function handleArchiveExtract(archivePath: string) {
   if (!selectedBox.value) return;
   actionBusy.value = true;
   try {
-    await extractArchive(selectedBox.value, archivePath, currentDir.value, tokenValue.value || null);
+    try {
+      await extractArchive(selectedBox.value, archivePath, currentDir.value, tokenValue.value || null);
+    } catch (err) {
+      // Files of the archive the server would replace ask once, with its count and first
+      // names; "No" leaves everything as it was and shows no error. Any other refusal
+      // shows the server's text.
+      if (!(err instanceof ApiError && err.reason === "exists" && err.taken)) throw err;
+      if (!(await askReplaceMany(err.taken))) return;
+      await extractArchive(selectedBox.value, archivePath, currentDir.value, tokenValue.value || null, { overwrite: true });
+    }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success("Extracted archive");
   } catch (err) {

@@ -840,6 +840,7 @@ export const en: Record<string, string> = {
   "files.upload_failed_final": "Upload failed after {n} attempts",
   "files.replace_title": "File already exists",
   "files.replace_confirm": "\"{name}\" already exists here. Replace it?",
+  "files.replace_many_confirm": "Files here that would be replaced: {count} ({names}). Replace them?",
   "files.replace_yes": "Replace",
   "files.replace_no": "No, keep it",
   "files.replace_all": "Replace all",

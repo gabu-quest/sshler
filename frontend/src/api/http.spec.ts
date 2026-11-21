@@ -8,6 +8,7 @@ import {
   downloadDirectory,
   downloadFile,
   exportPdf,
+  extractArchive,
   fetchBootstrap,
   fetchBoxes,
   filenameFromContentDisposition,
@@ -459,6 +460,15 @@ describe("a name that is taken", () => {
     await renameFile("b", "/d/a", "c", "t", { overwrite: true });
     expect(sentBody(0)).toEqual({ path: "/d/a", new_name: "c" });
     expect(sentBody(1)).toEqual({ path: "/d/a", new_name: "c", overwrite: true });
+  });
+
+  // Mutation killed: always sending the flag, or never sending it, on an extract.
+  it("extract sends overwrite only when asked", async () => {
+    fetchMock.mockImplementation(async () => res(200, { status: "ok", message: "Extracted" }));
+    await extractArchive("b", "/d/in.zip", "/d", "t");
+    await extractArchive("b", "/d/in.zip", "/d", "t", { overwrite: true });
+    expect(sentBody(0)).toEqual({ archive_path: "/d/in.zip", destination: "/d" });
+    expect(sentBody(1)).toEqual({ archive_path: "/d/in.zip", destination: "/d", overwrite: true });
   });
 
   it.each([["move", batchMove, "batch/move"], ["copy", batchCopy, "batch/copy"]] as const)(

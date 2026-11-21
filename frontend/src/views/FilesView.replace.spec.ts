@@ -480,3 +480,102 @@ describe("FilesView: compress onto an existing archive", () => {
     expect(createArchive).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("FilesView: extract onto existing files", () => {
+  const extractArchive = vi.mocked(http.extractArchive);
+  const names = ["a.txt", "b.txt", "sub/c.txt", "sub/d.txt", "sub/e.txt"];
+  const takenMany = () => new ApiError(
+    409, "exists", "Files of the archive that already exist here (12): a.txt, b.txt, sub/c.txt, sub/d.txt, sub/e.txt and 7 more",
+    null, { count: 12, names },
+  );
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({
+        matches: false, media: query, onchange: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      }),
+    });
+    vi.mocked(http.fetchDirectory).mockResolvedValue({
+      box: "local", directory: "/p",
+      entries: [
+        { name: "a.txt", path: "/p/a.txt", is_directory: false, size: 3, modified: 1, mode: 420 },
+        { name: "in.zip", path: "/p/in.zip", is_directory: false, size: 9, modified: 1, mode: 420 },
+      ],
+    } as any);
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    extractArchive.mockReset();
+  });
+
+  async function extract(container: Element) {
+    await fireEvent.contextMenu(container.querySelector('[data-path="/p/in.zip"] .cell-name div')!);
+    await fireEvent.click(container.querySelector(".menu-extract")!);
+  }
+
+  // Mutation: no prompt on 409 (the error toast), the server's count and names left out, or Yes without the flag.
+  it("a 409 asks once with the count and the first names; Replace sends the extract again with overwrite", async () => {
+    extractArchive.mockRejectedValueOnce(takenMany()).mockResolvedValueOnce({ status: "ok", message: "Extracted" });
+    const { container } = await mountLoaded();
+    await extract(container);
+    const opts = await prompt(1);
+    expect([opts.title, opts.positiveText, opts.negativeText]).toEqual(["File already exists", "Replace", "No, keep it"]);
+    expect(opts.content).toBe(
+      "Files here that would be replaced: 12 (a.txt, b.txt, sub/c.txt, sub/d.txt, sub/e.txt, …). Replace them?",
+    );
+    expect(messageSpy.error).not.toHaveBeenCalled();
+    opts.onPositiveClick();
+    await waitFor(() => expect(messageSpy.success).toHaveBeenCalledWith("Extracted archive"));
+    expect(extractArchive.mock.calls.map((c) => c.slice(1))).toEqual([
+      ["/p/in.zip", "/p", "tok"],
+      ["/p/in.zip", "/p", "tok", { overwrite: true }],
+    ]);
+    expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
+    expect(messageSpy.error).not.toHaveBeenCalled();
+  });
+
+  // Mutation: "…" shown when every taken name is listed.
+  it("lists every name when the server sent them all", async () => {
+    extractArchive.mockRejectedValueOnce(
+      new ApiError(409, "exists", "Files of the archive that already exist here (1): a.txt", null, { count: 1, names: ["a.txt"] }),
+    );
+    const { container } = await mountLoaded();
+    await extract(container);
+    expect((await prompt(1)).content).toBe("Files here that would be replaced: 1 (a.txt). Replace them?");
+  });
+
+  // Mutation: a dismissed prompt is read as Yes, or the 409 text is shown as an error.
+  it.each([
+    ["No", (o: any) => o.onNegativeClick()],
+    ["Escape", (o: any) => o.onEsc()],
+    ["a click outside", (o: any) => o.onMaskClick()],
+  ])("%s sends nothing more and shows no message", async (_label, dismiss) => {
+    extractArchive.mockRejectedValueOnce(takenMany());
+    const { container } = await mountLoaded();
+    await extract(container);
+    dismiss(await prompt(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(extractArchive).toHaveBeenCalledTimes(1);
+    expect(messageSpy.error).not.toHaveBeenCalled();
+    expect(messageSpy.success).not.toHaveBeenCalled();
+  });
+
+  // Mutation: every refusal asks (a Yes would fail: a folder or link is never replaced).
+  it("names that cannot be replaced show the failure's line and text and ask nothing", async () => {
+    extractArchive.mockRejectedValueOnce(new ApiError(
+      409, "cannot_replace", "Names of the archive taken here by something that cannot be replaced (1): x",
+      null, { count: 1, names: ["x"] },
+    ));
+    const { container } = await mountLoaded();
+    await extract(container);
+    await waitFor(() => expect(messageSpy.error).toHaveBeenCalledWith(
+      "That name is taken and cannot be replaced — Names of the archive taken here by something that cannot be replaced (1): x"));
+    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    expect(extractArchive).toHaveBeenCalledTimes(1);
+  });
+});

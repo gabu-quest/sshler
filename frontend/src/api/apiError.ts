@@ -36,9 +36,16 @@ export function reasonKey(reason: ApiErrorReason): string {
   return `error.reason.${reason ?? "none"}`;
 }
 
+/** The names one request found taken (an extract onto existing files): how many, and the first few. */
+export interface TakenNames {
+  count: number;
+  names: string[];
+}
+
 /**
  * Every failed request of the page. `status` is the answer's status (0 when no answer
- * came), `reason` what failed, `detail` the server's own text ("" when it gave none).
+ * came), `reason` what failed, `detail` the server's own text ("" when it gave none),
+ * `taken` the names a refusal of many names is about (null for any other failure).
  * `message` is what a person reads: the translated line of the reason, then " — " and
  * the detail when there is one, or the status in brackets when there is neither a
  * reason nor a detail. A reader decides by `reason`, never by the words. `retryAfter` is
@@ -49,8 +56,15 @@ export class ApiError extends Error {
   readonly reason: ApiErrorReason;
   readonly detail: string;
   readonly retryAfter: number | null;
+  readonly taken: TakenNames | null;
 
-  constructor(status: number, reason: ApiErrorReason, detail: string, retryAfter: number | null = null) {
+  constructor(
+    status: number,
+    reason: ApiErrorReason,
+    detail: string,
+    retryAfter: number | null = null,
+    taken: TakenNames | null = null,
+  ) {
     const line = translate(reasonKey(reason));
     // An answer with no reason and no text keeps its status, so it can still be told apart.
     const bare = reason === null && !detail && status > 0;
@@ -60,7 +74,15 @@ export class ApiError extends Error {
     this.reason = reason;
     this.detail = detail;
     this.retryAfter = retryAfter;
+    this.taken = taken;
   }
+}
+
+function takenNames(taken: unknown): TakenNames | null {
+  const fields = (typeof taken === "object" && taken !== null ? taken : {}) as { count?: unknown; names?: unknown };
+  const { count, names } = fields;
+  if (typeof count !== "number" || !Array.isArray(names) || !names.every((n) => typeof n === "string")) return null;
+  return { count, names: names as string[] };
 }
 
 /** A `Retry-After` header's whole seconds; null when it is absent or not a number of
@@ -84,17 +106,18 @@ function detailText(detail: unknown): string {
   return "";
 }
 
-/** The error of a failure body already read as JSON: `{"detail": ..., "reason": ...}`. */
+/** The error of a failure body already read as JSON: `{"detail": ..., "reason": ...}`, and `taken` where it has one. */
 export function apiErrorOfBody(status: number, body: unknown, retryAfter: number | null = null): ApiError {
   const fields = (typeof body === "object" && body !== null ? body : {}) as {
     detail?: unknown;
     reason?: unknown;
+    taken?: unknown;
   };
   const reason =
     typeof fields.reason === "string" && KNOWN_REASONS.has(fields.reason)
       ? (fields.reason as FailureReason)
       : null;
-  return new ApiError(status, reason, detailText(fields.detail), retryAfter);
+  return new ApiError(status, reason, detailText(fields.detail), retryAfter, takenNames(fields.taken));
 }
 
 /** The error of a failed answer from its status and its body's text. A body that is not

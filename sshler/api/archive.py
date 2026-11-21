@@ -33,6 +33,7 @@ class APIArchiveCreateRequest(BaseModel):
 class APIArchiveExtractRequest(BaseModel):
     archive_path: str
     destination: str
+    overwrite: StrictBool = False
 
 
 def _validate_archive_name(name: str, fmt: str) -> str:
@@ -94,7 +95,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
 
         async with box_files(deps, box, application_config, _ARCHIVE) as files:
-            destination = await files.extract_archive(payload.archive_path, payload.destination)
+            destination = await files.extract_archive(
+                payload.archive_path, payload.destination, overwrite=payload.overwrite
+            )
         return {"status": "ok", "message": "Extracted", "path": destination}
 
     return router
