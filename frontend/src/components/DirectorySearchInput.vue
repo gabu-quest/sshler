@@ -246,10 +246,10 @@ function formatPath(path: string): string {
     max-width: 100%;
   }
 
+  /* Under its input and as wide as it, like on a wide screen: the input spans the card here. */
   .search-dropdown {
-    position: fixed;
-    left: 8px;
-    right: 8px;
+    right: 0;
+    min-width: 0;
     width: auto;
     max-width: none;
     max-height: 50vh;

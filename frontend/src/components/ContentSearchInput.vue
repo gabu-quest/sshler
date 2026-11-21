@@ -325,9 +325,6 @@ function escapeHtml(str: string): string {
 
 @media (max-width: 768px) {
   .grep-dropdown {
-    position: fixed;
-    left: 8px;
-    right: 8px;
     max-height: 50vh;
   }
 }
