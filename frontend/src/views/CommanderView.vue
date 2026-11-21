@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
@@ -364,7 +365,7 @@ async function startTransfer(mode: "copy" | "move") {
     }
   } catch (err) {
     // A cancel has already put its own text on the dialog.
-    if (transferError.value === null) transferError.value = err instanceof Error ? err.message : String(err);
+    if (transferError.value === null) transferError.value = errorText(err);
   }
   refreshBothPanes();
 }
@@ -392,7 +393,7 @@ async function handleMkdir() {
     await createFolder(ctx.box, ctx.dir, name.trim(), tokenValue.value);
     ctx.paneRef?.reload();
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -429,7 +430,7 @@ async function handleDelete() {
     deleteTargetPaths.value = [];
     ctx.paneRef?.reload();
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 

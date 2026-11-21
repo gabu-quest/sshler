@@ -119,3 +119,8 @@ export function failureText(failure: FailureFields): string {
 export function networkError(): ApiError {
   return new ApiError(0, "network", "");
 }
+
+/** What a caught value reads as: an `Error`'s message, else the value as text. */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

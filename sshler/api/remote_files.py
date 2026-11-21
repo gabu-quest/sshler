@@ -30,6 +30,7 @@ from .failure import (
     REASON_INVALID,
     REASON_NOT_FOUND,
     REASON_TIMEOUT,
+    REASON_TOO_LARGE,
     REASON_UNREACHABLE,
     Failure,
     failure_entry,
@@ -816,7 +817,7 @@ class RemoteFiles:
             content, too_large = await _read_file_bytes(await self._conn(), path, limit)
         if too_large:
             detail = "File too large to view" if inline else "File too large to download via API"
-            raise Failure("too_large", detail)
+            raise Failure(REASON_TOO_LARGE, detail)
         if inline:
             mime, _ = mimetypes.guess_type(path)
             return Response(
@@ -879,7 +880,7 @@ class RemoteFiles:
                 else:
                     ssh_pool.discard(self._box.name, connection)
             if isinstance(exc, _ZipTooLargeError):
-                raise Failure("too_large", "Directory too large to download") from exc
+                raise Failure(REASON_TOO_LARGE, "Directory too large to download") from exc
             raise
         return FolderZip(path=tmp_path, name=dirname)
 

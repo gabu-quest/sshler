@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -31,7 +32,7 @@ export const useFilesStore = defineStore("files", () => {
     try {
       listing.value = await fetchDirectory(box, directory, token);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }
@@ -120,7 +121,7 @@ export const useFilesStore = defineStore("files", () => {
       uploadProgress.value = Math.max(uploadProgress.value, 100);
       uploadFileName.value = null;
     } catch (err) {
-      uploadError.value = err instanceof Error ? err.message : String(err);
+      uploadError.value = errorText(err);
       uploadProgress.value = 0;
       uploadFileName.value = null;
       throw err;

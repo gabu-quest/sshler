@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -158,7 +159,7 @@ async function submitRegistration(): Promise<void> {
     registrationModal.value = false;
     resetForm();
   } catch (reason) {
-    message.error(reason instanceof Error ? reason.message : String(reason));
+    message.error(errorText(reason));
   } finally {
     submitting.value = false;
   }
@@ -176,7 +177,7 @@ async function togglePages(artifact: ArtifactRegistration): Promise<void> {
     next.add(artifact.id);
     expandedArtifacts.value = next;
   } catch (reason) {
-    message.error(reason instanceof Error ? reason.message : String(reason));
+    message.error(errorText(reason));
   }
 }
 
@@ -201,7 +202,7 @@ async function previewArtifact(artifact: ArtifactRegistration): Promise<void> {
     }
     previewUrl.value = url;
   } catch (reason) {
-    message.error(reason instanceof Error ? reason.message : String(reason));
+    message.error(errorText(reason));
   }
 }
 
@@ -211,7 +212,7 @@ async function rescan(artifact: ArtifactRegistration): Promise<void> {
     expandedArtifacts.value = new Set([...expandedArtifacts.value, artifact.id]);
     message.success(t("artifacts.rescanned", { n: pages.length }));
   } catch (reason) {
-    message.error(reason instanceof Error ? reason.message : String(reason));
+    message.error(errorText(reason));
   }
 }
 
@@ -248,7 +249,7 @@ watch([searchQuery, projectFilter, modeFilter], () => {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     applyFilters().catch((reason) => {
-      message.error(reason instanceof Error ? reason.message : String(reason));
+      message.error(errorText(reason));
     });
   }, 220);
 });
@@ -273,7 +274,7 @@ async function saveProject(): Promise<void> {
     projectModal.value = false;
     message.success(t("artifacts.project_saved"));
   } catch (reason) {
-    message.error(reason instanceof Error ? reason.message : String(reason));
+    message.error(errorText(reason));
   }
 }
 

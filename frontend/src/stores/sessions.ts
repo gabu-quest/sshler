@@ -1,46 +1,11 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { fetchBoxSessions as apiFetchBoxSessions, syncBoxSessions as apiSyncBoxSessions } from '@/api/http'
+import { syncBoxSessions as apiSyncBoxSessions } from '@/api/http'
 import type { ApiSession } from '@/api/types'
 
 export const useSessionsStore = defineStore('sessions', () => {
   // Map of box name -> sessions array
   const sessionsByBox = ref<Map<string, ApiSession[]>>(new Map())
-  const loading = ref(false)
-  const error = ref<string | null>(null)
-
-  /**
-   * Load sessions for a specific box
-   */
-  async function loadBoxSessions(boxName: string, token: string | null, activeOnly = false): Promise<ApiSession[]> {
-    try {
-      const sessions = await apiFetchBoxSessions(boxName, token, activeOnly)
-      sessionsByBox.value.set(boxName, sessions)
-      return sessions
-    } catch (e) {
-      // A box that could not be asked is told in `error`, never listed as having no sessions.
-      error.value = e instanceof Error ? e.message : String(e)
-      return sessionsByBox.value.get(boxName) ?? []
-    }
-  }
-
-  /**
-   * Load sessions for all boxes in parallel
-   */
-  async function loadAllBoxSessions(boxNames: string[], token: string | null, activeOnly = false): Promise<void> {
-    loading.value = true
-    error.value = null
-
-    try {
-      await Promise.all(
-        boxNames.map(name => loadBoxSessions(name, token, activeOnly))
-      )
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
-    } finally {
-      loading.value = false
-    }
-  }
 
   /**
    * Sync sessions for a box with actual tmux state
@@ -63,17 +28,10 @@ export const useSessionsStore = defineStore('sessions', () => {
    * Sync sessions for all boxes in parallel
    */
   async function syncAllBoxSessions(boxNames: string[], token: string | null): Promise<void> {
-    loading.value = true
-    error.value = null
-
-    try {
-      // allSettled so one unreachable box doesn't block or fail the entire batch
-      await Promise.allSettled(
-        boxNames.map(name => syncBoxSessions(name, token))
-      )
-    } finally {
-      loading.value = false
-    }
+    // allSettled so one unreachable box doesn't block or fail the entire batch
+    await Promise.allSettled(
+      boxNames.map(name => syncBoxSessions(name, token))
+    )
   }
 
   /**
@@ -120,16 +78,10 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   function $reset() {
     sessionsByBox.value = new Map()
-    loading.value = false
-    error.value = null
   }
 
   return {
     sessionsByBox,
-    loading,
-    error,
-    loadBoxSessions,
-    loadAllBoxSessions,
     syncBoxSessions,
     syncAllBoxSessions,
     getBoxSessions,

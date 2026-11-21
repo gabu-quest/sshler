@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -89,7 +90,7 @@ export const useClaudeSessionsStore = defineStore("claudeSessions", () => {
       sessions.value = await fetchClaudeSessions(token);
       loaded.value = true;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       sessions.value = [];
     } finally {
       loading.value = false;

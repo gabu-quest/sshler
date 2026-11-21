@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
 import { PhArrowsClockwise, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX, PhHouse, PhSkull } from '@phosphor-icons/vue'
@@ -63,10 +64,6 @@ function goHome() {
       metadata: {},
     })
   }
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
 }
 
 async function load() {

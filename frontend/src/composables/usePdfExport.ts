@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 /**
  * Orchestrates the PDF export flow:
  *   1. Build printable HTML via `usePrintableHtml`
@@ -105,7 +106,7 @@ export function usePdfExport() {
       loadingBar.finish();
     } catch (err) {
       loadingBar.error();
-      message.error(`${t("files.pdf_failed")}: ${err instanceof Error ? err.message : String(err)}`);
+      message.error(`${t("files.pdf_failed")}: ${errorText(err)}`);
     } finally {
       busy.value = false;
     }
@@ -128,7 +129,7 @@ export function usePdfExport() {
           await renderOne(box, path, theme, prefix);
           succeeded++;
         } catch (err) {
-          message.error(`${t("files.pdf_failed")} (${name}): ${err instanceof Error ? err.message : String(err)}`);
+          message.error(`${t("files.pdf_failed")} (${name}): ${errorText(err)}`);
         }
       }
       if (succeeded === paths.length) {

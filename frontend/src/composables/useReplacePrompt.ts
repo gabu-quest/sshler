@@ -2,7 +2,7 @@ import { h, ref } from "vue";
 import { NButton, useDialog } from "naive-ui";
 
 import { useI18n } from "@/i18n";
-import { ApiError, type FailureReason } from "@/api/apiError";
+import { ApiError, type FailureReason, errorText } from "@/api/apiError";
 
 /** Why the server refused one item of a batch or transfer: any reason of a failure. */
 export type FailReason = FailureReason;
@@ -46,10 +46,6 @@ export const REPLACE_ARM_MS = 500;
 function baseName(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**

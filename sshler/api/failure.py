@@ -30,35 +30,42 @@ from .run_failures import ProgramNotFoundError
 
 logger = logging.getLogger(__name__)
 
-# Each reason and its one status. `invalid` is also the reason of FastAPI's own check of
-# a request's shape, which answers 422.
-STATUS_OF_REASON: dict[str, int] = {
-    "invalid": 400,
-    "auth": 401,
-    "token": 403,
-    "origin": 403,
-    "denied": 403,
-    "not_found": 404,
-    "exists": 409,
-    "cannot_replace": 409,
-    "too_large": 413,
-    "rate_limited": 429,
-    "failed": 500,
-    "internal": 500,
-    "program_missing": 501,
-    "unreachable": 502,
-    "timeout": 504,
-}
-
+# The words of the reasons of a failed request.
 REASON_INVALID = "invalid"
+REASON_AUTH = "auth"
+REASON_TOKEN = "token"
+REASON_ORIGIN = "origin"
 REASON_DENIED = "denied"
 REASON_NOT_FOUND = "not_found"
 REASON_EXISTS = "exists"  # a regular file has the name; `overwrite` would replace it
 REASON_CANNOT_REPLACE = "cannot_replace"  # the name is taken; `overwrite` cannot replace it
+REASON_TOO_LARGE = "too_large"
+REASON_RATE_LIMITED = "rate_limited"
 REASON_FAILED = "failed"
+REASON_INTERNAL = "internal"
 REASON_PROGRAM_MISSING = "program_missing"
 REASON_UNREACHABLE = "unreachable"
 REASON_TIMEOUT = "timeout"
+
+# Each reason and its one status. `invalid` is also the reason of FastAPI's own check of
+# a request's shape, which answers 422.
+STATUS_OF_REASON: dict[str, int] = {
+    REASON_INVALID: 400,
+    REASON_AUTH: 401,
+    REASON_TOKEN: 403,
+    REASON_ORIGIN: 403,
+    REASON_DENIED: 403,
+    REASON_NOT_FOUND: 404,
+    REASON_EXISTS: 409,
+    REASON_CANNOT_REPLACE: 409,
+    REASON_TOO_LARGE: 413,
+    REASON_RATE_LIMITED: 429,
+    REASON_FAILED: 500,
+    REASON_INTERNAL: 500,
+    REASON_PROGRAM_MISSING: 501,
+    REASON_UNREACHABLE: 502,
+    REASON_TIMEOUT: 504,
+}
 
 # The reason of an `HTTPException` raised without one, by its status.
 _REASON_OF_STATUS: dict[int, str] = {
@@ -219,7 +226,7 @@ def _named(
         reason = _REASON_OF_ERRNO.get(exc.errno or 0, REASON_FAILED)
         return Failure(reason, _text(_system_words(exc, as_sent)))
     logger.error("Unanswered failure: %s", exc, exc_info=exc)
-    return Failure("internal", _text(f"{type(exc).__name__}: {exc}"))
+    return Failure(REASON_INTERNAL, _text(f"{type(exc).__name__}: {exc}"))
 
 
 def _process_words(exc: asyncssh.ProcessError | asyncssh.ChannelOpenError) -> str:

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -513,7 +514,7 @@ const handleFilePathClick = async (rawPath: string) => {
     }
   } catch (err) {
     win?.close()
-    message.error(`Failed to check path: ${err instanceof Error ? err.message : String(err)}`)
+    message.error(`Failed to check path: ${errorText(err)}`)
   }
 }
 
@@ -1402,7 +1403,7 @@ const connect = async () => {
 
     // Only show error message if not already reconnecting
     if (!reconnecting.value && reconnectAttempts.value === 0) {
-      message.error(t('terminal.connection_failed') + ': ' + (error instanceof Error ? error.message : String(error)))
+      message.error(t('terminal.connection_failed') + ': ' + (errorText(error)))
     }
 
     // Schedule reconnect on connection failure

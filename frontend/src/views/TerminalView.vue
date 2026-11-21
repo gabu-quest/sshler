@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput, NPopover, useMessage } from 'naive-ui'
@@ -265,7 +266,7 @@ const handleThemeChange = async (theme: string) => {
     const box = boxesStore.items.find(b => b.name === selectedBox.value)
     if (box) box.terminal_theme = theme
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err))
+    message.error(errorText(err))
   }
 }
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NButton, NIcon, NSpace, useMessage } from "naive-ui";
@@ -144,7 +145,7 @@ async function saveAndShare() {
       message.success(t("diff.toast.shared"));
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     saving.value = false;
   }
@@ -289,7 +290,7 @@ async function hydrateForCurrentRoute() {
       diffStore.hydrateFromEnvelope(nb.envelope, nb.id);
       return;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       message.error(t("diff.toast.notebook_not_found", { id: params.id }));
       // Fall through to /diff with no query so the user has a clean slate.
       await router.replace({ name: "diff", query: {} });

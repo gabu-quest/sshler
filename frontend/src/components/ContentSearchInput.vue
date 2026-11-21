@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, ref, watch } from "vue";
 import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFile } from "@phosphor-icons/vue";
@@ -81,7 +82,7 @@ async function performSearch(pattern: string) {
   } catch (err) {
     if (id !== searchId || (err as { name?: unknown } | null)?.name === "AbortError") return;
     results.value = [];
-    failureLine.value = err instanceof Error ? err.message : String(err);
+    failureLine.value = errorText(err);
   } finally {
     if (id === searchId) loading.value = false;
   }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, nextTick, ref, watch } from "vue";
 
 import { fetchDirectory, gitInfo } from "@/api/http";
@@ -366,7 +367,7 @@ async function loadListing() {
   } catch (err) {
     if (requestId !== listingRequestId) return;
     listing.value = null;
-    error.value = err instanceof Error ? err.message : String(err);
+    error.value = errorText(err);
   } finally {
     if (requestId === listingRequestId) {
       loading.value = false;

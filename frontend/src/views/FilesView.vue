@@ -28,7 +28,7 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { ApiError, failureText } from "@/api/apiError";
+import { ApiError, failureText, errorText } from "@/api/apiError";
 import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
@@ -566,7 +566,7 @@ async function refreshStatus(box: string) {
   } catch (err) {
     if (selectedBox.value !== box) return;
     status.value = "offline";
-    statusText.value = err instanceof Error ? err.message : String(err);
+    statusText.value = errorText(err);
   }
 }
 
@@ -652,7 +652,7 @@ async function createEmptyFile() {
     newFileName.value = "";
     message.success(t('files.file_created'));
   } catch (err) {
-    directoryStore.error = err instanceof Error ? err.message : String(err);
+    directoryStore.error = errorText(err);
   } finally {
     actionBusy.value = false;
   }
@@ -668,7 +668,7 @@ async function createNewFolder() {
     newFolderName.value = "";
     message.success(t('files.folder_created'));
   } catch (err) {
-    directoryStore.error = err instanceof Error ? err.message : String(err);
+    directoryStore.error = errorText(err);
   } finally {
     actionBusy.value = false;
   }
@@ -695,7 +695,7 @@ async function removePath(path: string) {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success(t('files.deleted'));
   } catch (err) {
-    directoryStore.error = err instanceof Error ? err.message : String(err);
+    directoryStore.error = errorText(err);
   } finally {
     actionBusy.value = false;
   }
@@ -726,7 +726,7 @@ async function applyChmod() {
     message.success(`Permissions changed to ${chmodValue.value}`);
     await reloadDir();
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -758,7 +758,7 @@ async function doRename() {
     renameTarget.value = null;
     renameValue.value = "";
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -817,7 +817,7 @@ async function handleUpload(files: FileList | null) {
         message.warning(t('files.upload_skipped', { name: file.name }), { closable: true, duration: 0 });
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = errorText(err);
       message.error(`${file.name}: ${errorMsg}`, { closable: true, duration: 0 });
     }
   }
@@ -881,7 +881,7 @@ async function handleDownload(row: any) {
     anchor.click();
     URL.revokeObjectURL(objectUrl);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -950,7 +950,7 @@ async function handleDownloadDirectory(row: any) {
     message.success(`Downloaded ${zipName} (${formatBytes(blob.size)})`);
   } catch (err) {
     loadingMsg?.destroy();
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -996,7 +996,7 @@ async function bulkDelete() {
       message.success(t('files.deleted_selection'));
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1034,7 +1034,7 @@ async function handleBatchConfirm(destination: string) {
       else message.info(summary);
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1056,7 +1056,7 @@ async function handleArchiveCreate(format: string, paths?: string[]) {
     filesStore.setSelectedFiles([]);
     message.success(`Created ${archiveName}`);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1070,7 +1070,7 @@ async function handleArchiveExtract(archivePath: string) {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success("Extracted archive");
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1121,7 +1121,7 @@ async function bulkDownload() {
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      message.error(`Failed to download ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      message.error(`Failed to download ${path}: ${errorText(err)}`);
     }
   }
 }

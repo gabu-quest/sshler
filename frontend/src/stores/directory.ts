@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -19,7 +20,7 @@ export const useDirectoryStore = defineStore("directory", () => {
       listing.value = await fetchDirectory(box, directory, token);
       remember(box, directory);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }
@@ -48,7 +49,7 @@ export const useDirectoryStore = defineStore("directory", () => {
       return await fetchDirectory(box, path, token);
     } catch (err) {
       // A folder that could not be read is told, not shown as a folder with nothing in it.
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return null;
     }
   }

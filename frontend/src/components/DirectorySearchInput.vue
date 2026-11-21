@@ -4,7 +4,7 @@ import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFolder, PhFile, PhClockCounterClockwise } from "@phosphor-icons/vue";
 import { searchDirectories } from "@/api/http";
 import type { SearchResult } from "@/api/types";
-import { failureText } from "@/api/apiError";
+import { failureText, errorText } from "@/api/apiError";
 import { useI18n } from "@/i18n";
 
 const props = defineProps<{
@@ -79,7 +79,7 @@ async function performSearch(searchQuery: string) {
     if (id !== searchId || (err as { name?: unknown } | null)?.name === "AbortError") return;
     results.value = [];
     walkLine.value = null;
-    failureLine.value = err instanceof Error ? err.message : String(err);
+    failureLine.value = errorText(err);
   } finally {
     if (id === searchId) loading.value = false;
   }

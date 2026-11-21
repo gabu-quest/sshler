@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 /**
  * Build a complete, self-contained HTML document representing the printable
  * version of a file (markdown rendered with mermaid SVGs + inlined images,
@@ -161,7 +162,7 @@ async function renderMermaidBlocks(container: HTMLElement, theme: PrintableTheme
       const errorBox = document.createElement("pre");
       errorBox.className = "mermaid-error";
       errorBox.textContent = `Mermaid render error: ${
-        err instanceof Error ? err.message : String(err)
+        errorText(err)
       }\n\n${source}`;
       host.replaceWith(errorBox);
     }

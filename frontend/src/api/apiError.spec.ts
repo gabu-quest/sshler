@@ -4,7 +4,7 @@ import { en } from "@/locales/en";
 import { ja } from "@/locales/ja";
 import type { App } from "vue";
 import { createI18n } from "@/i18n";
-import { ApiError, FAILURE_REASONS, apiErrorOf, apiErrorOfBody, failureText, networkError, reasonKey } from "./apiError";
+import { ApiError, FAILURE_REASONS, apiErrorOf, apiErrorOfBody, errorText, failureText, networkError, reasonKey } from "./apiError";
 
 vi.unmock("@/i18n");
 
@@ -122,5 +122,14 @@ describe("the text of a failure inside a 200 answer", () => {
 
   it("no reason and no text reads as the no-reason line, with no status", () => {
     expect(failureText({ error: null, reason: null })).toBe("The request failed");
+  });
+});
+
+describe("what a caught value reads as", () => {
+  it.each([
+    ["an Error", new Error("boom"), "boom"],
+    ["a value that is not an Error", 42, "42"],
+  ])("%s", (_name, caught, text) => {
+    expect(errorText(caught)).toBe(text);
   });
 });

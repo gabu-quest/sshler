@@ -22,7 +22,6 @@ from typing import IO, cast
 import asyncssh
 from fastapi import (
     FastAPI,
-    HTTPException,
     Query,
     Request,
     WebSocket,
@@ -36,6 +35,7 @@ from . import state
 from .access import allowed_origins, origin_base, websocket_refusal
 from .api import APIDependencies, create_api_router, failure
 from .api.auth import create_auth_router, get_client_ip
+from .api.failure import Failure
 from .api.helpers import (
     DEFAULT_MAX_UPLOAD_BYTES,
     LOCAL_IS_WINDOWS,
@@ -856,7 +856,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     f"[Security] Blocked locked-out IP {client_ip} ({retry_after}s remaining)"
                 )
                 return failure.answer(
-                    "rate_limited",
+                    failure.REASON_RATE_LIMITED,
                     "Too many failed authentication attempts. Try again later.",
                     headers={"Retry-After": str(retry_after)},
                 )
@@ -877,7 +877,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                 auth_header = request.headers.get("authorization")
                 if not auth_header or not auth_header.startswith("Basic "):
                     return failure.answer(
-                        "auth",
+                        failure.REASON_AUTH,
                         "Authentication required",
                         headers={"WWW-Authenticate": 'Basic realm="sshler"'},
                     )
@@ -894,7 +894,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     await asyncio.sleep(2)
 
                     return failure.answer(
-                        "auth",
+                        failure.REASON_AUTH,
                         "Invalid credentials",
                         headers={"WWW-Authenticate": 'Basic realm="sshler"'},
                     )
@@ -972,7 +972,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         if not limiter.check(client_ip):
             return failure.answer(
-                "rate_limited",
+                failure.REASON_RATE_LIMITED,
                 "Rate limit exceeded. Please try again later.",
                 headers={"Retry-After": "60"},
             )
@@ -1006,7 +1006,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                         f"[Security] Blocked request with invalid Origin: {origin_value} "
                         f"(expected one of: {allowed_origins_list})"
                     )
-                    return failure.answer("origin", "Invalid Origin header")
+                    return failure.answer(failure.REASON_ORIGIN, "Invalid Origin header")
 
         return await call_next(request)
 
@@ -1433,7 +1433,7 @@ async def _resolved_remote_directory(
     """``folder`` with ``~`` resolved, or ``None`` when the box's home cannot be read."""
     try:
         return await remote_directory(connection, folder)
-    except HTTPException as exc:
+    except Failure as exc:
         reason = str(exc.detail)
     except TimeoutError:
         reason = "the lookup timed out"

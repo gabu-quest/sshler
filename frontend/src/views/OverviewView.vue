@@ -34,7 +34,7 @@ import { useBoxesStore } from "@/stores/boxes";
 import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
 import { boxStats, statsStreamUrl } from "@/api/http";
-import { failureText } from "@/api/apiError";
+import { failureText, errorText } from "@/api/apiError";
 import type { BoxStats } from "@/api/types";
 import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
@@ -117,7 +117,7 @@ async function loadBoxStats(boxName: string) {
     recordStats(boxName, await boxStats(boxName, tokenValue.value || null));
   } catch (err) {
     statsMap.value.delete(boxName);
-    statsFailure.value.set(boxName, err instanceof Error ? err.message : String(err));
+    statsFailure.value.set(boxName, errorText(err));
   } finally {
     statsLoading.value.delete(boxName);
   }

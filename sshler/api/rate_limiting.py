@@ -8,7 +8,7 @@ from collections.abc import Callable
 from fastapi import Request
 
 from ..rate_limit import get_rate_limiter
-from .failure import Failure
+from .failure import REASON_RATE_LIMITED, Failure
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def create_rate_limit_dependency(
         if not limiter.check(client_ip):
             logger.warning(f"[Security] Rate limit exceeded for {name} endpoint from {client_ip}")
             raise Failure(
-                "rate_limited",
+                REASON_RATE_LIMITED,
                 f"Rate limit exceeded. Maximum {rate} requests per {per} seconds allowed.",
                 headers={"Retry-After": str(limiter.retry_after(client_ip))},
             )

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from ..auth import AuthManager
 from ..session import Session, get_session_store
 from ..settings import get_settings
-from .failure import REASON_INVALID, Failure
+from .failure import REASON_AUTH, REASON_INVALID, Failure
 from .rate_limiting import rate_limit_login
 
 if TYPE_CHECKING:
@@ -117,7 +117,7 @@ def create_auth_router(
                 f"[Security] Failed login attempt for user '{credentials.username}' "
                 f"from {client_ip} (failure count: {failure_count})"
             )
-            raise Failure("auth", "Invalid username or password")
+            raise Failure(REASON_AUTH, "Invalid username or password")
 
         # Reset failure tracker on successful auth
         failure_tracker.reset_failures(client_ip)
@@ -159,7 +159,7 @@ def create_auth_router(
         # Get session cookie
         session_id = request.cookies.get(settings.cookie_name)
         if not session_id:
-            raise Failure("auth", "Not authenticated")
+            raise Failure(REASON_AUTH, "Not authenticated")
 
         # Validate session
         session = session_store.get_session(
@@ -168,7 +168,7 @@ def create_auth_router(
         )
 
         if session is None:
-            raise Failure("auth", "Session expired or invalid")
+            raise Failure(REASON_AUTH, "Session expired or invalid")
 
         return UserInfo(
             username=session.username,
@@ -237,7 +237,7 @@ async def get_current_session(request: Request) -> Session:
     # Get session cookie
     session_id = request.cookies.get(settings.cookie_name)
     if not session_id:
-        raise Failure("auth", "Not authenticated - session cookie missing")
+        raise Failure(REASON_AUTH, "Not authenticated - session cookie missing")
 
     # Validate session
     session_store = get_session_store()
@@ -247,7 +247,7 @@ async def get_current_session(request: Request) -> Session:
     )
 
     if session is None:
-        raise Failure("auth", "Session expired or invalid")
+        raise Failure(REASON_AUTH, "Session expired or invalid")
 
     return session
 

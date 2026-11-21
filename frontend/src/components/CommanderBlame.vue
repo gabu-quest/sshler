@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, onUnmounted, ref, watch } from "vue";
 
 import { gitBlame } from "@/api/http";
@@ -108,7 +109,7 @@ async function loadBlame() {
     truncated.value = result.truncated ?? false;
   } catch (err) {
     if (requestId !== loadRequestId) return;
-    error.value = err instanceof Error ? err.message : String(err);
+    error.value = errorText(err);
   } finally {
     if (requestId === loadRequestId) {
       loading.value = false;

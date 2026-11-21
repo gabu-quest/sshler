@@ -6,7 +6,7 @@ import { PhFolderSimple, PhPushPinSimple, PhStar, PhTerminalWindow } from "@phos
 
 import { useI18n } from "@/i18n";
 import { boxStatus } from "@/api/http";
-import { failureText } from "@/api/apiError";
+import { failureText, errorText } from "@/api/apiError";
 import type { ApiBox, BoxStatus } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
@@ -73,7 +73,7 @@ async function checkStatus(boxName: string) {
   try {
     stat = await boxStatus(boxName, token.value);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
     return;
   }
   if (stat.status !== "online") {

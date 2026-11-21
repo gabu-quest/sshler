@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { computed, ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -75,7 +76,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
       }, 30 * 60 * 1000); // 30 minutes
 
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }

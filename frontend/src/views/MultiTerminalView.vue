@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NSpace, NModal, NPopover, NSelect, NInput, useMessage } from 'naive-ui'
@@ -237,7 +238,7 @@ async function loadSavedLayouts() {
     savedLayouts.value = await fetchLayouts(tokenValue.value || null)
   } catch (error) {
     // The local layout still works; the message says the saved ones could not be listed.
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 
@@ -286,7 +287,7 @@ async function saveCurrentLayout() {
     showSaveLayoutModal.value = false
     await loadSavedLayouts()
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 
@@ -306,7 +307,7 @@ async function removeSavedLayout(id: string) {
     await deleteLayout(id, tokenValue.value || null)
     await loadSavedLayouts()
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 

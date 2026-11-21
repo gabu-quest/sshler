@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { onUnmounted, ref, watch } from "vue";
 
 import { gitBranches, gitLog } from "@/api/http";
@@ -95,7 +96,7 @@ async function loadData() {
     })
     .catch((err: unknown) => {
       if (requestId !== loadRequestId) return;
-      commitsError.value = err instanceof Error ? err.message : String(err);
+      commitsError.value = errorText(err);
     })
     .finally(() => {
       if (requestId === loadRequestId) {
@@ -110,7 +111,7 @@ async function loadData() {
     })
     .catch((err: unknown) => {
       if (requestId !== loadRequestId) return;
-      branchesError.value = err instanceof Error ? err.message : String(err);
+      branchesError.value = errorText(err);
     })
     .finally(() => {
       if (requestId === loadRequestId) {

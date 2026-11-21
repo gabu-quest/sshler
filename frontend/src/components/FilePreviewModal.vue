@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NButton, NIcon, NModal, NSpace, NSpin, NSwitch, useMessage } from "naive-ui";
 import { PhArrowCounterClockwise, PhArrowsOut, PhCaretLeft, PhCaretRight, PhCopy, PhDownloadSimple, PhEye, PhFile, PhFilePdf, PhMagnifyingGlassMinus, PhMagnifyingGlassPlus, PhPencil, PhPrinter, PhX } from "@phosphor-icons/vue";
@@ -337,7 +338,7 @@ const renderMermaidBlocks = async () => {
       const errorBox = document.createElement("pre");
       errorBox.className = "mermaid-error";
       errorBox.textContent = `Mermaid render error: ${
-        err instanceof Error ? err.message : String(err)
+        errorText(err)
       }\n\n${source}`;
       host.replaceWith(errorBox);
     }
@@ -572,7 +573,7 @@ watch(() => props.show, async (showing) => {
     content.value = payload.content || "";
     markdownRenderMode.value = !!payload.is_markdown;
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
     emit("update:show", false);
   } finally {
     loading.value = false;
@@ -602,7 +603,7 @@ async function copyToClipboard(text: string, label: string) {
     await navigator.clipboard.writeText(text);
     message.success(`${label} copied`);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -637,7 +638,7 @@ async function handleCopyRendered() {
       message.success("Rendered copied (plain text fallback)");
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -654,7 +655,7 @@ async function handleDownload() {
     document.body.removeChild(anchor);
     setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 

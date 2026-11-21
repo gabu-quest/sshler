@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { computed, ref, onMounted } from 'vue'
 import { NCard, NButton, NSpace, NAlert, NCode, NInputNumber, NSwitch, NSelect, useMessage } from 'naive-ui'
 import { useBootstrapStore } from '@/stores/bootstrap'
@@ -49,7 +50,7 @@ const refreshToken = async () => {
     await bootstrapStore.refreshToken()
     message.success(t('settings.token_refreshed'))
   } catch (error) {
-    message.error(t('settings.token_refresh_failed') + ' ' + (error instanceof Error ? error.message : String(error)))
+    message.error(t('settings.token_refresh_failed') + ' ' + (errorText(error)))
   }
 }
 
@@ -81,7 +82,7 @@ const loadPoolConfig = async () => {
       poolConfig.value.max_lifetime = Math.round(response.data.max_lifetime / 60)
     }
   } catch (error) {
-    message.error(t('settings.pool_load_failed') + ' ' + (error instanceof Error ? error.message : String(error)))
+    message.error(t('settings.pool_load_failed') + ' ' + (errorText(error)))
   } finally {
     poolLoading.value = false
   }
@@ -101,7 +102,7 @@ const savePoolConfig = async () => {
     })
     message.success(t('settings.pool_saved'))
   } catch (error) {
-    message.error(t('settings.pool_save_failed') + ' ' + (error instanceof Error ? error.message : String(error)))
+    message.error(t('settings.pool_save_failed') + ' ' + (errorText(error)))
   } finally {
     poolSaving.value = false
   }
@@ -112,7 +113,7 @@ const loadSnapshotConfig = async () => {
   try {
     snapshotConfig.value = await fetchSnapshotConfig(tokenValue.value)
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   } finally {
     snapshotLoading.value = false
   }
@@ -134,7 +135,7 @@ const handleSnapshotEnabledChange = async (enabled: boolean) => {
     await saveSnapshotConfig({ enabled })
   } catch (error) {
     snapshotConfig.value.enabled = previous
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 
@@ -147,7 +148,7 @@ const handleSnapshotIntervalChange = async (interval: number | null) => {
     await saveSnapshotConfig({ interval })
   } catch (error) {
     snapshotConfig.value.interval = previous
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 

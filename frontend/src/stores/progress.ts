@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 
@@ -204,7 +205,7 @@ export const useProgressStore = defineStore("progress", () => {
         const parsed = JSON.parse(msg.data) as ProgressEvent;
         _handleEvent(parsed);
       } catch (err) {
-        lastError.value = `bad ws payload: ${err instanceof Error ? err.message : String(err)}`;
+        lastError.value = `bad ws payload: ${errorText(err)}`;
       }
     };
 

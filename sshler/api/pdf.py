@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from ..pdf import PDF_RENDERER
 from .dependencies import APIDependencies
-from .failure import REASON_FAILED, REASON_PROGRAM_MISSING, Failure
+from .failure import REASON_FAILED, REASON_PROGRAM_MISSING, REASON_TOO_LARGE, Failure
 
 # Cap protects against runaway uploads. Real markdown docs with inlined
 # images are well under 1 MB; 20 MB is a generous sanity limit.
@@ -53,7 +53,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 "'pip install sshler[pdf]' and run 'playwright install chromium'.",
             )
         if len(req.html.encode("utf-8")) > _MAX_HTML_BYTES:
-            raise Failure("too_large", "HTML payload too large")
+            raise Failure(REASON_TOO_LARGE, "HTML payload too large")
 
         try:
             pdf_bytes = await PDF_RENDERER.render(req.html)

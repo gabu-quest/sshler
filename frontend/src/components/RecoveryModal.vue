@@ -4,7 +4,7 @@ import { NButton, NCheckbox, NIcon, NModal, NSpace, NTag, useMessage } from "nai
 import { PhTerminalWindow, PhArrowCounterClockwise, PhX, PhFolder, PhGear, PhArrowSquareOut } from "@phosphor-icons/vue";
 import type { LostSession } from "@/api/types";
 import { recreateSessionBatch, dismissRecovery, dismissRecoverySession } from "@/api/http";
-import { failureText } from "@/api/apiError";
+import { failureText, errorText } from "@/api/apiError";
 import { useI18n } from "@/i18n";
 
 const props = defineProps<{
@@ -89,7 +89,7 @@ async function handleRecreate(ids: string[]) {
     if (resp.succeeded.length > 0) message.success(t("recovery.selected_recreated", { count: resp.succeeded.length }));
     if (resp.failed.length > 0) message.error(t("recovery.failed_count", { count: resp.failed.length }));
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     busy.value = false;
   }
@@ -107,7 +107,7 @@ async function handleSkip(session: LostSession) {
     await dismissRecoverySession(session.id, props.token);
   } catch (err) {
     // The row leaves the list either way; the message says the server did not drop it.
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
   const remaining = props.sessions.filter(s => s.id !== session.id);
   emit("updated", remaining);
@@ -120,7 +120,7 @@ async function handleDismiss() {
     message.info(t("recovery.dismissed"));
   } catch (err) {
     // The modal closes either way; the message says the server did not drop them.
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
   emit("updated", []);
   emit("update:show", false);

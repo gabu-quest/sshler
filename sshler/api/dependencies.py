@@ -12,7 +12,7 @@ from ..access import token_matches
 from ..config import AppConfig, Box, find_box, get_config_path, load_config
 from ..config_cache import get_cache
 from ..ssh import SSHError, connect
-from .failure import REASON_NOT_FOUND, Failure
+from .failure import REASON_NOT_FOUND, REASON_TOKEN, Failure
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from .tunnels import TunnelRegistry
@@ -65,7 +65,7 @@ class APIDependencies:
             logger.warning(
                 "Token mismatch on %s: supplied=%s", request.url.path, "yes" if supplied else "no"
             )
-            raise Failure("token", "Missing or invalid X-SSHLER-TOKEN header")
+            raise Failure(REASON_TOKEN, "Missing or invalid X-SSHLER-TOKEN header")
 
     async def get_application_config(self) -> AppConfig:
         """Dependency that loads the persisted configuration with caching."""

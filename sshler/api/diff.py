@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .. import state
 from .dependencies import APIDependencies
-from .failure import REASON_FAILED, REASON_NOT_FOUND, Failure
+from .failure import REASON_FAILED, REASON_NOT_FOUND, REASON_TOO_LARGE, Failure
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001 - deps reser
         envelope_json = json.dumps(envelope_obj)
         if len(envelope_json) > _MAX_ENVELOPE_BYTES:
             raise Failure(
-                "too_large",
+                REASON_TOO_LARGE,
                 f"Notebook envelope too large (>{_MAX_ENVELOPE_BYTES} bytes)",
             )
         row = await state.save_diff_notebook_async(

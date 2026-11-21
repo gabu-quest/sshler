@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, ref, watch } from "vue";
 import {
   NDrawer,
@@ -58,7 +59,7 @@ async function refreshServer() {
     const resp = await listDiffNotebooks(bootstrapStore.token);
     serverNotebooks.value = resp.notebooks;
   } catch (err) {
-    serverError.value = err instanceof Error ? err.message : String(err);
+    serverError.value = errorText(err);
   } finally {
     serverLoading.value = false;
   }
@@ -97,7 +98,7 @@ async function deleteServer(id: string) {
     serverNotebooks.value = serverNotebooks.value.filter((n) => n.id !== id);
     message.success(t("diff.saved.deleted"));
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 

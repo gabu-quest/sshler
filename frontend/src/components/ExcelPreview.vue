@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { ref, computed, watch, onMounted } from "vue";
 import { NTabs, NTab, NSpin, NAlert } from "naive-ui";
 import { fetchExcelPreview } from "@/api/http";
@@ -52,7 +53,7 @@ async function load() {
     data.value = result;
     activeTab.value = result.active_sheet || result.sheets[0]?.name || "";
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = errorText(e);
   } finally {
     loading.value = false;
   }
