@@ -2,7 +2,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PingEvent } from '@/api/types'
+import { signInAfterSocketClose } from '@/api/http'
 import { usePingStore } from './ping'
+
+// The owner of "the session has ended" answers a 4401 close with its sign-in navigation
+// (a promise) and any other close with null; the spec reads what the store asked it.
+vi.mock('@/api/http', () => ({
+  signInAfterSocketClose: vi.fn((code: number) => (code === 4401 ? Promise.resolve() : null)),
+}))
 
 class MockWebSocket {
   static OPEN = 1
@@ -26,9 +33,9 @@ class MockWebSocket {
   fireRaw(data: string) {
     this.onmessage?.({ data } as MessageEvent)
   }
-  fireClose() {
+  fireClose(code = 1006) {
     this.readyState = MockWebSocket.CLOSED
-    this.onclose?.(new CloseEvent('close'))
+    this.onclose?.(new CloseEvent('close', { code }))
   }
   close() {
     this.fireClose()
@@ -54,6 +61,7 @@ describe('ping store', () => {
     MockWebSocket.instances = []
     ;(globalThis as any).WebSocket = MockWebSocket
     vi.useFakeTimers()
+    vi.mocked(signInAfterSocketClose).mockClear()
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -133,6 +141,20 @@ describe('ping store', () => {
     vi.advanceTimersByTime(1000)
     expect(MockWebSocket.instances).toHaveLength(4)
     expect(socket(3).url).toContain('token=tok')
+  })
+
+  it.each([
+    ['while open', true],
+    ['refused at connect', false],
+  ])('a 4401 close %s goes to the sign-in page and never reconnects', (_when, opened) => {
+    const s = usePingStore()
+    s.connect('tok')
+    if (opened) socket(0).fireOpen()
+    socket(0).fireClose(4401)
+    vi.advanceTimersByTime(60_000)
+    expect(vi.mocked(signInAfterSocketClose).mock.calls).toEqual([[4401]])
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(s.connected).toBe(false)
   })
 
   // Mutation killed: disconnect not cancelling the timer / not flagging intent.

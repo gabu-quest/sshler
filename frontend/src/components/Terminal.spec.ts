@@ -41,9 +41,15 @@ vi.mock("naive-ui", async (importOriginal) => ({
   useMessage: () => messageMock,
 }));
 
+// The owner of "the session has ended" answers a 4401 close with its sign-in navigation
+// (a promise) and any other close with null; the spec reads what the terminal asked it.
+const signInMock = vi.hoisted(() =>
+  vi.fn((code: number) => (code === 4401 ? Promise.resolve() : null)),
+);
 vi.mock("@/api/http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/api/http")>()),
   fetchSnapshotStatus: vi.fn(() => ({ last_snapshot_at: null })),
+  signInAfterSocketClose: signInMock,
 }));
 
 class FakeWebSocket {
@@ -83,6 +89,7 @@ beforeEach(async () => {
   setActivePinia(createPinia());
   FakeWebSocket.instances = [];
   Object.values(messageMock).forEach((m) => m.mockClear());
+  signInMock.mockClear();
   fetchMock.mockClear();
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", fetchMock);
@@ -121,7 +128,6 @@ describe("Terminal.vue close codes", () => {
   it.each([
     [4400, "terminal.session_name_refused", 6000],
     [4403, "terminal.auth_failed", 5000],
-    [4401, "terminal.auth_denied", 5000],
     [4502, "terminal.wsl_not_installed", 6000],
     [4503, "terminal.pywinpty_missing", 8000],
     [4404, "terminal.unknown_box", 6000],
@@ -133,6 +139,19 @@ describe("Terminal.vue close codes", () => {
 
     expect(messageMock.error).toHaveBeenCalledTimes(1);
     expect(messageMock.error).toHaveBeenCalledWith(en[key], { duration });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(wrapper.text()).not.toContain(en["terminal.reconnecting_to"]!.replace("{box}", "box1"));
+    wrapper.unmount();
+  });
+
+  // Mutation killed: a 4401 that toasts, reconnects, or never reaches the sign-in owner.
+  it("code 4401 goes to the sign-in page: no toast, no reconnect", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onclose!({ code: 4401 });
+    await advance(60_000);
+
+    expect(signInMock.mock.calls).toEqual([[4401]]);
+    expect(messageMock.error).toHaveBeenCalledTimes(0);
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(wrapper.text()).not.toContain(en["terminal.reconnecting_to"]!.replace("{box}", "box1"));
     wrapper.unmount();

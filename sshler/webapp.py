@@ -33,7 +33,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 
 from . import state
-from .access import allowed_origins, origin_base, websocket_refusal
+from .access import allowed_origins, hold_socket, origin_base, websocket_refusal
 from .api import APIDependencies, create_api_router, failure
 from .api.auth import create_auth_router, get_client_ip
 from .api.failure import Failure
@@ -1103,8 +1103,15 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             return
 
         await websocket.accept()
-        request = TerminalRequest(host, directory, session, columns, rows, shell)
-        await _serve_terminal(websocket, request)
+        # The session's end closes the socket (4401); the pump then ends as on any close.
+        held = await hold_socket(websocket)
+        if held is None:
+            return
+        try:
+            request = TerminalRequest(host, directory, session, columns, rows, shell)
+            await _serve_terminal(websocket, request)
+        finally:
+            held.release()
 
     @application.websocket("/ws/progress")
     async def progress_socket(websocket: WebSocket) -> None:
@@ -1123,6 +1130,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             return
 
         await websocket.accept()
+        held = await hold_socket(websocket)
+        if held is None:
+            return
 
         async def progress_snapshot() -> dict:
             bars = await state.list_progress_async()
@@ -1153,6 +1163,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("progress socket error: %s", exc)
         finally:
+            held.release()
             await progress_broadcaster.disconnect(websocket)
 
     @application.websocket("/ws/ping")
@@ -1168,6 +1179,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             return
 
         await websocket.accept()
+        held = await hold_socket(websocket)
+        if held is None:
+            return
         await ping_broadcaster.connect(websocket)
         try:
             while True:
@@ -1177,6 +1191,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("ping socket error: %s", exc)
         finally:
+            held.release()
             await ping_broadcaster.disconnect(websocket)
 
     # Health check endpoint for monitoring

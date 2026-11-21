@@ -464,7 +464,6 @@ export const en: Record<string, string> = {
   "terminal.reconnected_to": "Reconnected to {box}",
   "terminal.connected_to": "Connected to {box}",
   "terminal.auth_failed": "Authentication failed - please refresh the page",
-  "terminal.auth_denied": "Authorization failed",
   "terminal.connection_failed": "Connection failed",
   "terminal.session_name_refused": "The server refused this session name. Open the terminal with another name.",
   "terminal.file_url_copied": "File URL copied — paste in a new tab to open",

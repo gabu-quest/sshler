@@ -464,7 +464,6 @@ export const ja: Record<string, string> = {
   "terminal.reconnected_to": "{box} に再接続しました",
   "terminal.connected_to": "{box} に接続しました",
   "terminal.auth_failed": "認証に失敗しました - ページを更新してください",
-  "terminal.auth_denied": "認可に失敗しました",
   "terminal.connection_failed": "接続に失敗しました",
   "terminal.session_name_refused": "サーバーがこのセッション名を拒否しました。別の名前でターミナルを開いてください。",
   "terminal.file_url_copied": "ファイルのURLをコピーしました。新しいタブに貼り付けて開いてください",

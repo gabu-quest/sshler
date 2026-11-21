@@ -5,12 +5,15 @@ import type { ProgressBar, ProgressEvent } from "@/api/types";
 import { useProgressStore } from "./progress";
 import { useAppStore } from "@/stores/app";
 
+// The owner of "the session has ended" answers a 4401 close with its sign-in navigation
+// (a promise) and any other close with null; the spec reads what the store asked it.
 vi.mock("@/api/http", () => ({
   fetchProgress: vi.fn(),
   deleteProgress: vi.fn(),
+  signInAfterSocketClose: vi.fn((code: number) => (code === 4401 ? Promise.resolve() : null)),
 }));
 
-import { deleteProgress, fetchProgress } from "@/api/http";
+import { deleteProgress, fetchProgress, signInAfterSocketClose } from "@/api/http";
 
 function makeBar(name: string, overrides: Partial<ProgressBar> = {}): ProgressBar {
   const now = Date.now() / 1000;
@@ -61,9 +64,9 @@ class MockWebSocket {
     this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
   }
 
-  fireClose() {
+  fireClose(code = 1006) {
     this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.(new CloseEvent("close"));
+    this.onclose?.(new CloseEvent("close", { code }));
   }
 
   close() {
@@ -97,6 +100,7 @@ describe("progress store", () => {
     }
     vi.mocked(fetchProgress).mockReset();
     vi.mocked(deleteProgress).mockReset();
+    vi.mocked(signInAfterSocketClose).mockClear();
     // Subscriptions are scoped to the active box; default scope for tests.
     useAppStore().activeBox = "test-box";
   });
@@ -320,6 +324,21 @@ describe("progress store", () => {
     vi.advanceTimersByTime(1_000);
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1]!.url).toContain("token=tok");
+  });
+
+  it.each([
+    ["while open", true],
+    ["refused at connect", false],
+  ])("a 4401 close %s goes to the sign-in page and never reconnects", (_when, opened) => {
+    vi.useFakeTimers();
+    const store = useProgressStore();
+    store.connect("tok");
+    if (opened) MockWebSocket.instances[0]!.fireOpen();
+    MockWebSocket.instances[0]!.fireClose(4401);
+    vi.advanceTimersByTime(60_000);
+    expect(vi.mocked(signInAfterSocketClose).mock.calls).toEqual([[4401]]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(store.connected).toBe(false);
   });
 
   it("disconnect cancels reconnect and closes the socket", () => {

@@ -5,6 +5,7 @@ import { defineStore } from "pinia";
 import {
   deleteProgress as apiDeleteProgress,
   fetchProgress as apiFetchProgress,
+  signInAfterSocketClose,
 } from "@/api/http";
 import type { ProgressBar, ProgressEvent } from "@/api/types";
 import { useAppStore } from "@/stores/app";
@@ -213,10 +214,12 @@ export const useProgressStore = defineStore("progress", () => {
       lastError.value = "websocket error";
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       connected.value = false;
       connecting.value = false;
       if (socket === ws) socket = null;
+      // A session that ended goes to the sign-in form; trying again would be refused.
+      if (signInAfterSocketClose(event.code)) return;
       _scheduleReconnect(() => lastToken);
     };
   }

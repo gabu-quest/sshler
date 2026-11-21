@@ -285,6 +285,19 @@ async function handleAuthErrors(): Promise<void> {
   }
 }
 
+/** The close code the server gives a socket whose session has ended, or that came without one. */
+const SESSION_ENDED_CLOSE = 4401;
+
+/**
+ * A socket's close, as a failed request's `auth` answer is handled: a 4401 goes to the
+ * sign-in page through `handleAuthErrors` (once, however many sockets close together)
+ * and its promise is returned; any other code returns null and does nothing, so the
+ * caller goes on with its own handling.
+ */
+export function signInAfterSocketClose(code: number): Promise<void> | null {
+  return code === SESSION_ENDED_CLOSE ? handleAuthErrors() : null;
+}
+
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
   // The bootstrap call is the token refresh itself: a `token` failure is never refreshed.
   const response = await request(`${API_BASE}/bootstrap?_t=${Date.now()}`, {

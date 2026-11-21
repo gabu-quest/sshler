@@ -9,7 +9,8 @@
  *
  * Server-side close codes (see sshler/webapp.py `/ws/term`):
  *   4400  the session name was refused
- *   4401  unauthorized (no valid session/credentials)
+ *   4401  the session ended, or none came with the socket: the page goes to the
+ *         sign-in form (`signInAfterSocketClose` in api/http.ts), with no toast
  *   4403  invalid CSRF token
  *   4404  the box is not known to the server
  *   4501  tmux is not installed on the box
@@ -36,7 +37,8 @@ export function classifyTerminalCloseCode(code: number): TerminalClosePolicy {
     case 4403:
       return { messageKey: "terminal.auth_failed", reconnect: false, duration: 5000 };
     case 4401:
-      return { messageKey: "terminal.auth_denied", reconnect: false, duration: 5000 };
+      // The sign-in form is the message; after sign-in the page loads afresh and reconnects.
+      return { messageKey: null, reconnect: false };
     case 4404:
       return { messageKey: "terminal.unknown_box", reconnect: false, duration: 6000 };
     case 4501:

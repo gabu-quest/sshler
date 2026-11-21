@@ -89,6 +89,18 @@ answers `rate_limited` with `Retry-After` on every closed path and on the sign-i
 the other open routes keep loading so the form can say how long to wait. Sockets decide the
 same credentials in `access.websocket_refusal` (close 4401).
 
+A socket let in on a session cookie belongs to that session until it closes: after accepting
+it, each socket handler calls `access.hold_socket`, which records it in `SessionStore` (the
+store judges the session live and records the socket in one step, so a sign-out between the
+check and the record refuses the socket with 4401). Every end of a session, a sign-out from
+any tab, an expiry a request finds, or the timer each held socket sets for its session's
+deadline (no request needed; it reads the store's clock again at least every 30 seconds, so
+time that passed while the machine slept counts), closes each of its sockets with 4401; a terminal then ends as
+on any close, its attach process (or SSH channel) closed and the tmux session left running.
+A socket let in by a Basic header, or with no password set, belongs to no session. In the
+page, a 4401 close of a terminal, progress or ping socket goes to `handleAuthErrors`, as a
+401 does, and the progress and ping stores stop reconnecting.
+
 The bootstrap says who is asking: `auth_required` (a password is set) and `authenticated`
 (this request carried a live session or a good Basic header, always true with no password);
 a request that is not authenticated gets `token: null` and only what the sign-in page needs (the version, token header, page base, platform and the two auth flags; no allowed origins, shell, PDF or artifact settings). The router's guard asks the bootstrap

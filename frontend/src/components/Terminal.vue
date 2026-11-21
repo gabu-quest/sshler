@@ -40,7 +40,7 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake } from '@/api/http'
+import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake, signInAfterSocketClose } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
@@ -1374,6 +1374,8 @@ const connect = async () => {
       connecting.value = false
       emit('disconnected')
 
+      // A session that ended goes to the sign-in form, as a failed request does.
+      signInAfterSocketClose(event.code)
       const policy = classifyTerminalCloseCode(event.code)
       if (policy.messageKey) {
         message.error(t(policy.messageKey), { duration: policy.duration })

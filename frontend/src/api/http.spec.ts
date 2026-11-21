@@ -15,6 +15,7 @@ import {
   http,
   renameFile,
   sameBoxTransfer,
+  signInAfterSocketClose,
   tokenWorks,
 } from "./http";
 import { ApiError } from "./apiError";
@@ -320,6 +321,38 @@ describe("the one request: what a failure does and shows", () => {
     const abort = new DOMException("The operation was aborted.", "AbortError");
     fetchMock.mockRejectedValueOnce(abort);
     await expect(fetchBoxes("t")).rejects.toBe(abort);
+  });
+});
+
+describe("a socket closed with 4401: its session ended, the same way as a 401", () => {
+  const signInNavigation = { name: "login", query: { redirect: "/files?box=b" } };
+
+  it("clears the signed-in user, forgets the bootstrap and goes to the sign-in page once", async () => {
+    await signInAfterSocketClose(4401);
+    expect(pushMock.mock.calls).toEqual([[signInNavigation]]);
+    expect(clearUserMock).toHaveBeenCalledTimes(1);
+    expect(forgetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("three sockets that close together navigate once", async () => {
+    pushMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      routerState.current = { name: "login", fullPath: "/login?redirect=%2Ffiles%3Fbox%3Db" };
+    });
+    await Promise.all([4401, 4401, 4401].map((code) => signInAfterSocketClose(code)));
+    expect(pushMock.mock.calls).toEqual([[signInNavigation]]);
+  });
+
+  it("on the sign-in page itself: no navigation", async () => {
+    routerState.current = { name: "login", fullPath: "/login?redirect=%2Ffiles" };
+    await signInAfterSocketClose(4401);
+    expect(pushMock).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([1000, 1006, 1011, 4403, 4404])("code %i is not the session's end: null, nothing done", (code) => {
+    expect(signInAfterSocketClose(code)).toBeNull();
+    expect(pushMock).toHaveBeenCalledTimes(0);
+    expect(clearUserMock).toHaveBeenCalledTimes(0);
   });
 });
 

@@ -18,10 +18,8 @@ describe("classifyTerminalCloseCode", () => {
     expect(policy.duration).toBe(5000);
   });
 
-  it("4401 (unauthorized) toasts auth_denied and stops reconnecting", () => {
-    const policy = classifyTerminalCloseCode(4401);
-    expect(policy.reconnect).toBe(false);
-    expect(policy.messageKey).toBe("terminal.auth_denied");
+  it("4401 (the session ended) toasts nothing and stops reconnecting: the sign-in form is the message", () => {
+    expect(classifyTerminalCloseCode(4401)).toEqual({ messageKey: null, reconnect: false });
   });
 
   it("4502 (no WSL distro) toasts wsl_not_installed and stops reconnecting", () => {

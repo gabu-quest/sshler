@@ -91,15 +91,24 @@ async def deliver(message: dict[str, Any], transport: Transport) -> bool:
     return True
 
 
+async def _receive(websocket: WebSocket) -> dict[str, Any]:
+    """The client's next message, or a disconnect once the server has closed the socket
+    (its session ended): nothing the client sends after that reaches the terminal."""
+    message = dict(await websocket.receive())
+    if websocket.application_state != WebSocketState.CONNECTED:
+        return {"type": "websocket.disconnect"}
+    return message
+
+
 async def take_early_message(websocket: WebSocket, transport: Transport) -> bool:
     """Apply a message the client sent with its connect (a first resize); False if it left."""
     try:
-        message = await asyncio.wait_for(websocket.receive(), timeout=EARLY_MESSAGE_WAIT)
+        message = await asyncio.wait_for(_receive(websocket), timeout=EARLY_MESSAGE_WAIT)
     except TimeoutError:
         return True
     except WebSocketDisconnect:
         return False
-    return await deliver(dict(message), transport)
+    return await deliver(message, transport)
 
 
 def _connected(websocket: WebSocket) -> bool:
@@ -128,7 +137,7 @@ async def _pump_output(websocket: WebSocket, transport: Transport) -> PumpEnd:
 async def _pump_input(websocket: WebSocket, transport: Transport) -> PumpEnd:
     """Deliver the client's messages until it leaves or the terminal refuses one."""
     try:
-        while await deliver(dict(await websocket.receive()), transport):
+        while await deliver(await _receive(websocket), transport):
             pass
     except WebSocketDisconnect:
         pass
