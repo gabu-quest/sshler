@@ -8,12 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from platformdirs import user_config_dir
 
 from . import state
+from .config_dir import get_config_dir
 from .ssh_config import HostConfig, load_ssh_config
-
-ENV_CONFIG_DIR = "SSHLER_CONFIG_DIR"
 
 
 @dataclass
@@ -109,26 +107,6 @@ class AppConfig:
 
 
 DEFAULT_CONFIGURATION_TEMPLATE: dict[str, Any] = {"boxes": []}
-
-
-def get_config_dir() -> Path:
-    """Return the configuration directory, creating it when missing.
-
-    English:
-        Determines the directory that will contain ``boxes.yaml`` and creates
-        it if necessary.
-
-    日本語:
-        ``boxes.yaml`` を格納するディレクトリを決定し、存在しない場合は作成します。
-    """
-
-    override_directory = os.getenv(ENV_CONFIG_DIR)
-    if override_directory:
-        configuration_dir = Path(override_directory).expanduser()
-    else:
-        configuration_dir = Path(user_config_dir(appname="sshler", appauthor=False))
-    configuration_dir.mkdir(parents=True, exist_ok=True)
-    return configuration_dir
 
 
 def get_config_path() -> Path:

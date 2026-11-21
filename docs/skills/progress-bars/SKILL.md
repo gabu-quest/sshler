@@ -11,7 +11,7 @@ External scripts push progress updates via REST; every connected browser tab rec
 
 ```
 script (any host)
-  → sshler progress push       (CLI — sshler/cli.py)
+  → sshler progress push       (CLI — sshler/cli/progress.py)
   → POST /api/v1/progress/:name (REST — sshler/api/progress.py)
   → state.upsert_progress       (SQLite — sshler/state.py)
   → broadcaster.broadcast       (per-app — sshler/webapp.py)
@@ -81,7 +81,7 @@ The tooltip on each strip bar renders the metadata key/value rows and, when set,
 
 ## Display: floor, never round up
 
-Displayed percent is **floored** everywhere (`Math.floor` in `ProgressStrip.vue`/`ProgressView.vue`, `int(...)` in `cli.py`). A 3300-step build at 3299/3300 reads **99%**, not 100% — 100% appears only when `current >= total`. The bar-fill width still uses the exact fraction; only the number is floored.
+Displayed percent is **floored** everywhere (`Math.floor` in `ProgressStrip.vue`/`ProgressView.vue`, `int(...)` in `cli/progress.py`). A 3300-step build at 3299/3300 reads **99%**, not 100% — 100% appears only when `current >= total`. The bar-fill width still uses the exact fraction; only the number is floored.
 
 ## Finish blink
 
@@ -114,7 +114,7 @@ Implications:
 
 ## CLI
 
-`sshler progress push/list/delete` in `sshler/cli.py`.
+`sshler progress push/list/delete` in `sshler/cli/progress.py`.
 
 **`name current total` are POSITIONAL — there are no `--current`/`--total` flags** (passing them exits 2 with "unrecognized arguments"). Canonical invocation:
 
@@ -158,7 +158,7 @@ URL discovery: `--url` → `$SSHLER_PROGRESS_URL` → `http://127.0.0.1:8822`.
 | `sshler/api/progress.py` | REST router, Pydantic validation, broadcaster wiring |
 | `sshler/api/dependencies.py` | `APIDependencies.broadcast_progress` callable slot |
 | `sshler/webapp.py` | `ProgressBroadcaster` class, `/ws/progress` endpoint, lifespan wiring |
-| `sshler/cli.py` | `progress` subparser, runtime-token cache write in `serve()` |
+| `sshler/cli/progress.py`, `sshler/cli/server.py` | `progress` subparser and handlers; runtime-token cache write in `serve()` (`sshler/cli/runtime_token.py`) |
 
 ## Do not refactor away
 

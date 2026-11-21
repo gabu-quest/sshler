@@ -11,7 +11,7 @@ External scripts POST a ping; the server fans out to every connected `/ws/ping` 
 
 ```
 script (any host)
-  → sshler ping                  (CLI — sshler/cli.py)
+  → sshler ping                  (CLI — sshler/cli/ping.py)
   → POST /api/v1/ping            (REST — sshler/api/ping.py)
   → PingBroadcaster.broadcast    (per-app — sshler/webapp.py)
   → /ws/ping connected clients

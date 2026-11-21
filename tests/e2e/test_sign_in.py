@@ -78,7 +78,7 @@ def password_server(tmp_path_factory, e2e_tmux_dir: Path) -> Iterator[str]:
         }
     )
     code = (
-        "from sshler.cli import serve; "
+        "from sshler.cli.server import serve; "
         f"serve(host='127.0.0.1', port={port}, reload=False, "
         "allow_origins=[], basic_auth=None, max_upload_mb=50, "
         f"allow_ssh_alias=True, log_level='warning', open_browser=False, token='{TOKEN}')"

@@ -21,8 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sshler
-from sshler import cli
-from sshler.cli import _cleanup_processes, _start_vite_dev_server, serve_dev
+from sshler.cli import server
+from sshler.cli.server import _cleanup_processes, _start_vite_dev_server, serve_dev
 
 DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
@@ -36,10 +36,10 @@ def reload_env_key_restored(monkeypatch):
     It requests ``monkeypatch`` and undoes it explicitly before checking, because the
     conftest's autouse fixtures hold the same monkeypatch and tear down later.
     """
-    before = os.environ.get(cli._RELOAD_ENV_KEY)
+    before = os.environ.get(server._RELOAD_ENV_KEY)
     yield
     monkeypatch.undo()
-    assert os.environ.get(cli._RELOAD_ENV_KEY) == before, "test leaked _RELOAD_ENV_KEY"
+    assert os.environ.get(server._RELOAD_ENV_KEY) == before, "test leaked _RELOAD_ENV_KEY"
 
 
 @pytest.fixture
@@ -49,11 +49,11 @@ def dev_project(tmp_path, monkeypatch):
     (project / "frontend").mkdir(parents=True)
     monkeypatch.chdir(project)
     # serve() writes and removes the PID file; keep it off the real /tmp/sshler.pid.
-    monkeypatch.setattr(cli, "_PID_FILE", tmp_path / "sshler.pid")
+    monkeypatch.setattr(server, "_PID_FILE", tmp_path / "sshler.pid")
     # setenv first so monkeypatch records the pre-test state (absent) and deletes the
     # key again at teardown; delenv(raising=False) alone records nothing when absent.
-    monkeypatch.setenv(cli._RELOAD_ENV_KEY, "")
-    monkeypatch.delenv(cli._RELOAD_ENV_KEY)
+    monkeypatch.setenv(server._RELOAD_ENV_KEY, "")
+    monkeypatch.delenv(server._RELOAD_ENV_KEY)
     saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     yield project
     for sig, handler in saved.items():
@@ -66,11 +66,11 @@ def vite():
     process = Mock()
     process.poll.return_value = None
     process.stdout = None
-    # Replace the ``time`` name inside ``sshler.cli`` only (serve_dev needs just
+    # Replace the ``time`` name inside ``sshler.cli.server`` only (serve_dev needs just
     # ``sleep``); the global ``time`` module is untouched.
     with (
-        patch("sshler.cli._start_vite_dev_server", return_value=process) as starter,
-        patch.object(cli, "time", types.SimpleNamespace(sleep=Mock())),
+        patch("sshler.cli.server._start_vite_dev_server", return_value=process) as starter,
+        patch.object(server, "time", types.SimpleNamespace(sleep=Mock())),
     ):
         process.starter = starter
         yield process
@@ -86,11 +86,11 @@ class TestServeDev:
         the cwd, here ``dev_project``, so backend edits never reload).
         """
         assert Path.cwd() != Path(sshler.__file__).resolve().parent
-        with patch("sshler.cli.uvicorn.run") as run:
+        with patch("sshler.cli.server.uvicorn.run") as run:
             serve_dev(port=8123, token="dev-token", open_browser=False)
 
         run.assert_called_once_with(
-            "sshler.cli:_reload_app",
+            "sshler.cli.server:_reload_app",
             host="127.0.0.1",
             port=8123,
             reload=True,
@@ -99,7 +99,7 @@ class TestServeDev:
             reload_dirs=[str(Path(sshler.__file__).resolve().parent)],
         )
         # uvicorn would now import the factory in its reloader child; do the same.
-        client = TestClient(cli._reload_app())
+        client = TestClient(server._reload_app())
         headers = {"X-SSHLER-TOKEN": "dev-token"}
         try:
             allowed = client.post(
@@ -120,10 +120,10 @@ class TestServeDev:
         Mutations killed: user origins dropped, Vite origins omitted, Vite origins
         placed before the user's.
         """
-        with patch("sshler.cli.uvicorn.run"):
+        with patch("sshler.cli.server.uvicorn.run"):
             serve_dev(port=9001, allow_origins=user_origins, open_browser=False)
 
-        origins = json.loads(cli.os.environ[cli._RELOAD_ENV_KEY])["allow_origins"]
+        origins = json.loads(server.os.environ[server._RELOAD_ENV_KEY])["allow_origins"]
         count = len(user_origins)
         assert origins[:count] == user_origins
         # The tail is a deduplicated set (order not specified): Vite's two origins
@@ -140,7 +140,7 @@ class TestServeDev:
         Mutations killed: wrong frontend dir, cleanup missing from ``finally``.
         """
         vite.wait.return_value = None
-        with patch("sshler.cli.uvicorn.run", side_effect=KeyboardInterrupt()):
+        with patch("sshler.cli.server.uvicorn.run", side_effect=KeyboardInterrupt()):
             serve_dev(open_browser=False)
 
         vite.starter.assert_called_once_with(dev_project / "frontend")
@@ -154,8 +154,8 @@ class TestServeDev:
         empty = tmp_path / "empty"
         empty.mkdir()
         monkeypatch.chdir(empty)
-        with patch("sshler.cli._start_vite_dev_server") as starter:
-            with patch("sshler.cli.uvicorn.run") as run:
+        with patch("sshler.cli.server._start_vite_dev_server") as starter:
+            with patch("sshler.cli.server.uvicorn.run") as run:
                 with pytest.raises(SystemExit) as excinfo:
                     serve_dev(open_browser=False)
 
@@ -169,8 +169,8 @@ class TestServeDev:
         Mutations killed: RuntimeError not caught, backend started anyway.
         """
         with (
-            patch("sshler.cli._start_vite_dev_server", side_effect=RuntimeError("no pnpm")),
-            patch("sshler.cli.uvicorn.run") as run,
+            patch("sshler.cli.server._start_vite_dev_server", side_effect=RuntimeError("no pnpm")),
+            patch("sshler.cli.server.uvicorn.run") as run,
         ):
             with pytest.raises(SystemExit) as excinfo:
                 serve_dev(open_browser=False)
@@ -186,7 +186,7 @@ class TestServeDev:
         non-zero exit.
         """
         vite.wait.return_value = None
-        with patch("sshler.cli.uvicorn.run"):
+        with patch("sshler.cli.server.uvicorn.run"):
             serve_dev(open_browser=False)
         vite.terminate.reset_mock()  # the normal ``finally`` cleanup already ran once
 

@@ -159,7 +159,8 @@ CLI usage of ping, progress, artifacts, diff notebook and markdown preview is in
 
 ### Progress bars
 - `ProgressBar` model in `state.py`; REST `/api/v1/progress[/:name]`, name `^[A-Za-z0-9._:-]{1,64}$`, status `{running, done, failed, cancelled}`. WS sends `snapshot` on connect, then `upsert`/`delete`.
-- CLI token discovery: `--token` → `$SSHLER_TOKEN` → `<config_dir>/runtime-token` (0600, written by `serve()`); URL: `--url` → `$SSHLER_PROGRESS_URL` → `http://127.0.0.1:8822`. That is why `httpx` is a core dep.
+- CLI token discovery: `--token` → `$SSHLER_TOKEN` → `<config_dir>/runtime-token` (0600, written by `serve()` in `sshler/cli/server.py`; path, write and read in `sshler/cli/runtime_token.py`; discovery in `sshler/cli/client.py`); URL: `--url` → `$SSHLER_PROGRESS_URL` → `http://127.0.0.1:8822`. That is why `httpx` is a core dep.
+- The client commands (`progress`, `ping`, `artifact`) load no server: `sshler/cli/` builds every parser without importing `server.py` (uvicorn, the web app) or `password.py`, and `_main.py` imports one of them only when its command runs. `tests/test_cli_imports.py` pins the list of server modules a client command may load: none. `get_config_dir` lives in `sshler/config_dir.py` so the CLI does not import `sshler.config`.
 - `stores/progress.ts`: subscriptions are client-side and **scoped per box** (`subscriptionsByScope`, key = `appStore.activeBox`; no-ops without a box), persisted at `localStorage["sshler:progress:subscribed"]`.
 - WS lifecycle is owned by `App.vue`; `<ProgressStrip>` is `v-if`-gated so it must NOT own it. Bars never auto-dismiss (including `done`); percent is floored.
 - New WS event: add to `ProgressEvent` in `api/types.ts`, handle in `_handleEvent`, broadcast from `api/progress.py`.
