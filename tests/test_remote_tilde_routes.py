@@ -11,9 +11,11 @@ its mutation. Shared mutation: drop the route's ``_remote_path`` call, so the li
 from __future__ import annotations
 
 import io
+import posixpath
 from pathlib import Path
 from types import SimpleNamespace
 
+import asyncssh
 import openpyxl
 import pytest
 import yaml
@@ -22,6 +24,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from sshler import ssh_pool, state
+from sshler.api import remote_files as remote_files_api
 from sshler.api.dependencies import APIDependencies
 from sshler.api.rate_limiting import create_rate_limit_dependency
 from sshler.settings import reset_settings
@@ -33,6 +36,13 @@ BOX = "remote1"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
 HOME_CMD = 'printf %s "$HOME"'
 HOME = "/home/tester"
+TEMP_SUFFIX = ".t.sshler"
+
+
+def _temp_of(archive: str) -> str:
+    """The temp name an archive is packed under (``fixed_temp_name``)."""
+    parent, name = posixpath.split(archive)
+    return f"{parent}/.{name}{TEMP_SUFFIX}"
 
 
 def _reply(stdout: str = "", status: int = 0) -> SimpleNamespace:
@@ -62,6 +72,16 @@ class FakeSFTP:
     async def stat(self, path: str):
         self.calls.append(("stat", path))
         return SimpleNamespace(permissions=0o100644)
+
+    async def lstat(self, path: str):
+        """The temp file of an archive is there; every other name is free."""
+        self.calls.append(("lstat", path))
+        if not path.endswith(TEMP_SUFFIX):
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return SimpleNamespace(permissions=0o100644, size=0, mtime=0, mtime_ns=0)
+
+    async def link(self, source: str, target: str) -> None:
+        self.calls.append(("link", source, target))
 
     async def remove(self, path: str) -> None:
         self.calls.append(("remove", path))
@@ -117,6 +137,10 @@ def remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def fake_connect(self, box, application_config):
         return FakeConnection(replies, log, sftp)
 
+    def fixed_temp_name(target: str, suffix: str = ".sshler") -> str:
+        return _temp_of(target)
+
+    monkeypatch.setattr(remote_files_api, "_remote_temp_beside", fixed_temp_name)
     monkeypatch.setattr(APIDependencies, "connect_for_box", fake_connect)
     monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
     client = TestClient(make_app(ServerSettings(csrf_token=TOKEN)))
@@ -137,8 +161,8 @@ def _post(remote, route: str, body: dict):
 @pytest.mark.parametrize(
     ("fmt", "name", "command"),
     [
-        ("tar.gz", "out.tar.gz", f"tar czf {HOME}/out.tar.gz -C / {HOME}/proj"),
-        ("zip", "out.zip", f"cd / && zip -r {HOME}/out.zip {HOME}/proj"),
+        ("tar.gz", "out.tar.gz", f"tar czf {_temp_of(HOME + '/out.tar.gz')} -C / {HOME}/proj"),
+        ("zip", "out.zip", f"cd / && zip -r {_temp_of(HOME + '/out.zip')} {HOME}/proj"),
     ],
 )
 def test_archive_create_resolves_tilde_in_destination_and_sources(remote, fmt, name, command):
@@ -329,7 +353,7 @@ async def test_rate_limit_buckets_by_the_forwarded_client_address(
 
 def test_archive_create_names_a_relative_source_starting_with_a_dash_as_a_path(remote):
     """Mutation: pass the source to tar as it came; tar reads `-rf` as options."""
-    command = "tar czf /srv/o.tar.gz -C / ./-rf"
+    command = f"tar czf {_temp_of('/srv/o.tar.gz')} -C / ./-rf"
     remote.replies[command] = _reply()
     resp = _post(
         remote,

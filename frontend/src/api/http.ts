@@ -1118,11 +1118,12 @@ export async function createArchive(
   archiveName: string,
   format: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<SimpleMessage> {
   return apiFetch<SimpleMessage>(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/create`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ paths, destination, archive_name: archiveName, format }),
+    body: JSON.stringify({ paths, destination, archive_name: archiveName, format, ...overwriteField(options) }),
   });
 }
 

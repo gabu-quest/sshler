@@ -29,7 +29,6 @@ from .failure import (
     REASON_FAILED,
     REASON_INVALID,
     REASON_NOT_FOUND,
-    REASON_TIMEOUT,
     REASON_TOO_LARGE,
     REASON_UNREACHABLE,
     Failure,
@@ -65,6 +64,7 @@ from .placement import (
     refuse_a_name_this_request_placed,
     run_to_end,
     source_not_removed,
+    temp_stem,
 )
 from .remote import (
     and_then,
@@ -122,7 +122,7 @@ async def _remote_exclusive[T](
 
 def _remote_temp_beside(target: str, suffix: str = ".sshler") -> str:
     parent, name = posixpath.split(target)
-    return posixpath.join(parent, f".{name}.{secrets.token_hex(6)}{suffix}")
+    return posixpath.join(parent, f".{temp_stem(name)}.{secrets.token_hex(6)}{suffix}")
 
 
 class _RemoteLanding:
@@ -513,6 +513,16 @@ def archive_create_command(fmt: str, archive_target: str, paths: list[str]) -> s
     if fmt in ("tar.gz", "tgz"):
         return command("tar", "czf", path_word(archive_target), "-C", "/", *sources)
     return and_then(command("cd", "/"), command("zip", "-r", path_word(archive_target), *sources))
+
+
+async def _run_archive_command(connection, cmd: str, what: str) -> None:
+    """Run a ``tar`` or ``zip`` command within ``ARCHIVE_TIMEOUT``. Past it the command
+    may still run on the connection, so a ``TimeoutError`` leaves the block (the pool
+    closes the connection of a block that ends so) and answers 504 with ``what``."""
+    try:
+        await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
+    except TimeoutError as exc:
+        raise TimeoutError(f"{what} timed out") from exc
 
 
 def archive_extract_command(archive: str, destination: str) -> str:
@@ -986,11 +996,20 @@ class RemoteFiles:
         return target
 
     async def create_archive(
-        self, paths: Sequence[str], destination: str, name: str, fmt: str
+        self,
+        paths: Sequence[str],
+        destination: str,
+        name: str,
+        fmt: str,
+        *,
+        overwrite: bool = False,
     ) -> str:
         """Every path is checked before the connection is taken (a bad source is a 400
-        that names it); ``tar`` or ``zip`` runs on the box, a 504 past
-        ``ARCHIVE_TIMEOUT``."""
+        that names it); ``tar`` or ``zip`` runs on the box into a temp file beside the
+        archive, which is placed under its name by the rule when the command is done.
+        A name that is taken is refused before the command runs. A 504 past
+        ``ARCHIVE_TIMEOUT``, with the connection closed (``TimeoutError`` leaves the
+        block, so ``ssh_pool.connection`` does not pool it)."""
         dest_validated = PathValidator.validate_remote_path(destination)
         validated_paths: list[str] = []
         for p in paths:
@@ -1003,11 +1022,21 @@ class RemoteFiles:
         dest_resolved = await remote_path(connection, dest_validated)
         resolved_paths = [await remote_path(connection, p) for p in validated_paths]
         archive_target = str(PurePosixPath(dest_resolved) / name)
-        cmd = archive_create_command(fmt, archive_target, resolved_paths)
+        sftp_client = await self._session()
+        _refuse_or_replace(
+            await _remote_lstat_mode(sftp_client, archive_target), overwrite=overwrite
+        )
+        temp = _remote_temp_beside(archive_target)
         try:
-            await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
-        except TimeoutError as exc:
-            raise Failure(REASON_TIMEOUT, "Archive creation timed out") from exc
+            await _run_archive_command(
+                connection, archive_create_command(fmt, temp, resolved_paths), "Archive creation"
+            )
+            await _remote_place(
+                sftp_client, temp, archive_target, move=True, overwrite=overwrite, allow_dirs=False
+            )
+        except BaseException:
+            await run_to_end(_remove_quietly(sftp_client, temp))
+            raise
         return archive_target
 
     async def extract_archive(self, archive: str, destination: str) -> str:
@@ -1027,11 +1056,9 @@ class RemoteFiles:
             raise Failure(REASON_INVALID, "Unsupported archive format")
         if stat_mod.S_ISDIR(found.permissions or 0):
             raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), archive_resolved)
-        cmd = archive_extract_command(archive_resolved, dest_resolved)
-        try:
-            await asyncio.wait_for(connection.run(cmd, check=True), timeout=ARCHIVE_TIMEOUT)
-        except TimeoutError as exc:
-            raise Failure(REASON_TIMEOUT, "Extraction timed out") from exc
+        await _run_archive_command(
+            connection, archive_extract_command(archive_resolved, dest_resolved), "Extraction"
+        )
         return dest_resolved
 
     def _unreachable_fails_the_rest(

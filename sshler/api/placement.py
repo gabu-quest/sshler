@@ -106,6 +106,13 @@ def _refuse_a_folder_into_itself(
         raise DestinationRefused(400, _INTO_ITSELF, REASON_CANNOT_REPLACE)
 
 
+def temp_stem(name: str) -> str:
+    """``name`` as the middle of a temp name beside it (a dot, this, a dot, random
+    characters and a suffix): cut to 200 bytes, never through a character, so the temp
+    name fits where the name itself fits (a file system takes 255 bytes)."""
+    return name.encode("utf-8", "surrogateescape")[:200].decode("utf-8", "ignore")
+
+
 def kept_permission_bits(mode: int) -> int:
     """The bits a replace keeps from the replaced file: the nine permission bits.
     Setuid, setgid and sticky are never carried to the new file."""

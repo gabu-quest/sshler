@@ -14,7 +14,9 @@ import tarfile
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator, Sequence
+from functools import partial
 from pathlib import Path, PureWindowsPath
+from typing import BinaryIO
 
 import anyio
 from fastapi.responses import FileResponse, Response
@@ -63,6 +65,7 @@ from .placement import (
     refuse_a_name_this_request_placed,
     run_to_end,
     source_not_removed,
+    temp_stem,
 )
 
 # --- local transport (every function here runs in a worker thread) ---------------
@@ -98,6 +101,19 @@ def _set_bits(fd: int, path: str, bits: int) -> None:
         os.chmod(path, bits)
 
 
+def _temp_with_default_bits(target: str) -> tuple[int, str]:
+    """A new temp file beside ``target`` with the bits ``open`` gives a new file (0o666
+    less the umask), as a descriptor and a path. ``mkstemp`` makes its file 0600, and the
+    umask can only be read by setting it, which every thread of the process would see."""
+    folder, name = os.path.split(target)
+    while True:
+        temp = os.path.join(folder, f".{temp_stem(name)}.{os.urandom(6).hex()}")
+        try:
+            return os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), temp
+        except FileExistsError:
+            continue
+
+
 class _LocalLanding:
     """A local file being written under the rule. A free name is created exclusively
     (``O_CREAT|O_EXCL``: ``FileExistsError`` when taken, a dangling link included); a
@@ -105,17 +121,20 @@ class _LocalLanding:
 
     ``mode`` gives the new file its permission bits: the replaced file's on a replace,
     the source's on a free name. They are on the file before its first byte and the
-    umask cannot narrow them. Without ``mode`` a free name gets the default bits (the
-    umask's)."""
+    umask cannot narrow them. Without ``mode`` a free name, and the temp file of a
+    replace, get the default bits (the umask's)."""
 
     def __init__(self, target: str, *, replace: bool, mode: int | None = None) -> None:
         self.target = target
         self.temp: str | None = None
         if replace:
-            fd, self.temp = tempfile.mkstemp(
-                dir=os.path.dirname(target), prefix=f".{os.path.basename(target)}."
-            )
-            if mode is not None:
+            if mode is None:
+                fd, self.temp = _temp_with_default_bits(target)
+            else:
+                fd, self.temp = tempfile.mkstemp(
+                    dir=os.path.dirname(target),
+                    prefix=f".{temp_stem(os.path.basename(target))}.",
+                )
                 _set_bits(fd, self.temp, kept_permission_bits(mode))
             self.handle = os.fdopen(fd, "wb")
         elif mode is None:
@@ -658,25 +677,52 @@ def _safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
         zf.extract(info, dest_dir)
 
 
-def _local_create_archive(paths: Sequence[str], archive_path: Path, fmt: str) -> None:
-    """Pack each path (resolved) under its own name; a folder in a zip is packed file by
-    file."""
+def _local_pack(paths: Sequence[str], out: BinaryIO, unfinished: Path, fmt: str) -> None:
+    """Pack each path (resolved) under its own name into ``out``; a folder in a zip is
+    packed file by file. ``unfinished`` is the file ``out`` writes: a folder that holds
+    it never packs it into itself."""
     if fmt in ("tar.gz", "tgz"):
-        with tarfile.open(str(archive_path), "w:gz") as tf:
+
+        def not_unfinished(info: tarfile.TarInfo, source: Path) -> tarfile.TarInfo | None:
+            return None if source.parent / info.name == unfinished else info
+
+        with tarfile.open(fileobj=out, mode="w:gz") as tf:
             for p in paths:
                 source = Path(p)
-                tf.add(str(source), arcname=source.name)
+                tf.add(
+                    str(source), arcname=source.name, filter=partial(not_unfinished, source=source)
+                )
         return
-    with zipfile.ZipFile(str(archive_path), "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in paths:
             source = Path(p)
             if source.is_dir():
                 for child in source.rglob("*"):
-                    if child.is_file():
+                    if child.is_file() and child != unfinished:
                         arcname = str(source.name / child.relative_to(source))
                         zf.write(str(child), arcname)
             else:
                 zf.write(str(source), source.name)
+
+
+def _local_create_archive(
+    paths: Sequence[str], archive_path: Path, fmt: str, *, overwrite: bool
+) -> None:
+    """Pack ``paths`` into a temp file beside ``archive_path`` and place it under that
+    name by the rule when the packer has finished (call from a worker thread). A name
+    that is taken is refused before anything is packed (and again at the placing); a
+    failure at any point leaves the old archive whole and no temp file."""
+    target = str(archive_path)
+    _refuse_or_replace(_local_lstat_mode(target), overwrite=overwrite)
+    landing = _LocalLanding(target, replace=True)
+    try:
+        assert landing.temp is not None
+        _local_pack(paths, landing.handle, Path(landing.temp), fmt)
+        landing.handle.close()
+        _local_place(landing.temp, target, move=True, overwrite=overwrite)
+    except BaseException:
+        landing.abort()
+        raise
 
 
 def _local_extract_archive(archive: Path, dest_dir: Path) -> None:
@@ -1017,11 +1063,19 @@ class LocalFiles:
         )
 
     async def create_archive(
-        self, paths: Sequence[str], destination: str, name: str, fmt: str
+        self,
+        paths: Sequence[str],
+        destination: str,
+        name: str,
+        fmt: str,
+        *,
+        overwrite: bool = False,
     ) -> str:
         archive_path = Path(self._resolve(destination)) / name
         sources = [self._resolve(p) for p in paths]
-        await asyncio.to_thread(_local_create_archive, sources, archive_path, fmt)
+        await asyncio.to_thread(
+            partial(_local_create_archive, sources, archive_path, fmt, overwrite=overwrite)
+        )
         return str(archive_path)
 
     async def extract_archive(self, archive: str, destination: str) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from ..config import AppConfig
 from ..validation import PathValidator, ValidationError
@@ -27,6 +27,7 @@ class APIArchiveCreateRequest(BaseModel):
     destination: str
     archive_name: str
     format: str  # "tar.gz" | "tgz" | "zip"
+    overwrite: StrictBool = False
 
 
 class APIArchiveExtractRequest(BaseModel):
@@ -74,7 +75,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         async with box_files(deps, box, application_config) as files:
             archive_path = await files.create_archive(
-                payload.paths, payload.destination, archive_name, payload.format
+                payload.paths,
+                payload.destination,
+                archive_name,
+                payload.format,
+                overwrite=payload.overwrite,
             )
         return {"status": "ok", "message": f"Created {archive_name}", "path": archive_path}
 

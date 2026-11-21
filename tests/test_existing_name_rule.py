@@ -29,12 +29,15 @@ import errno
 import os
 import posixpath
 import resource
+import shlex
 import shutil
 import signal
 import socket
+import tarfile
 import threading
 import tracemalloc
-from collections.abc import Iterator
+import zipfile
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -203,23 +206,37 @@ ODD_SERVERS = {
 }
 
 
-def _answer(process: asyncssh.SSHServerProcess) -> None:
-    """The pool's health check and the `~` lookup; nothing else runs on this server."""
-    if process.command == "echo test":
-        process.stdout.write("test\n")
-        process.exit(0)
-    elif process.command == HOME_CMD:
-        process.stdout.write("/home")
-        process.exit(0)
-    else:
-        process.stderr.write(f"not run: {process.command}\n")
-        process.exit(127)
+CommandStandIn = Callable[[str], Awaitable[int]]
 
 
 class ServerThread:
-    """An asyncssh server on its own event loop, so the sync test client can call it."""
+    """An asyncssh server on its own event loop, so the sync test client can call it.
+
+    It answers the pool's health check and the `~` lookup itself. Any other command is
+    never run: it is recorded in ``ran`` and handed to ``stand_in``, which does in
+    the temp folder what the program would have done and returns its exit status; with
+    no stand-in the status is 127."""
+
+    async def _answer(self, process: asyncssh.SSHServerProcess) -> None:
+        if process.command == "echo test":
+            process.stdout.write("test\n")
+            process.exit(0)
+        elif process.command == HOME_CMD:
+            process.stdout.write("/home")
+            process.exit(0)
+        elif self.stand_in is not None:
+            self.ran.append(process.command)
+            running = asyncio.ensure_future(self.stand_in(process.command))
+            self.running.add(running)
+            process.exit(await running)
+        else:
+            process.stderr.write(f"not run: {process.command}\n")
+            process.exit(127)
 
     def __init__(self, root: Path, keys: Path, server_class: type[asyncssh.SFTPServer]) -> None:
+        self.stand_in: CommandStandIn | None = None
+        self.ran: list[str] = []
+        self.running: set[asyncio.Future[int]] = set()
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
@@ -245,7 +262,7 @@ class ServerThread:
                 server_host_keys=[host_key],
                 authorized_client_keys=str(authorized),
                 sftp_factory=lambda chan: server_class(chan, chroot=os.fsencode(root)),
-                process_factory=_answer,
+                process_factory=self._answer,
             )
         )
         self.port = self.server.get_port()
@@ -264,6 +281,9 @@ class ServerThread:
             # The app pools its connections; close them here or `wait_closed` waits.
             for conn in self.connections:
                 conn.close()
+            for running in self.running:  # a stand-in still waiting when the test ended
+                running.cancel()
+            await asyncio.gather(*self.running, return_exceptions=True)
             self.server.close()
             await self.server.wait_closed()
 
@@ -279,6 +299,7 @@ class Env:
     local: Path  # a work folder on the local box
     root: Path  # the remote server's `/`
     server_kind: str
+    server: ServerThread | None = None
 
 
 # A test names its box ("local" or a remote one on either server) as `box`, or the
@@ -331,7 +352,8 @@ def env(request, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[En
     local.mkdir()
     client = TestClient(make_app(ServerSettings(csrf_token=TOKEN)))
     try:
-        yield Env(client=client, local=local, root=root, server_kind=kind)
+        server.stand_in = _packing_in(root)
+        yield Env(client=client, local=local, root=root, server_kind=kind, server=server)
     finally:
         client.close()
         state.reset_state()
@@ -2705,3 +2727,253 @@ def test_an_upload_that_replaces_a_file_keeps_its_bits_and_leaves_no_other_file(
         0o640,
         {"x.txt": b"uploaded"},
     )
+
+
+# --- compress never writes over an archive unasked, and lands whole ----------------------
+
+
+def _packing_in(root: Path) -> CommandStandIn:
+    """What ``tar czf`` and ``zip -r`` do, on the temp folder that is the server's `/`:
+    a tar is made new, a zip adds to the zip that is there (as the program does), and
+    a source that is not there is the program's error after it began to write. The
+    archive being written is never packed into itself."""
+
+    async def run(command: str) -> int:
+        zipping = command.startswith("cd / && ")
+        words = shlex.split(command.removeprefix("cd / && "))
+        if words[:2] == ["tar", "czf"]:
+            target, sources = words[2], words[5:]
+        elif words[:2] == ["zip", "-r"]:
+            target, sources = words[2], words[3:]
+        else:
+            return 127
+        written = root / target.lstrip("/")
+        if not zipping:
+            written.write_bytes(b"")
+        packed = [root / source.lstrip("/") for source in sources]
+        if any(not p.exists() for p in packed):
+            written.write_bytes(b"partial")
+            return 2
+        members = [f for p in packed for f in [p, *sorted(p.rglob("*"))] if f != written]
+        if zipping:
+            with zipfile.ZipFile(written, "a") as archive:
+                for member in members:
+                    archive.write(member, member.relative_to(root).as_posix())
+            return 0
+        with tarfile.open(written, "w:gz") as archive:
+            for member in members:
+                archive.add(member, arcname=member.relative_to(root).as_posix(), recursive=False)
+        return 0
+
+    return run
+
+
+ARCHIVES = [("tar.gz", "o.tar.gz"), ("zip", "o.zip")]
+
+
+def entries(archive: Path) -> list[str]:
+    if archive.name.endswith(".zip"):
+        # The files of a zip: a zip made by `zip -r` also lists each folder.
+        with zipfile.ZipFile(archive) as opened:
+            return sorted(n for n in opened.namelist() if not n.endswith("/"))
+    with tarfile.open(archive, "r:gz") as opened:
+        return sorted(opened.getnames())
+
+
+def make_old_archive(s: Side, name: str, member: str = "old.txt") -> Path:
+    """A real archive in folder ``d`` that holds one member."""
+    s.disk("d").mkdir(exist_ok=True)
+    old = s.disk(f"d/{name}")
+    source = s.disk("old-source")
+    source.mkdir(exist_ok=True)
+    (source / member).write_bytes(b"old")
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(old, "w") as opened:
+            opened.write(source / member, member)
+    else:
+        with tarfile.open(old, "w:gz") as opened:
+            opened.add(source / member, arcname=member)
+    return old
+
+
+def compress(s: Side, names: list[str], fmt: str, name: str, **extra):
+    return s.post(
+        "archive/create",
+        {
+            "paths": [s.path(n) for n in names],
+            "destination": s.path("d"),
+            "archive_name": name,
+            "format": fmt,
+            **extra,
+        },
+    )
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+def test_a_compress_onto_an_existing_archive_is_409_and_changes_nothing(env, box, fmt, name):
+    s = side(env, box)
+    old = make_old_archive(s, name)
+    s.disk("a.txt").write_bytes(b"alpha")
+    before = files_under(s.base)
+    old_bytes = old.read_bytes()
+
+    resp = compress(s, ["a.txt"], fmt, name)
+
+    assert (resp.status_code, resp.json()) == (409, EXISTS)
+    assert old.read_bytes() == old_bytes
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+def test_a_compress_with_overwrite_replaces_the_archive_and_keeps_no_old_entry(env, box, fmt, name):
+    s = side(env, box)
+    make_old_archive(s, name)
+    s.disk("a.txt").write_bytes(b"alpha")
+
+    resp = compress(s, ["a.txt"], fmt, name, overwrite=True)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path(f"d/{name}"))
+    assert entries(s.disk(f"d/{name}")) == ["a.txt"]
+    assert sorted(p.name for p in s.disk("d").iterdir()) == [name]
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+def test_a_compress_to_a_free_name_makes_the_archive_and_nothing_else(env, box, fmt, name):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"alpha")
+
+    resp = compress(s, ["a.txt"], fmt, name)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path(f"d/{name}"))
+    assert entries(s.disk(f"d/{name}")) == ["a.txt"]
+    assert sorted(p.name for p in s.disk("d").iterdir()) == [name]
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("kind", ["folder", "link"])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_a_compress_onto_a_folder_or_a_link_answers_as_an_upload_does(env, box, kind, overwrite):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("elsewhere.txt").write_bytes(b"keep me")
+    s.disk("a.txt").write_bytes(b"alpha")
+    if kind == "folder":
+        s.disk("d/o.zip").mkdir()
+    else:
+        s.disk("d/o.zip").symlink_to(s.disk("elsewhere.txt"))
+    before = files_under(s.base)
+
+    resp = compress(s, ["a.txt"], "zip", "o.zip", overwrite=overwrite)
+
+    expected = (400, NOT_REGULAR) if overwrite else (409, TAKEN)
+    assert (resp.status_code, resp.json()) == expected
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("value", ["true", 1, "false", 0])
+def test_a_compress_overwrite_must_be_a_json_boolean(local_env, value):
+    s = side(local_env, "local")
+    s.disk("d").mkdir()
+    s.disk("d/o.zip").write_bytes(b"precious")
+    s.disk("a.txt").write_bytes(b"alpha")
+
+    resp = compress(s, ["a.txt"], "zip", "o.zip", overwrite=value)
+
+    assert (resp.status_code, resp.json()) == (
+        422,
+        {"detail": "body.overwrite: Input should be a valid boolean", "reason": "invalid"},
+    )
+    assert s.disk("d/o.zip").read_bytes() == b"precious"
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+@pytest.mark.parametrize("taken", [True, False])
+def test_a_compress_that_fails_leaves_the_old_archive_and_no_other_file(env, box, fmt, name, taken):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    if taken:
+        make_old_archive(s, name)
+    s.disk("a.txt").write_bytes(b"alpha")
+    before = files_under(s.base)
+
+    resp = compress(s, ["a.txt", "gone.txt"], fmt, name, overwrite=True)
+
+    expected = (404, "not_found") if box == "local" else (500, "failed")
+    assert (resp.status_code, resp.json()["reason"]) == (expected[0], expected[1])
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+def test_a_compress_of_a_folder_that_holds_the_archive_never_packs_the_unfinished_file(
+    env, box, fmt, name
+):
+    s = side(env, box)
+    make_old_archive(s, name)
+    s.disk("d/a.txt").write_bytes(b"alpha")
+
+    resp = compress(s, ["d"], fmt, name, overwrite=True)
+
+    assert resp.status_code == 200
+    folders = [] if fmt == "zip" else ["d"]
+    assert entries(s.disk(f"d/{name}")) == sorted([*folders, "d/a.txt", f"d/{name}"])
+    assert sorted(p.name for p in s.disk("d").iterdir()) == sorted(["a.txt", name])
+
+
+def _pool_holds_a_connection() -> int:
+    return ssh_pool.get_pool().stats().get(REMOTE, {}).get("active_connections", 0)
+
+
+@pytest.mark.parametrize("box", ["lb-refusing"])
+def test_a_compress_past_its_limit_is_504_closes_the_connection_and_leaves_no_file(
+    env, box, monkeypatch
+):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("a.txt").write_bytes(b"alpha")
+
+    async def slow(command: str) -> int:
+        words = shlex.split(command)
+        (env.root / words[2].lstrip("/")).write_bytes(b"partial")
+        await asyncio.sleep(30)
+        return 0
+
+    env.server.stand_in = slow
+    monkeypatch.setattr(remote_files_api, "ARCHIVE_TIMEOUT", 0.3)
+
+    resp = compress(s, ["a.txt"], "tar.gz", "o.tar.gz")
+
+    assert (resp.status_code, resp.json()) == (
+        504,
+        {"detail": "Archive creation timed out", "reason": "timeout"},
+    )
+    assert _pool_holds_a_connection() == 0
+    assert sorted(p.name for p in s.disk("d").iterdir()) == []
+
+
+@pytest.mark.parametrize("box", ["lb-refusing"])
+def test_an_extract_past_its_limit_is_504_and_closes_the_connection(env, box, monkeypatch):
+    s = side(env, box)
+    make_old_archive(s, "o.tar.gz")
+
+    async def slow(command: str) -> int:
+        await asyncio.sleep(30)
+        return 0
+
+    env.server.stand_in = slow
+    monkeypatch.setattr(remote_files_api, "ARCHIVE_TIMEOUT", 0.3)
+
+    resp = s.post(
+        "archive/extract", {"archive_path": s.path("d/o.tar.gz"), "destination": s.path("out")}
+    )
+
+    assert (resp.status_code, resp.json()) == (
+        504,
+        {"detail": "Extraction timed out", "reason": "timeout"},
+    )
+    assert _pool_holds_a_connection() == 0

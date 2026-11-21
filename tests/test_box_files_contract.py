@@ -983,6 +983,37 @@ async def test_a_local_folder_zip_holds_each_file_under_its_relative_name(tmp_pa
 # --- archives: a remote command recorded, never run; a local one made and unpacked ---
 
 
+class _PlacingSFTP:
+    """An SFTP client for an archive: the temp file is there, the archive's name is free,
+    and what it is asked to do is recorded."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    async def lstat(self, path: str) -> SimpleNamespace:
+        self.calls.append(("lstat", path))
+        if not path.endswith(".t.sshler"):
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return SimpleNamespace(permissions=0o100644, size=0, mtime=0, mtime_ns=0)
+
+    async def link(self, source: str, target: str) -> None:
+        self.calls.append(("link", source, target))
+
+    async def remove(self, path: str) -> None:
+        self.calls.append(("remove", path))
+
+    def exit(self) -> None:
+        pass
+
+
+def _fixed_temp_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    def temp(target: str, suffix: str = ".sshler") -> str:
+        parent, name = target.rsplit("/", 1)
+        return f"{parent}/.{name}.t.sshler"
+
+    monkeypatch.setattr(remote_files_api, "_remote_temp_beside", temp)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("fmt", "name", "words"),
@@ -990,20 +1021,39 @@ async def test_a_local_folder_zip_holds_each_file_under_its_relative_name(tmp_pa
         (
             "tar.gz",
             "o.tar.gz",
-            ["tar", "czf", "/home/out/o.tar.gz", "-C", "/", f"/srv/{ODD_NAME}", "/home/x"],
+            [
+                "tar",
+                "czf",
+                "/home/out/.o.tar.gz.t.sshler",
+                "-C",
+                "/",
+                f"/srv/{ODD_NAME}",
+                "/home/x",
+            ],
         ),
         (
             "zip",
             "o.zip",
-            ["cd", "/", "&&", "zip", "-r", "/home/out/o.zip", f"/srv/{ODD_NAME}", "/home/x"],
+            [
+                "cd",
+                "/",
+                "&&",
+                "zip",
+                "-r",
+                "/home/out/.o.zip.t.sshler",
+                f"/srv/{ODD_NAME}",
+                "/home/x",
+            ],
         ),
     ],
 )
 async def test_a_remote_archive_is_made_by_one_command_on_the_quoted_paths(
     monkeypatch, fmt, name, words
 ):
+    _fixed_temp_name(monkeypatch)
     home = 'printf %s "$HOME"'
-    connection = RecordingConnection({home: _Result(stdout="/home", exit_status=0)})
+    sftp = _PlacingSFTP()
+    connection = RecordingConnection({home: _Result(stdout="/home", exit_status=0)}, sftp)
     # The zip runs after a `cd /`: its `&&` is the one word left unquoted.
     made = shlex.join(words) if fmt == "tar.gz" else "cd / && " + shlex.join(words[3:])
     connection.replies[made] = _Result(stdout="", exit_status=0)
@@ -1013,6 +1063,11 @@ async def test_a_remote_archive_is_made_by_one_command_on_the_quoted_paths(
     assert target == f"/home/out/{name}"
     assert connection.commands == [home, made, HEALTH_CMD]
     assert shlex.split(made) == words
+    # The archive takes its name only now: the temp file is linked to it and removed.
+    assert sftp.calls[-2:] == [
+        ("link", f"/home/out/.{name}.t.sshler", f"/home/out/{name}"),
+        ("remove", f"/home/out/.{name}.t.sshler"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1047,7 +1102,9 @@ async def test_a_remote_archive_past_its_limit_is_504(monkeypatch):
                 await asyncio.sleep(5)
             return await super().run(cmd, check, encoding)
 
-    connection = Slow({})
+    _fixed_temp_name(monkeypatch)
+    sftp = _PlacingSFTP()
+    connection = Slow({}, sftp)
     monkeypatch.setattr(remote_files_api, "ARCHIVE_TIMEOUT", 0.05)
     deps = _recording(monkeypatch, connection)
     with pytest.raises(HTTPException) as answered:

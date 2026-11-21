@@ -1,6 +1,7 @@
 """A local folder copy makes each file the way a single-file copy does: no setuid, setgid
 or sticky bit, the file's bits on it before its first byte, a link kept as a link, and a
-copy that fails removes what it made and reports the first error."""
+copy that fails removes what it made and reports the first error. Also the temp file a
+replace is written to: its name beside a target with the longest name, and its bits."""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import pytest
 from platform_support import make_symlink
 
 from sshler.api import local_files as local_files_api
+from sshler.api import remote_files as remote_files_api
 from sshler.api.failure import Failure
 
 pytestmark = pytest.mark.posix_only("permission bits, setuid and a link in a folder")
@@ -116,3 +118,53 @@ def test_a_named_pipe_in_the_folder_fails_the_copy_without_opening_it(source, tm
 
     assert answers == [("invalid", f"Could not copy {source} to {target}: Not a regular file")]
     assert os.path.lexists(target) is False
+
+
+# --- a temp file beside a target with a long name -------------------------------------
+
+# 85 three-byte characters: 255 bytes, the longest name a file system here takes.
+LONGEST_NAME = "あ" * 85
+
+
+@pytest.mark.parametrize("mode", [0o640, None])
+def test_a_file_with_the_longest_name_is_replaced_through_a_temp_file(tmp_path, mode):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    target = folder / LONGEST_NAME
+    target.write_bytes(b"old")
+
+    landing = local_files_api._LocalLanding(str(target), replace=True, mode=mode)
+    landing.write(b"new")
+    landing.commit()
+
+    assert [(path.name, path.read_bytes()) for path in folder.iterdir()] == [(LONGEST_NAME, b"new")]
+
+
+def test_a_remote_temp_name_fits_beside_the_longest_name():
+    temp = remote_files_api._remote_temp_beside(f"/srv/{LONGEST_NAME}", ".sshler-old")
+
+    # a dot, 66 whole characters (198 bytes), a dot, 12 hex digits, the suffix
+    assert len(temp.removeprefix("/srv/").encode()) == 1 + 198 + 1 + 12 + 11
+    assert temp.startswith("/srv/." + "あ" * 66 + ".")
+
+
+def test_a_new_archive_has_the_bits_of_a_new_file_and_a_replaced_one_keeps_its_bits(tmp_path):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (folder / "plain.txt").write_bytes(b"plain")  # made by ``open``: the default bits
+    archive = folder / "out.zip"
+
+    local_files_api._local_create_archive(
+        [str(folder / "plain.txt")], archive, "zip", overwrite=False
+    )
+    made = stat.S_IMODE(archive.stat().st_mode)
+    archive.chmod(0o640)
+    local_files_api._local_create_archive(
+        [str(folder / "plain.txt")], archive, "zip", overwrite=True
+    )
+
+    assert (made, stat.S_IMODE(archive.stat().st_mode)) == (
+        stat.S_IMODE((folder / "plain.txt").stat().st_mode),
+        0o640,
+    )
+    assert sorted(path.name for path in folder.iterdir()) == ["out.zip", "plain.txt"]

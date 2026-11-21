@@ -1051,7 +1051,15 @@ async function handleArchiveCreate(format: string, paths?: string[]) {
     ? single.split('/').pop() + ext
     : `archive${ext}`;
   try {
-    await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null);
+    try {
+      await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null);
+    } catch (err) {
+      // A taken archive name the server would replace asks; "No" leaves everything as it
+      // was and shows no error. Any other refusal shows the server's text.
+      if (!(err instanceof ApiError && err.reason === "exists")) throw err;
+      if (!(await askReplace(archiveName))) return;
+      await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null, { overwrite: true });
+    }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     filesStore.setSelectedFiles([]);
     message.success(`Created ${archiveName}`);

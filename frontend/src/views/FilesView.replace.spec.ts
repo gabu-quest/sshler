@@ -138,6 +138,7 @@ const i18nPlugin = { install(app: App) { createI18n(app); } };
 const renameFile = vi.mocked(http.renameFile);
 const batchMove = vi.mocked(http.batchMove);
 const batchCopy = vi.mocked(http.batchCopy);
+const createArchive = vi.mocked(http.createArchive);
 const taken = () => new ApiError(409, "exists", "File already exists");
 /** What a person reads for a failed item: the line of its reason, " — ", the server's text. */
 const line = (reason: string, text: string) => `${en[`error.reason.${reason}`]} — ${text}`;
@@ -409,5 +410,73 @@ describe.each([
     await waitFor(() => expect(messageSpy.success).toHaveBeenCalledWith(`${verb} 2 item(s)`));
     expect(dialogSpy.warning).not.toHaveBeenCalled();
     expect(sent()).toEqual([[["/p/a", "/p/b"], undefined]]);
+  });
+});
+
+describe("FilesView: compress onto an existing archive", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({
+        matches: false, media: query, onchange: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      }),
+    });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    createArchive.mockReset();
+  });
+
+  async function compress(container: Element) {
+    await fireEvent.contextMenu(container.querySelector('[data-path="/p/a.txt"] .cell-name div')!);
+    await fireEvent.click(container.querySelector(".menu-compress-zip")!);
+  }
+
+  // Mutation: no prompt on 409 (the error toast), or Yes without the flag.
+  it("a 409 asks naming the archive; Replace sends the compress again with overwrite", async () => {
+    createArchive.mockRejectedValueOnce(taken()).mockResolvedValueOnce({ status: "ok", message: "Created a.txt.zip" });
+    const { container } = await mountLoaded();
+    await compress(container);
+    const opts = await prompt(1);
+    expect(opts.content).toBe("\"a.txt.zip\" already exists here. Replace it?");
+    expect(messageSpy.error).not.toHaveBeenCalled();
+    opts.onPositiveClick();
+    await waitFor(() => expect(messageSpy.success).toHaveBeenCalledWith("Created a.txt.zip"));
+    expect(createArchive.mock.calls.map((c) => c.slice(1))).toEqual([
+      [["/p/a.txt"], "/p", "a.txt.zip", "zip", "tok"],
+      [["/p/a.txt"], "/p", "a.txt.zip", "zip", "tok", { overwrite: true }],
+    ]);
+    expect(messageSpy.error).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a dismissed prompt is read as Yes, or the 409 text is shown as an error.
+  it.each([
+    ["No", (o: any) => o.onNegativeClick()],
+    ["Escape", (o: any) => o.onEsc()],
+    ["a click outside", (o: any) => o.onMaskClick()],
+  ])("%s sends nothing more and shows no message", async (_label, dismiss) => {
+    createArchive.mockRejectedValueOnce(taken());
+    const { container } = await mountLoaded();
+    await compress(container);
+    dismiss(await prompt(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(createArchive).toHaveBeenCalledTimes(1);
+    expect(messageSpy.error).not.toHaveBeenCalled();
+    expect(messageSpy.success).not.toHaveBeenCalled();
+  });
+
+  // Mutation: every refusal asks (a Yes would fail: a folder or link is never replaced).
+  it("a name that cannot be replaced shows the failure's line and text and asks nothing", async () => {
+    createArchive.mockRejectedValueOnce(new ApiError(409, "cannot_replace", "File already exists"));
+    const { container } = await mountLoaded();
+    await compress(container);
+    await waitFor(() => expect(messageSpy.error).toHaveBeenCalledWith(
+      "That name is taken and cannot be replaced — File already exists"));
+    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    expect(createArchive).toHaveBeenCalledTimes(1);
   });
 });

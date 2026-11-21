@@ -284,12 +284,21 @@ class BoxFiles(Protocol):
         ...
 
     async def create_archive(
-        self, paths: Sequence[str], destination: str, name: str, fmt: str
+        self,
+        paths: Sequence[str],
+        destination: str,
+        name: str,
+        fmt: str,
+        *,
+        overwrite: bool = False,
     ) -> str:
-        """Pack ``paths`` into a new archive ``name`` in folder ``destination``; ``fmt``
+        """Pack ``paths`` into archive ``name`` in folder ``destination``; ``fmt``
         (``tar.gz``, ``tgz`` or ``zip``) and ``name`` are checked by the route. Returns
         the archive's path. A folder is packed with everything in it, under its own
-        name."""
+        name. The archive is written under a temporary name beside it and placed by the
+        rule for an existing name when complete: a taken name is refused unless
+        ``overwrite`` lets a regular file be replaced, and a compress that fails leaves
+        the old archive whole and no other file."""
         ...
 
     async def extract_archive(self, archive: str, destination: str) -> str:
