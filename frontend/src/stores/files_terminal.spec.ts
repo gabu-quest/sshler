@@ -12,7 +12,7 @@ vi.mock("@/api/http", () => ({
   moveFile: vi.fn().mockResolvedValue({ status: "ok", message: "moved" }),
   copyFile: vi.fn().mockResolvedValue({ status: "ok", message: "copied" }),
   uploadFile: vi.fn().mockResolvedValue({ status: "ok", message: "uploaded" }),
-  fetchBootstrap: vi.fn().mockResolvedValue({ token_header: "X-SSHLER-TOKEN", token: "t", version: "1", allow_origins: [], basic_auth_required: false, spa_base: "/app/" }),
+  fetchBootstrap: vi.fn().mockResolvedValue({ token_header: "X-SSHLER-TOKEN", token: "t", version: "1", allow_origins: [], auth_required: false, spa_base: "/app/" }),
 }));
 
 describe("files + terminal stores", () => {

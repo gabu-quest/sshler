@@ -73,7 +73,7 @@ Key suites: `test_websocket.py`/`test_terminal_websocket.py` (WS), `test_api_v1.
 
 **MUST NOT:** execute uploaded content, disable auth in configs, or trust client paths without normalization.
 
-**Auth:** httpOnly session cookies (Secure in production); optional basic auth for exposed deployments.
+**Auth:** the sign-in form makes the httpOnly session cookie; a Basic header passes one request (`door_of`).
 
 ## Development Workflow
 

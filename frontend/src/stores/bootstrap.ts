@@ -15,12 +15,22 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
   const token = ref<string | null>(readStoredToken());
   const shortcuts = ref<string[]>(["Cmd/Ctrl+K: Command Palette", "Alt+F: Files", "Alt+T: Terminal", "Alt+M: Multi-Terminal"]);
   let refreshInterval: number | null = null;
+  // The bootstrap in flight: callers that arrive meanwhile wait for the same answer.
+  let pending: Promise<void> | null = null;
 
   const tokenHeader = computed(() => payload.value?.token_header ?? "X-SSHLER-TOKEN");
   const version = computed(() => payload.value?.version ?? "");
   const spaBase = computed(() => payload.value?.spa_base ?? "/app/");
   const spaEnabled = computed(() => payload.value?.spa_enabled ?? true);
-  const basicAuthRequired = computed(() => payload.value?.basic_auth_required ?? false);
+  // A password is set: the page is used signed in.
+  const authRequired = computed(() => payload.value?.auth_required ?? false);
+  // This page's requests carry a live session (true when no password is set).
+  const authenticated = computed(() => payload.value?.authenticated ?? false);
+  // The bootstrap answer is here and this page may call the server: no password is set,
+  // or the answer says the page is signed in.
+  const signedIn = computed(
+    () => payload.value !== null && (!authRequired.value || authenticated.value),
+  );
   const wslDistro = computed(() => payload.value?.wsl_distro ?? null);
   const pdfAvailable = computed(() => payload.value?.pdf_available ?? false);
   const platform = computed(() => payload.value?.platform ?? "posix");
@@ -46,7 +56,17 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
     }
   }
 
-  async function bootstrap() {
+  /** Ask the server for the bootstrap; a call made while one is in flight shares it. */
+  function bootstrap(): Promise<void> {
+    if (!pending) {
+      pending = load().finally(() => {
+        pending = null;
+      });
+    }
+    return pending;
+  }
+
+  async function load() {
     loading.value = true;
     error.value = null;
     try {
@@ -55,6 +75,9 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
       if (payload.value.token) {
         token.value = payload.value.token;
         persistToken(token.value);
+      } else if (payload.value.auth_required && !payload.value.authenticated) {
+        // Signed out: a token kept from an earlier session is not this page's.
+        setToken(null);
       }
 
       // Set up periodic refresh (every 30 minutes)
@@ -89,6 +112,15 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
     }
   }
 
+  /** Forget the signed-in page: the bootstrap, the token (also the stored one) and its
+   * refresh. The next navigation asks the server afresh. */
+  function forget() {
+    cleanup();
+    payload.value = null;
+    error.value = null;
+    setToken(null);
+  }
+
   async function refreshToken() {
     token.value = null;
     persistToken(null);
@@ -109,7 +141,9 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
     version,
     spaBase,
     spaEnabled,
-    basicAuthRequired,
+    authRequired,
+    authenticated,
+    signedIn,
     wslDistro,
     pdfAvailable,
     platform,
@@ -119,6 +153,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
     bootstrap,
     refreshToken,
     setToken,
+    forget,
     shortcuts,
     cleanup,
   };

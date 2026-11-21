@@ -12,7 +12,6 @@ Every row also checks that no fake SSH connection is left open.
 
 from __future__ import annotations
 
-import base64
 import errno
 import socket
 from collections.abc import Callable, Iterator
@@ -230,10 +229,8 @@ def _login_app(world: World, enabled: bool) -> None:
         reset_settings()
         settings = ServerSettings(csrf_token=TOKEN)
     world.client.close()
+    # No credentials: the sign-in route is open when a password is set.
     world.client = TestClient(make_app(settings))
-    if enabled:
-        sent = base64.b64encode(f"{LOGIN_USER}:{LOGIN_PASSWORD}".encode()).decode()
-        world.client.headers["Authorization"] = f"Basic {sent}"
 
 
 def _login_wrong_password(world: World) -> None:

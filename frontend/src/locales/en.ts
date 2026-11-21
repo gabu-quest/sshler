@@ -253,10 +253,12 @@ export const en: Record<string, string> = {
   "login.error_empty": "Please enter both username and password",
   "login.error_invalid": "Invalid username or password",
   "login.error_rate_limit": "Too many failed attempts. Please try again later",
+  "login.error_rate_limit_minutes": "Too many failed attempts. Try again in {minutes} min",
+  "login.error_rate_limit_seconds": "Too many failed attempts. Try again in {seconds} s",
   "login.error_generic": "Authentication failed. Please try again.",
   "login.security_notice": "Security Notice:",
   "login.security_detail": "sshler uses secure session cookies with Argon2id password hashing. Your credentials are never stored in the browser.",
-  "login.session_expiry": "Sessions expire after 8 hours of inactivity for your security.",
+  "login.session_expiry": "Sessions expire 8 hours after sign-in for your security.",
 
   // Boxes
   "boxes.title": "boxes",
@@ -348,6 +350,8 @@ export const en: Record<string, string> = {
   "settings.auth_error": "Authentication Error",
   "settings.refresh_token": "Refresh Token",
   "settings.clear_cache": "Clear Cache",
+  "settings.signed_in_as": "Signed in as {user}",
+  "settings.sign_out": "Sign out",
   "settings.token_refreshed": "Token refreshed successfully",
   "settings.token_refresh_failed": "Failed to refresh token:",
   "settings.token_status_loading": "Loading...",

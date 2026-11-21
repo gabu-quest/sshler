@@ -39,7 +39,7 @@ import type {
   ArtifactProjectList,
   ArtifactRegistration,
 } from "./types";
-import { ApiError, apiErrorOf, apiErrorOfBody, networkError } from "./apiError";
+import { ApiError, apiErrorOf, apiErrorOfBody, networkError, retryAfterSeconds } from "./apiError";
 import type { FailureReason } from "./apiError";
 import { translate } from "@/i18n";
 
@@ -195,8 +195,13 @@ async function request(url: string, init: RequestInit = {}, options: RequestOpti
       throw networkError();
     }
     if (!response.ok) {
-      // A failure body that cannot be read gives no detail; the error keeps its status.
-      throw apiErrorOf(response.status, await response.text().catch(() => ""));
+      // A failure body that cannot be read gives no detail; the error keeps its status
+      // and the answer's Retry-After.
+      throw apiErrorOf(
+        response.status,
+        await response.text().catch(() => ""),
+        retryAfterSeconds(response.headers.get("Retry-After")),
+      );
     }
     return response;
   };
@@ -261,8 +266,12 @@ async function handleAuthErrors(): Promise<void> {
   try {
     const { useAuthStore } = await import('@/stores/auth');
     useAuthStore().clearUser();
+    const { useBootstrapStore } = await import('@/stores/bootstrap');
+    useBootstrapStore().forget();
 
     const { default: router } = await import('@/router');
+    // The router's first navigation (the guard's own redirect) ends before the route is read.
+    await router.isReady();
     const current = router.currentRoute.value;
     if (current.name === 'login') return;
     if (!_signInPromise) {

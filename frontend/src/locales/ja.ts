@@ -253,10 +253,12 @@ export const ja: Record<string, string> = {
   "login.error_empty": "ユーザー名とパスワードを入力してください",
   "login.error_invalid": "ユーザー名またはパスワードが正しくありません",
   "login.error_rate_limit": "試行回数が多すぎます。しばらくしてからもう一度お試しください",
+  "login.error_rate_limit_minutes": "試行回数が多すぎます。{minutes} 分後にもう一度お試しください",
+  "login.error_rate_limit_seconds": "試行回数が多すぎます。{seconds} 秒後にもう一度お試しください",
   "login.error_generic": "認証に失敗しました。もう一度お試しください。",
   "login.security_notice": "セキュリティ通知：",
   "login.security_detail": "sshlerはArgon2idパスワードハッシュを使用した安全なセッションCookieを使用しています。認証情報はブラウザに保存されません。",
-  "login.session_expiry": "セキュリティのため、8時間操作がないとセッションが期限切れになります。",
+  "login.session_expiry": "セキュリティのため、サインインから8時間でセッションが期限切れになります。",
 
   // Boxes
   "boxes.title": "ホスト",
@@ -348,6 +350,8 @@ export const ja: Record<string, string> = {
   "settings.auth_error": "認証エラー",
   "settings.refresh_token": "トークン更新",
   "settings.clear_cache": "キャッシュクリア",
+  "settings.signed_in_as": "{user} としてサインイン中",
+  "settings.sign_out": "サインアウト",
   "settings.token_refreshed": "トークンを更新しました",
   "settings.token_refresh_failed": "トークンの更新に失敗:",
   "settings.token_status_loading": "読み込み中...",

@@ -10,7 +10,10 @@ export interface BootstrapPayload {
   version: string;
   token_header: string;
   token: string | null;
-  basic_auth_required: boolean;
+  /** A password is set: the page is used signed in. */
+  auth_required: boolean;
+  /** This page's requests carry a live session (always true with no password set). */
+  authenticated: boolean;
   allow_origins: string[];
   spa_base: string;
   spa_enabled: boolean;

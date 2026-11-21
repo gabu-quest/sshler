@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from fastapi import WebSocket
 
-from .session import get_session_store
+from .session import live_session
 from .settings import SshlerSettings
 from .settings import get_settings as get_app_settings
 
@@ -75,7 +75,7 @@ def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
             authenticated = True
         if not authenticated:
             cookie_sid = websocket.cookies.get(app_settings.cookie_name)
-            if cookie_sid and get_session_store().get_session(cookie_sid):
+            if cookie_sid and live_session(cookie_sid):
                 authenticated = True
         if not authenticated:
             logger.warning("[Connection] WebSocket refused: no valid credentials")

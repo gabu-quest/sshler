@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from ..auth import AuthManager
-from ..session import Session, get_session_store
+from ..session import Session, get_session_store, live_session
 from ..settings import get_settings
 from .failure import REASON_AUTH, REASON_INVALID, Failure
 from .rate_limiting import rate_limit_login
@@ -103,7 +103,7 @@ def create_auth_router(
         - Additional reverse proxy rate limiting recommended for production
         """
         # Check if auth is required
-        if not settings.require_auth or auth_manager is None:
+        if auth_manager is None:
             raise Failure(REASON_INVALID, "Authentication is not enabled")
 
         # Get client IP for rate limiting
@@ -152,8 +152,8 @@ def create_auth_router(
 
         Returns user information if session is valid, 401 otherwise.
         """
-        if not settings.require_auth:
-            # If auth is disabled, return a default user
+        if auth_manager is None:
+            # If no password is set, return a default user
             return UserInfo(username="anonymous", user_id="anonymous")
 
         # Get session cookie
@@ -162,10 +162,7 @@ def create_auth_router(
             raise Failure(REASON_AUTH, "Not authenticated")
 
         # Validate session
-        session = session_store.get_session(
-            session_id,
-            idle_timeout=settings.session_idle_timeout_seconds,
-        )
+        session = live_session(session_id)
 
         if session is None:
             raise Failure(REASON_AUTH, "Session expired or invalid")
@@ -219,8 +216,8 @@ async def get_current_session(request: Request) -> Session:
     """
     settings = get_settings()
 
-    # If auth is disabled, create a dummy session
-    if not settings.require_auth:
+    # With no password set, create a dummy session
+    if request.app.state.settings.auth_manager is None:
         import time
 
         from ..session import Session
@@ -240,11 +237,7 @@ async def get_current_session(request: Request) -> Session:
         raise Failure(REASON_AUTH, "Not authenticated - session cookie missing")
 
     # Validate session
-    session_store = get_session_store()
-    session = session_store.get_session(
-        session_id,
-        idle_timeout=settings.session_idle_timeout_seconds,
-    )
+    session = live_session(session_id)
 
     if session is None:
         raise Failure(REASON_AUTH, "Session expired or invalid")

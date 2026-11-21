@@ -18,20 +18,21 @@ def mount_spa(app: FastAPI, serve_spa: bool) -> None:
     if not serve_spa or not spa_dist.exists():
         return
 
+    spa_root = spa_dist.resolve()
     app.mount("/app/assets", StaticFiles(directory=str(spa_dist / "assets")), name="spa-assets")
 
     @app.get("/app", response_class=HTMLResponse)
     @app.get("/app/", response_class=HTMLResponse)
     @app.get("/app/{path:path}", response_class=HTMLResponse)
     async def vue_index(path: str = ""):
-        target_path = (spa_dist / path).resolve()
-        try:
-            spa_dist.resolve()
-        except Exception as exc:
-            raise Failure(REASON_NOT_FOUND, "Not found") from exc
-
-        if path and target_path.is_file() and str(target_path).startswith(str(spa_dist)):
-            return FileResponse(target_path)
+        if path:
+            try:
+                target = (spa_root / path).resolve()
+            except (OSError, ValueError):
+                # A path that cannot be a file name is served as any unknown path is.
+                target = None
+            if target is not None and target.is_relative_to(spa_root) and target.is_file():
+                return FileResponse(target)
 
         index_path = spa_dist / "index.html"
         if not index_path.exists():

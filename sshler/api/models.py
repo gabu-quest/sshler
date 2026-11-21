@@ -233,7 +233,8 @@ class APIBootstrap(BaseModel):
     version: str
     token_header: str
     token: str | None = None
-    basic_auth_required: bool
+    auth_required: bool
+    authenticated: bool
     allow_origins: list[str]
     spa_base: str = "/app/"
     spa_enabled: bool = True

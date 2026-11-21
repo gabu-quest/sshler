@@ -68,6 +68,35 @@ batch recreate of lost sessions answer it, and the batch recreate shares the sin
 failures through `recovery._recreate`. A route outside these that raises a plain
 `HTTPException` gets its reason from its status.
 
+## Signing in
+
+With a password set (`--auth`, or `SSHLER_USERNAME` with `SSHLER_PASSWORD_HASH` or
+`SSHLER_PASSWORD`), the page's own sign-in form is the way in. Who passes the server's door is
+decided by one function, `door_of` in `webapp.py`, by exact method and the decoded path the
+router matches; `_security_middleware` only asks it. Open without credentials: OPTIONS and
+`/health` (untouched); GET and HEAD of `/`, `/app` and the paths below `/app/` (the page's
+files, no secret in them); GET `/api/v1/bootstrap`, GET `/api/v1/auth/me` and POST
+`/api/v1/auth/logout`; POST `/api/v1/auth/login`, which a lockout still stops. A path with a
+`.`, `..` or empty segment is never open, so `/app/../api/v1/boxes` and `/appx` need
+credentials. Everything else needs a live session cookie or a good Basic header. A refusal is
+401 `auth` with no `WWW-Authenticate` header, so no browser shows its own prompt or keeps
+the password. A Basic header passes that one request and makes no session: only the sign-in
+route makes a session and its cookie (8 hours, `SSHLER_SESSION_TTL_SECONDS`). A wrong Basic header
+counts toward the lockout (five failures, five minutes) as a failed sign-in does; a lockout
+answers `rate_limited` with `Retry-After` on every closed path and on the sign-in route, and
+the other open routes keep loading so the form can say how long to wait. Sockets decide the
+same credentials in `access.websocket_refusal` (close 4401).
+
+The bootstrap says who is asking: `auth_required` (a password is set) and `authenticated`
+(this request carried a live session or a good Basic header, always true with no password);
+a request that is not authenticated gets `token: null` and only what the sign-in page needs (the version, token header, page base, platform and the two auth flags; no allowed origins, shell, PDF or artifact settings). The router's guard asks the bootstrap
+when the page has none (on load, and after sign-out forgets it) and sends a signed-out page to
+the sign-in route with `redirect`. The header's polls and the app's sockets start only while the bootstrap store's `signedIn` is true, and a refusal reads the route only after the router's first navigation has ended, so neither can replace the guard's `redirect`. A good sign-in loads the page afresh at `redirect`
+(`utils/pageLoad.ts`), so the bootstrap gives the token and every socket opens signed in. The
+settings view's sign-out row calls the sign-out route, forgets the user, the bootstrap and the
+token, and loads the sign-in page. A session that ended answers 401 `auth` on the next
+request, and `handleAuthErrors` forgets the user and the bootstrap and goes to the sign-in route. The page starts its sockets, progress bars and recovery poll only when it is signed in. One function, `live_session` in `session.py`, decides whether a session id is live (the configured idle timeout included) for the door, the sockets and the auth routes.
+
 ## Frontend details
 
 **A request and its failure**: every request of the page goes through `request` in
@@ -76,7 +105,8 @@ transfer's first answer, the terminal handshake, the start-up token check); the 
 `XMLHttpRequest` for its progress and runs under the same policy. A failed request is an
 `ApiError` (`src/api/apiError.ts`): `status` (0 when no answer came), `reason` (one of the
 server's words, `network` when no answer came, null when an answer had none) and `detail` (the
-server's text). Its `message` is the translated line of the reason (`error.reason.<word>`,
+server's text), and `retryAfter` (the answer's `Retry-After` in seconds, or null; the sign-in
+page shows a lockout's wait from it). Its `message` is the translated line of the reason (`error.reason.<word>`,
 `error.reason.network`, `error.reason.none`, in both locales), then " — " and the detail; an
 answer with no reason and no text shows its status in brackets instead. The page acts on the
 reason only, never on the status or the words: `token` refreshes the token once and sends once

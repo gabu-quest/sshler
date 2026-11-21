@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRouter, createWebHistory } from "vue-router";
 
 import { ApiError } from "@/api/apiError";
+import { useBootstrapStore } from "@/stores/bootstrap";
 import AppHeader from "./AppHeader.vue";
 
 vi.mock("@/api/http", () => ({
@@ -11,7 +12,7 @@ vi.mock("@/api/http", () => ({
   fetchSnapshotStatus: vi.fn(async () => ({ last_snapshot_at: null })),
 }));
 
-import { boxStats } from "@/api/http";
+import { boxStats, fetchSnapshotStatus } from "@/api/http";
 
 vi.mock("naive-ui", () => {
   const stub = (template: string) => ({ template });
@@ -32,9 +33,29 @@ const router = createRouter({
   routes: [{ path: "/", component: { template: "<div>home</div>" } }],
 });
 
+function signIn(authRequired: boolean, authenticated: boolean) {
+  useBootstrapStore().payload = {
+    version: "1", token_header: "X-SSHLER-TOKEN", token: null, auth_required: authRequired, authenticated,
+    allow_origins: [], spa_base: "/app/", spa_enabled: true, platform: "posix",
+    default_shell: null, windows_shells: [],
+  } as unknown as ReturnType<typeof useBootstrapStore>["payload"];
+}
+
+function mountHeader() {
+  return render(AppHeader, {
+    global: {
+      plugins: [router],
+      stubs: { CommandPalette: { template: "<span />" }, ShortcutsOverlay: { template: "<span />" } },
+    },
+  });
+}
+
 describe("AppHeader: the local box's stats", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    vi.mocked(boxStats).mockReset();
+    vi.mocked(fetchSnapshotStatus).mockClear();
+    signIn(false, true);
     vi.useFakeTimers();
     Object.defineProperty(window, "matchMedia", {
       writable: true,
@@ -65,5 +86,22 @@ describe("AppHeader: the local box's stats", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(vi.mocked(boxStats)).toHaveBeenCalledTimes(2);
     expect(container.querySelectorAll(".mobile-stats")).toHaveLength(0);
+  });
+
+  it("signed out: neither poll is asked", async () => {
+    signIn(true, false);
+    mountHeader();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect([vi.mocked(boxStats).mock.calls.length, vi.mocked(fetchSnapshotStatus).mock.calls.length]).toEqual([0, 0]);
+  });
+
+  it("signed in with a password set: each poll is asked once at the start", async () => {
+    signIn(true, true);
+    vi.mocked(boxStats).mockResolvedValue({
+      name: "local", cpu_percent: 1, memory_used_mb: 1, memory_total_mb: 2, memory_percent: 50, uptime_seconds: 1,
+    });
+    mountHeader();
+    await vi.advanceTimersByTimeAsync(0);
+    expect([vi.mocked(boxStats).mock.calls.length, vi.mocked(fetchSnapshotStatus).mock.calls.length]).toEqual([1, 1]);
   });
 });

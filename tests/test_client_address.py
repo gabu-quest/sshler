@@ -105,10 +105,11 @@ def _client(*, basic_auth: bool) -> TestClient:
 
 
 def _failed_login(client: TestClient, real_ip: str) -> int:
+    # The sign-in route is open: a failed login carries no other credentials.
     return client.post(
         LOGIN,
         json={"username": USER, "password": "wrong-password"},
-        headers={"Authorization": _basic(USER, PASSWORD), "X-Real-IP": real_ip},
+        headers={"X-Real-IP": real_ip},
     ).status_code
 
 
@@ -300,11 +301,11 @@ def test_trusted_proxy_login_failures_lock_out_the_forwarded_address(trust_proxy
     try:
         statuses = [_failed_login(client, VICTIM) for _ in range(5)]
         locked = client.get(
-            "/api/v1/auth/me",
+            UNROUTED,
             headers={"Authorization": _basic(USER, PASSWORD), "X-Real-IP": VICTIM},
         )
         other = client.get(
-            "/api/v1/auth/me",
+            UNROUTED,
             headers={"Authorization": _basic(USER, PASSWORD), "X-Real-IP": _spoofed(1)},
         )
         tracker = client.app.state.auth_tracker
@@ -316,10 +317,9 @@ def test_trusted_proxy_login_failures_lock_out_the_forwarded_address(trust_proxy
     assert locked.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
     assert tracker.is_locked_out(VICTIM) is True
     assert tracker.is_locked_out("127.0.0.1") is False
-    # The lockout check runs before the cookie check, so another forwarded client
-    # reaching /me with the session cookie proves it is not locked out.
-    assert other.status_code == 200
-    assert other.json() == {"username": USER, "user_id": USER, "authenticated": True}
+    # The lockout check runs before the credentials are read, so another forwarded
+    # client passing the door (404 on the unrouted path) proves it is not locked out.
+    assert other.status_code == 404
 
 
 def test_trusted_proxy_login_rate_limit_is_per_forwarded_address(trust_proxy):

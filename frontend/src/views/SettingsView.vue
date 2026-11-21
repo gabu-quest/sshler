@@ -2,13 +2,18 @@
 import { errorText } from '@/api/apiError'
 import { computed, ref, onMounted } from 'vue'
 import { NCard, NButton, NSpace, NAlert, NCode, NInputNumber, NSwitch, NSelect, useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import { useBootstrapStore } from '@/stores/bootstrap'
+import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { http, buildHeaders, fetchSnapshotConfig, updateSnapshotConfig } from '@/api/http'
 import { resetFavicon } from '@/utils/emoji-favicon'
 import { useI18n } from '@/i18n'
+import { loadPage } from '@/utils/pageLoad'
 
 const bootstrapStore = useBootstrapStore()
+const authStore = useAuthStore()
+const router = useRouter()
 const appStore = useAppStore()
 const message = useMessage()
 const { t } = useI18n()
@@ -51,6 +56,22 @@ const refreshToken = async () => {
     message.success(t('settings.token_refreshed'))
   } catch (error) {
     message.error(t('settings.token_refresh_failed') + ' ' + (errorText(error)))
+  }
+}
+
+const signingOut = ref(false)
+
+// Sign out, then load the sign-in page afresh: nothing of the signed-in page (its
+// sockets, its stores) stays open behind the form.
+const signOut = async () => {
+  signingOut.value = true
+  try {
+    await authStore.signOut()
+    loadPage(router.resolve({ name: 'login' }).href)
+  } catch (error) {
+    message.error(errorText(error))
+  } finally {
+    signingOut.value = false
   }
 }
 
@@ -217,6 +238,13 @@ onMounted(async () => {
           </NButton>
           <NButton @click="clearCache">
             {{ t('settings.clear_cache') }}
+          </NButton>
+        </NSpace>
+
+        <NSpace v-if="bootstrapStore.authRequired" align="center" data-testid="sign-out-row">
+          <span>{{ t('settings.signed_in_as', { user: authStore.displayUsername }) }}</span>
+          <NButton :loading="signingOut" @click="signOut">
+            {{ t('settings.sign_out') }}
           </NButton>
         </NSpace>
       </NSpace>

@@ -181,32 +181,33 @@ router.beforeEach(async (to, _from, next) => {
     metaDescription.setAttribute('content', description);
   }
 
-  // Authentication guard
+  // Authentication guard: the bootstrap says whether a password is set and whether
+  // this page is signed in; it is asked when the page loads and again after it is
+  // forgotten (sign-out), so a reload keeps a signed-in person signed in.
   const isPublicRoute = to.meta?.public === true;
 
   if (!isPublicRoute) {
     try {
-      // Check if server requires authentication
       const { useBootstrapStore } = await import('@/stores/bootstrap');
       const bootstrapStore = useBootstrapStore();
 
-      // Ensure bootstrap is loaded
-      if (!bootstrapStore.token && !bootstrapStore.loading) {
+      if (!bootstrapStore.payload) {
         await bootstrapStore.bootstrap();
       }
 
-      // Check if basic auth is required
-      if (bootstrapStore.basicAuthRequired) {
-        const { useAuthStore } = await import('@/stores/auth');
-        const authStore = useAuthStore();
-
-        // If not authenticated, redirect to login
-        if (!authStore.isAuthenticated) {
+      if (bootstrapStore.authRequired) {
+        if (!bootstrapStore.authenticated) {
           next({
             name: 'login',
             query: { redirect: to.fullPath }
           });
           return;
+        }
+        const { useAuthStore } = await import('@/stores/auth');
+        const authStore = useAuthStore();
+        // The signed-in user's name, once per page (the header and the settings show it).
+        if (!authStore.isAuthenticated) {
+          await authStore.loadUser();
         }
       }
     } catch (error) {

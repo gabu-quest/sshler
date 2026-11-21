@@ -16,6 +16,7 @@ import time
 from collections.abc import Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import partial
 from typing import IO, cast
 
@@ -57,7 +58,7 @@ from .config import (
 )
 from .ptyspawn import spawn_on_pty
 from .rate_limit import get_rate_limiter
-from .session import get_session_store
+from .session import live_session
 from .settings import get_settings as get_app_settings
 from .spa import mount_spa
 from .ssh import (
@@ -718,6 +719,60 @@ class Broadcaster:
             self._drop(ws)
 
 
+class Door(Enum):
+    """How the server's door treats a request when a password is set."""
+
+    #: Passes untouched: no lockout, no credentials read (preflights, the health check).
+    EXEMPT = "exempt"
+    #: Passes without credentials; credentials it carries are read, never required,
+    #: and a lockout does not stop it (the page's own files, the bootstrap, who am I,
+    #: sign-out).
+    OPEN = "open"
+    #: Passes without credentials, but a lockout answers first (the sign-in route).
+    SIGN_IN = "sign_in"
+    #: Needs a live session cookie or a good Basic header; a lockout answers first.
+    CLOSED = "closed"
+
+
+#: The routes that pass without credentials, by exact method and path. Every other
+#: method and path, the page's files under ``/app/`` aside, is closed.
+_DOOR_OF_ROUTE: dict[tuple[str, str], Door] = {
+    ("GET", "/"): Door.OPEN,
+    ("HEAD", "/"): Door.OPEN,
+    ("GET", "/app"): Door.OPEN,
+    ("HEAD", "/app"): Door.OPEN,
+    ("GET", "/api/v1/bootstrap"): Door.OPEN,
+    ("GET", "/api/v1/auth/me"): Door.OPEN,
+    ("POST", "/api/v1/auth/logout"): Door.OPEN,
+    ("POST", "/api/v1/auth/login"): Door.SIGN_IN,
+}
+
+
+def door_of(method: str, path: str) -> Door:
+    """The one decision of which requests pass the door without credentials.
+
+    ``path`` is the decoded path the router matches (``scope["path"]``). Only a path
+    already in normal form can be open: one with a ``.`` or ``..`` segment, an empty
+    segment or a trailing slash other than ``/app/...`` is closed, whatever it would
+    name once resolved, so ``/app/../api/v1/boxes`` and ``/app/%2e%2e/`` need
+    credentials. ``/app`` opens only itself and the paths below ``/app/`` (``/appx`` is
+    closed), and only for GET and HEAD.
+    """
+    if method == "OPTIONS" or path == "/health":
+        return Door.EXEMPT
+    if not path.startswith("/"):
+        return Door.CLOSED
+    segments = path[1:].split("/")
+    # A trailing slash leaves one empty last segment; only the page's paths may have it.
+    if path.startswith("/app/") and segments[-1] == "":
+        segments = segments[:-1]
+    if path != "/" and any(segment in ("", ".", "..") for segment in segments):
+        return Door.CLOSED
+    if method in ("GET", "HEAD") and path.startswith("/app/"):
+        return Door.OPEN
+    return _DOOR_OF_ROUTE.get((method, path), Door.CLOSED)
+
+
 def make_app(settings: ServerSettings | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -845,12 +900,13 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         auth_tracker: AuthFailureTracker = request.app.state.auth_tracker
         client_ip = get_client_ip(request)
 
-        # Check authentication if required
-        # Skip auth for health check endpoint (needed for load balancers)
-        need_session_cookie = False
-        if settings.auth_manager and request.method != "OPTIONS" and request.url.path != "/health":
-            # Check if IP is locked out
-            if auth_tracker.is_locked_out(client_ip):
+        # Who passes the door is decided by `door_of` alone; a session is made only by
+        # the sign-in route, never here.
+        door = door_of(request.method, request.scope["path"])
+        authenticated = settings.auth_manager is None
+        if settings.auth_manager is not None and door is not Door.EXEMPT:
+            locked = auth_tracker.is_locked_out(client_ip)
+            if locked and door is not Door.OPEN:
                 retry_after = auth_tracker.get_lockout_remaining(client_ip)
                 logging.warning(
                     f"[Security] Blocked locked-out IP {client_ip} ({retry_after}s remaining)"
@@ -861,47 +917,37 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
                     headers={"Retry-After": str(retry_after)},
                 )
 
-            # Try session cookie first (browsers always send cookies,
-            # including with WebSocket upgrades, unlike Basic Auth headers)
+            # A session cookie first (browsers send it with every request and every
+            # socket upgrade), else a Basic header for this one request.
             app_settings = get_app_settings()
-            authenticated = False
-
             cookie_sid = request.cookies.get(app_settings.cookie_name)
-            if cookie_sid:
-                session_obj = get_session_store().get_session(cookie_sid)
-                if session_obj:
+            if cookie_sid and live_session(cookie_sid):
+                authenticated = True
+
+            auth_header = request.headers.get("authorization") or ""
+            basic_sent = auth_header.startswith("Basic ")
+            # A locked-out client's Basic header is not checked: an open route then
+            # answers as to a stranger, so it cannot be used to go on guessing.
+            if not authenticated and basic_sent and not locked:
+                if settings.auth_manager.verify_basic_auth_header(auth_header):
+                    auth_tracker.reset_failures(client_ip)
                     authenticated = True
-
-            if not authenticated:
-                # Fall back to Basic Auth
-                auth_header = request.headers.get("authorization")
-                if not auth_header or not auth_header.startswith("Basic "):
-                    return failure.answer(
-                        failure.REASON_AUTH,
-                        "Authentication required",
-                        headers={"WWW-Authenticate": 'Basic realm="sshler"'},
-                    )
-
-                if not settings.auth_manager.verify_basic_auth_header(auth_header):
+                else:
                     auth_tracker.record_failure(client_ip)
                     failure_count = auth_tracker.get_failure_count(client_ip)
-
                     logging.warning(
                         f"[Security] Failed auth attempt from {client_ip} "
                         f"({failure_count}/5 failures)"
                     )
-
                     await asyncio.sleep(2)
+                    if door is Door.CLOSED:
+                        return failure.answer(failure.REASON_AUTH, "Invalid credentials")
 
-                    return failure.answer(
-                        failure.REASON_AUTH,
-                        "Invalid credentials",
-                        headers={"WWW-Authenticate": 'Basic realm="sshler"'},
-                    )
-
-                # Successful Basic Auth - set session cookie so WebSocket works
-                auth_tracker.reset_failures(client_ip)
-                need_session_cookie = True
+            # No WWW-Authenticate header: the page's sign-in form is the way in, so no
+            # browser shows its own prompt or keeps the password.
+            if not authenticated and door is Door.CLOSED:
+                return failure.answer(failure.REASON_AUTH, "Authentication required")
+        request.state.authenticated = authenticated
 
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -919,32 +965,6 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             f"frame-src {' '.join(frame_sources)}",
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
-
-        # Set session cookie after successful Basic Auth so subsequent
-        # requests (especially WebSocket upgrades) can authenticate via cookie
-        if need_session_cookie:
-            app_settings = get_app_settings()
-            username = "user"
-            try:
-                auth_header = request.headers.get("authorization", "")
-                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-                username = decoded.split(":", 1)[0]
-            except Exception:
-                pass
-            session_obj = get_session_store().create_session(
-                username=username,
-                user_id=username,
-                ttl_seconds=app_settings.session_ttl_seconds,
-            )
-            response.set_cookie(
-                key=app_settings.cookie_name,
-                value=session_obj.session_id,
-                max_age=app_settings.session_ttl_seconds,
-                httponly=True,
-                secure=app_settings.cookie_secure,
-                samesite=app_settings.cookie_samesite,
-                path="/",
-            )
 
         return response
 

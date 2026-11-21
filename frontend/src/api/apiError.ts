@@ -41,14 +41,16 @@ export function reasonKey(reason: ApiErrorReason): string {
  * came), `reason` what failed, `detail` the server's own text ("" when it gave none).
  * `message` is what a person reads: the translated line of the reason, then " — " and
  * the detail when there is one, or the status in brackets when there is neither a
- * reason nor a detail. A reader decides by `reason`, never by the words.
+ * reason nor a detail. A reader decides by `reason`, never by the words. `retryAfter` is
+ * the answer's `Retry-After` in whole seconds, or null when it sent none.
  */
 export class ApiError extends Error {
   readonly status: number;
   readonly reason: ApiErrorReason;
   readonly detail: string;
+  readonly retryAfter: number | null;
 
-  constructor(status: number, reason: ApiErrorReason, detail: string) {
+  constructor(status: number, reason: ApiErrorReason, detail: string, retryAfter: number | null = null) {
     const line = translate(reasonKey(reason));
     // An answer with no reason and no text keeps its status, so it can still be told apart.
     const bare = reason === null && !detail && status > 0;
@@ -57,7 +59,15 @@ export class ApiError extends Error {
     this.status = status;
     this.reason = reason;
     this.detail = detail;
+    this.retryAfter = retryAfter;
   }
+}
+
+/** A `Retry-After` header's whole seconds; null when it is absent or not a number of
+ * seconds (the date form is not sent by this server). */
+export function retryAfterSeconds(header: string | null): number | null {
+  if (header === null || !/^\d+$/.test(header.trim())) return null;
+  return Number(header.trim());
 }
 
 function detailText(detail: unknown): string {
@@ -75,7 +85,7 @@ function detailText(detail: unknown): string {
 }
 
 /** The error of a failure body already read as JSON: `{"detail": ..., "reason": ...}`. */
-export function apiErrorOfBody(status: number, body: unknown): ApiError {
+export function apiErrorOfBody(status: number, body: unknown, retryAfter: number | null = null): ApiError {
   const fields = (typeof body === "object" && body !== null ? body : {}) as {
     detail?: unknown;
     reason?: unknown;
@@ -84,19 +94,19 @@ export function apiErrorOfBody(status: number, body: unknown): ApiError {
     typeof fields.reason === "string" && KNOWN_REASONS.has(fields.reason)
       ? (fields.reason as FailureReason)
       : null;
-  return new ApiError(status, reason, detailText(fields.detail));
+  return new ApiError(status, reason, detailText(fields.detail), retryAfter);
 }
 
 /** The error of a failed answer from its status and its body's text. A body that is not
  * JSON (a proxy's page) gives no reason and no detail: its markup is never shown. */
-export function apiErrorOf(status: number, text: string): ApiError {
+export function apiErrorOf(status: number, text: string, retryAfter: number | null = null): ApiError {
   let body: unknown = null;
   try {
     body = JSON.parse(text);
   } catch {
     // Not JSON: the error has no reason and no detail.
   }
-  return apiErrorOfBody(status, body);
+  return apiErrorOfBody(status, body, retryAfter);
 }
 
 /** A failure that arrives inside a 200 answer: a box's status, a stats event of a box

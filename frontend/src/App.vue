@@ -100,6 +100,9 @@ onMounted(async () => {
   if (!bootstrapStore.payload) {
     await bootstrapStore.bootstrap();
   }
+  // Everything below needs a session: the sign-in page starts none of it. A good
+  // sign-in loads the page afresh, so it starts then, with the token.
+  if (!bootstrapStore.signedIn) return;
   // The progress WebSocket lives at the app level so the header strip stays
   // live on every route (the strip itself mounts/unmounts with box context).
   progressStore.connect(bootstrapStore.token);

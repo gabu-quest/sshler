@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from .. import __version__
 from ..pdf import PDF_RENDERER
@@ -76,14 +76,38 @@ def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
     @router.get("/bootstrap", response_model=APIBootstrap)
-    async def api_bootstrap() -> APIBootstrap:
-        """Expose runtime settings to bootstrap the SPA."""
+    async def api_bootstrap(request: Request) -> APIBootstrap:
+        """Expose runtime settings to bootstrap the SPA.
+
+        The route is open without credentials when a password is set, so the sign-in
+        page can load: ``auth_required`` says a password is set, ``authenticated``
+        whether this request carried a live session or a good Basic header (the
+        server's door decides and leaves it on ``request.state``), and the token is
+        given, with the rest of the settings, only to a request that is authenticated.
+        """
+        auth_required = deps.settings.auth_manager is not None
+        authenticated = not auth_required or getattr(request.state, "authenticated", False) is True
+
+        if not authenticated:
+            # A stranger gets only what the sign-in page needs.
+            return APIBootstrap(
+                version=__version__,
+                token_header="X-SSHLER-TOKEN",
+                token=None,
+                auth_required=auth_required,
+                authenticated=False,
+                allow_origins=[],
+                spa_base="/app/" if deps.settings.serve_spa else "",
+                spa_enabled=deps.settings.serve_spa,
+                platform="windows" if LOCAL_IS_WINDOWS else "posix",
+            )
 
         return APIBootstrap(
             version=__version__,
             token_header="X-SSHLER-TOKEN",
             token=deps.settings.csrf_token,
-            basic_auth_required=bool(deps.settings.basic_auth),
+            auth_required=auth_required,
+            authenticated=True,
             allow_origins=deps.settings.allow_origins,
             spa_base="/app/" if deps.settings.serve_spa else "",
             spa_enabled=deps.settings.serve_spa,

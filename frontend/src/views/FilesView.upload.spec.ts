@@ -32,7 +32,7 @@ vi.mock("@/api/http", () => ({
   uploadFile: vi.fn(),
   fetchBootstrap: vi.fn(async () => ({
     token: "tok", token_header: "X-SSHLER-TOKEN", version: "test",
-    spa_base: "/app/", spa_enabled: true, basic_auth_required: false,
+    spa_base: "/app/", spa_enabled: true, auth_required: false,
     wsl_distro: null, pdf_available: false, platform: "posix",
     windows_shells: [], default_shell: null,
   })),

@@ -15,6 +15,7 @@ vi.mock("@/router", () => ({
   default: {
     currentRoute: { value: { name: "files", fullPath: "/files?box=b" } },
     push: (to: unknown) => pushMock(to),
+    isReady: async () => {},
   },
 }));
 vi.mock("@/stores/auth", () => ({ useAuthStore: () => ({ clearUser: vi.fn() }) }));
@@ -27,6 +28,7 @@ vi.mock("@/stores/bootstrap", () => ({
   useBootstrapStore: () => ({
     setToken: (v: string | null) => { bootstrapState.token = v; },
     bootstrap: bootstrapMock,
+    forget: () => {},
     get token() { return bootstrapState.token; },
   }),
 }));

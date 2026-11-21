@@ -73,10 +73,6 @@ class SshlerSettings(BaseSettings):
     )
 
     # Auth settings
-    require_auth: bool = Field(
-        default=True,
-        description="Require authentication (should always be True in production)",
-    )
     username: str | None = Field(
         default=None,
         alias="sshler_username",

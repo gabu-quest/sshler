@@ -101,9 +101,9 @@ function isStatCritical(percent: number | null | undefined): boolean {
 let statsInterval: number | null = null;
 
 // Auth status computed
-const showAuthIndicator = computed(() => bootstrapStore.basicAuthRequired && authStore.isAuthenticated);
+const showAuthIndicator = computed(() => bootstrapStore.authRequired && authStore.isAuthenticated);
 const authTooltip = computed(() => {
-  if (!bootstrapStore.basicAuthRequired) return '';
+  if (!bootstrapStore.authRequired) return '';
   return authStore.isAuthenticated
     ? t('header.authenticated_as', { user: authStore.displayUsername })
     : t('header.auth_required');
@@ -196,7 +196,8 @@ const handleKeydown = (event: KeyboardEvent) => {
 
 // Only poll stats when the tab is visible (saves requests when 20+ tabs open)
 const startStatsPolling = () => {
-  if (statsInterval) return;
+  // Nothing is asked of the server before the page knows it is signed in.
+  if (statsInterval || !bootstrapStore.signedIn) return;
   loadLocalStats();
   loadSnapshotStatus();
   statsInterval = window.setInterval(() => {
@@ -219,6 +220,16 @@ const handleVisibilityChange = () => {
     startStatsPolling();
   }
 };
+
+// The polls run only while the page is signed in: they start when it becomes so and stop
+// when it is signed out.
+watch(() => bootstrapStore.signedIn, (signedIn) => {
+  if (signedIn) {
+    if (!document.hidden) startStatsPolling();
+  } else {
+    stopStatsPolling();
+  }
+});
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);

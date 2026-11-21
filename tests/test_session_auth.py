@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -213,7 +215,6 @@ class TestSettings:
         assert settings.cookie_secure is True
         assert settings.cookie_samesite == "lax"
         assert settings.session_ttl_seconds == 28800  # 8 hours
-        assert settings.require_auth is True
 
     def test_cors_disabled_by_default(self):
         """Test that CORS is disabled when no origins configured."""
@@ -236,7 +237,6 @@ class TestSettings:
 # /api/v1/auth/{login,me,logout} endpoints from sshler/api/auth.py.
 AUTH_USER = "admin"
 AUTH_PASSWORD = "Corr3ct-Horse-Battery!"
-CHALLENGE = 'Basic realm="sshler"'
 
 
 def _basic(user: str, password: str) -> str:
@@ -279,82 +279,322 @@ def auth_client(monkeypatch: pytest.MonkeyPatch):
     client.close()
 
 
+REFUSED = {"detail": "Authentication required", "reason": "auth"}
+WRONG = {"detail": "Invalid credentials", "reason": "auth"}
+LOCKED = {
+    "detail": "Too many failed authentication attempts. Try again later.",
+    "reason": "rate_limited",
+}
+# A path no route serves: a 404 there means the request passed the door.
+PROBE = "/door-probe"
+PASSED = {"detail": "Not Found", "reason": "not_found"}
+INDEX_HTML = "<!doctype html><title>page</title>"
+
+
+def _login(client: TestClient, password: str = AUTH_PASSWORD):
+    return client.post("/api/v1/auth/login", json={"username": AUTH_USER, "password": password})
+
+
+class _FrozenTime:
+    """`time` for sshler.webapp: the lockout's clock stands still."""
+
+    def __init__(self) -> None:
+        import time
+
+        self._time = time
+        self.now = 1_000_000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def __getattr__(self, name: str):
+        return getattr(self._time, name)
+
+
+@pytest.fixture
+def frozen_lockout_clock(monkeypatch: pytest.MonkeyPatch) -> _FrozenTime:
+    clock = _FrozenTime()
+    monkeypatch.setattr("sshler.webapp.time", clock)
+    return clock
+
+
+@pytest.fixture
+def page_client(auth_client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """`auth_client`'s settings with a built page of two files, and a file beside the
+    page's folder that must never be served."""
+    from sshler.webapp import make_app
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(INDEX_HTML, encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("outside the page", encoding="utf-8")
+    monkeypatch.setattr("sshler.spa.SPA_DIST_DIR", dist)
+    client = TestClient(make_app(auth_client.app.state.settings))
+    yield client
+    client.close()
+
+
+def _raw_get(client: TestClient, path: str, headers: dict[str, str] | None = None):
+    """GET `path` exactly as written: an HTTP client would resolve `..` before
+    sending, a server receives it as sent."""
+    import asyncio
+
+    app = client.app
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+    sent: list[dict] = []
+
+    async def run() -> None:
+        requested = False
+        done = asyncio.Event()
+
+        async def receive():
+            nonlocal requested
+            if not requested:
+                requested = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            # The client stays connected until the whole answer has been sent.
+            await done.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.body" and not message.get("more_body"):
+                done.set()
+
+        await app(scope, receive, send)
+
+    asyncio.run(run())
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    names = {k.decode().lower() for k, _ in start["headers"]}
+    return start["status"], names, body
+
+
+class TestDoorDecision:
+    """`door_of`: the one decision of what passes without credentials."""
+
+    @pytest.mark.parametrize(
+        ("method", "path", "door"),
+        [
+            ("OPTIONS", "/api/v1/boxes", "exempt"),
+            ("GET", "/health", "exempt"),
+            ("POST", "/health", "exempt"),
+            ("GET", "/", "open"),
+            ("HEAD", "/", "open"),
+            ("GET", "/app", "open"),
+            ("HEAD", "/app", "open"),
+            ("GET", "/app/", "open"),
+            ("GET", "/app/settings", "open"),
+            ("GET", "/app/assets/index-abc.js", "open"),
+            ("HEAD", "/app/assets/index-abc.js", "open"),
+            ("GET", "/api/v1/bootstrap", "open"),
+            ("GET", "/api/v1/auth/me", "open"),
+            ("POST", "/api/v1/auth/logout", "open"),
+            ("POST", "/api/v1/auth/login", "sign_in"),
+            ("GET", "/api/v1/boxes", "closed"),
+            ("GET", "/api/v1/boxes/local/download", "closed"),
+            ("POST", "/app/", "closed"),
+            ("DELETE", "/app/x", "closed"),
+            ("POST", "/", "closed"),
+            ("GET", "/appx", "closed"),
+            ("GET", "/appx/", "closed"),
+            ("GET", "/app/../api/v1/boxes", "closed"),
+            ("GET", "/app/..", "closed"),
+            ("GET", "/app/../", "closed"),
+            ("GET", "/app/./x", "closed"),
+            ("GET", "/app//x", "closed"),
+            ("GET", "//app", "closed"),
+            ("GET", "/app/../../etc/passwd", "closed"),
+            ("POST", "/api/v1/bootstrap", "closed"),
+            ("HEAD", "/api/v1/bootstrap", "closed"),
+            ("GET", "/api/v1/bootstrap/", "closed"),
+            ("GET", "/api/v1/auth/login", "closed"),
+            ("GET", "/api/v1/auth/logout", "closed"),
+            ("POST", "/api/v1/auth/me", "closed"),
+            ("POST", "/api/v1/auth/login/", "closed"),
+            ("GET", "/api/v1/auth/../bootstrap", "closed"),
+            ("GET", "app", "closed"),
+            ("GET", "", "closed"),
+        ],
+    )
+    def test_door_of_each_method_and_path(self, method: str, path: str, door: str):
+        from sshler.webapp import door_of
+
+        assert door_of(method, path).value == door
+
+
 class TestHttpAuth:
     """Cookie and Basic auth over HTTP. Each test names the mutation it kills."""
 
-    def test_no_credentials_gets_basic_challenge(self, auth_client: TestClient):
-        """Kills: letting requests without credentials through the middleware."""
-        response = auth_client.get("/api/v1/auth/me")
+    def test_no_credentials_on_an_api_route_is_refused_without_a_challenge(
+        self, auth_client: TestClient
+    ):
+        """Kills: letting requests without credentials through, and the Basic challenge
+        that made browsers show their own prompt."""
+        response = auth_client.get("/api/v1/boxes")
         assert response.status_code == 401
-        assert response.headers["WWW-Authenticate"] == CHALLENGE
+        assert response.json() == REFUSED
+        assert "www-authenticate" not in response.headers
         assert "set-cookie" not in response.headers
 
+    def test_no_credentials_on_a_download_is_refused(self, auth_client: TestClient):
+        response = auth_client.get("/api/v1/boxes/local/download", params={"path": "/etc/hosts"})
+        assert response.status_code == 401
+        assert response.json() == REFUSED
+        assert "www-authenticate" not in response.headers
+
+    @pytest.mark.parametrize(
+        "path", ["/app/../api/v1/boxes", "/appx", "/app/../", "/app/../../etc/passwd"]
+    )
+    def test_a_path_that_only_looks_like_the_page_is_refused(
+        self, page_client: TestClient, path: str
+    ):
+        """Kills: deciding by a bare `/app` prefix, or on the path before it is
+        normalized."""
+        status, header_names, body = _raw_get(page_client, path)
+        assert status == 401
+        assert json.loads(body) == REFUSED
+        assert "www-authenticate" not in header_names
+
+    def test_a_traversal_with_credentials_never_serves_a_file_outside_the_page(
+        self, page_client: TestClient
+    ):
+        status, _names, body = _raw_get(
+            page_client,
+            "/app/../secret.txt",
+            headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)},
+        )
+        assert status == 200
+        assert body.decode() == INDEX_HTML
+
+    def test_a_sibling_folder_with_the_page_folders_name_as_prefix_is_never_served(
+        self, page_client: TestClient, tmp_path
+    ):
+        """Kills: containment by a string prefix, which `dist-x` passes."""
+        (tmp_path / "dist-x").mkdir()
+        (tmp_path / "dist-x" / "secret.txt").write_text("beside the page", encoding="utf-8")
+        status, _names, body = _raw_get(
+            page_client,
+            "/app/../dist-x/secret.txt",
+            headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)},
+        )
+        assert status == 200
+        assert body.decode() == INDEX_HTML
+
+    def test_a_path_that_cannot_be_a_file_name_gets_the_index(self, page_client: TestClient):
+        """Kills: a 500 from resolving a path with a NUL character."""
+        response = page_client.get("/app/a%00b")
+        assert (response.status_code, response.text) == (200, INDEX_HTML)
+
+    def test_the_page_and_its_files_load_without_credentials(self, page_client: TestClient):
+        """Kills: keeping the page's shell behind the door (the browser's prompt was the
+        only way in)."""
+        index = page_client.get("/app/")
+        asset = page_client.get("/app/assets/app.js")
+        assert (index.status_code, index.text) == (200, INDEX_HTML)
+        assert (asset.status_code, asset.text) == (200, "console.log(1)")
+        assert "set-cookie" not in index.headers
+
     def test_missing_credentials_do_not_count_toward_lockout(self, auth_client: TestClient):
-        """A browser's first request carries no credentials; it must not count as a failure.
+        """A request without credentials must not count as a failure.
 
         Kills: dropping the early `not auth_header` 401 (the request would fall through to
         `record_failure`, and the sixth credential-less request would get 429).
         """
-        statuses = [auth_client.get("/api/v1/auth/me").status_code for _ in range(6)]
+        statuses = [auth_client.get("/api/v1/boxes").status_code for _ in range(6)]
         assert statuses == [401] * 6
 
-    def test_wrong_basic_password_gets_basic_challenge(self, auth_client: TestClient):
+    def test_wrong_basic_password_is_refused_without_a_challenge(self, auth_client: TestClient):
         """Kills: accepting any `Basic` header without `verify_basic_auth_header`."""
         response = auth_client.get(
-            "/api/v1/auth/me", headers={"Authorization": _basic(AUTH_USER, "wrong-password")}
+            "/api/v1/boxes", headers={"Authorization": _basic(AUTH_USER, "wrong-password")}
         )
         assert response.status_code == 401
-        assert response.headers["WWW-Authenticate"] == CHALLENGE
+        assert response.json() == WRONG
+        assert "www-authenticate" not in response.headers
 
-    def test_basic_auth_issues_cookie_that_authenticates_alone(self, auth_client: TestClient):
-        """Kills: dropping the session cookie the middleware sets after Basic auth, and
-        dropping the cookie branch of the middleware (the second request would 401)."""
-        first = auth_client.get(
-            "/api/v1/auth/me", headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)}
-        )
-        # The request itself carried no cookie, so /me cannot see a session yet.
-        assert first.status_code == 401
-        assert first.json() == {"detail": "Not authenticated", "reason": "auth"}
-        session_id = first.cookies["sshler_session"]
-        assert get_session_store().get_session(session_id).username == AUTH_USER
+    def test_a_good_basic_header_passes_and_makes_no_session(self, auth_client: TestClient):
+        """Kills: the door making a session and a cookie after Basic auth (only the
+        sign-in route makes one)."""
+        before = get_session_store().count()
+        good = {"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)}
+        answers = [auth_client.get(PROBE, headers=good) for _ in range(10)]
+        assert [a.status_code for a in answers] == [404] * 10
+        assert answers[0].json() == PASSED
+        assert ["set-cookie" in a.headers for a in answers] == [False] * 10
+        assert get_session_store().count() == before
+        assert auth_client.get("/api/v1/boxes").status_code == 401
 
-        second = auth_client.get("/api/v1/auth/me")
-        assert second.status_code == 200
-        assert second.json() == {"username": AUTH_USER, "user_id": AUTH_USER, "authenticated": True}
+    def test_wrong_basic_five_times_locks_out_a_right_one(
+        self, auth_client: TestClient, frozen_lockout_clock: _FrozenTime
+    ):
+        bad = {"Authorization": _basic(AUTH_USER, "wrong-password")}
+        statuses = [auth_client.get(PROBE, headers=bad).status_code for _ in range(5)]
+        locked = auth_client.get(PROBE, headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)})
+        assert statuses == [401] * 5
+        assert locked.status_code == 429
+        assert locked.json() == LOCKED
+        assert locked.headers["Retry-After"] == "300"
 
-    def test_unknown_cookie_gets_basic_challenge(self, auth_client: TestClient):
+    def test_an_unknown_or_expired_cookie_is_refused_on_the_api_and_not_on_the_page(
+        self, page_client: TestClient
+    ):
         """Kills: treating any present cookie as authenticated (skipping `get_session`)."""
-        response = auth_client.get("/api/v1/auth/me", headers={"Cookie": "sshler_session=forged"})
-        assert response.status_code == 401
-        assert response.headers["WWW-Authenticate"] == CHALLENGE
+        expired = get_session_store().create_session(AUTH_USER, AUTH_USER, ttl_seconds=0)
+        for sid in ("forged", expired.session_id):
+            api = page_client.get("/api/v1/boxes", headers={"Cookie": f"sshler_session={sid}"})
+            page = page_client.get("/app/", headers={"Cookie": f"sshler_session={sid}"})
+            assert (api.status_code, api.json()) == (401, REFUSED)
+            assert "www-authenticate" not in api.headers
+            assert (page.status_code, page.text) == (200, INDEX_HTML)
 
-    def test_login_with_correct_credentials(self, auth_client: TestClient):
-        """Kills: `login` skipping `auth_manager.authenticate` (paired with the next test)."""
-        response = auth_client.post(
-            "/api/v1/auth/login",
-            json={"username": AUTH_USER, "password": AUTH_PASSWORD},
-            headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)},
-        )
+    @pytest.mark.parametrize(
+        ("method", "path"), [("POST", "/api/v1/bootstrap"), ("GET", "/api/v1/auth/login")]
+    )
+    def test_another_method_on_an_open_path_is_not_open(
+        self, auth_client: TestClient, method: str, path: str
+    ):
+        response = auth_client.request(method, path)
+        assert response.status_code == 401
+        assert response.json() == REFUSED
+
+    def test_login_with_correct_credentials_makes_the_session(self, auth_client: TestClient):
+        """Kills: `login` skipping `auth_manager.authenticate` (paired with the next
+        test), and the sign-in route staying behind the door."""
+        before = get_session_store().count()
+        response = _login(auth_client)
         assert response.status_code == 200
         assert response.json() == {"success": True, "message": "Login successful"}
+        assert get_session_store().count() == before + 1
+        assert auth_client.get(PROBE).status_code == 404
 
     def test_login_with_wrong_password_is_401(self, auth_client: TestClient):
         """Kills: `login` accepting any credentials."""
-        response = auth_client.post(
-            "/api/v1/auth/login",
-            json={"username": AUTH_USER, "password": "wrong-password"},
-            headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)},
-        )
+        response = _login(auth_client, "wrong-password")
         assert response.status_code == 401
         assert response.json() == {"detail": "Invalid username or password", "reason": "auth"}
+        assert "www-authenticate" not in response.headers
 
     def test_logout_destroys_session(self, auth_client: TestClient):
         """Kills: `logout` clearing the cookie without `delete_session` (the old cookie
         would still authenticate)."""
-        good = {"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)}
-        auth_client.get("/api/v1/auth/me", headers=good)
+        _login(auth_client)
         session_id = auth_client.cookies["sshler_session"]
-        assert auth_client.get("/api/v1/auth/me").status_code == 200
+        assert auth_client.get(PROBE).status_code == 404
 
         logout = auth_client.post("/api/v1/auth/logout")
         assert logout.status_code == 200
@@ -362,10 +602,158 @@ class TestHttpAuth:
 
         auth_client.cookies.clear()
         replay = auth_client.get(
-            "/api/v1/auth/me", headers={"Cookie": f"sshler_session={session_id}"}
+            "/api/v1/boxes", headers={"Cookie": f"sshler_session={session_id}"}
         )
         assert replay.status_code == 401
-        assert replay.headers["WWW-Authenticate"] == CHALLENGE
+        assert replay.json() == REFUSED
+        assert "www-authenticate" not in replay.headers
+
+    def test_login_while_locked_out_says_how_long(
+        self, auth_client: TestClient, frozen_lockout_clock: _FrozenTime
+    ):
+        """Kills: the sign-in route escaping the lockout."""
+        statuses = [_login(auth_client, "wrong-password").status_code for _ in range(5)]
+        locked = _login(auth_client)
+        assert statuses == [401] * 5
+        assert locked.status_code == 429
+        assert locked.json() == LOCKED
+        assert locked.headers["Retry-After"] == "300"
+
+    def test_while_locked_out_the_page_and_the_bootstrap_still_load(
+        self, page_client: TestClient, frozen_lockout_clock: _FrozenTime
+    ):
+        """Kills: the lockout stopping the open routes (the form could not load to say
+        how long to wait), and a locked-out Basic header being checked there."""
+        for _ in range(5):
+            _login(page_client, "wrong-password")
+        good = {"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)}
+        page = page_client.get("/app/")
+        bootstrap = page_client.get("/api/v1/bootstrap", headers=good)
+        assert (page.status_code, page.text) == (200, INDEX_HTML)
+        assert bootstrap.status_code == 200
+        assert (bootstrap.json()["authenticated"], bootstrap.json()["token"]) == (False, None)
+        assert page_client.get(PROBE).status_code == 429
+
+
+def _stranger_body(**overrides):
+    from sshler import __version__
+
+    body = {
+        "version": __version__,
+        "token_header": "X-SSHLER-TOKEN",
+        "token": None,
+        "auth_required": True,
+        "authenticated": False,
+        "allow_origins": [],
+        "spa_base": "/app/",
+        "spa_enabled": True,
+        "wsl_distro": None,
+        "pdf_available": False,
+        "platform": "posix",
+        "windows_shells": [],
+        "default_shell": None,
+        "artifact_server_enabled": False,
+        "artifact_server_port": None,
+    }
+    body.update(overrides)
+    return body
+
+
+class TestBootstrapSaysWhoAsks:
+    """The bootstrap is open; it gives the token only to an authenticated request."""
+
+    def test_without_credentials(self, auth_client: TestClient):
+        """Kills: the token handed to anyone who can reach the page."""
+        response = auth_client.get("/api/v1/bootstrap")
+        body = response.json()
+        assert response.status_code == 200
+        assert (body["token"], body["auth_required"], body["authenticated"]) == (None, True, False)
+        assert "basic_auth_required" not in body
+        assert "set-cookie" not in response.headers
+
+    def test_with_a_session(self, auth_client: TestClient):
+        _login(auth_client)
+        body = auth_client.get("/api/v1/bootstrap").json()
+        assert (body["token"], body["auth_required"], body["authenticated"]) == ("t", True, True)
+
+    def test_a_stranger_gets_only_what_the_sign_in_page_needs(
+        self, auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Kills: the allowed origins, the artifact port and the platform details given
+        to a request that has not signed in."""
+        from sshler.api import config as config_module
+
+        monkeypatch.setattr(config_module, "_WSL_DISTRO", "Ubuntu")
+        monkeypatch.setattr(config_module, "_DEFAULT_SHELL", "pwsh")
+        monkeypatch.setattr(config_module.PDF_RENDERER, "available", True)
+        settings = auth_client.app.state.settings
+        settings.allow_origins = ["https://elsewhere.example"]
+        settings.serve_artifacts = True
+        settings.artifact_server_port_actual = 4321
+        assert auth_client.get("/api/v1/bootstrap").json() == _stranger_body()
+
+        _login(auth_client)
+        body = auth_client.get("/api/v1/bootstrap").json()
+        assert body == _stranger_body(
+            token="t",
+            authenticated=True,
+            allow_origins=["https://elsewhere.example"],
+            wsl_distro="Ubuntu",
+            default_shell="pwsh",
+            pdf_available=True,
+            artifact_server_enabled=True,
+            artifact_server_port=4321,
+        )
+
+    def test_with_a_good_basic_header(self, auth_client: TestClient):
+        response = auth_client.get(
+            "/api/v1/bootstrap", headers={"Authorization": _basic(AUTH_USER, AUTH_PASSWORD)}
+        )
+        body = response.json()
+        assert (body["token"], body["authenticated"]) == ("t", True)
+        assert "set-cookie" not in response.headers
+
+    def test_with_a_wrong_basic_header(self, auth_client: TestClient):
+        response = auth_client.get(
+            "/api/v1/bootstrap", headers={"Authorization": _basic(AUTH_USER, "wrong-password")}
+        )
+        body = response.json()
+        assert response.status_code == 200
+        assert (body["token"], body["authenticated"]) == (None, False)
+        assert auth_client.app.state.auth_tracker.get_failure_count("testclient") == 1
+
+    def test_a_password_from_the_environment_only(self, monkeypatch: pytest.MonkeyPatch):
+        """Kills: `auth_required` read from the command-line password alone (false when
+        the password comes from the environment, so the page never asked to sign in)."""
+        from argon2 import PasswordHasher as RealArgon2Hasher
+
+        from sshler.webapp import ServerSettings, make_app
+
+        made_up_hash = RealArgon2Hasher(time_cost=1, memory_cost=8, parallelism=1).hash(
+            "Env-Only-Pass-42!"
+        )
+        monkeypatch.setenv("SSHLER_USERNAME", "envuser")
+        monkeypatch.setenv("SSHLER_PASSWORD_HASH", made_up_hash)
+        monkeypatch.delenv("SSHLER_PASSWORD", raising=False)
+        reset_settings()
+        client = TestClient(make_app(ServerSettings(csrf_token="t")))
+        try:
+            body = client.get("/api/v1/bootstrap").json()
+        finally:
+            client.close()
+        assert (body["token"], body["auth_required"], body["authenticated"]) == (None, True, False)
+
+    def test_with_no_password_set(self, monkeypatch: pytest.MonkeyPatch):
+        from sshler.webapp import ServerSettings, make_app
+
+        monkeypatch.delenv("SSHLER_USERNAME", raising=False)
+        reset_settings()
+        client = TestClient(make_app(ServerSettings(csrf_token="t")))
+        try:
+            body = client.get("/api/v1/bootstrap").json()
+        finally:
+            client.close()
+        assert (body["token"], body["auth_required"], body["authenticated"]) == ("t", False, True)
 
 
 def test_login_failures_lock_out_the_forwarded_client_address(
@@ -383,7 +771,7 @@ def test_login_failures_lock_out_the_forwarded_client_address(
     reset_settings()
     forwarded = "203.0.113.9"
     client = TestClient(auth_client.app, client=("127.0.0.1", 50000))
-    headers = {"Authorization": _basic(AUTH_USER, AUTH_PASSWORD), "X-Real-IP": forwarded}
+    headers = {"X-Real-IP": forwarded}
     try:
         statuses = [
             client.post(
@@ -394,7 +782,10 @@ def test_login_failures_lock_out_the_forwarded_client_address(
             for _ in range(5)
         ]
         tracker = auth_client.app.state.auth_tracker
-        locked = client.get("/api/v1/auth/me", headers=headers)
+        locked = client.get(
+            "/api/v1/boxes",
+            headers={**headers, "Authorization": _basic(AUTH_USER, AUTH_PASSWORD)},
+        )
     finally:
         client.close()
 
@@ -402,10 +793,7 @@ def test_login_failures_lock_out_the_forwarded_client_address(
     assert tracker.is_locked_out(forwarded) is True
     assert tracker.is_locked_out("127.0.0.1") is False
     assert locked.status_code == 429
-    assert locked.json() == {
-        "detail": "Too many failed authentication attempts. Try again later.",
-        "reason": "rate_limited",
-    }
+    assert locked.json() == LOCKED
 
 
 def test_login_when_auth_disabled_is_400():
@@ -417,3 +805,86 @@ def test_login_when_auth_disabled_is_400():
     client.close()
     assert response.status_code == 400
     assert response.json() == {"detail": "Authentication is not enabled", "reason": "invalid"}
+
+
+def test_me_without_credentials_is_401(auth_client: TestClient):
+    """Kills: the current-user route answering a stranger."""
+    response = auth_client.get("/api/v1/auth/me")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Not authenticated", "reason": "auth"}
+
+
+def test_logout_without_a_session_answers_and_sets_no_session(auth_client: TestClient):
+    """Kills: logout refusing a request that has no session, or making one."""
+    before = get_session_store().count()
+    response = auth_client.post("/api/v1/auth/logout")
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "message": "Logged out successfully"}
+    assert get_session_store().count() == before
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith('sshler_session=""; ')
+    assert "Max-Age=0" in cookie
+
+
+def test_a_switch_that_never_opened_the_door_does_not_stop_signing_in(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Kills: a second switch (`SSHLER_REQUIRE_AUTH`) that closed the sign-in route
+    while the door stayed closed, so nobody could sign in."""
+    monkeypatch.setenv("SSHLER_REQUIRE_AUTH", "false")
+    reset_settings()
+    from sshler.webapp import make_app
+
+    client = TestClient(make_app(auth_client.app.state.settings))
+    try:
+        before = get_session_store().count()
+        login = _login(client)
+        assert login.status_code == 200
+        assert login.json() == {"success": True, "message": "Login successful"}
+        assert get_session_store().count() == before + 1
+        client.cookies.clear()
+        refused = client.get("/api/v1/boxes")
+        assert refused.status_code == 401
+        assert refused.json() == REFUSED
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def store_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    """A session store on a clock that only moves when told. Request it before
+    `auth_client`, which builds the app after it is set."""
+    fake = FakeClock()
+    monkeypatch.setattr(session_module, "_session_store", SessionStore(clock=fake))
+    return fake
+
+
+@pytest.fixture
+def idle_clock(store_clock: FakeClock, monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    """`store_clock` and a 600 s idle timeout."""
+    monkeypatch.setenv("SSHLER_SESSION_IDLE_TIMEOUT_SECONDS", "600")
+    yield store_clock
+    reset_settings()
+
+
+def test_an_idle_session_is_not_signed_in_for_the_door_the_bootstrap_or_the_api(
+    idle_clock: FakeClock, auth_client: TestClient
+):
+    """Kills: the door and the bootstrap judging a session live without the idle
+    timeout that `/api/v1/auth/me` applies."""
+    assert _login(auth_client).status_code == 200
+    assert auth_client.get("/api/v1/auth/me").status_code == 200
+    idle_clock.advance(1200)
+
+    body = auth_client.get("/api/v1/bootstrap").json()
+    assert (body["authenticated"], body["token"]) == (False, None)
+    api = auth_client.get("/api/v1/boxes")
+    assert api.status_code == 401
+    assert api.json() == REFUSED
+
+
+def test_an_idle_timeout_of_zero_changes_nothing(store_clock: FakeClock, auth_client: TestClient):
+    assert _login(auth_client).status_code == 200
+    store_clock.advance(1200)
+    body = auth_client.get("/api/v1/bootstrap").json()
+    assert (body["authenticated"], body["token"]) == (True, "t")

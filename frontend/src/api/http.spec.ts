@@ -32,9 +32,11 @@ const bootstrapMock = vi.fn(async () => {
 const setTokenMock = vi.fn((v: string | null) => {
   bootstrapState.token = v;
 });
+const forgetMock = vi.fn();
 vi.mock("@/stores/bootstrap", () => ({
   useBootstrapStore: () => ({
     setToken: setTokenMock,
+    forget: forgetMock,
     bootstrap: bootstrapMock,
     get token() {
       return bootstrapState.token;
@@ -45,11 +47,13 @@ vi.mock("@/stores/bootstrap", () => ({
 // The router the sign-in redirect goes through: the spec sets the current route and
 // reads every navigation.
 const routerState = { current: { name: "files", fullPath: "/files?box=b" } as { name: string; fullPath: string } };
+const readyState = { promise: Promise.resolve() as Promise<void> };
 const pushMock = vi.fn(async (_to: unknown) => {});
 vi.mock("@/router", () => ({
   default: {
     get currentRoute() { return { value: routerState.current }; },
     push: (to: unknown) => pushMock(to),
+    isReady: () => readyState.promise,
   },
 }));
 
@@ -75,7 +79,9 @@ beforeEach(() => {
   bootstrapMock.mockClear();
   setTokenMock.mockClear();
   clearUserMock.mockClear();
+  forgetMock.mockClear();
   pushMock.mockClear();
+  readyState.promise = Promise.resolve();
   routerState.current = { name: "files", fullPath: "/files?box=b" };
   bootstrapState.token = null;
   bootstrapState.nextToken = "fresh-token";
@@ -198,6 +204,13 @@ describe("the one request: what a failure does and shows", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("auth: the bootstrap forgets who the page was, so Back to a view is not let through", async () => {
+    fetchMock.mockResolvedValueOnce(res(401, { detail: "Not authenticated", reason: "auth" }));
+
+    await failure(fetchBoxes("t"));
+    expect(forgetMock).toHaveBeenCalledTimes(1);
+  });
+
   it("auth while the sign-in page is shown: no navigation, and it throws", async () => {
     routerState.current = { name: "login", fullPath: "/login?redirect=%2Ffiles" };
     fetchMock.mockResolvedValueOnce(res(401, { detail: "Invalid username or password", reason: "auth" }));
@@ -205,6 +218,20 @@ describe("the one request: what a failure does and shows", () => {
     expect(await failure(http.post("/api/v1/auth/login", { username: "u", password: "p" }))).toEqual([
       401, "auth", "Invalid username or password", "You need to sign in — Invalid username or password",
     ]);
+    expect(pushMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("auth that arrives before the router is ready: the route is read once it is, and the sign-in page gets no push", async () => {
+    routerState.current = { name: "", fullPath: "/" } as { name: string; fullPath: string };
+    let ready!: () => void;
+    readyState.promise = new Promise<void>((resolve) => { ready = resolve; });
+    fetchMock.mockResolvedValueOnce(res(401, { detail: "Not authenticated", reason: "auth" }));
+
+    const failed = failure(fetchBoxes("t"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    routerState.current = { name: "login", fullPath: "/login?redirect=%2Fsettings" };
+    ready();
+    await failed;
     expect(pushMock).toHaveBeenCalledTimes(0);
   });
 
@@ -618,5 +645,28 @@ describe("a name that is taken", () => {
       expect(fetchMock.mock.calls[1]![1].headers["X-SSHLER-TOKEN"]).toBe("fresh-token");
       expect(bootstrapMock).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("a failure's Retry-After", () => {
+  function locked(retryAfter: string | null): Response {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (retryAfter !== null) headers["Retry-After"] = retryAfter;
+    return new Response(
+      JSON.stringify({ detail: "Too many failed authentication attempts. Try again later.", reason: "rate_limited" }),
+      { status: 429, headers },
+    );
+  }
+
+  it.each([
+    ["whole seconds", "300", 300],
+    ["no header", null, null],
+    ["a date, which this server never sends", "Wed, 21 Oct 2026 07:28:00 GMT", null],
+  ])("%s", async (_label, header, seconds) => {
+    fetchMock.mockResolvedValueOnce(locked(header));
+    const err = await http.post("/api/v1/auth/login", { username: "u", password: "p" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).reason).toBe("rate_limited");
+    expect((err as ApiError).retryAfter).toBe(seconds);
   });
 });

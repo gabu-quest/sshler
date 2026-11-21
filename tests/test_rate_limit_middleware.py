@@ -188,9 +188,7 @@ def test_auth_lockout_after_five_failures_returns_429(auth_env, auth_client: Tes
     bad = {"Authorization": _basic(USER, "wrong-password")}
     failures = [auth_client.get(UNROUTED, headers=bad) for _ in range(LOCKOUT_THRESHOLD)]
     assert [r.status_code for r in failures] == [401] * LOCKOUT_THRESHOLD
-    assert [r.headers["WWW-Authenticate"] for r in failures] == [
-        'Basic realm="sshler"'
-    ] * LOCKOUT_THRESHOLD
+    assert ["www-authenticate" in r.headers for r in failures] == [False] * LOCKOUT_THRESHOLD
     assert fake_asyncio.sleeps == [2] * LOCKOUT_THRESHOLD
 
     # Even correct credentials are refused while locked out.
@@ -226,7 +224,7 @@ def test_successful_auth_resets_failure_count(auth_env, auth_client: TestClient)
     for _ in range(LOCKOUT_THRESHOLD - 1):
         auth_client.get(UNROUTED, headers=bad)
     assert auth_client.get(UNROUTED, headers=good).status_code == 404
-    # The good request set a session cookie; drop it so the next requests use Basic auth.
+    # The door makes no session from a Basic header; no cookie carries the next requests.
     auth_client.cookies.clear()
     statuses = [
         auth_client.get(UNROUTED, headers=bad).status_code for _ in range(LOCKOUT_THRESHOLD - 1)

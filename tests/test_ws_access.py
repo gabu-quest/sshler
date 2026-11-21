@@ -17,7 +17,8 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from sshler import access, state, webapp
-from sshler.session import get_session_store
+from sshler import session as session_module
+from sshler.session import SessionStore, get_session_store
 from sshler.settings import get_settings as get_app_settings
 from sshler.settings import reset_settings
 from sshler.webapp import ServerSettings, make_app
@@ -315,3 +316,22 @@ def test_the_token_is_not_in_a_log_line_or_a_close_reason(
         "Invalid origin",
     )
     assert TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("socket", SOCKETS)
+def test_idle_session_cookie_closes_4401(
+    monkeypatch: pytest.MonkeyPatch, auth_client: TestClient, socket: str
+):
+    """Kills: a socket that judges a session live without the idle timeout the rest of
+    the server applies."""
+    now = [1_000_000.0]
+    monkeypatch.setattr(session_module, "_session_store", SessionStore(clock=lambda: now[0]))
+    monkeypatch.setenv("SSHLER_SESSION_IDLE_TIMEOUT_SECONDS", "600")
+    reset_settings()
+    try:
+        sid = get_session_store().create_session(username=USER, user_id=USER, ttl_seconds=28800)
+        auth_client.cookies.set(get_app_settings().cookie_name, sid.session_id)
+        now[0] += 1200
+        assert _closed_before_accept(auth_client, _url(socket)) == (4401, "Unauthorized")
+    finally:
+        reset_settings()
