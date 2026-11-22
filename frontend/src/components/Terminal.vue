@@ -788,7 +788,7 @@ const tmuxKillSession = () => sendTmuxCommand('kill-session')
 
 // Force-kill session ("super off"): unlike kill-session (SIGHUP over the WS),
 // this hits the REST endpoint that runs kill-server on the session's own socket
-// then SIGKILLs any pane process that ignored SIGHUP. Local box only.
+// then SIGKILLs any pane process that ignored SIGHUP. Works on every box.
 const tmuxForceKillSession = async () => {
   if (isNativeShell.value) return
   const name = sessionOverride.value ?? props.sessionName

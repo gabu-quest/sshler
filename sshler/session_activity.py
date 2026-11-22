@@ -9,9 +9,11 @@ as it is: "could not ask" is never read as "has no such session". It sits beside
 state store and below the API, so ``snapshot.py`` can call it too (``api`` imports
 ``snapshot`` through its recovery routes).
 
-A row is made by ``track_session`` only: when a terminal opens (``webapp._track_terminal``)
-and, for a session tmux has on its own server that has no row yet (one started with
-``ts`` outside sshler), by the sync route (``track_live_sessions``).
+A terminal's row is made by ``track_session`` only: when a terminal opens
+(``webapp._track_terminal``) and, for a session tmux has on its own server that has no row
+yet (one started with ``ts`` outside sshler), by the sync route (``track_live_sessions``).
+The one other maker is the Claude dashboard's open route (``api/claude_sessions.py``), for
+the local box only; its row records no ``transport``, which ``is_tmux_row`` reads as local.
 
 A row that is not a tmux session's is left alone: on a Windows server a local row is a
 persisted native shell, whose registry marks it when the shell ends. A plain shell has
@@ -87,7 +89,7 @@ async def track_session(
     *,
     keep_existing: bool = False,
 ) -> state.Session:
-    """The one maker of a session row: the row of *session_name* on *box*, active, in
+    """The maker of a terminal's session row: the row of *session_name* on *box*, active, in
     *folder*, recording the box's ``transport`` beside *metadata*. A row that exists is
     updated, or with *keep_existing* answered as it is."""
     return await state.create_or_update_session_async(

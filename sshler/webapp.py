@@ -1311,7 +1311,7 @@ async def _serve_terminal(websocket: WebSocket, request: TerminalRequest) -> Non
         return
     # The one teardown: whatever ends the session, the transport closes here.
     try:
-        await _run_terminal(websocket, opened, box, kind, request)
+        await _run_terminal(websocket, opened, box, request)
     finally:
         with teardown_scope():
             await opened.transport.close()
@@ -1569,7 +1569,7 @@ async def _resolved_remote_directory(
 
 
 async def _run_terminal(
-    websocket: WebSocket, opened: OpenedTerminal, box: Box, kind: str, request: TerminalRequest
+    websocket: WebSocket, opened: OpenedTerminal, box: Box, request: TerminalRequest
 ) -> None:
     """Track the session and run the pump until the client leaves or the terminal ends."""
     if not await take_early_message(websocket, opened.transport):

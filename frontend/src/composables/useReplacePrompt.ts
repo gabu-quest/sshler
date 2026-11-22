@@ -172,7 +172,7 @@ export function useReplacePrompt() {
         action: () =>
           // The buttons come first, so the dialog's first focus is "No" or "Skip" and
           // Enter replaces nothing; the tick box sits under them.
-          h("div", { class: "replace-dialog-actions", style: "display:flex;flex-direction:column;gap:12px;width:100%" }, [
+          h("div", { style: "display:flex;flex-direction:column;gap:12px;width:100%" }, [
             h("div", { class: "replace-actions", style: "display:flex;gap:8px;justify-content:flex-end;flex-wrap:nowrap" }, [
               button(t(several ? "files.skip" : "files.replace_no"), "no"),
               button(t("files.keep_both"), "keep_both"),
