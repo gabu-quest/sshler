@@ -27,6 +27,7 @@ from existing_name_support import (
 )
 
 from sshler import ssh_pool
+from sshler.api import local_files as local_files_api
 from sshler.api import remote_files as remote_files_api
 
 pytestmark = pytest.mark.posix_only("hard links, chmod and an SFTP server rooted in a temp folder")
@@ -608,3 +609,165 @@ def test_an_extract_overwrite_must_be_a_json_boolean(local_env, value):
         {"detail": "body.overwrite: Input should be a valid boolean", "reason": "invalid"},
     )
     assert s.disk("d/a.txt").read_bytes() == b"precious"
+
+
+# --- keep both: a new archive, or a new folder for an extract, beside what is there ----
+
+INVALID_BOTH = {"detail": "overwrite and keep_both cannot both be set", "reason": "invalid"}
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+def test_a_compress_with_keep_both_lands_under_the_first_free_name(env, box, fmt, name):
+    s = side(env, box)
+    old = make_old_archive(s, name)
+    old_bytes = old.read_bytes()
+    s.disk("a.txt").write_bytes(b"alpha")
+    landed = name.replace(".", " (2).", 1)
+
+    resp = compress(s, ["a.txt"], fmt, name, keep_both=True)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path(f"d/{landed}"))
+    assert resp.json()["message"] == f"Created {landed}"
+    assert old.read_bytes() == old_bytes
+    assert entries(s.disk(f"d/{landed}")) == ["a.txt"]
+    assert sorted(p.name for p in s.disk("d").iterdir()) == sorted([name, landed])
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("fmt", "name"), ARCHIVES)
+def test_a_compress_with_keep_both_that_fails_leaves_no_file(env, box, fmt, name):
+    s = side(env, box)
+    make_old_archive(s, name)
+    s.disk("a.txt").write_bytes(b"alpha")
+    before = files_under(s.base)
+
+    resp = compress(s, ["a.txt", "gone.txt"], fmt, name, keep_both=True)
+
+    expected = (404, "not_found") if box == "local" else (500, "failed")
+    assert (resp.status_code, resp.json()["reason"]) == expected
+    assert files_under(s.base) == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("taken_by", ["nothing", "folder", "file"])
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_an_extract_with_keep_both_unpacks_into_a_new_folder_named_after_the_archive(
+    env, box, taken_by, fmt
+):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("d/a.txt").write_bytes(b"old a")
+    if taken_by == "folder":
+        s.disk("d/backup").mkdir()
+        s.disk("d/backup/a.txt").write_bytes(b"old in backup")
+    elif taken_by == "file":
+        s.disk("d/backup").write_bytes(b"a file")
+    make_archive(
+        s.disk(f"backup.{fmt}"), [("a.txt", b"new a"), ("sub", "dir"), ("sub/b.txt", b"b")]
+    )
+    before = files_under(s.base)
+    folder = "backup" if taken_by == "nothing" else "backup (2)"
+
+    resp = extract(s, f"backup.{fmt}", keep_both=True)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path(f"d/{folder}"))
+    after = files_under(s.base)
+    added = {k: v for k, v in after.items() if k not in before}
+    assert added == {
+        f"d/{folder}": "dir",
+        f"d/{folder}/a.txt": b"new a",
+        f"d/{folder}/sub": "dir",
+        f"d/{folder}/sub/b.txt": b"b",
+    }
+    assert {k: after[k] for k in before} == before
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize(("archive", "folder"), [("a.tar.gz", "a"), (".zip", ".zip")])
+def test_an_extract_with_keep_both_names_the_folder_by_the_archive_without_its_extension(
+    env, box, archive, folder
+):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    make_archive(s.disk(archive), [("x.txt", b"x")])
+
+    resp = extract(s, archive, keep_both=True)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path(f"d/{folder}"))
+    assert s.disk(f"d/{folder}/x.txt").read_bytes() == b"x"
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_an_extract_with_keep_both_of_an_archive_holding_its_own_name_goes_one_level_deeper(
+    env, box
+):
+    s = side(env, box)
+    s.disk("d/backup").mkdir(parents=True)
+    s.disk("d/backup/old.txt").write_bytes(b"old")
+    make_archive(s.disk("backup.zip"), [("backup", "dir"), ("backup/new.txt", b"new")])
+
+    resp = extract(s, "backup.zip", keep_both=True)
+
+    assert (resp.status_code, resp.json()["path"]) == (200, s.path("d/backup (2)"))
+    assert files_under(s.disk("d")) == {
+        "backup": "dir",
+        "backup/old.txt": b"old",
+        "backup (2)": "dir",
+        "backup (2)/backup": "dir",
+        "backup (2)/backup/new.txt": b"new",
+    }
+
+
+@pytest.mark.parametrize("box", BOXES)
+def test_an_extract_with_keep_both_that_the_guard_refuses_leaves_no_folder(env, box):
+    s = side(env, box)
+    s.disk("d").mkdir()
+    s.disk("outside").mkdir()
+    make_archive(s.disk("in.tar.gz"), [("first.txt", b"first"), ("../outside/x.txt", b"pwned")])
+    before = files_under(s.base)
+
+    resp = extract(s, "in.tar.gz", keep_both=True)
+
+    assert (resp.status_code, resp.json()["reason"]) == (500, "failed")
+    assert files_under(s.base) == before
+
+
+def test_two_local_extracts_of_one_archive_with_keep_both_at_once_make_two_folders(local_env):
+    s = side(local_env, "local")
+    s.disk("d").mkdir()
+    make_archive(s.disk("in.zip"), [("x.txt", b"x")])
+
+    async def both():
+        files = local_files_api.LocalFiles()
+        return await asyncio.gather(
+            files.extract_archive(s.path("in.zip"), s.path("d"), keep_both=True),
+            files.extract_archive(s.path("in.zip"), s.path("d"), keep_both=True),
+        )
+
+    landed = asyncio.run(both())
+
+    assert sorted(landed) == [s.path("d/in"), s.path("d/in (2)")]
+    assert files_under(s.disk("d")) == {
+        "in": "dir",
+        "in/x.txt": b"x",
+        "in (2)": "dir",
+        "in (2)/x.txt": b"x",
+    }
+
+
+@pytest.mark.parametrize("box", BOXES)
+@pytest.mark.parametrize("route", ["create", "extract"])
+def test_an_archive_with_overwrite_and_keep_both_is_refused_and_changes_nothing(env, box, route):
+    s = side(env, box)
+    make_old_archive(s, "o.zip")
+    s.disk("a.txt").write_bytes(b"alpha")
+    before = files_under(s.base)
+
+    if route == "create":
+        resp = compress(s, ["a.txt"], "zip", "o.zip", overwrite=True, keep_both=True)
+    else:
+        resp = extract(s, "d/o.zip", overwrite=True, keep_both=True)
+
+    assert (resp.status_code, resp.json()) == (400, INVALID_BOTH)
+    assert files_under(s.base) == before

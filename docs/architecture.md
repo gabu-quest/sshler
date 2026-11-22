@@ -27,7 +27,7 @@ each has a local and a remote implementation:
   their destination on both kinds of box (a remote box through `_remote_make_missing`).
   **A taken name** (`api/placement.py`): without a word from the request it is refused;
   `overwrite` lets a regular file replace a regular file; `keep_both` (rename, move, copy,
-  upload, batch move and copy, transfer) neither replaces nor refuses: the new thing lands
+  upload, batch move and copy, transfer, compress, extract) neither replaces nor refuses: the new thing lands
   under the first free name of one series, `free_name` (`report (2).pdf`, `site (2).tar.gz`,
   `photos (2)`, at most 255 bytes, up to `(999)`, then `exists`). Every name is taken by
   the exclusive call that writes (an exclusive create, a hard link, a new folder), tried on
@@ -36,6 +36,10 @@ each has a local and a remote implementation:
   (`refuse_replace_and_keep_both`). The answer's `path` is where the thing landed; a batch
   answer with `keep_both` adds `placed` (`{"path", "placed"}` for each item that landed
   under another name), and a transfer's `progress` events for such a file carry `placed`.
+  An extract with `keep_both` checks no entry against a taken name (the guard against
+  unsafe entries runs as always): its unpacked temp folder is placed whole as
+  a new folder named by `archive_folder_name` (`backup.zip` gives `backup/`, then
+  `backup (2)/`), never merged into an existing one; its `path` is that folder.
 - **Programs:** `BoxRunner` (`api/box_runner.py`), opened with `box_runner(deps, box, config,
   deadline=...)`. `run(words, folder=, timeout=)` for git and grep, `tmux(session, args)`,
   `force_kill(session)` (the session's own `ts-<name>` server stopped and every pane process

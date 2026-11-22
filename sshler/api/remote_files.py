@@ -47,6 +47,7 @@ from .file_contract import (
     ReadChunk,
     SourceFile,
     SpelledPaths,
+    archive_folder_name,
     is_archive_name,
 )
 from .helpers import _attachment_header
@@ -1268,6 +1269,7 @@ class RemoteFiles:
         fmt: str,
         *,
         overwrite: bool = False,
+        keep_both: bool = False,
     ) -> str:
         """Every path is checked before the connection is taken (a bad source is a 400
         that names it); ``tar`` or ``zip`` runs on the box into a temp file beside the
@@ -1289,29 +1291,37 @@ class RemoteFiles:
         archive_target = str(PurePosixPath(dest_resolved) / name)
         sftp_client = await self._session()
         _refuse_or_replace(
-            await _remote_lstat_mode(sftp_client, archive_target), overwrite=overwrite
+            await _remote_lstat_mode(sftp_client, archive_target),
+            overwrite=overwrite,
+            keep_both=keep_both,
         )
         temp = _remote_temp_beside(archive_target)
         try:
             await _run_archive_command(
                 connection, archive_create_command(fmt, temp, resolved_paths), "Archive creation"
             )
-            await _remote_place(
-                sftp_client, temp, archive_target, move=True, overwrite=overwrite, allow_dirs=False
+            return await _remote_place(
+                sftp_client,
+                temp,
+                archive_target,
+                move=True,
+                overwrite=overwrite,
+                allow_dirs=False,
+                keep_both=keep_both,
             )
         except BaseException:
             await run_to_end(_remove_quietly(sftp_client, temp))
             raise
-        return archive_target
 
     async def extract_archive(
-        self, archive: str, destination: str, *, overwrite: bool = False
+        self, archive: str, destination: str, *, overwrite: bool = False, keep_both: bool = False
     ) -> str:
         """Both paths are checked before the connection is taken; then, as on the local
         box, a missing archive fails first and a name that is no archive is a 400.
         ``tar`` or ``unzip`` runs on the box into a temp folder inside the destination,
         a 504 past ``ARCHIVE_TIMEOUT`` (the connection is closed, as for a compress);
-        the entries are then checked and moved as on the local box."""
+        the entries are then checked and moved as on the local box, or with
+        ``keep_both`` the temp folder is placed whole as a new folder, as there."""
         validated_archive = PathValidator.validate_remote_path(archive)
         validated_dest = PathValidator.validate_remote_path(destination)
         connection = await self._conn()
@@ -1332,11 +1342,27 @@ class RemoteFiles:
             temp = _remote_temp_beside(
                 posixpath.join(dest_resolved, PurePosixPath(archive_resolved).name)
             )
-            await sftp_client.mkdir(temp, asyncssh.SFTPAttrs(permissions=0o700))
+            # Under keep_both this folder is the one that stays: the server's default bits.
+            await sftp_client.mkdir(
+                temp, asyncssh.SFTPAttrs() if keep_both else asyncssh.SFTPAttrs(permissions=0o700)
+            )
             unpacked = temp
             await _run_archive_command(
                 connection, archive_extract_command(archive_resolved, unpacked), "Extraction"
             )
+            if keep_both:
+                landed = await _remote_place(
+                    sftp_client,
+                    unpacked,
+                    posixpath.join(
+                        dest_resolved, archive_folder_name(PurePosixPath(archive_resolved).name)
+                    ),
+                    move=True,
+                    overwrite=False,
+                    keep_both=True,
+                )
+                unpacked = None
+                return landed
             moves: list[tuple[str, str]] = []
             taken: list[tuple[str, int, bool]] = []
             await _remote_plan(sftp_client, unpacked, dest_resolved, moves, taken)
@@ -1355,6 +1381,7 @@ class RemoteFiles:
                     raise unpacked_not_removed(exc, unpacked, cleanup) from exc
             await run_to_end(_remote_remove_made(sftp_client, made))
             raise
+        assert unpacked is not None
         try:
             await _remote_remove_tree(sftp_client, unpacked)
         except asyncssh.SFTPError as cleanup:

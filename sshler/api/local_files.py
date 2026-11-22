@@ -9,6 +9,7 @@ import errno
 import mimetypes
 import os
 import platform
+import secrets
 import shutil
 import stat as stat_mod
 import sys
@@ -49,6 +50,7 @@ from .file_contract import (
     ReadChunk,
     SourceFile,
     SpelledPaths,
+    archive_folder_name,
     is_archive_name,
 )
 from .helpers import (
@@ -777,20 +779,23 @@ def _local_pack(paths: Sequence[str], out: BinaryIO, unfinished: Path, fmt: str)
 
 
 def _local_create_archive(
-    paths: Sequence[str], archive_path: Path, fmt: str, *, overwrite: bool
-) -> None:
+    paths: Sequence[str], archive_path: Path, fmt: str, *, overwrite: bool, keep_both: bool = False
+) -> str:
     """Pack ``paths`` into a temp file beside ``archive_path`` and place it under that
     name by the rule when the packer has finished (call from a worker thread). A name
     that is taken is refused before anything is packed (and again at the placing); a
-    failure at any point leaves the old archive whole and no temp file."""
+    failure at any point leaves the old archive whole and no temp file. Returns where
+    it landed (with ``keep_both`` a taken name gives the first free name of its series)."""
     target = str(archive_path)
-    _refuse_or_replace(_local_lstat_mode(target), overwrite=overwrite)
+    _refuse_or_replace(_local_lstat_mode(target), overwrite=overwrite, keep_both=keep_both)
     landing = _LocalLanding(target, replace=True)
     try:
         assert landing.temp is not None
         _local_pack(paths, landing.handle, Path(landing.temp), fmt)
         landing.handle.close()
-        _local_place(landing.temp, target, move=True, overwrite=overwrite)
+        return _local_place(
+            landing.temp, target, move=True, overwrite=overwrite, keep_both=keep_both
+        )
     except BaseException:
         landing.abort()
         raise
@@ -892,16 +897,36 @@ def _local_plan(
         moves.append((entry.path, target))
 
 
-def _local_extract_archive(archive: Path, dest_dir: Path, *, overwrite: bool) -> None:
+def _local_extract_archive(
+    archive: Path, dest_dir: Path, *, overwrite: bool, keep_both: bool = False
+) -> str:
     """Unpack ``archive`` into a temp folder inside ``dest_dir`` (made if missing), check
     every entry against ``dest_dir`` by the rule, and only then move the entries into
     place (call from a worker thread). A refused or failed extract leaves ``dest_dir``
-    as it was and no temp folder; a folder this made is removed again."""
+    as it was and no temp folder; a folder this made is removed again. With
+    ``keep_both`` the temp folder itself is placed as a new folder named by
+    ``archive_folder_name`` (or the next free name). Returns where the entries are."""
     made = _local_make_missing(str(dest_dir))
     unpacked: str | None = None
     try:
-        unpacked = tempfile.mkdtemp(dir=dest_dir, prefix=f".{temp_stem(archive.name)}.")
+        if keep_both:
+            # Made with the default bits, since this folder becomes the one that stays.
+            temp = os.path.join(dest_dir, f".{temp_stem(archive.name)}.{secrets.token_hex(6)}")
+            os.mkdir(temp)
+            unpacked = temp
+        else:
+            unpacked = tempfile.mkdtemp(dir=dest_dir, prefix=f".{temp_stem(archive.name)}.")
         _local_unpack(archive, unpacked)
+        if keep_both:
+            landed = _local_place(
+                unpacked,
+                os.path.join(dest_dir, archive_folder_name(archive.name)),
+                move=True,
+                overwrite=False,
+                keep_both=True,
+            )
+            unpacked = None
+            return landed
         moves: list[tuple[str, str]] = []
         taken: list[tuple[str, int, bool]] = []
         _local_plan(unpacked, str(dest_dir), moves, taken)
@@ -920,6 +945,7 @@ def _local_extract_archive(archive: Path, dest_dir: Path, *, overwrite: bool) ->
         shutil.rmtree(unpacked)
     except OSError as cleanup:
         raise unpacked_not_removed(None, unpacked, cleanup) from cleanup
+    return str(dest_dir)
 
 
 def _local_batch_item(
@@ -1267,16 +1293,23 @@ class LocalFiles:
         fmt: str,
         *,
         overwrite: bool = False,
+        keep_both: bool = False,
     ) -> str:
         archive_path = Path(self._resolve(destination)) / name
         sources = [self._resolve(p) for p in paths]
-        await asyncio.to_thread(
-            partial(_local_create_archive, sources, archive_path, fmt, overwrite=overwrite)
+        return await asyncio.to_thread(
+            partial(
+                _local_create_archive,
+                sources,
+                archive_path,
+                fmt,
+                overwrite=overwrite,
+                keep_both=keep_both,
+            )
         )
-        return str(archive_path)
 
     async def extract_archive(
-        self, archive: str, destination: str, *, overwrite: bool = False
+        self, archive: str, destination: str, *, overwrite: bool = False, keep_both: bool = False
     ) -> str:
         """A missing archive fails first, then a name that is no archive is a 400."""
         archive_path = Path(self._resolve(archive))
@@ -1284,10 +1317,15 @@ class LocalFiles:
         await asyncio.to_thread(archive_path.stat)
         if not is_archive_name(archive_path.name):
             raise Failure(REASON_INVALID, "Unsupported archive format")
-        await asyncio.to_thread(
-            partial(_local_extract_archive, archive_path, dest_dir, overwrite=overwrite)
+        return await asyncio.to_thread(
+            partial(
+                _local_extract_archive,
+                archive_path,
+                dest_dir,
+                overwrite=overwrite,
+                keep_both=keep_both,
+            )
         )
-        return str(dest_dir)
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
         outcome = BatchOutcome()

@@ -87,6 +87,17 @@ def is_archive_name(name: str) -> bool:
     return name.lower().endswith(ARCHIVE_SUFFIXES)
 
 
+def archive_folder_name(name: str) -> str:
+    """The folder an extract with ``keep_both`` unpacks archive ``name`` into: the name
+    without its suffix of ``ARCHIVE_SUFFIXES`` (``backup.zip`` gives ``backup``,
+    ``site.tar.gz`` gives ``site``). A name that would be left empty, ``.`` or ``..``
+    (``.zip``) keeps the whole name."""
+    lowered = name.lower()
+    suffix = next((s for s in ARCHIVE_SUFFIXES if lowered.endswith(s)), "")
+    stem = name[: len(name) - len(suffix)]
+    return name if stem in ("", ".", "..") else stem
+
+
 class PathKind(NamedTuple):
     """What ``stat`` found at a path."""
 
@@ -320,6 +331,7 @@ class BoxFiles(Protocol):
         fmt: str,
         *,
         overwrite: bool = False,
+        keep_both: bool = False,
     ) -> str:
         """Pack ``paths`` into archive ``name`` in folder ``destination``; ``fmt``
         (``tar.gz``, ``tgz`` or ``zip``) and ``name`` are checked by the route. Returns
@@ -327,11 +339,13 @@ class BoxFiles(Protocol):
         name. The archive is written under a temporary name beside it and placed by the
         rule for an existing name when complete: a taken name is refused unless
         ``overwrite`` lets a regular file be replaced, and a compress that fails leaves
-        the old archive whole and no other file."""
+        the old archive whole and no other file. With ``keep_both`` a taken name is
+        neither replaced nor refused: the archive lands under the first free name of its
+        series, and the path returned is that one."""
         ...
 
     async def extract_archive(
-        self, archive: str, destination: str, *, overwrite: bool = False
+        self, archive: str, destination: str, *, overwrite: bool = False, keep_both: bool = False
     ) -> str:
         """Unpack ``archive`` (a ``.tar.gz``, ``.tgz`` or ``.zip`` by its name; any other
         name is a 400) into folder ``destination`` (made if missing); returns the
@@ -346,7 +360,14 @@ class BoxFiles(Protocol):
         ``destination`` as it was and no temp folder. The moves are one per entry and
         not undone: one that fails after the check (an existing subfolder that takes no
         new file) leaves the entries moved before it in place. On the local box no
-        entry is written outside ``destination``."""
+        entry is written outside ``destination``.
+
+        With ``keep_both`` nothing is checked entry by entry: the unpacked temp folder
+        is placed whole as a new folder inside ``destination``, named by
+        ``archive_folder_name``, or the first free name of its series when that name is
+        taken by anything; nothing merges into an existing folder and no entry is
+        renamed. The path returned is that new folder. A refused or failed extract
+        leaves no folder."""
         ...
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
