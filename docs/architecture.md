@@ -27,13 +27,15 @@ each has a local and a remote implementation:
   their destination on both kinds of box (a remote box through `_remote_make_missing`).
 - **Programs:** `BoxRunner` (`api/box_runner.py`), opened with `box_runner(deps, box, config,
   deadline=...)`. `run(words, folder=, timeout=)` for git and grep, `tmux(session, args)`,
+  `force_kill(session)` (the session's own `ts-<name>` server stopped and every pane process
+  it listed sent SIGKILL, on both kinds),
   `folder`/`file` for paths, `reach` for the status check. Its module docstring is the
   contract: every word reaches the program as one word, what a time limit does to the
   program and to a pooled connection, and where the two kinds differ.
 
 Work the two kinds really do differently sits in one function that decides once and returns
-the same shape for both: `box_stats` (`api/boxes.py`), `live_sessions` and
-`force_kill_supported` (`api/sessions.py`), `search_box` (`api/search.py`), and the in-process
+the same shape for both: `box_stats` (`api/boxes.py`), `live_sessions`
+(`api/sessions.py`), `search_box` (`api/search.py`), and the in-process
 grep of a Windows local box (`api/grep.py`). `tests/test_box_files_contract.py` counts the
 tests of the kind per route module, so a new one outside such a function fails there.
 

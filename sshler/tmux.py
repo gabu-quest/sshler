@@ -83,6 +83,36 @@ def remote_tmux_command(session: str, args: list[str]) -> str:
     return shlex.join(["tmux", "-L", f"{SOCKET_PREFIX}{session}", *args])
 
 
+# The force kill of a remote session, what ``force_kill_local_session`` does on this
+# machine: ask the session's own server (``$1``, always ``ts-<name>``) for its pane
+# process ids, stop that server, then SIGKILL each pane's process group and process.
+# Only a line of digits tmux printed is a pane process id (0 and 1 never are); a
+# session that is already gone lists none and is not an error. Exits 127 when the box
+# has no tmux (the shell's status for a command it cannot find), 2 when ``$1`` is not
+# a ``ts-`` server, else 0. A fixed text, never built from a request; sent as one
+# word to ``sh -c``, the server name as its own word after it
+# (``remote_force_kill_words``).
+REMOTE_FORCE_KILL = """command -v tmux >/dev/null 2>&1 || exit 127
+case $1 in "$SOCKET_PREFIX"?*) ;; *) exit 2 ;; esac
+panes=$(tmux -L "$1" list-panes -a -F '#{pane_pid}' 2>/dev/null)
+tmux -L "$1" kill-server >/dev/null 2>&1
+printf '%s\\n' "$panes" | while IFS= read -r pid; do
+    case $pid in ''|*[!0-9]*|0|1) continue ;; esac
+    group=$(ps -o pgid= -p "$pid" 2>/dev/null)
+    group=${group##* }
+    case $group in ''|*[!0-9]*|0|1) ;; *) kill -s KILL -- "-$group" 2>/dev/null ;; esac
+    kill -s KILL "$pid" 2>/dev/null
+done
+exit 0
+""".replace('"$SOCKET_PREFIX"', SOCKET_PREFIX)
+
+
+def remote_force_kill_words(session: str) -> list[str]:
+    """The words a remote runner sends to force-kill ``session``: ``REMOTE_FORCE_KILL``
+    run by ``sh``, with the session's own server name as one word."""
+    return ["sh", "-c", REMOTE_FORCE_KILL, "sh", f"{SOCKET_PREFIX}{session}"]
+
+
 def ts_session_name(directory: str) -> str:
     """Tmux session name for a LOCAL directory, matching the ``ts`` CLI exactly.
 
@@ -354,8 +384,8 @@ async def force_kill_local_session(session_name: str) -> None:
     from the server dying. Best-effort: every step is suppressed so a partial
     failure never blocks session deletion.
 
-    LOCAL ONLY: it runs tmux and signals processes on this machine. A remote force
-    kill is not built (``api.sessions.force_kill_supported``).
+    It runs tmux and signals processes on this machine (``LocalRunner.force_kill``);
+    a remote box runs ``REMOTE_FORCE_KILL`` instead.
     """
     # 1. Capture pane PIDs before the socket goes away.
     pids = await _list_local_pane_pids(session_name)

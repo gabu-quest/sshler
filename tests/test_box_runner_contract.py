@@ -219,6 +219,11 @@ async def _answer(process: asyncssh.SSHServerProcess, counts: Counts, home: str)
         status, out = GIT_REFUSED, ""
     elif words == ["true"]:
         status, out = 0, ""
+    elif words[:4] == ["sh", "-c", tmux_module.REMOTE_FORCE_KILL, "sh"] and len(words) == 5:
+        # The force kill: its first line exits 127 when the box has no tmux.
+        if words[4] == "ts-stuck":
+            await asyncio.sleep(60)
+        status, out = (0, "") if counts.tmux_installed else (127, "")
     elif words == ["sh", "-c", sessions_api.REMOTE_LIST_SESSIONS]:
         # The script's first line exits 127 when the box has no tmux.
         status, out = (0, LIVE_SESSIONS) if counts.tmux_installed else (127, "")
@@ -1388,6 +1393,52 @@ async def test_tmux_with_no_limit_has_the_tmux_command_limit(kind, fake_tmux_on_
     with pytest.raises(TmuxTimeoutError):
         await kind.runner.tmux("stuck", ["kill-session", "-t", "stuck"])
     assert time.monotonic() - started < 4.0
+
+
+def _force_kill_words(session: str) -> list[str]:
+    return tmux_module.remote_force_kill_words(session)
+
+
+@pytest.mark.parametrize("name", ["work", "it's a b", "$(id)"], ids=repr)
+def test_a_remote_force_kill_by_name_is_ok_and_sends_one_force_kill_line(served, name):
+    resp = served.client.post(
+        f"/api/v1/boxes/lb/sessions/by-name/{quote(name, safe='')}/force-kill", headers=HEADERS
+    )
+    assert (resp.status_code, resp.json()["message"]) == (200, "force-killed")
+    assert [_parse(line) for line in served.remote_commands()] == [
+        (None, _force_kill_words(name), None)
+    ]
+
+
+def test_a_forced_remote_delete_sends_the_force_kill_and_no_kill_session(served):
+    session_id = _new_session(served, "lb", "work")
+    resp = served.client.delete(
+        f"/api/v1/boxes/lb/sessions/{session_id}?kill_tmux=true&force=true", headers=HEADERS
+    )
+    assert (resp.status_code, resp.json()["message"]) == (200, "deleted")
+    assert [_parse(line) for line in served.remote_commands()] == [
+        (None, _force_kill_words("work"), None)
+    ]
+
+
+def test_a_remote_force_kill_on_a_box_without_tmux_is_program_missing(served):
+    served.counts.tmux_installed = False
+    resp = served.client.post("/api/v1/boxes/lb/sessions/by-name/work/force-kill", headers=HEADERS)
+    assert (resp.status_code, resp.json()) == (
+        501,
+        {"detail": "tmux is not installed on lb", "reason": "program_missing"},
+    )
+
+
+def test_a_remote_force_kill_past_its_limit_is_a_timeout(served, monkeypatch):
+    monkeypatch.setattr(tmux_module, "TMUX_COMMAND_TIMEOUT", 0.5)
+    started = time.monotonic()
+    resp = served.client.post("/api/v1/boxes/lb/sessions/by-name/stuck/force-kill", headers=HEADERS)
+    assert time.monotonic() - started < 4.0
+    assert (resp.status_code, resp.json()) == (
+        504,
+        {"detail": "tmux on stuck timed out", "reason": "timeout"},
+    )
 
 
 # --- the session routes run tmux through the runner ------------------------------------

@@ -2,11 +2,10 @@
 
 A session route runs tmux on a box through the box's runner (``BoxRunner.tmux``): the
 same words on both kinds, the local box's tmux on this machine and a remote box's over
-its pooled connection. Two things the kinds really do differently each live in one
-function here: ``_local_live_sessions`` (which sessions are running: the local box is
-asked in Python, a remote box by one script; ``live_sessions`` asks about every
-session of a box, ``live_sessions_on`` about one) and ``force_kill_supported`` (a
-force kill is built for the local box only).
+its pooled connection, and a force kill through ``BoxRunner.force_kill``. One thing the
+kinds really do differently lives in one function here: ``_local_live_sessions`` (which
+sessions are running: the local box is asked in Python, a remote box by one script;
+``live_sessions`` asks about every session of a box, ``live_sessions_on`` about one).
 
 A failure of tmux or of the box is raised and answered by its reason: a box that
 cannot be reached is ``unreachable``, tmux past its limit ``timeout``, no tmux on the
@@ -32,7 +31,6 @@ from ..tmux import (
     LiveSessions,
     ask_local_session,
     discover_local_sessions,
-    force_kill_local_session,
 )
 from ..validation import PathValidator, ValidationError
 from . import dependencies
@@ -193,14 +191,6 @@ def _refused(command: str, ran: Ran) -> str:
     if words:
         return f"tmux {command} failed: {words}"
     return f"tmux {command} exited with status {ran.status}"
-
-
-def force_kill_supported(box: Box) -> bool:
-    """Whether a force kill (stop the session's own tmux server, then SIGKILL every
-    pane process that outlived it) is built for ``box``: for the local box only. A
-    remote session runs on its own ``ts-<name>`` server too, so a remote force kill
-    could be scoped the same way, but it is not built."""
-    return is_local(box)
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -376,19 +366,13 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         if kill_tmux and record.session_name:
             try:
-                if force and force_kill_supported(box):
-                    # Stops the session's own ts-<name> server and SIGKILLs any pane
-                    # process that ignored SIGHUP; other sessions are untouched.
-                    await force_kill_local_session(record.session_name)
-                else:
+                limit = dependencies.PROBE_TIMEOUT_SECONDS
+                async with box_runner(deps, box, application_config, deadline=limit) as runner:
                     if force:
-                        logger.info(
-                            "force kill requested for remote session %s; a remote force "
-                            "kill is not built, so the session is ended with kill-session",
-                            record.session_name,
-                        )
-                    limit = dependencies.PROBE_TIMEOUT_SECONDS
-                    async with box_runner(deps, box, application_config, deadline=limit) as runner:
+                        # Stops the session's own ts-<name> server and SIGKILLs any pane
+                        # process that ignored SIGHUP; other sessions are untouched.
+                        await runner.force_kill(record.session_name)
+                    else:
                         await runner.tmux(
                             record.session_name, ["kill-session", "-t", record.session_name]
                         )
@@ -409,23 +393,24 @@ def get_router(deps: APIDependencies) -> APIRouter:
         session_name: str,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
-        """Force-kill a LOCAL tmux session by its name (no DB id needed).
+        """Force-kill a tmux session of the box by its name (no DB id needed).
 
-        Powers the terminal toolbar's "super kill" — kills the session's own
-        per-session tmux server and SIGKILLs any pane process that ignored the
-        SIGHUP. Local box only: a remote force kill is not built
-        (``force_kill_supported``), so a remote box is answered 400.
+        Powers the terminal toolbar's "super kill": ``BoxRunner.force_kill`` stops the
+        session's own tmux server and SIGKILLs any pane process that ignored the SIGHUP,
+        on either kind of box. A box that cannot be reached answers ``unreachable``, no
+        tmux on a remote box ``program_missing``, past the limit ``timeout``; a session
+        that is already gone is ``ok``.
         """
         box = deps.get_box_or_404(application_config, name)
-        if not force_kill_supported(box):
-            raise Failure(REASON_INVALID, "force-kill by name is supported for the local box only")
         if not session_name.strip() or any(c in session_name for c in "\r\n\x00"):
             raise Failure(REASON_INVALID, "Invalid session name")
 
-        await force_kill_local_session(session_name)
-        # Drop any DB rows tracking this local session so the switcher updates.
+        limit = dependencies.PROBE_TIMEOUT_SECONDS
+        async with box_runner(deps, box, application_config, deadline=limit) as runner:
+            await runner.force_kill(session_name)
+        # Drop any DB rows tracking this session so the switcher updates.
         with contextlib.suppress(Exception):
-            for record in await state.list_sessions_async("local"):
+            for record in await state.list_sessions_async(name):
                 if record.session_name == session_name:
                     await state.delete_session_async(record.id)
         return APISimpleMessage(status="ok", message="force-killed", path=session_name)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import select
+import shlex
 import shutil
 import time
 import uuid
@@ -23,6 +24,7 @@ from sshler.tmux import (
     _list_local_pane_pids,
     force_kill_local_session,
     local_tmux_command,
+    remote_force_kill_words,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -278,7 +280,8 @@ def kill_recorders(monkeypatch):
         plain_calls.append((session_name, list(args)))
         return 0, b"", b""
 
-    monkeypatch.setattr("sshler.api.sessions.force_kill_local_session", fake_force)
+    # The runner of the local box force-kills through this one helper.
+    monkeypatch.setattr("sshler.tmux.force_kill_local_session", fake_force)
     # The runner of the local box runs every session's tmux through this one helper.
     monkeypatch.setattr("sshler.tmux.run_local_tmux", fake_run_local_tmux)
     return {"force": force_calls, "plain": plain_calls}
@@ -354,16 +357,10 @@ def test_delete_route_force_without_kill_tmux_calls_nothing(tmp_path, monkeypatc
         state.reset_state()
 
 
-def test_delete_route_remote_force_never_uses_local_force_helper(
-    tmp_path, monkeypatch, kill_recorders
-):
-    """Mutation killed: a remote box with ``force=true`` reaching the local
-    helper (which would nuke a local socket) instead of a plain remote
-    ``tmux kill-session``.
-    """
-    from sshler import state
-    from tests.test_api_v1 import auth_headers, build_client
-
+@pytest.fixture
+def remote_commands(monkeypatch):
+    """A remote box ``remote1`` whose connection records each command line and answers
+    status 0 with no output."""
     commands: list[str] = []
 
     class FakeConnection:
@@ -378,6 +375,22 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
         return FakeConnection()
 
     monkeypatch.setattr("sshler.api.dependencies.APIDependencies.connect_for_box", fake_connect)
+    return commands
+
+
+def _force_kill_line(session: str) -> list[str]:
+    """The words of the remote force-kill line of ``session``, as a shell reads them."""
+    return [*remote_force_kill_words(session), "2>/dev/null"]
+
+
+def test_delete_route_remote_force_runs_the_remote_force_kill_of_its_own_server(
+    tmp_path, monkeypatch, kill_recorders, remote_commands
+):
+    """A forced remote delete stops the session's own ts server and SIGKILLs its panes
+    on the remote box (never the local helper, never a plain kill-session)."""
+    from sshler import state
+    from tests.test_api_v1 import auth_headers, build_client
+
     config_dir = _write_boxes(tmp_path, [{"name": "remote1", "host": "example.invalid"}])
     client = build_client(config_dir, monkeypatch)
     try:
@@ -392,9 +405,9 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
         assert kill_recorders["force"] == []
         assert kill_recorders["plain"] == []
         # The pool health-checks the connection it gets back with ``echo test``.
-        assert [c for c in commands if c != "echo test"] == [
-            "tmux -L ts-rsess kill-session -t rsess"
-        ]
+        sent = [shlex.split(c) for c in remote_commands if c != "echo test"]
+        assert sent == [_force_kill_line("rsess")]
+        assert state.get_session_by_id(record.id) is None
     finally:
         client.close()
         state.reset_state()
@@ -422,10 +435,42 @@ def test_force_kill_by_name_route_calls_helper_once_with_the_name(
         state.reset_state()
 
 
-def test_force_kill_by_name_remote_box_is_400_and_never_kills(
-    tmp_path, monkeypatch, kill_recorders
+@pytest.mark.parametrize("name", ["target-sess", "a b", "it's", 'a"b', "$HOME;id"], ids=repr)
+def test_force_kill_by_name_on_a_remote_box_kills_its_own_server_and_drops_its_rows(
+    tmp_path, monkeypatch, kill_recorders, remote_commands, name
 ):
-    """Mutation killed: dropping the ``transport != "local"`` guard."""
+    """A remote box is force-killed as the local one: one remote line whose last word is
+    the session's own server, ``ok``, and the box's rows of that name gone."""
+    from urllib.parse import quote
+
+    from sshler import state
+    from tests.test_api_v1 import auth_headers, build_client
+
+    config_dir = _write_boxes(tmp_path, [{"name": "remote1", "host": "example.invalid"}])
+    client = build_client(config_dir, monkeypatch)
+    try:
+        state.initialize(config_dir)
+        kept = state.create_or_update_session("remote1", "other", "/")
+        state.create_or_update_session("remote1", name, "/")
+        resp = client.post(
+            f"/api/v1/boxes/remote1/sessions/by-name/{quote(name, safe='')}/force-kill",
+            headers=auth_headers(),
+        )
+        assert (resp.status_code, resp.json()["message"]) == (200, "force-killed")
+        sent = [shlex.split(c) for c in remote_commands if c != "echo test"]
+        assert sent == [_force_kill_line(name)]
+        assert sent[0][4] == f"ts-{name}"
+        assert kill_recorders["force"] == []
+        assert [r.session_name for r in state.list_sessions("remote1")] == [kept.session_name]
+    finally:
+        client.close()
+        state.reset_state()
+
+
+@pytest.mark.parametrize("name", ["%20", "a%0Db", "a%0Ab", "a%00b"])
+def test_force_kill_by_name_on_a_remote_box_refuses_a_bad_name_before_it_connects(
+    tmp_path, monkeypatch, kill_recorders, remote_commands, name
+):
     from sshler import state
     from tests.test_api_v1 import auth_headers, build_client
 
@@ -433,11 +478,11 @@ def test_force_kill_by_name_remote_box_is_400_and_never_kills(
     client = build_client(config_dir, monkeypatch)
     try:
         resp = client.post(
-            "/api/v1/boxes/remote1/sessions/by-name/target-sess/force-kill",
+            f"/api/v1/boxes/remote1/sessions/by-name/{name}/force-kill",
             headers=auth_headers(),
         )
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "force-kill by name is supported for the local box only"
+        assert (resp.status_code, resp.json()["detail"]) == (400, "Invalid session name")
+        assert remote_commands == []
         assert kill_recorders["force"] == []
     finally:
         client.close()

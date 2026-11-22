@@ -1425,9 +1425,9 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
     the in-process search of a Windows local box (named in its module's docstring);
     boxes.py keeps one in ``box_stats`` (psutil on this machine, ``/proc`` through the
     runner on a remote box), and names the field once more when it lists a box. The
-    session routes run tmux through the runner; sessions.py keeps two: the live
-    sessions of a box (the local box scans its own sockets, a remote box runs one
-    script) and the force kill, which is built for the local box only."""
+    session routes run tmux and the force kill through the runner; sessions.py keeps
+    one: the live sessions of a box (the local box scans its own sockets, a remote box
+    runs one script)."""
     api = Path(sshler.api.__file__).parent
 
     def tests_of_the_kind(name: str) -> int:
@@ -1461,7 +1461,7 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
         "grep.py": 1,
         "boxes.py": 2,
         "stats_stream.py": 0,
-        "sessions.py": 2,
+        "sessions.py": 1,
     }
 
 
