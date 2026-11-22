@@ -486,8 +486,16 @@ def _local_place(
 
 
 def _local_make_folder(dest_dir: Path) -> Path:
-    """Make ``dest_dir`` if missing (call from a worker thread)."""
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    """Make ``dest_dir`` and its missing folders (call from a worker thread). A file
+    standing where one of them is needed, ``dest_dir`` itself included, is a path that
+    goes on through a file: ``NotADirectoryError``, as the system says when it opens
+    such a path, whichever level the file stands at."""
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as exc:
+        raise NotADirectoryError(
+            errno.ENOTDIR, os.strerror(errno.ENOTDIR), exc.filename or str(dest_dir)
+        ) from exc
     return dest_dir
 
 
@@ -526,7 +534,7 @@ async def _local_write_new(
     existing name answers ``exists_status``."""
 
     def _worker() -> None:
-        Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+        _local_make_folder(Path(target_path).parent)
         landing = _local_landing(target_path, overwrite=overwrite, exists_status=exists_status)
         try:
             landing.write(data)
@@ -599,15 +607,7 @@ async def _local_read_text(path: str, max_bytes: int) -> str:
 
 async def _local_write_text(path: str, content: str) -> None:
     def _worker() -> None:
-        parent = Path(path).parent
-        try:
-            parent.mkdir(parents=True, exist_ok=True)
-        except FileExistsError as exc:
-            # A file stands where a folder of the path is needed: the path goes on
-            # through a file, as the system says when it opens such a path.
-            raise NotADirectoryError(
-                errno.ENOTDIR, os.strerror(errno.ENOTDIR), exc.filename or str(parent)
-            ) from exc
+        _local_make_folder(Path(path).parent)
         with open(Path(path), "w", encoding="utf-8") as handle:
             handle.write(content)
 
@@ -1118,7 +1118,7 @@ class LocalFiles:
         path_obj.mkdir(parents=False, exist_ok=False)
 
     async def land(self, path: str, *, source_mode: int, overwrite: bool) -> _ThreadedLanding:
-        await asyncio.to_thread(os.makedirs, os.path.dirname(path), exist_ok=True)
+        await asyncio.to_thread(_local_make_folder, Path(os.path.dirname(path)))
         landing = await asyncio.to_thread(
             _local_landing,
             path,

@@ -606,6 +606,37 @@ async def _upload_under_a_file(files, kind: Kind):
     await files.upload(await files.child(kind.at("taken.txt/x"), "out.txt"), b"u", overwrite=False)
 
 
+async def _write_text_into_a_file(files, kind: Kind):
+    await files.write_text(await files.child(kind.at("taken.txt"), "out.txt"), "t")
+
+
+async def _touch_into_a_file(files, kind: Kind):
+    await files.touch(await files.child(kind.at("taken.txt"), "out.txt"))
+
+
+async def _upload_into_a_file(files, kind: Kind):
+    await files.upload(await files.child(kind.at("taken.txt"), "out.txt"), b"u", overwrite=False)
+
+
+async def _copy_into_a_file(files, kind: Kind):
+    await files.place_into(
+        kind.at("a.txt"),
+        kind.at("taken.txt"),
+        "out.txt",
+        move=False,
+        overwrite=False,
+        allow_dirs=True,
+    )
+
+
+async def _land_into_a_file(files, kind: Kind):
+    await files.land(
+        files.join(await files.path(kind.at("taken.txt")), "out.txt"),
+        source_mode=0o100644,
+        overwrite=False,
+    )
+
+
 async def _write_text_under_a_read_only_folder(files, kind: Kind):
     (kind.root / "sub").chmod(0o500)
     try:
@@ -975,6 +1006,46 @@ ROWS = [
         _upload_under_a_file,
         differs={
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "a text write into a file taken for a folder is not found",
+        _write_text_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "a new file in a file taken for a folder is not found",
+        _touch_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "an upload into a file taken for a folder is not found",
+        _upload_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "a copy into a file taken for a folder is not found",
+        _copy_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "a landing in a file taken for a folder is not found",
+        _land_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
     ),
