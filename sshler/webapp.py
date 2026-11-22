@@ -59,7 +59,7 @@ from .config import (
 from .ptyspawn import spawn_on_pty
 from .rate_limit import get_rate_limiter
 from .session import live_session
-from .session_activity import match_tmux
+from .session_activity import match_tmux, track_session
 from .settings import get_settings as get_app_settings
 from .spa import mount_spa
 from .ssh import (
@@ -1574,7 +1574,7 @@ async def _run_terminal(
     """Track the session and run the pump until the client leaves or the terminal ends."""
     if not await take_early_message(websocket, opened.transport):
         return
-    session_id = await _track_terminal(opened, box, kind, request)
+    session_id = await _track_terminal(opened, box, request)
     try:
         await run_pump(
             websocket,
@@ -1606,9 +1606,7 @@ async def _match_row_to_tmux(session_id: str, opened: OpenedTerminal, box: Box) 
         logger.warning(f"Session {session_id} keeps its flag: tmux could not be asked: {exc}")
 
 
-async def _track_terminal(
-    opened: OpenedTerminal, box: Box, kind: str, request: TerminalRequest
-) -> str | None:
+async def _track_terminal(opened: OpenedTerminal, box: Box, request: TerminalRequest) -> str | None:
     """Record the session row; its id, or None when there is none.
 
     A row is a session that can be opened again by its name: a tmux session, or a
@@ -1617,11 +1615,11 @@ async def _track_terminal(
     if opened.transport.tmux is None and opened.on_tracked is None:
         return None
     try:
-        tracked = await state.create_or_update_session_async(
-            box_name=box.name,
-            session_name=request.session,
-            working_directory=opened.directory,
-            metadata={"columns": request.columns, "rows": request.rows, "transport": kind},
+        tracked = await track_session(
+            box,
+            request.session,
+            opened.directory,
+            {"columns": request.columns, "rows": request.rows},
         )
         if opened.on_tracked is not None:
             opened.on_tracked(tracked.id)

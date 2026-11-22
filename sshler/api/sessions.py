@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from .. import state
 from .. import tmux as tmux_module
 from ..config import AppConfig, Box
-from ..session_activity import match_tmux_all
+from ..session_activity import match_tmux_all, refused_session_name, track_live_sessions
 from ..tmux import (
     LiveSessions,
     ask_local_session,
@@ -62,7 +62,8 @@ logger = logging.getLogger(__name__)
 # Lists the sessions of the remote default tmux server and of every per-session
 # ``ts-*`` server, so sessions opened by sshler or by ``ts`` both count as live; given
 # a session name as its first argument, of that session's own ``ts-<name>`` server and
-# the default server only. The names are its output, one per line. Its exit status says
+# the default server only. Its output is tmux's, one line per session in
+# ``tmux.LIST_FORMAT``, read by ``tmux.parse_listing``. Its exit status says
 # what it learnt: 0 when every server it asked answered (a socket with no server behind
 # it answers "none", in the words ``tmux._NO_SERVER`` reads), ``REMOTE_LISTING_INCOMPLETE``
 # when one could not be asked (past ``timeout``'s limit, or another refusal), 127 when
@@ -75,7 +76,7 @@ limit=
 command -v timeout >/dev/null 2>&1 && limit="timeout 2"
 unasked=0
 ask() {
-    errors=$($limit tmux "$@" list-sessions -F '#{session_name}' 2>&1 >&3)
+    errors=$($limit tmux "$@" list-sessions -F 'LIST_FORMAT' 2>&1 >&3)
     case $? in
         0) ;;
         1) case $errors in
@@ -98,7 +99,7 @@ ask() {
     fi
 } 3>&1
 [ "$unasked" -eq 0 ] || exit 75
-"""
+""".replace("LIST_FORMAT", tmux_module.LIST_FORMAT)
 
 
 def require_local_tmux(box: str, command: Sequence[str]) -> None:
@@ -181,8 +182,27 @@ async def _remote_live_sessions(
             REASON_FAILED,
             f"listing the tmux sessions of {box.name} exited with status {ran.status}",
         )
-    names = frozenset(line.strip() for line in ran.output.splitlines() if line.strip())
-    return LiveSessions(names, complete=ran.ok)
+    seen = tmux_module.parse_listing(ran.output)
+    return LiveSessions(seen.names, complete=ran.ok, folders=seen.folders)
+
+
+# The rows a sync answers when fewer than this many are active.
+SYNC_ANSWER_ROWS = 50
+
+
+def _sync_answer(rows: list[state.Session]) -> list[state.Session]:
+    """The rows of a box a sync answers, from all of them (most recent first, the order
+    kept): every active row, so the page lists and counts every session tmux has, and
+    the most recent inactive ones while the answer has fewer than ``SYNC_ANSWER_ROWS``."""
+    room = max(0, SYNC_ANSWER_ROWS - sum(1 for row in rows if row.active))
+    answered = []
+    for row in rows:
+        if row.active:
+            answered.append(row)
+        elif room > 0:
+            answered.append(row)
+            room -= 1
+    return answered
 
 
 def _refused(command: str, ran: Ran) -> str:
@@ -402,7 +422,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         that is already gone is ``ok``.
         """
         box = deps.get_box_or_404(application_config, name)
-        if not session_name.strip() or any(c in session_name for c in "\r\n\x00"):
+        if refused_session_name(session_name):
             raise Failure(REASON_INVALID, "Invalid session name")
 
         limit = dependencies.PROBE_TIMEOUT_SECONDS
@@ -469,18 +489,23 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> list[APISession]:
         """Make every tmux row of the box say whether tmux has its session
-        (``match_tmux_all``), both ways, and answer the box's rows. When the live
-        sessions cannot be read the failure is answered and no row changes.
+        (``match_tmux_all``), both ways, make a row for each session tmux has on its
+        own server that has none (``track_live_sessions``: one started with ``ts``
+        outside sshler), and answer the box's rows (``_sync_answer``). Every row of
+        the box is matched, however many there are. When the live sessions cannot be
+        read the failure is answered and no row changes.
         """
         box = deps.get_box_or_404(application_config, name)
         running = await live_sessions(deps, box, application_config)
-        db_sessions = await state.list_sessions_async(name, active_only=False)
+        db_sessions = await state.list_sessions_async(name, limit=None)
         changed = await match_tmux_all(db_sessions, running)
         if changed > 0:
             logger.info(f"Synced {name}: {changed} session(s) changed")
+        made = await track_live_sessions(box, db_sessions, running)
+        if made > 0:
+            logger.info(f"Synced {name}: {made} session(s) started outside sshler")
 
-        # Return updated list
-        records = await state.list_sessions_async(name, active_only=False)
+        records = _sync_answer(await state.list_sessions_async(name, limit=None))
         return [
             APISession(
                 id=item.id,

@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from collections.abc import Iterator
@@ -285,6 +286,66 @@ async def test_a_session_whose_tab_closed_is_still_listed_as_running(
     await type_in_card(page, "epsilon", sessions_loaded=True)
     await expect(page.locator(ROWS)).to_have_count(1, timeout=TIMEOUT_MS)
     assert await row_texts(page) == [f"session: epsilon-proj {home}/epsilon-proj"]
+
+
+@pytest.fixture
+def outside_tmux_dir() -> Iterator[Path]:
+    """A socket folder of this test alone, so the card counts only its session; the tmux
+    server in it is stopped by its own socket at teardown."""
+    tmux_dir = Path(tempfile.mkdtemp(prefix="sshler-e2e-out-"))
+    try:
+        yield tmux_dir
+    finally:
+        for sock in tmux_dir.glob("tmux-*/*"):
+            if sock.is_socket():
+                subprocess.run(
+                    ["tmux", "-S", str(sock), "kill-server"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+        shutil.rmtree(tmux_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def outside_server(tmp_path_factory, outside_tmux_dir: Path) -> Iterator[tuple[str, str, Path]]:
+    yield from run_search_server(tmp_path_factory, outside_tmux_dir, [])
+
+
+async def test_a_session_started_outside_sshler_is_counted_and_found_on_its_card(
+    open_search_page, outside_server, outside_tmux_dir: Path
+):
+    _url, _token, home = outside_server
+    make_folders(home, "zeta-out")
+    env = {**os.environ, "TMUX_TMPDIR": str(outside_tmux_dir)}
+    env.pop("TMUX", None)
+    started = subprocess.run(
+        [
+            "tmux",
+            "-L",
+            "ts-zeta-out",
+            "new-session",
+            "-d",
+            "-s",
+            "zeta-out",
+            "-c",
+            str(home / "zeta-out"),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        timeout=5,
+        check=False,
+    )
+    assert started.returncode == 0
+    page = await open_search_page(DESKTOP, server=outside_server)
+
+    await type_in_card(page, "zeta", sessions_loaded=True)
+
+    await expect(page.locator(".session-link")).to_have_text("1 active session")
+    await expect(page.locator(ROWS)).to_have_count(1, timeout=TIMEOUT_MS)
+    assert await row_texts(page) == [f"session: zeta-out {home}/zeta-out"]
 
 
 async def test_nothing_matching_says_so_in_one_line(open_search_page):

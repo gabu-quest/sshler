@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from sshler import tmux
 from sshler.api import sessions as sessions_api
 from sshler.api.search import remote_discovery_command
 from sshler.api.sessions import REMOTE_LIST_SESSIONS
@@ -41,6 +42,7 @@ def _sh(
         env={"PATH": str(programs), **(env or {})},
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=20,
         check=False,
     )
@@ -143,6 +145,91 @@ def test_the_listing_of_a_session_whose_server_does_not_answer_says_it_could_not
 ):
     ran = _sh(REMOTE_LIST_SESSIONS, programs, "slow", env=box)
     assert (ran.returncode, ran.stdout) == (sessions_api.REMOTE_LISTING_INCOMPLETE, "")
+
+
+# The stand-in tmux of a box where ``ts`` started the session "own" on its own server
+# ts-own, in a folder with a space, a tab and a non-ASCII character, and a session
+# "stray" on that server too; the default server has "legacy". It answers only when the
+# script asks for ``tmux.LIST_FORMAT``, and expands it as tmux 3.4 does.
+FOLDER_TMUX = r"""#!/bin/sh
+if [ "$1" = "-L" ]; then server=$2; shift 2; else server=default; fi
+[ "$1 $2 $3" = "list-sessions -F $LIST_FORMAT" ] || exit 3
+socket="$TMUX_TMPDIR/tmux-4242/$server"
+case $server in
+  ts-own) printf 'S\t%s\town\t/srv/a b\tc\303\251\tE\n' "$socket"
+          printf 'S\t%s\tstray\t/srv\tE\n' "$socket" ;;
+  default) printf 'S\t%s\tlegacy\t/srv\tE\n' "$socket" ;;
+esac
+"""
+
+
+def test_the_session_listing_says_the_folder_of_a_session_on_its_own_server(
+    tmp_path: Path, programs: Path
+):
+    _program(programs, "tmux", FOLDER_TMUX)
+    _program(programs, "id", "#!/bin/sh\necho 4242\n")
+    sockets = tmp_path / "tmux" / "tmux-4242"
+    sockets.mkdir(parents=True)
+    with socket.socket(socket.AF_UNIX) as bound:
+        bound.bind(str(sockets / "ts-own"))
+    env = {"TMUX_TMPDIR": str(tmp_path / "tmux"), "LIST_FORMAT": tmux.LIST_FORMAT}
+
+    ran = _sh(REMOTE_LIST_SESSIONS, programs, env=env)
+    seen = tmux.parse_listing(ran.stdout)
+
+    assert (ran.returncode, seen.names, seen.complete) == (
+        0,
+        frozenset({"own", "stray", "legacy"}),
+        True,
+    )
+    assert dict(seen.folders) == {"own": "/srv/a b\tc\u00e9"}
+
+
+@pytest.mark.parametrize(
+    ("output", "names", "folders"),
+    [
+        ("fine\nother\n", {"fine", "other"}, {}),
+        ("S\t\tfine\t/srv\tE\n", {"fine"}, {}),
+        (
+            "S\t/s/ts-fine\tfine\t/srv/two\nlines\tE\nS\t/s/ts-ok\tok\t/o\tE\n",
+            {"fine", "ok"},
+            {"ok": "/o"},
+        ),
+        ("S\t/s/ts-fine\tfine\t/a\nb\nc\tE\n", {"fine"}, {}),
+        ("S\t/s/ts-fi\nne\tfine\t/a\tE\n", set(), {}),
+    ],
+    ids=[
+        "names-only",
+        "no-socket-path",
+        "newline-folder",
+        "folder-of-three-lines",
+        "newline-before-the-name",
+    ],
+)
+def test_a_session_whose_listing_line_is_split_is_still_seen_but_has_no_folder(
+    output: str, names: set[str], folders: dict[str, str]
+):
+    """A folder with a newline in its name splits its line: tmux has the session, so
+    its name counts (a row of it stays active), but its folder cannot be read, so no row
+    is made from it."""
+    seen = tmux.parse_listing(output)
+    assert (seen.names, dict(seen.folders), seen.complete) == (frozenset(names), folders, True)
+
+
+@pytest.mark.parametrize(
+    ("output", "folders"),
+    [
+        ("S\t/s/ts-fine\tfine\t/a\u2028b\x0cc\x85d\tE\n", {"fine": "/a\u2028b\x0cc\x85d"}),
+        ("S\t/s/ts-fine\tfine\t/a\tE\r\nS\t/s/ts-ok\tok\t/o\tE\r\n", {"fine": "/a", "ok": "/o"}),
+    ],
+    ids=["other-separators-in-a-folder", "windows-line-ends"],
+)
+def test_only_a_newline_ends_a_listing_line(output: str, folders: dict[str, str]):
+    """tmux ends a session's line with a newline and nothing else: a folder holding a
+    form feed or a Unicode line separator is one line, and a carriage return before
+    the newline is not part of the line."""
+    seen = tmux.parse_listing(output)
+    assert (seen.names, dict(seen.folders)) == (frozenset(folders), folders)
 
 
 # --- the remote force kill, against a stand-in tmux ------------------------------------

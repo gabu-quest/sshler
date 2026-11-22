@@ -21,8 +21,8 @@ import re
 import shlex
 import shutil
 import signal
-from collections.abc import Coroutine
-from dataclasses import dataclass
+from collections.abc import Coroutine, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,41 @@ def _session_names(stdout: bytes) -> set[str]:
         for line in stdout.decode("utf-8", errors="ignore").splitlines()
         if line.strip()
     }
+
+
+# The ``list-sessions -F`` format of every listing, local and remote: one line per
+# session between two fixed marks, the server's socket, the name, then the folder (free
+# text, so it may hold tabs). ``#{socket_path}`` is what says which server a line came
+# from; a tmux without it prints it empty and no session is found on its own server.
+LIST_FORMAT = "S\t#{socket_path}\t#{session_name}\t#{session_path}\tE"
+
+
+def parse_listing(text: str) -> LiveSessions:
+    """The sessions in the output of ``list-sessions -F LIST_FORMAT`` (of one server or
+    several). A session NAME on its own server, ``ts-NAME``, also gets its folder. A
+    folder with a newline in it splits its line: the session is still seen (its name
+    stands before the folder), but it gets no folder, and the rest of the split line is
+    dropped. Output without the marks is read as one name per line."""
+    # tmux ends a line with a newline and nothing else: ``splitlines`` would also cut
+    # at a form feed or a Unicode line separator inside a folder's name.
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
+    if not any(line.startswith("S\t") for line in lines):
+        return LiveSessions(frozenset(line.strip() for line in lines if line.strip()))
+    names: set[str] = set()
+    folders: dict[str, str] = {}
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 4 or parts[0] != "S":
+            continue
+        name = parts[2].strip()
+        if not name:
+            continue
+        names.add(name)
+        whole = len(parts) >= 5 and parts[-1] == "E"
+        folder = "\t".join(parts[3:-1]) if whole else ""
+        if folder and parts[1].rsplit("/", 1)[-1] == f"{SOCKET_PREFIX}{name}":
+            folders[name] = folder
+    return LiveSessions(frozenset(names), folders=folders)
 
 
 # A Windows-looking path (drive or UNC): only there does `\\` separate segments.
@@ -168,6 +203,10 @@ class LiveSessions:
 
     names: frozenset[str] = frozenset()
     complete: bool = True
+    # The folder of each session that sits on its own server (NAME on ``ts-NAME``),
+    # by name: the sessions sshler can open. A session of the default server, or of a
+    # ``ts-`` server of another name, is in ``names`` only.
+    folders: Mapping[str, str] = field(default_factory=dict)
 
     def has(self, session: str) -> bool | None:
         """Whether tmux has *session*: True when it was seen, False when every server
@@ -177,7 +216,11 @@ class LiveSessions:
         return False if self.complete else None
 
     def __or__(self, other: LiveSessions) -> LiveSessions:
-        return LiveSessions(self.names | other.names, self.complete and other.complete)
+        return LiveSessions(
+            self.names | other.names,
+            self.complete and other.complete,
+            {**self.folders, **other.folders},
+        )
 
 
 # What tmux says, on its error output, when no server is behind the socket: the
@@ -196,7 +239,7 @@ async def _ask(argv: list[str], server: str) -> LiveSessions:
         logger.info("tmux server %s could not be asked: %s", server, exc)
         return LiveSessions(complete=False)
     if returncode == 0:
-        return LiveSessions(frozenset(_session_names(stdout)))
+        return parse_listing(stdout.decode("utf-8", errors="ignore"))
     errors = stderr.decode("utf-8", errors="replace").strip()
     if _NO_SERVER.match(errors):
         return LiveSessions()
@@ -209,14 +252,14 @@ async def _query_server(server_name: str) -> LiveSessions:
     cmd = local_tmux_command(server_name.removeprefix(SOCKET_PREFIX)) + [
         "list-sessions",
         "-F",
-        "#{session_name}",
+        LIST_FORMAT,
     ]
     return await _ask(cmd, server_name)
 
 
 async def _query_default_server() -> LiveSessions:
     """The sessions of the default tmux server (sessions made before the ts convention)."""
-    cmd = default_tmux_command() + ["list-sessions", "-F", "#{session_name}"]
+    cmd = default_tmux_command() + ["list-sessions", "-F", LIST_FORMAT]
     return await _ask(cmd, "default")
 
 

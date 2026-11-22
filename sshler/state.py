@@ -574,8 +574,10 @@ def create_or_update_session(
     session_name: str,
     working_directory: str,
     metadata: dict | None = None,
+    keep_existing: bool = False,
 ) -> Session:
-    """Create or update a session record."""
+    """Create or update a session record (one per box and name). With
+    ``keep_existing`` a record that already exists is answered as it is."""
     db = _require_db()
     now = time.time()
 
@@ -587,6 +589,8 @@ def create_or_update_session(
             .first()
         )
 
+        if existing and keep_existing:
+            return existing
         if existing:
             # Update existing session
             existing.last_accessed_at = now
@@ -619,9 +623,10 @@ create_or_update_session_async = _in_thread(create_or_update_session)
 def list_sessions(
     box_name: str,
     active_only: bool = False,
-    limit: int = 50,
+    limit: int | None = 50,
 ) -> list[Session]:
-    """List sessions for a box, ordered by last accessed (most recent first)."""
+    """List sessions for a box, ordered by last accessed (most recent first): at most
+    ``limit`` of them, every one with ``limit=None``."""
     db = _require_db()
 
     with _DB_LOCK:
@@ -630,8 +635,10 @@ def list_sessions(
         if active_only:
             query = query.filter(F("active") == True)  # noqa: E712
 
-        rows = query.order_by("last_accessed_at", desc=True).limit(limit).all()
-        return list(rows)
+        query = query.order_by("last_accessed_at", desc=True)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(query.all())
 
 
 list_sessions_async = _in_thread(list_sessions)

@@ -65,12 +65,14 @@ def _tmux(server: str | None, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _start(server: str | None, session: str) -> None:
-    """A detached session *session* on *server*; no pipe for the server it forks to hold."""
+def _start(server: str | None, session: str, folder: Path | None = None) -> None:
+    """A detached session *session* on *server* (in *folder* when given), as ``ts`` or a
+    plain ``tmux`` in an SSH login starts one; no pipe for the server it forks to hold."""
     assert TMUX is not None
     words = [TMUX] if server is None else [TMUX, "-L", f"ts-{server}"]
+    where = [] if folder is None else ["-c", str(folder)]
     started = subprocess.run(
-        [*words, "new-session", "-d", "-s", session],
+        [*words, "new-session", "-d", "-s", session, *where],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -312,8 +314,8 @@ async def test_a_tab_close_asks_tmux_only_about_its_own_session(
 
     assert sorted(asked) == sorted(
         [
-            ["tmux", "-L", "ts-flag-own", "list-sessions", "-F", "#{session_name}"],
-            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            ["tmux", "-L", "ts-flag-own", "list-sessions", "-F", tmux.LIST_FORMAT],
+            ["tmux", "list-sessions", "-F", tmux.LIST_FORMAT],
         ]
     )
     assert await _listed(app) == [("flag-own", True)]
@@ -358,16 +360,20 @@ class _ListingConnection(FakeSshConnection):
     """A connection to a box whose tmux has the sessions *names*: it answers the session
     listing with them and with *status* (0: every server answered)."""
 
-    def __init__(self, names: list[str], status: int = 0) -> None:
+    def __init__(self, names: list[str], status: int = 0, output: str | None = None) -> None:
         super().__init__()
         self.names = names
         self.status = status
+        self.output = output
 
     async def run(self, command: str, *args: Any, **kwargs: Any) -> Any:
         if shlex.split(command)[:3] != ["sh", "-c", sessions_api.REMOTE_LIST_SESSIONS]:
             return await super().run(command, *args, **kwargs)
         self.commands.append(command)
-        out = "".join(f"{name}\n" for name in self.names).encode()
+        if self.output is not None:
+            out = self.output.encode()
+        else:
+            out = "".join(f"{name}\n" for name in self.names).encode()
         return SimpleNamespace(exit_status=self.status, stdout=out, stderr=b"")
 
     def listings(self) -> int:
@@ -557,6 +563,251 @@ async def test_a_sync_leaves_the_row_of_a_persisted_windows_shell_alone(
 
     assert status == 200
     assert [(r["session_name"], r["active"]) for r in rows] == [("flag-windows", True)]
+
+
+# --- a session started outside sshler -------------------------------------------------
+
+
+def _rows(rows: Any) -> list[tuple[str, bool, str, str]]:
+    """(name, active, folder, transport) of each row a route answered, by name."""
+    return sorted(
+        (r["session_name"], r["active"], r["working_directory"], r["metadata"].get("transport"))
+        for r in rows
+    )
+
+
+@pytest.fixture
+def outside_folder(tmp_path: Path) -> Path:
+    """A folder whose name holds a space, a tab and a non-ASCII character."""
+    path = tmp_path / "an outside\tfolder é"
+    path.mkdir()
+    return path
+
+
+@pytest.mark.asyncio
+async def test_a_sync_makes_one_row_for_a_session_started_outside_sshler(
+    app, servers: Servers, outside_folder: Path, tmp_path: Path
+) -> None:
+    for server, session in (
+        ("flag-out", "flag-out"),
+        ("flag-out", "flag-stray"),
+        (None, "flag-default"),
+    ):
+        servers.expect(server)
+        _start(server, session, tmp_path)
+    servers.expect("flag-own")
+    _start("flag-own", "flag-own", outside_folder)
+    for server in ("flag-out", None, "flag-own"):
+        servers.record(server)
+
+    first_status, first = await _synced(app)
+    second_status, second = await _synced(app)
+
+    expected = [
+        ("flag-out", True, str(tmp_path), "local"),
+        ("flag-own", True, str(outside_folder), "local"),
+    ]
+    assert (first_status, _rows(first)) == (200, expected)
+    assert (second_status, _rows(second)) == (200, expected)
+
+
+@pytest.mark.asyncio
+async def test_two_syncs_at_once_make_one_row(app, servers: Servers, tmp_path: Path) -> None:
+    servers.expect("flag-twice")
+    _start("flag-twice", "flag-twice", tmp_path)
+    servers.record("flag-twice")
+
+    await asyncio.gather(_synced(app), _synced(app))
+
+    assert await _listed(app) == [("flag-twice", True)]
+
+
+@pytest.mark.asyncio
+async def test_the_row_of_an_outside_session_that_ends_is_inactive_at_the_next_sync(
+    app, servers: Servers, tmp_path: Path
+) -> None:
+    servers.expect("flag-gone")
+    _start("flag-gone", "flag-gone", tmp_path)
+    pid = servers.record("flag-gone")
+    await _synced(app)
+    os.kill(pid, signal.SIGKILL)
+    await _until(lambda: not _alive(pid), "the tmux server to end")
+
+    status, rows = await _synced(app)
+
+    assert (status, _rows(rows)) == (200, [("flag-gone", False, str(tmp_path), "local")])
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_opened_on_an_outside_session_updates_its_row(
+    app, servers: Servers, workdir: Path
+) -> None:
+    servers.expect("flag-join")
+    _start("flag-join", "flag-join", workdir)
+    servers.record("flag-join")
+    await _synced(app)
+
+    await _close(await _open(app, workdir, "flag-join", servers))
+
+    rows = await state.list_sessions_async("local", active_only=False)
+    assert [(r.session_name, r.active, r.metadata) for r in rows] == [
+        ("flag-join", True, {"columns": 80, "rows": 24, "transport": "local"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_sync_turns_an_inactive_row_of_an_outside_session_active_and_keeps_its_folder(
+    app, servers: Servers, tmp_path: Path
+) -> None:
+    row = await state.create_or_update_session_async(
+        "local", "flag-kept", "/kept", metadata={"transport": "local"}
+    )
+    await state.update_session_activity_async(row.id, active=False)
+    servers.expect("flag-kept")
+    _start("flag-kept", "flag-kept", tmp_path)
+    servers.record("flag-kept")
+
+    status, rows = await _synced(app)
+
+    assert (status, _rows(rows)) == (200, [("flag-kept", True, "/kept", "local")])
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_folder_has_a_newline_is_seen_and_gets_no_row(
+    app, servers: Servers, tmp_path: Path
+) -> None:
+    folder = tmp_path / "two\nlines"
+    folder.mkdir()
+    servers.expect("flag-newline")
+    _start("flag-newline", "flag-newline", folder)
+    servers.record("flag-newline")
+
+    seen = await tmux.discover_local_sessions()
+    status, rows = await _synced(app)
+
+    assert (seen.names, seen.complete, dict(seen.folders)) == (
+        frozenset({"flag-newline"}),
+        True,
+        {},
+    )
+    assert (status, rows) == (200, [])
+
+
+@pytest.mark.asyncio
+async def test_a_sync_on_a_windows_server_makes_no_local_row_from_a_tmux_listing(
+    app, fake_tmux, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("sshler.tmux._IS_WINDOWS", True)
+
+    async def listing() -> tmux.LiveSessions:
+        return tmux.LiveSessions(frozenset({"flag-win"}), folders={"flag-win": "/w"})
+
+    monkeypatch.setattr("sshler.api.sessions.discover_local_sessions", listing)
+
+    status, rows = await _synced(app)
+
+    assert (status, rows) == (200, [])
+
+
+def _remote_line(server: str, name: str, folder: str) -> str:
+    return f"S\t/run/tmux-1000/{server}\t{name}\t{folder}\tE\n"
+
+
+@pytest.fixture
+def remote_listing(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Point the remote box's connection at a ``_ListingConnection`` answering *output*."""
+    from sshler import ssh_pool
+    from sshler.ssh_pool import SSHConnectionPool
+
+    def install(output: str, status: int = 0) -> _ListingConnection:
+        fake = _ListingConnection([], status=status, output=output)
+
+        async def connect_for_box(_deps: Any, _box: Any, _config: Any) -> FakeSshConnection:
+            return fake
+
+        monkeypatch.setattr(APIDependencies, "connect_for_box", connect_for_box)
+        monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
+        return fake
+
+    return install
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", [0, sessions_api.REMOTE_LISTING_INCOMPLETE], ids=["complete", "incomplete"]
+)
+async def test_a_remote_sync_makes_a_row_only_for_a_session_on_its_own_server(
+    app, remote_listing: Any, status: int
+) -> None:
+    local = await state.create_or_update_session_async(
+        "local", "flag-r", "/l", metadata={"transport": "local"}
+    )
+    await state.update_session_activity_async(local.id, active=False)
+    remote_listing(
+        _remote_line("ts-flag-r", "flag-r", "/srv/a b")
+        + _remote_line("default", "flag-default", "/srv")
+        + _remote_line("ts-flag-r", "flag-stray", "/srv")
+        + _remote_line("ts- ", " ", "/srv")
+        + _remote_line("ts-bad\x00", "bad\x00", "/srv")
+        + _remote_line("ts-cr\r", "cr\r", "/srv"),
+        status,
+    )
+
+    status_code, rows = await _synced(app, REMOTE_BOX)
+
+    assert (status_code, _rows(rows)) == (200, [("flag-r", True, "/srv/a b", "ssh")])
+    assert await _listed(app) == [("flag-r", False)]
+
+
+@pytest.mark.asyncio
+async def test_a_remote_sync_of_200_outside_sessions_runs_one_listing(
+    app, remote_listing: Any
+) -> None:
+    names = [f"flag-{n:03d}" for n in range(200)]
+    fake = remote_listing("".join(_remote_line(f"ts-{n}", n, f"/srv/{n}") for n in names))
+
+    status, answered = await _synced(app, REMOTE_BOX)
+
+    made = await state.list_sessions_async(REMOTE_BOX, active_only=False, limit=1000)
+    tmux_commands = [command for command in fake.commands if "tmux" in command]
+    assert (status, fake.listings(), len(tmux_commands)) == (200, 1, 1)
+    assert sorted(r.session_name for r in made) == names
+    assert sorted((r["session_name"], r["active"]) for r in answered) == [(n, True) for n in names]
+
+
+@pytest.mark.asyncio
+async def test_a_sync_sets_the_flag_of_every_row_of_a_box_however_many(
+    app, remote_listing: Any
+) -> None:
+    """The answer holds every active row, and no more than 50 rows when fewer are
+    active; the flags are set on every row of the box, also those the answer leaves out."""
+    names = [f"flag-{n:03d}" for n in range(60)]
+    remote_listing("".join(_remote_line(f"ts-{n}", n, f"/srv/{n}") for n in names))
+    await _synced(app, REMOTE_BOX)
+    remote_listing(_remote_line("ts-flag-000", "flag-000", "/srv/flag-000"))
+
+    status, answered = await _synced(app, REMOTE_BOX)
+
+    rows = await state.list_sessions_async(REMOTE_BOX, active_only=False, limit=1000)
+    assert status == 200
+    assert sorted(r.session_name for r in rows if r.active) == ["flag-000"]
+    assert (len(answered), [r["session_name"] for r in answered if r["active"]]) == (
+        50,
+        ["flag-000"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_ends_before_its_row_is_made_is_inactive_at_the_next_sync(
+    app, remote_listing: Any
+) -> None:
+    remote_listing(_remote_line("ts-flag-brief", "flag-brief", "/srv"))
+    await _synced(app, REMOTE_BOX)
+    remote_listing("")
+
+    status, rows = await _synced(app, REMOTE_BOX)
+
+    assert (status, _rows(rows)) == (200, [("flag-brief", False, "/srv", "ssh")])
 
 
 # --- the snapshot loop and recovery ---------------------------------------------------
