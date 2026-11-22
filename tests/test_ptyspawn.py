@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import select
 import struct
 import sys
-import termios
 import threading
 import time
 import warnings
@@ -18,6 +16,11 @@ import pytest
 
 from sshler import ptyspawn
 from sshler.ptyspawn import spawn_on_pty
+
+# POSIX-only modules: the file must still import on Windows, where every test is skipped.
+if sys.platform != "win32":
+    import fcntl
+    import termios
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTYs are POSIX-only")
 
