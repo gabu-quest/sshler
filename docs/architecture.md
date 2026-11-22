@@ -23,6 +23,8 @@ each has a local and a remote implementation:
 - **Files:** `BoxFiles` (`api/file_contract.py`), opened with `box_files(deps, box, config)`
   (`api/box_files.py`), kept by `LocalFiles` and `RemoteFiles`. Listing, reading, writing,
   placing under the existing-name rule, batches, archives, the folder zip.
+  A write, a new file, an upload, a copy, a move and a transfer make the missing folders of
+  their destination on both kinds of box (a remote box through `_remote_make_missing`).
 - **Programs:** `BoxRunner` (`api/box_runner.py`), opened with `box_runner(deps, box, config,
   deadline=...)`. `run(words, folder=, timeout=)` for git and grep, `tmux(session, args)`,
   `folder`/`file` for paths, `reach` for the status check. Its module docstring is the

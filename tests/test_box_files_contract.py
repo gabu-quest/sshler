@@ -532,6 +532,118 @@ def _listed(folder_size: int | None) -> list[tuple[str, bool, int | None]]:
     ]
 
 
+# --- a write into a folder that is not there makes the folders -----------------------
+
+MISSING = "sub/new dir #/c"
+
+
+def _placed(kind: Kind, name: str = "out.txt") -> tuple[bytes, list[str], list[str]]:
+    """What stands in the made folders: the file, the folders of ``sub``, and those of
+    the folder made first."""
+    return (
+        (kind.root / MISSING / name).read_bytes(),
+        _folder_names(kind, "sub"),
+        _folder_names(kind, "sub/new dir #"),
+    )
+
+
+async def _write_text_into_missing(files, kind: Kind):
+    await files.write_text(await files.child(kind.at(MISSING), "out.txt"), "text")
+    return _placed(kind)
+
+
+async def _touch_into_missing(files, kind: Kind):
+    await files.touch(await files.child(kind.at(MISSING), "out.txt"))
+    return _placed(kind)
+
+
+async def _upload_into_missing(files, kind: Kind):
+    await files.upload(await files.child(kind.at(MISSING), "out.txt"), b"up", overwrite=False)
+    return _placed(kind)
+
+
+async def _two_uploads_into_missing(files, kind: Kind):
+    await asyncio.gather(
+        files.upload(await files.child(kind.at(MISSING), "one.txt"), b"1", overwrite=False),
+        files.upload(await files.child(kind.at(MISSING), "two.txt"), b"2", overwrite=False),
+    )
+    return (
+        (kind.root / MISSING / "one.txt").read_bytes(),
+        (kind.root / MISSING / "two.txt").read_bytes(),
+        _folder_names(kind, MISSING),
+    )
+
+
+async def _place_into_missing(files, kind: Kind, *, move: bool):
+    target = await files.place_into(
+        kind.at("a.txt"), kind.at(MISSING), "out.txt", move=move, overwrite=False, allow_dirs=True
+    )
+    return (*_placed(kind), files.name(target), (kind.root / "a.txt").exists())
+
+
+async def _place_many_into_missing(files, kind: Kind, *, move: bool):
+    outcome = await files.place_many(
+        [kind.at("a.txt")], kind.at(MISSING), move=move, overwrite=False
+    )
+    return outcome.succeeded, outcome.failed, _placed(kind, "a.txt")[1:]
+
+
+async def _land_into_missing(files, kind: Kind):
+    folder = kind.at(MISSING)
+    landing = await files.land(
+        files.join(await files.path(folder), "out.txt"), source_mode=0o100644, overwrite=False
+    )
+    await landing.write(b"lan")
+    await landing.commit()
+    return _placed(kind)
+
+
+async def _write_text_under_a_file(files, kind: Kind):
+    await files.write_text(await files.child(kind.at("taken.txt/x"), "out.txt"), "t")
+
+
+async def _upload_under_a_file(files, kind: Kind):
+    await files.upload(await files.child(kind.at("taken.txt/x"), "out.txt"), b"u", overwrite=False)
+
+
+async def _write_text_under_a_read_only_folder(files, kind: Kind):
+    (kind.root / "sub").chmod(0o500)
+    try:
+        await files.write_text(await files.child(kind.at("sub/new/c"), "out.txt"), "t")
+    finally:
+        (kind.root / "sub").chmod(0o700)
+
+
+async def _upload_under_a_read_only_folder(files, kind: Kind):
+    (kind.root / "sub").chmod(0o500)
+    try:
+        await files.upload(
+            await files.child(kind.at("sub/new/c"), "out.txt"), b"u", overwrite=False
+        )
+    finally:
+        (kind.root / "sub").chmod(0o700)
+
+
+async def _a_refused_folder_copy_after_the_folders(files, kind: Kind):
+    """A folder copy is refused after its destination was asked for: what is left."""
+    (kind.root / "srcdir").mkdir()
+    try:
+        await files.place_into(
+            kind.at("srcdir"), kind.at(MISSING), None, move=False, overwrite=False, allow_dirs=False
+        )
+    except Exception as exc:  # the answer is the failure table's; the folders are the point
+        return type(exc).__name__, _folder_names(kind, "sub"), _folder_names(kind, "sub/new dir #")
+
+
+async def _a_folder_into_its_own_missing_folder(files, kind: Kind):
+    try:
+        await files.place_into(
+            kind.at("sub"), kind.at(MISSING), None, move=False, overwrite=False, allow_dirs=True
+        )
+    except Exception as exc:
+        return type(exc).__name__, _folder_names(kind, "sub")
+
+
 ATTACHMENT = "attachment; filename=\"a.txt\"; filename*=UTF-8''a.txt"
 
 ROWS = [
@@ -794,6 +906,87 @@ ROWS = [
             [k.at("a.txt")],
             [{"path": k.at("taken.txt"), "error": "File already exists", "reason": "exists"}],
         ),
+    ),
+    Row(
+        "a text write into a missing folder makes the folders",
+        _write_text_into_missing,
+        same=lambda k: (b"text", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "a new file into a missing folder makes the folders",
+        _touch_into_missing,
+        same=lambda k: (b"", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "an upload into a missing folder makes the folders",
+        _upload_into_missing,
+        same=lambda k: (b"up", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "two uploads into one missing folder both land",
+        _two_uploads_into_missing,
+        same=lambda k: (b"1", b"2", ["one.txt", "two.txt"]),
+    ),
+    Row(
+        "a copy into a missing folder makes the folders",
+        lambda f, k: _place_into_missing(f, k, move=False),
+        same=lambda k: (b"hello\n", ["inner.txt", "new dir #"], ["c"], "out.txt", True),
+    ),
+    Row(
+        "a move into a missing folder makes the folders",
+        lambda f, k: _place_into_missing(f, k, move=True),
+        same=lambda k: (b"hello\n", ["inner.txt", "new dir #"], ["c"], "out.txt", False),
+    ),
+    Row(
+        "a batch copy into a missing folder makes the folders",
+        lambda f, k: _place_many_into_missing(f, k, move=False),
+        same=lambda k: ([k.at("a.txt")], [], (["inner.txt", "new dir #"], ["c"])),
+    ),
+    Row(
+        "a batch move into a missing folder makes the folders",
+        lambda f, k: _place_many_into_missing(f, k, move=True),
+        same=lambda k: ([k.at("a.txt")], [], (["inner.txt", "new dir #"], ["c"])),
+    ),
+    Row(
+        "a landing into a missing folder makes the folders",
+        _land_into_missing,
+        same=lambda k: (b"lan", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "a refused folder copy into a missing folder leaves the folders it made",
+        _a_refused_folder_copy_after_the_folders,
+        same=lambda k: ("Failure", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "a folder into a missing folder of its own is refused before any folder is made",
+        _a_folder_into_its_own_missing_folder,
+        same=lambda k: ("DestinationRefused", ["inner.txt"]),
+    ),
+    Row(
+        "a text write under a file is answered as the local box answers",
+        _write_text_under_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "an upload under a file is answered as a text write is",
+        _upload_under_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+    ),
+    Row(
+        "a text write under a read-only folder is forbidden",
+        _write_text_under_a_read_only_folder,
+        same=lambda k: ("answered", 403, "Permission denied"),
+    ),
+    Row(
+        "an upload under a read-only folder is forbidden",
+        _upload_under_a_read_only_folder,
+        same=lambda k: ("answered", 403, "Permission denied"),
     ),
 ]
 

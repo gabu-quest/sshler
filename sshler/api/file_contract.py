@@ -230,21 +230,24 @@ class BoxFiles(Protocol):
 
     # --- writing ---------------------------------------------------------------------
 
-    async def write_text(self, path: str, content: str) -> None: ...
+    async def write_text(self, path: str, content: str) -> None:
+        """Write ``content`` at ``path``; the missing folders of the path are made."""
+        ...
 
     async def touch(self, path: str) -> None:
-        """A new, empty file; a name that exists is refused."""
+        """A new, empty file; a name that exists is refused. The missing folders of the
+        path are made."""
         ...
 
     async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
         """A new file with ``data``; a regular file on the name is replaced only with
-        ``overwrite``."""
+        ``overwrite``. The missing folders of the path are made."""
         ...
 
     async def make_folder(self, path: str) -> None: ...
 
     async def land(self, path: str, *, source_mode: int, overwrite: bool) -> Landing:
-        """A landing for the bytes of a file at ``path``, its folder made if missing.
+        """A landing for the bytes of a file at ``path``, all the missing folders of its path made.
 
         The name is decided by the existing-name rule (``DestinationRefused``), and a
         source that is not a regular file is refused. A replaced file keeps its
@@ -280,7 +283,8 @@ class BoxFiles(Protocol):
         allow_dirs: bool,
     ) -> str:
         """Move or copy ``source`` into folder ``destination`` as ``new_name`` (its own
-        name when None) under the existing-name rule; returns the new path."""
+        name when None) under the existing-name rule; the missing folders of ``destination``
+        are made; returns the new path."""
         ...
 
     async def create_archive(
@@ -327,6 +331,7 @@ class BoxFiles(Protocol):
     async def place_many(
         self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
     ) -> BatchOutcome:
-        """Move or copy each path into ``destination`` under the existing-name rule;
-        a second item with the same name as one placed before it is refused."""
+        """Move or copy each path into ``destination`` under the existing-name rule; the
+        missing folders of ``destination`` are made; a second item with the same name as one placed
+        before it is refused."""
         ...
