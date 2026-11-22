@@ -89,6 +89,15 @@ def local_fingerprint(found: os.stat_result) -> tuple[int, int, int]:
     return found.st_size, found.st_mtime_ns, found.st_ino
 
 
+def _set_bits(fd: int, path: str, bits: int) -> None:
+    """Set an open file's permission bits: through its descriptor, or by its path on
+    Windows before Python 3.13, which has no ``fchmod``."""
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, bits)
+    else:
+        os.chmod(path, bits)
+
+
 class _LocalLanding:
     """A local file being written under the rule. A free name is created exclusively
     (``O_CREAT|O_EXCL``: ``FileExistsError`` when taken, a dangling link included); a
@@ -107,7 +116,7 @@ class _LocalLanding:
                 dir=os.path.dirname(target), prefix=f".{os.path.basename(target)}."
             )
             if mode is not None:
-                os.fchmod(fd, kept_permission_bits(mode))
+                _set_bits(fd, self.temp, kept_permission_bits(mode))
             self.handle = os.fdopen(fd, "wb")
         elif mode is None:
             self.handle = open(target, "xb")  # noqa: SIM115 - closed by commit/abort
@@ -117,7 +126,7 @@ class _LocalLanding:
             # both before the first write.
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, bits)
             try:
-                os.fchmod(fd, bits)
+                _set_bits(fd, target, bits)
             except BaseException:
                 os.close(fd)
                 with contextlib.suppress(OSError):

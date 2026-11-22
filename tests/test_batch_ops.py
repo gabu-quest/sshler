@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -191,6 +192,34 @@ class TestBatchMove:
 
 
 class TestBatchCopy:
+    @pytest.mark.parametrize("overwrite", [False, True], ids=["free-name", "replace"])
+    def test_batch_copy_works_where_os_has_no_fchmod(self, tmp_path, monkeypatch, overwrite):
+        """Windows before Python 3.13 has no ``os.fchmod``."""
+        config_dir = setup_config(tmp_path)
+        (tmp_path / "a.txt").write_text("new")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        if overwrite:
+            (dest / "a.txt").write_text("old")
+        monkeypatch.delattr(os, "fchmod", raising=False)
+
+        client = build_client(config_dir, monkeypatch)
+        try:
+            resp = client.post(
+                "/api/v1/boxes/local/batch/copy",
+                json={
+                    "paths": [str(tmp_path / "a.txt")],
+                    "destination": str(dest),
+                    "overwrite": overwrite,
+                },
+                headers=auth_headers(),
+            )
+        finally:
+            client.close()
+        assert (resp.status_code, resp.json()["status"]) == (200, "ok")
+        assert (dest / "a.txt").read_text() == "new"
+        assert [p.name for p in dest.iterdir()] == ["a.txt"]
+
     def test_batch_copy_files(self, tmp_path, monkeypatch):
         config_dir = setup_config(tmp_path)
         workdir = tmp_path / "work"
@@ -276,8 +305,13 @@ class TestLocalWorkLeavesTheEventLoop:
         (workdir / "d" / "f.txt").write_text("f")
         seen: list[bool] = []
         # The call that does each operation's file work: a move takes the new name
-        # with a hard link, a copy streams the bytes.
-        real = {"rmtree": shutil.rmtree, "link": os.link, "copyfileobj": shutil.copyfileobj}
+        # with a hard link (a rename on Windows), a copy streams the bytes.
+        take_name = "rename" if sys.platform == "win32" else "link"
+        real = {
+            "rmtree": shutil.rmtree,
+            take_name: getattr(os, take_name),
+            "copyfileobj": shutil.copyfileobj,
+        }
 
         def spy(name):
             def wrapper(*args, **kwargs):
@@ -287,7 +321,7 @@ class TestLocalWorkLeavesTheEventLoop:
             return wrapper
 
         monkeypatch.setattr(shutil, "rmtree", spy("rmtree"))
-        monkeypatch.setattr(os, "link", spy("link"))
+        monkeypatch.setattr(os, take_name, spy(take_name))
         monkeypatch.setattr(shutil, "copyfileobj", spy("copyfileobj"))
         client = build_client(config_dir, monkeypatch)
         try:
