@@ -149,16 +149,18 @@ def test_initial_size_is_what_the_child_reads(script: Path) -> None:
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
 def test_child_has_only_fds_0_to_2(script: Path, tmp_path: Path) -> None:
     held = [open(tmp_path / f"held{i}", "w") for i in range(3)]
+    # What a launcher hands the server: inheritable, at a low and at a high number.
+    os.set_inheritable(held[0].fileno(), True)
+    high = fcntl.fcntl(held[1].fileno(), fcntl.F_DUPFD, 140)
     try:
         out, _ = _run([sys.executable, str(script)])
     finally:
+        os.close(high)
         for fh in held:
             fh.close()
 
-    # the child's own listing of /proc/self/fd holds one fd for the listing itself
-    fds = [fd for fd in _info(out)["fds"] if fd <= 2]
-    assert fds == [0, 1, 2]
-    assert max(_info(out)["fds"]) <= 3
+    # 3 is the child's own listing of /proc/self/fd
+    assert _info(out)["fds"] == [0, 1, 2, 3]
 
 
 def test_call_from_worker_thread_with_other_threads_and_warnings_as_errors(

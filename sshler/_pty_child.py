@@ -4,6 +4,8 @@
 argument says what ``LC_CTYPE`` the command gets: ``-`` for none, or ``=`` and the
 value. An interpreter started in the C locale sets ``LC_CTYPE`` in its own
 environment; the command must get the environment the caller gave, so it is put back.
+``posix_spawn`` hands down every inheritable descriptor of the server (what its own
+launcher left open, for one), so all above 2 are closed: the command gets the PTY only.
 """
 
 import os
@@ -23,6 +25,9 @@ def main() -> None:
             os.environ.pop("LC_CTYPE", None)
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        for fd in map(int, os.listdir("/dev/fd")):
+            if fd > 2:
+                os.closerange(fd, fd + 1)  # ignores the listing's own, already closed
         os.execvp(argv[0], argv)
     except (OSError, IndexError) as exc:
         name = argv[0] if argv else ""

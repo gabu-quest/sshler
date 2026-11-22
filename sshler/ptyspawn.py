@@ -27,7 +27,7 @@ def spawn_on_pty(
     """Run *argv* on a new PTY of the given size; return ``(master_fd, pid)``.
 
     The child is the leader of its own session with the PTY as its controlling
-    terminal on fds 0 to 2, and its environment is exactly *env*. If *argv[0]*
+    terminal on fds 0 to 2 and no other fd, and its environment is exactly *env*. If *argv[0]*
     cannot be run the child writes one line to the PTY and exits 127. The caller
     reaps the pid.
     """
