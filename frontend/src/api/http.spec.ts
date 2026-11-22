@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   batchCopy,
   batchMove,
+  createArchive,
   buildHeaders as _buildHeaders,
   crossBoxTransfer,
   downloadDirectory,
@@ -515,6 +516,37 @@ describe("a name that is taken", () => {
       expect(sentBody(1)).toEqual({ paths: ["/s/a"], destination: "/d", overwrite: true });
     },
   );
+
+  it("keep_both is sent only when asked, alone, by rename, extract, compress and the batch calls", async () => {
+    fetchMock.mockImplementation(async () => res(200, { status: "ok", succeeded: [], failed: [] }));
+    await renameFile("b", "/d/a", "c", "t", { keepBoth: true });
+    await extractArchive("b", "/d/in.zip", "/d", "t", { keepBoth: true });
+    await createArchive("b", ["/d/a"], "/d", "a.zip", "zip", "t", { keepBoth: true });
+    await batchMove("b", ["/s/a"], "/d", "t", { keepBoth: true });
+    await batchCopy("b", ["/s/a"], "/d", "t", { keepBoth: true });
+    expect(sentBody(0)).toEqual({ path: "/d/a", new_name: "c", keep_both: true });
+    expect(sentBody(1)).toEqual({ archive_path: "/d/in.zip", destination: "/d", keep_both: true });
+    expect(sentBody(2)).toEqual({ paths: ["/d/a"], destination: "/d", archive_name: "a.zip", format: "zip", keep_both: true });
+    expect(sentBody(3)).toEqual({ paths: ["/s/a"], destination: "/d", keep_both: true });
+    expect(sentBody(4)).toEqual({ paths: ["/s/a"], destination: "/d", keep_both: true });
+  });
+
+  it("a cross-box transfer with keep_both sends it alone and hands on where each file landed", async () => {
+    const sse =
+      'event: progress\ndata: {"file":"/s/a","bytes_done":1,"bytes_total":1,"index":0,"total":2,"placed":"/d/a (2)"}\n\n' +
+      'event: progress\ndata: {"file":"/s/b","bytes_done":1,"bytes_total":1,"index":1,"total":2}\n\n' +
+      'event: done\ndata: {"succeeded":["/s/a","/s/b"],"failed":[]}\n\n';
+    fetchMock.mockImplementation(async () => new Response(sse, { status: 200 }));
+    const result = await new Promise<unknown>((resolve) => {
+      crossBoxTransfer("x", "y", ["/s/a", "/s/b"], "/d", "copy", "t", () => {}, resolve, () => {}, { keepBoth: true });
+    });
+    expect(sentBody(0)).toEqual({
+      src_box: "x", dest_box: "y", paths: ["/s/a", "/s/b"], destination: "/d", mode: "copy", keep_both: true,
+    });
+    expect(result).toEqual({
+      succeeded: ["/s/a", "/s/b"], failed: [], placed: [{ path: "/s/a", placed: "/d/a (2)" }],
+    });
+  });
 
   it("a same-box transfer passes the flag on to the batch call", async () => {
     fetchMock.mockImplementation(async () => res(200, { status: "ok", succeeded: [], failed: [] }));

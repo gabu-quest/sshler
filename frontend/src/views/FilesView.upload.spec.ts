@@ -139,6 +139,18 @@ async function prompt(n: number) {
   return dialogSpy.warning.mock.calls[n - 1]![0];
 }
 
+/** The buttons of a prompt (the tick box and the row), and the one called `label`: "No" is the first, "Replace" the last. */
+function buttonsOf(options: any) {
+  const [row, box] = options.action().children as any[];
+  return { box, buttons: row.children as any[] };
+}
+function press(options: any, label: string, ticked = false) {
+  const { box, buttons } = buttonsOf(options);
+  if (ticked) box.props["onUpdate:checked"](true);
+  const found = label === "No" ? buttons[0] : buttons.find((v) => v.children.default() === label);
+  found.props.onClick();
+}
+
 const uploadedNames = () => uploadFile.mock.calls.map((c) => [(c[2] as File).name, c[5]]);
 
 describe("FilesView upload: refused is never shown as uploaded", () => {
@@ -167,10 +179,10 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
     const { container } = await mountLoaded();
     await choose(container, ["a.txt"]);
     const opts = await prompt(1);
-    expect([opts.title, opts.content, opts.positiveText, opts.negativeText]).toEqual([
-      "File already exists", "\"a.txt\" already exists here. Replace it?", "Replace", "No, keep it",
+    expect([opts.title, opts.content, buttonsOf(opts).buttons.map((v: any) => v.children.default())]).toEqual([
+      "File already exists", "\"a.txt\" already exists here. Replace it?", ["No, keep it", "Keep both", "Replace"],
     ]);
-    opts.onNegativeClick();
+    press(opts, "No");
     await waitFor(() => expect(messageSpy.warning).toHaveBeenCalledTimes(1));
     expect(messageSpy.warning).toHaveBeenCalledWith(
       "a.txt: skipped, the existing file was kept", { closable: true, duration: 0 },
@@ -203,7 +215,7 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
     uploadFile.mockRejectedValueOnce(exists()).mockResolvedValueOnce(OK);
     const { container } = await mountLoaded();
     await choose(container, ["a.txt"]);
-    (await prompt(1)).onPositiveClick();
+    press(await prompt(1), "Replace");
     await waitFor(() => expect(messageSpy.success).toHaveBeenCalledTimes(1));
     expect(messageSpy.success).toHaveBeenCalledWith("uploaded");
     expect(uploadedNames()).toEqual([["a.txt", {}], ["a.txt", { overwrite: true }]]);
@@ -220,8 +232,8 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
       .mockRejectedValueOnce(exists());
     const { container } = await mountLoaded();
     await choose(container, ["a.txt", "b.txt", "c.txt", "d.txt"]);
-    (await prompt(1)).onNegativeClick();
-    (await prompt(2)).onNegativeClick();
+    press(await prompt(1), "No");
+    press(await prompt(2), "No");
     await waitFor(() => expect(messageSpy.success).toHaveBeenCalledTimes(1));
     expect(messageSpy.success).toHaveBeenCalledWith("2 files uploaded");
     expect(messageSpy.warning.mock.calls.map((c) => c[0])).toEqual([
@@ -325,12 +337,12 @@ describe("FilesView upload: the replace prompt's default answer is No", () => {
   });
 
   // Naive UI's dialog focus trap focuses the first focusable element: the close button
-  // when `closable`, otherwise the action row, which renders negativeText before
-  // positiveText. jsdom cannot render the real dialog (cssstyle throws on its
-  // `var(--n-border)` shorthand), so this pins the options that make "No" the first
-  // stop. Mutation: drop `closable: false`, or give the dialog its own initial focus
-  // (`autoFocus`); the option set differs. The disabled `positiveButtonProps` is the
-  // half-second delay before Replace answers; a disabled button is never focused.
+  // when `closable`, otherwise the first button of the action row, which is "No" (the
+  // row comes before the tick box; the browser suite presses Enter on the real dialog).
+  // jsdom cannot render the real dialog (cssstyle throws on its `var(--n-border)`
+  // shorthand), so this pins the options that make "No" the first stop. Mutation: drop
+  // `closable: false`, or give the dialog its own initial focus (`autoFocus`); the option
+  // set differs.
   it("the prompt has no close button and no focus override, so 'No, keep it' takes the first focus", async () => {
     uploadFile.mockRejectedValueOnce(exists());
     const { container } = await mountLoaded();
@@ -338,8 +350,7 @@ describe("FilesView upload: the replace prompt's default answer is No", () => {
     const opts = await prompt(1);
     expect(opts.closable).toBe(false);
     expect(Object.keys(opts).sort()).toEqual([
-      "closable", "content", "negativeText", "onAfterLeave", "onEsc", "onMaskClick",
-      "onNegativeClick", "onPositiveClick", "positiveButtonProps", "positiveText", "title",
+      "action", "closable", "content", "onAfterLeave", "onEsc", "onMaskClick", "style", "title",
     ]);
     // A dialog that closes any other way (onAfterLeave alone) resolves as No.
     opts.onAfterLeave();

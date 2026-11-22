@@ -35,7 +35,9 @@ export function translate(key: string, params?: Record<string, string | number>)
   let result = table[key] ?? messages.en[key] ?? key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      result = result.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+      // A function, so the value goes in as it is: a string would be read as a
+      // replacement pattern, and a file name may hold "$".
+      result = result.replace(new RegExp(`\\{${k}\\}`, "g"), () => String(v));
     }
   }
   return result;

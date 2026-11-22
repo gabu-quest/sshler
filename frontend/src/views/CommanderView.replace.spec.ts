@@ -73,6 +73,7 @@ vi.mock("@/components/FileEditorModal.vue", () => passthrough("FileEditorModal")
 vi.mock("naive-ui", () => ({
   NModal: { props: ["show", "maskClosable"], emits: ["update:show"], template: '<div v-if="show" class="stub-modal"><slot /></div>' },
   NButton: { props: ["type", "size", "ghost"], template: "<button><slot /></button>" },
+  NCheckbox: { props: ["checked"], template: "<input type=\"checkbox\" />" },
   NProgress: { template: '<div class="stub-progress" />' },
   useDialog: () => dialogSpy,
   useMessage: () => messageSpy,
@@ -120,9 +121,16 @@ async function prompt(n: number) {
   return dialogSpy.warning.mock.calls[n - 1]![0];
 }
 
-function press(options: any, label: string) {
-  const row = options.action();
-  (row.children as any[]).find((v) => v.children.default() === label).props.onClick();
+/** The buttons of a prompt (the tick box and the row), and the one called `label`: "No" is the first, "Replace" the last. */
+function buttonsOf(options: any) {
+  const [row, box] = options.action().children as any[];
+  return { box, buttons: row.children as any[] };
+}
+function press(options: any, label: string, ticked = false) {
+  const { box, buttons } = buttonsOf(options);
+  if (ticked) box.props["onUpdate:checked"](true);
+  const found = label === "No" ? buttons[0] : buttons.find((v) => v.children.default() === label);
+  found.props.onClick();
 }
 
 /** The progress dialog's rows: name, state, text. */
@@ -163,7 +171,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     await startTransfer(container, "f5");
     const opts = await prompt(1);
     expect(opts.content).toBe("\"b.txt\" already exists here. Replace it?");
-    opts.onPositiveClick();
+    press(opts, "Replace");
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null], ["b.txt", "done", null], ["c.txt", "done", null],
     ]);
@@ -179,7 +187,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     same.mockResolvedValueOnce(result(["/src/a.txt", "/src/c.txt"], [exists("/src/b.txt")]));
     const { container } = await mountReady({ rightDir: "/dst" });
     await startTransfer(container, "f6");
-    (await prompt(1)).onNegativeClick();
+    press(await prompt(1), "No");
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
       ["b.txt", "skipped", "skipped, the existing file was kept"],
@@ -211,7 +219,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
       .mockRejectedValueOnce(new Error("Could not replace /dst/b.txt: disk full"));
     const { container } = await mountReady({ rightDir: "/dst" });
     await startTransfer(container, "f5");
-    (await prompt(1)).onPositiveClick();
+    press(await prompt(1), "Replace");
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
       ["b.txt", "failed", line("failed", "Could not replace /dst/b.txt: disk full")],
@@ -225,7 +233,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     same.mockResolvedValueOnce(result(["/src/a.txt"], [exists("/src/b.txt"), exists("/src/c.txt")]));
     const { container } = await mountReady({ rightDir: "/dst" });
     await startTransfer(container, "f5");
-    press(await prompt(1), "Skip all");
+    press(await prompt(1), "Skip", true);
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
       ["b.txt", "skipped", "skipped, the existing file was kept"],
@@ -235,13 +243,49 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
   });
 
+  it("one box: Keep both sends the file again with keepBoth only and names the landed name", async () => {
+    same
+      .mockResolvedValueOnce(result(["/src/a.txt", "/src/c.txt"], [exists("/src/b.txt")]))
+      .mockResolvedValueOnce({ ...result(["/src/b.txt"]), placed: [{ path: "/src/b.txt", placed: "/dst/b (2).txt" }] });
+    const { container } = await mountReady({ rightDir: "/dst" });
+    await startTransfer(container, "f5");
+    press(await prompt(1), "Keep both");
+    await waitFor(() => expect(messageSpy.success).toHaveBeenCalledWith("Kept both: saved as b (2).txt"));
+    expect(same.mock.calls.map((c) => [c[1], c[5]])).toEqual([
+      [["/src/a.txt", "/src/b.txt", "/src/c.txt"], undefined],
+      [["/src/b.txt"], { keepBoth: true }],
+    ]);
+  });
+
+  it("across boxes: Keep both sends keepBoth and no overwrite, and names the landed name", async () => {
+    cross.mockImplementationOnce(((_s, _d, _p, _dest, _m, _t, _onProgress, onDone, _onError, options) => {
+      setTimeout(() => {
+        options?.onItemFailed?.(exists("/src/b.txt"));
+        onDone(result(["/src/a.txt", "/src/c.txt"], [exists("/src/b.txt")]));
+      }, 0);
+      return new AbortController();
+    }) as typeof http.crossBoxTransfer);
+    cross.mockImplementationOnce(((_s, _d, _p, _dest, _m, _t, _onProgress, onDone) => {
+      setTimeout(() => onDone({ ...result(["/src/b.txt"]), placed: [{ path: "/src/b.txt", placed: "/dst/b (2).txt" }] }), 0);
+      return new AbortController();
+    }) as typeof http.crossBoxTransfer);
+    const { container } = await mountReady({ rightDir: "/dst", rightBox: "other" });
+    await startTransfer(container, "f5");
+    press(await prompt(1), "Keep both");
+    await waitFor(() => expect(messageSpy.success).toHaveBeenCalledWith("Kept both: saved as b (2).txt"));
+    expect(cross.mock.calls.map((c) => [c[2], c[9]?.keepBoth, c[9]?.overwrite])).toEqual([
+      [["/src/a.txt", "/src/b.txt", "/src/c.txt"], undefined, undefined],
+      [["/src/b.txt"], true, undefined],
+    ]);
+  });
+
   it("several taken names: Replace all sends both again, once, and asks nothing more", async () => {
     same
       .mockResolvedValueOnce(result(["/src/a.txt"], [exists("/src/b.txt"), exists("/src/c.txt")]))
       .mockResolvedValueOnce(result(["/src/b.txt", "/src/c.txt"]));
     const { container } = await mountReady({ rightDir: "/dst" });
     await startTransfer(container, "f5");
-    press(await prompt(1), "Replace all");
+    press(await prompt(1), "Replace", true);
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null], ["b.txt", "done", null], ["c.txt", "done", null],
     ]);
@@ -261,7 +305,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     press(await prompt(1), "Replace");
     const second = await prompt(2);
     expect(second.content).toBe("\"c.txt\" already exists here. Replace it?");
-    second.onNegativeClick();
+    press(second, "No");
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
       ["b.txt", "done", null],
@@ -277,7 +321,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     );
     const { container } = await mountReady({ rightBox: "other", rightDir: "/dst" });
     await startTransfer(container, "f5");
-    (await prompt(1)).onPositiveClick();
+    press(await prompt(1), "Replace");
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null], ["b.txt", "done", null], ["c.txt", "done", null],
     ]);
@@ -343,7 +387,7 @@ describe("CommanderView: every row is true while the transfer runs", () => {
       ["b.txt", "waiting", "waiting for your answer"],
       ["c.txt", "done", null],
     ]);
-    opts.onPositiveClick();
+    press(opts, "Replace");
     await waitFor(() => expect(same).toHaveBeenCalledTimes(2));
     // the retry is running: the files the first call placed stay done, only b is pending
     expect(rowsNow(container)).toEqual([
@@ -352,6 +396,51 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     release(result(["/src/b.txt"]));
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null], ["b.txt", "done", null], ["c.txt", "done", null],
+    ]);
+  });
+
+  // Mutation: what the first retry placed is only told at the very end, so its file
+  // falls back to pending while the second retry runs.
+  it("Replace for one and Keep both for another: the replaced file reads done while the other is sent", async () => {
+    same.mockResolvedValueOnce(result(["/src/a.txt"], [exists("/src/b.txt"), exists("/src/c.txt")]));
+    same.mockResolvedValueOnce(result(["/src/b.txt"]));
+    let release: (value: any) => void = () => {};
+    same.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const { container } = await mountReady({ rightDir: "/dst" });
+    await startTransfer(container, "f5");
+    press(await prompt(1), "Replace");
+    press(await prompt(2), "Keep both");
+    await waitFor(() => expect(same).toHaveBeenCalledTimes(3));
+    expect(rowsNow(container)).toEqual([
+      ["a.txt", "done", null], ["b.txt", "done", null], ["c.txt", "pending", null],
+    ]);
+    release({ ...result(["/src/c.txt"]), placed: [{ path: "/src/c.txt", placed: "/dst/c (2).txt" }] });
+    expect(await finalRows(container)).toEqual([
+      ["a.txt", "done", null], ["b.txt", "done", null], ["c.txt", "done", null],
+    ]);
+  });
+
+  // Mutation: a file the first retry failed reads pending while the second retry runs.
+  it("a file the Replace retry failed reads failed while the Keep both retry is sent", async () => {
+    same.mockResolvedValueOnce(result(["/src/a.txt"], [exists("/src/b.txt"), exists("/src/c.txt")]));
+    same.mockResolvedValueOnce(result([], [blocked("/src/b.txt")]));
+    let release: (value: any) => void = () => {};
+    same.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const { container } = await mountReady({ rightDir: "/dst" });
+    await startTransfer(container, "f5");
+    press(await prompt(1), "Replace");
+    press(await prompt(2), "Keep both");
+    await waitFor(() => expect(same).toHaveBeenCalledTimes(3));
+    expect(rowsNow(container)).toEqual([
+      ["a.txt", "done", null],
+      ["b.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
+      ["c.txt", "pending", null],
+    ]);
+    release({ ...result(["/src/c.txt"]), placed: [{ path: "/src/c.txt", placed: "/dst/c (2).txt" }] });
+    expect(await finalRows(container)).toEqual([
+      ["a.txt", "done", null],
+      ["b.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
+      ["c.txt", "done", null],
     ]);
   });
 
@@ -373,7 +462,7 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     same.mockImplementationOnce(() => new Promise(() => {}));
     const { container } = await mountReady({ rightDir: "/dst" });
     await startTransfer(container, "f5");
-    (await prompt(1)).onPositiveClick();
+    press(await prompt(1), "Replace");
     await waitFor(() => expect(same).toHaveBeenCalledTimes(2));
     expect(rowsNow(container)).toEqual([
       ["a.txt", "done", null],
@@ -413,7 +502,7 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     const { container } = await mountReady({ rightDir: "/dst" });
     same.mockImplementationOnce(() => new Promise(() => {}));
     await startTransfer(container, "f5");
-    (await prompt(1)).onPositiveClick();
+    press(await prompt(1), "Replace");
     await waitFor(() => expect(same).toHaveBeenCalledTimes(2));
     await fireEvent.click(container.querySelector(".transfer-footer button")!);
     expect(rowsNow(container)).toEqual([
@@ -453,7 +542,7 @@ describe("CommanderView: a prompt does not outlive what it belongs to", () => {
     const opts = await prompt(1);
     unmount();
     expect(destroy).toHaveBeenCalledTimes(1);
-    opts.onPositiveClick();
+    press(opts, "Replace");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(same).toHaveBeenCalledTimes(1);
   });
@@ -467,7 +556,7 @@ describe("CommanderView: a prompt does not outlive what it belongs to", () => {
     await fireEvent.click(container.querySelector(".transfer-footer button")!);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".transfer-error")?.textContent).toContain("Cancelled");
-    opts.onPositiveClick();
+    press(opts, "Replace");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(same).toHaveBeenCalledTimes(1);
   });

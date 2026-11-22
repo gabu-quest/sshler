@@ -732,6 +732,19 @@ async function applyChmod() {
   }
 }
 
+/**
+ * After a "Keep both": say the name the server used (`landed` are paths as it answered)
+ * and select those entries in the listing that was just loaded.
+ */
+function showKeptBoth(landed: string[]) {
+  if (!landed.length) return;
+  const nameOf = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
+  message.success(t("files.kept_both", { name: landed.map(nameOf).join(", ") }));
+  const shown = new Set((directoryStore.listing?.entries || []).map((entry: any) => entry.path));
+  const entries = landed.map((path) => path.replace(/\/+$/, "")).filter((path) => shown.has(path));
+  if (entries.length) filesStore.setSelectedFiles(entries);
+}
+
 async function doRename() {
   if (!selectedBox.value || !renameTarget.value || !renameValue.value.trim()) return;
   const newName = renameValue.value.trim();
@@ -743,18 +756,25 @@ async function doRename() {
   }
   actionBusy.value = true;
   try {
+    let landed: string | null = null;
     try {
       await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null);
     } catch (err) {
       // A taken name the server would replace asks; "No" leaves the dialog open and
       // everything as it was. Any other refusal shows the server's text.
       if (!(err instanceof ApiError && err.reason === "exists")) throw err;
-      if (!(await askReplace(newName))) return;
-      await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null, { overwrite: true });
+      const choice = await askReplace(newName);
+      if (choice === "no") return;
+      const answer = await filesStore.doRename(
+        selectedBox.value, renameTarget.value, newName, tokenValue.value || null,
+        choice === "keep_both" ? { keepBoth: true } : { overwrite: true },
+      );
+      if (choice === "keep_both") landed = answer.path ?? null;
     }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    message.success(t('files.renamed'));
+    if (landed) showKeptBoth([landed]);
+    else message.success(t('files.renamed'));
     renameTarget.value = null;
     renameValue.value = "";
   } catch (err) {
@@ -769,7 +789,7 @@ async function doRename() {
  * it. The reason "exists" asks to replace (Yes re-sends with the overwrite
  * flag); any other 4xx is final; a network or server failure is retried with backoff.
  */
-async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
+async function uploadOne(file: File, landed: string[]): Promise<"uploaded" | "skipped"> {
   uploadTarget.value = file;
   const maxAttempts = 3;
   let lastError: unknown = null;
@@ -782,8 +802,13 @@ async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
       // Only a file the server says it may replace is asked about.
       if (err instanceof ApiError && err.reason === "exists") {
         filesStore.uploadError = null; // the prompt answers this one
-        if (!(await askReplace(file.name))) return "skipped";
-        await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null, { overwrite: true });
+        const choice = await askReplace(file.name);
+        if (choice === "no") return "skipped";
+        const answer = await filesStore.doUpload(
+          selectedBox.value!, currentDir.value, file, tokenValue.value || null,
+          choice === "keep_both" ? { keepBoth: true } : { overwrite: true },
+        );
+        if (choice === "keep_both" && answer.path) landed.push(answer.path);
         return "uploaded";
       }
       // Whether to retry is a rule about the answer, not about what failed: a refusal
@@ -807,11 +832,12 @@ async function handleUpload(files: FileList | null) {
   actionBusy.value = true;
 
   let uploaded = 0;
+  const landed: string[] = [];
   for (let i = 0; i < files.length; i++) {
     const file = files.item(i);
     if (!file) continue;
     try {
-      if ((await uploadOne(file)) === "uploaded") {
+      if ((await uploadOne(file, landed)) === "uploaded") {
         uploaded++;
       } else {
         message.warning(t('files.upload_skipped', { name: file.name }), { closable: true, duration: 0 });
@@ -829,6 +855,7 @@ async function handleUpload(files: FileList | null) {
     message.success(uploaded === 1 ? t('files.uploaded') : `${uploaded} files uploaded`);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
+    showKeptBoth(landed);
   }
 }
 
@@ -1016,12 +1043,13 @@ async function handleBatchConfirm(destination: string) {
   actionBusy.value = true;
   try {
     const place = mode === "move" ? filesStore.doBatchMove : filesStore.doBatchCopy;
-    const outcome = await withReplace(paths, (toSend, overwrite) =>
-      overwrite ? place(box, toSend, destination, token, { overwrite: true }) : place(box, toSend, destination, token),
+    const outcome = await withReplace(paths, (toSend, options) =>
+      options.overwrite || options.keepBoth ? place(box, toSend, destination, token, options) : place(box, toSend, destination, token),
     );
     await directoryStore.load(box, currentDir.value, token);
     // Names the user kept are no failure; a selection that moved nothing stays as it was.
     if (outcome.succeeded.length || outcome.failed.length) filesStore.setSelectedFiles([]);
+    showKeptBoth(outcome.placed.map((item) => item.placed));
     for (const item of outcome.failed) {
       message.error(`${item.path.split('/').pop() || item.path}: ${failureText(item)}`, { closable: true, duration: 0 });
     }
@@ -1051,18 +1079,25 @@ async function handleArchiveCreate(format: string, paths?: string[]) {
     ? single.split('/').pop() + ext
     : `archive${ext}`;
   try {
+    let landed: string | null = null;
     try {
       await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null);
     } catch (err) {
       // A taken archive name the server would replace asks; "No" leaves everything as it
       // was and shows no error. Any other refusal shows the server's text.
       if (!(err instanceof ApiError && err.reason === "exists")) throw err;
-      if (!(await askReplace(archiveName))) return;
-      await createArchive(selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null, { overwrite: true });
+      const choice = await askReplace(archiveName);
+      if (choice === "no") return;
+      const answer = await createArchive(
+        selectedBox.value, archivePaths, currentDir.value, archiveName, format, tokenValue.value || null,
+        choice === "keep_both" ? { keepBoth: true } : { overwrite: true },
+      );
+      if (choice === "keep_both") landed = answer.path ?? null;
     }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     filesStore.setSelectedFiles([]);
-    message.success(`Created ${archiveName}`);
+    if (landed) showKeptBoth([landed]);
+    else message.success(`Created ${archiveName}`);
   } catch (err) {
     message.error(errorText(err));
   } finally {
@@ -1074,6 +1109,7 @@ async function handleArchiveExtract(archivePath: string) {
   if (!selectedBox.value) return;
   actionBusy.value = true;
   try {
+    let landed: string | null = null;
     try {
       await extractArchive(selectedBox.value, archivePath, currentDir.value, tokenValue.value || null);
     } catch (err) {
@@ -1081,11 +1117,17 @@ async function handleArchiveExtract(archivePath: string) {
       // names; "No" leaves everything as it was and shows no error. Any other refusal
       // shows the server's text.
       if (!(err instanceof ApiError && err.reason === "exists" && err.taken)) throw err;
-      if (!(await askReplaceMany(err.taken))) return;
-      await extractArchive(selectedBox.value, archivePath, currentDir.value, tokenValue.value || null, { overwrite: true });
+      const choice = await askReplaceMany(err.taken);
+      if (choice === "no") return;
+      const answer = await extractArchive(
+        selectedBox.value, archivePath, currentDir.value, tokenValue.value || null,
+        choice === "keep_both" ? { keepBoth: true } : { overwrite: true },
+      );
+      if (choice === "keep_both") landed = answer.path ?? null;
     }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    message.success("Extracted archive");
+    if (landed) showKeptBoth([landed]);
+    else message.success("Extracted archive");
   } catch (err) {
     message.error(errorText(err));
   } finally {
