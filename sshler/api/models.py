@@ -82,12 +82,16 @@ class APIRenameRequest(BaseModel):
     new_name: str
     # Replace a regular file that has the name; a JSON boolean only, never "true" or 1.
     overwrite: StrictBool = False
+    # Land beside a taken name under the first free name of its series; never with
+    # `overwrite` (`placement.refuse_replace_and_keep_both`).
+    keep_both: StrictBool = False
 
 
 class APIMoveRequest(BaseModel):
     source: str
     destination: str
     overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 class APICopyRequest(BaseModel):
@@ -95,6 +99,7 @@ class APICopyRequest(BaseModel):
     destination: str
     new_name: str | None = None
     overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 class APIChmodRequest(BaseModel):

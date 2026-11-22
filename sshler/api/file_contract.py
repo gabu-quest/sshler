@@ -112,7 +112,11 @@ class SourceFile(NamedTuple):
 
 class Landing(Protocol):
     """A file being written beside its name: ``commit`` puts it in place, ``abort``
-    removes what was written (to the end, even when the request is being cancelled)."""
+    removes what was written (to the end, even when the request is being cancelled).
+    ``path`` is where it lands: the path asked for, or with ``keep_both`` the free name
+    taken beside it."""
+
+    path: str
 
     async def write(self, data: bytes) -> None: ...
 
@@ -127,10 +131,18 @@ ReadChunk = Callable[[int], Awaitable[bytes]]
 
 @dataclass
 class BatchOutcome:
-    """What a batch did: the paths done, and one entry per path that failed."""
+    """What a batch did: the paths done, one entry per path that failed, and one entry
+    per path that landed under another name than asked (``keep_both``)."""
 
     succeeded: list[str] = field(default_factory=list)
     failed: list[dict] = field(default_factory=list)
+    placed: list[dict] = field(default_factory=list)
+
+    def landed(self, path: str, target: str, at: str) -> None:
+        """``path`` (as sent) is done: asked to land at ``target``, it landed at ``at``."""
+        self.succeeded.append(path)
+        if at != target:
+            self.placed.append({"path": path, "placed": at})
 
 
 class BoxFiles(Protocol):
@@ -239,21 +251,28 @@ class BoxFiles(Protocol):
         path are made."""
         ...
 
-    async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
+    async def upload(
+        self, path: str, data: bytes, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         """A new file with ``data``; a regular file on the name is replaced only with
-        ``overwrite``. The missing folders of the path are made."""
+        ``overwrite``; with ``keep_both`` a taken name gives the first free name of its
+        series (``placement.free_name``). The missing folders of the path are made.
+        Returns where the file landed."""
         ...
 
     async def make_folder(self, path: str) -> None: ...
 
-    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> Landing:
+    async def land(
+        self, path: str, *, source_mode: int, overwrite: bool, keep_both: bool = False
+    ) -> Landing:
         """A landing for the bytes of a file at ``path``, all the missing folders of its path made.
 
-        The name is decided by the existing-name rule (``DestinationRefused``), and a
-        source that is not a regular file is refused. A replaced file keeps its
-        permission bits; a free name gets ``source_mode``'s nine permission bits from
-        before the first byte (the box's default bits when it is 0 on a remote box).
-        A local landing writes in a worker thread."""
+        The name is decided by the existing-name rule (``DestinationRefused``; with
+        ``keep_both`` a taken name gives the first free name of its series, which the
+        landing's ``path`` names), and a source that is not a regular file is refused.
+        A replaced file keeps its permission bits; a free name gets ``source_mode``'s
+        nine permission bits from before the first byte (the box's default bits when it
+        is 0 on a remote box). A local landing writes in a worker thread."""
         ...
 
     async def remove_if_unchanged(self, path: str, fingerprint: tuple, target: str) -> None:
@@ -267,9 +286,12 @@ class BoxFiles(Protocol):
 
     async def chmod(self, path: str, mode: int) -> None: ...
 
-    async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
+    async def rename(
+        self, path: str, new_name: str, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         """Give ``path`` the name ``new_name`` in its own folder under the existing-name
-        rule; returns the new path."""
+        rule (with ``keep_both`` a taken name gives the first free name of its series; a
+        rename to its own name is nothing to do); returns the new path."""
         ...
 
     async def place_into(
@@ -281,10 +303,13 @@ class BoxFiles(Protocol):
         move: bool,
         overwrite: bool,
         allow_dirs: bool,
+        keep_both: bool = False,
     ) -> str:
         """Move or copy ``source`` into folder ``destination`` as ``new_name`` (its own
-        name when None) under the existing-name rule; the missing folders of ``destination``
-        are made; returns the new path."""
+        name when None) under the existing-name rule (with ``keep_both`` a taken name,
+        the source itself included for a copy, gives the first free name of its series;
+        a move onto its own path is nothing to do); the missing folders of
+        ``destination`` are made; returns the path it landed at."""
         ...
 
     async def create_archive(
@@ -329,9 +354,16 @@ class BoxFiles(Protocol):
         ...
 
     async def place_many(
-        self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
+        self,
+        paths: Sequence[str],
+        destination: str,
+        *,
+        move: bool,
+        overwrite: bool,
+        keep_both: bool = False,
     ) -> BatchOutcome:
         """Move or copy each path into ``destination`` under the existing-name rule; the
-        missing folders of ``destination`` are made; a second item with the same name as one placed
-        before it is refused."""
+        missing folders of ``destination`` are made; a second item with the same name as
+        one placed before it is refused, or with ``keep_both`` lands beside it. Each item
+        that landed under another name than asked is in ``placed``."""
         ...

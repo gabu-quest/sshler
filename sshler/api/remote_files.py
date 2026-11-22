@@ -55,10 +55,12 @@ from .placement import (
     _NO_FOLDER_COPY,
     _ONLY_FILES,
     COPY_CHUNK_BYTES,
+    NameTakenError,
     _reason,
     _refuse_a_folder_into_itself,
     _refuse_or_replace,
     _taken_after_check,
+    candidate_paths,
     ensure_source_unchanged,
     kept_permission_bits,
     refuse_a_name_this_request_placed,
@@ -109,17 +111,41 @@ def remote_fingerprint(attrs) -> tuple:
 
 
 async def _remote_exclusive[T](
-    sftp_client, target: str, call: Awaitable[T], *, source_regular: bool = True
+    sftp_client,
+    target: str,
+    call: Awaitable[T],
+    *,
+    source_regular: bool = True,
+    keep_both: bool = False,
 ) -> T:
     """Await ``call``, which fails when ``target`` exists; failing with the name taken
-    is the rule's refusal (SFTPv3 has no "exists" status: OpenSSH says FX_FAILURE)."""
+    is the rule's refusal (SFTPv3 has no "exists" status: OpenSSH says FX_FAILURE), or
+    under ``keep_both`` ``NameTakenError``, for the caller to try the next name."""
     try:
         return await call
     except asyncssh.SFTPError:
         mode = await _remote_lstat_mode(sftp_client, target)
         if mode is not None:
-            _taken_after_check(mode, source_regular=source_regular)
+            _taken_after_check(mode, source_regular=source_regular, keep_both=keep_both)
         raise
+
+
+async def _remote_take_free_name[T](
+    target: str,
+    take: Callable[[str], Awaitable[T]],
+    *,
+    keep_both: bool,
+    folder: bool,
+) -> T:
+    """``take(candidate)``, which takes its name with the exclusive calls above, on
+    ``target``; with ``keep_both`` on each next name of ``candidate_paths`` while it
+    answers ``NameTakenError``."""
+    for candidate in candidate_paths(target, keep_both=keep_both, folder=folder, paths=posixpath):
+        try:
+            return await take(candidate)
+        except NameTakenError:
+            continue
+    raise AssertionError("unreachable: candidate_paths ends with a refusal")
 
 
 def _remote_temp_beside(target: str, suffix: str = ".sshler") -> str:
@@ -139,13 +165,21 @@ class _RemoteLanding:
     def __init__(self, sftp_client, target: str, temp: str | None, handle) -> None:
         self.sftp = sftp_client
         self.target = target
+        self.path = target  # where the file lands
         self.temp = temp
         self.handle = handle
         self.keep: int | None = None  # a replace's bits, set exactly (the umask narrows an open)
 
     @classmethod
     async def start(
-        cls, sftp_client, target: str, *, replace: bool, source_regular: bool = True, mode=None
+        cls,
+        sftp_client,
+        target: str,
+        *,
+        replace: bool,
+        source_regular: bool = True,
+        mode=None,
+        keep_both: bool = False,
     ) -> _RemoteLanding:
         # A mode of 0 is a server that sent none; a file with no bits set still has its
         # type bits, and keeps none.
@@ -161,6 +195,7 @@ class _RemoteLanding:
             target,
             sftp_client.open(target, "xb", attrs),
             source_regular=source_regular,
+            keep_both=keep_both,
         )
         if exact is not None:
             try:
@@ -241,28 +276,42 @@ async def _remote_landing(
     overwrite: bool,
     source_regular: bool = True,
     source_mode: int | None = None,
+    keep_both: bool = False,
 ) -> _RemoteLanding:
-    """Decide ``target`` by the rule and open it for the bytes of a file."""
+    """Decide ``target`` by the rule and open it for the bytes of a file; with
+    ``keep_both`` a taken name gives the first free name of its series."""
     dest_mode = await _remote_lstat_mode(sftp_client, target)
-    replace = _refuse_or_replace(dest_mode, overwrite=overwrite, source_regular=source_regular)
+    replace = _refuse_or_replace(
+        dest_mode, overwrite=overwrite, source_regular=source_regular, keep_both=keep_both
+    )
     if not source_regular:
         raise Failure(REASON_INVALID, _ONLY_FILES)
-    return await _RemoteLanding.start(
-        sftp_client,
+    if replace:
+        return await _RemoteLanding.start(sftp_client, target, replace=True, mode=dest_mode)
+    return await _remote_take_free_name(
         target,
-        replace=replace,
-        source_regular=source_regular,
-        mode=dest_mode if replace else source_mode,
+        lambda candidate: _RemoteLanding.start(
+            sftp_client,
+            candidate,
+            replace=False,
+            source_regular=source_regular,
+            mode=source_mode,
+            keep_both=keep_both,
+        ),
+        keep_both=keep_both,
+        folder=False,
     )
 
 
 async def _remote_copy_file(
-    sftp_client, source: str, target: str, *, replace: bool, mode: int
+    sftp_client, source: str, target: str, *, replace: bool, mode: int, keep_both: bool = False
 ) -> None:
     """Copy a remote file to the same server in chunks, never whole into memory.
     ``mode``: the source's on a free name, the replaced file's on a replace."""
     async with await sftp_client.open(source, "rb") as src:
-        landing = await _RemoteLanding.start(sftp_client, target, replace=replace, mode=mode)
+        landing = await _RemoteLanding.start(
+            sftp_client, target, replace=replace, mode=mode, keep_both=keep_both
+        )
         try:
             while chunk := await src.read(COPY_CHUNK_BYTES):
                 await landing.write(chunk)
@@ -303,9 +352,13 @@ async def _remote_remove_tree(sftp_client, path: str) -> None:
     await sftp_client.rmdir(path)
 
 
-async def _remote_copy_folder_new(sftp_client, source: str, target: str) -> None:
+async def _remote_copy_folder_new(
+    sftp_client, source: str, target: str, *, keep_both: bool = False
+) -> None:
     """Remote twin of ``_local_copy_folder_new``."""
-    await _remote_exclusive(sftp_client, target, sftp_client.mkdir(target), source_regular=False)
+    await _remote_exclusive(
+        sftp_client, target, sftp_client.mkdir(target), source_regular=False, keep_both=keep_both
+    )
     try:
         await _remote_copy_tree(sftp_client, source, target)
     except Exception as exc:
@@ -336,12 +389,20 @@ async def _remote_remove_moved_source(
         raise source_not_removed(target, exc.reason) from exc
 
 
-async def _remote_move_new(sftp_client, source: str, target: str, source_attrs) -> None:
+async def _remote_move_new(
+    sftp_client, source: str, target: str, source_attrs, *, keep_both: bool = False
+) -> None:
+    """Move to a free name; a name taken by now is the rule's refusal, or under
+    ``keep_both`` ``NameTakenError``."""
     source_mode = source_attrs.permissions or 0
     before = remote_fingerprint(source_attrs)
     if stat_mod.S_ISDIR(source_mode):
         await _remote_exclusive(
-            sftp_client, target, sftp_client.mkdir(target), source_regular=False
+            sftp_client,
+            target,
+            sftp_client.mkdir(target),
+            source_regular=False,
+            keep_both=keep_both,
         )
         try:
             await sftp_client.posix_rename(source, target)  # over the empty folder above
@@ -349,7 +410,11 @@ async def _remote_move_new(sftp_client, source: str, target: str, source_attrs) 
             # No posix-rename: the server's own rename decides about the name.
             await sftp_client.rmdir(target)
             await _remote_exclusive(
-                sftp_client, target, sftp_client.rename(source, target), source_regular=False
+                sftp_client,
+                target,
+                sftp_client.rename(source, target),
+                source_regular=False,
+                keep_both=keep_both,
             )
         except asyncssh.SFTPError:
             with contextlib.suppress(asyncssh.SFTPError):
@@ -359,7 +424,11 @@ async def _remote_move_new(sftp_client, source: str, target: str, source_attrs) 
     if stat_mod.S_ISLNK(source_mode):
         link_text = await sftp_client.readlink(source)
         await _remote_exclusive(
-            sftp_client, target, sftp_client.symlink(link_text, target), source_regular=False
+            sftp_client,
+            target,
+            sftp_client.symlink(link_text, target),
+            source_regular=False,
+            keep_both=keep_both,
         )
         await _remote_remove_moved_source(sftp_client, source, target, None)
         return
@@ -368,10 +437,12 @@ async def _remote_move_new(sftp_client, source: str, target: str, source_attrs) 
     except asyncssh.SFTPError:
         mode = await _remote_lstat_mode(sftp_client, target)
         if mode is not None:
-            _taken_after_check(mode)
+            _taken_after_check(mode, keep_both=keep_both)
         # No hard link on this server (or across its filesystems): copy into a name
         # opened exclusively, then remove the source if it is still what was copied.
-        await _remote_copy_file(sftp_client, source, target, replace=False, mode=source_mode)
+        await _remote_copy_file(
+            sftp_client, source, target, replace=False, mode=source_mode, keep_both=keep_both
+        )
         await _remote_remove_moved_source(sftp_client, source, target, before)
     else:
         # Source and target are one file now: the check could not find anything.
@@ -440,8 +511,9 @@ async def _remote_place(
     overwrite: bool,
     allow_dirs: bool = True,
     make_parents: bool = False,
-) -> None:
-    """Remote twin of ``_local_place``. A missing source raises
+    keep_both: bool = False,
+) -> str:
+    """Remote twin of ``_local_place``; returns where it landed. A missing source raises
     ``asyncssh.SFTPNoSuchFile``. With ``make_parents``, a missing folder of ``target``
     is made once the source is known and not refused into itself, and before any other
     refusal, as the local box does."""
@@ -457,14 +529,27 @@ async def _remote_place(
                 posixpath.commonpath,
             )
         await _remote_make_missing(sftp_client, folder, keep=True)
-    await _remote_place_in_folder(
-        sftp_client, source, target, move=move, overwrite=overwrite, allow_dirs=allow_dirs
+    return await _remote_place_in_folder(
+        sftp_client,
+        source,
+        target,
+        move=move,
+        overwrite=overwrite,
+        allow_dirs=allow_dirs,
+        keep_both=keep_both,
     )
 
 
 async def _remote_place_in_folder(
-    sftp_client, source: str, target: str, *, move: bool, overwrite: bool, allow_dirs: bool
-) -> None:
+    sftp_client,
+    source: str,
+    target: str,
+    *,
+    move: bool,
+    overwrite: bool,
+    allow_dirs: bool,
+    keep_both: bool = False,
+) -> str:
     """``_remote_place`` into a folder that is there. A move onto the same path is
     nothing to do (SFTP gives no inode, so another spelling of the same file is a taken
     name, except a name that differs only in letter case on a server that ignores
@@ -472,7 +557,7 @@ async def _remote_place_in_folder(
     source_attrs = await (sftp_client.lstat(source) if move else sftp_client.stat(source))
     source_mode = source_attrs.permissions or 0
     if move and source == target:
-        return
+        return target
     dest_mode = await _remote_lstat_mode(sftp_client, target)
     if (
         move
@@ -483,7 +568,7 @@ async def _remote_place_in_folder(
             await sftp_client.posix_rename(source, target)
         except asyncssh.SFTPOpUnsupported:
             await sftp_client.rename(source, target)
-        return
+        return target
     if stat_mod.S_ISDIR(source_mode) and posixpath.dirname(source) != posixpath.dirname(target):
         _refuse_a_folder_into_itself(
             await sftp_client.realpath(source),
@@ -496,6 +581,7 @@ async def _remote_place_in_folder(
         overwrite=overwrite,
         source_regular=source_regular,
         same_file=source == target,
+        keep_both=keep_both,
     )
     if stat_mod.S_ISDIR(source_mode) and not allow_dirs:
         raise Failure(REASON_INVALID, _NO_FOLDER_COPY)
@@ -506,15 +592,28 @@ async def _remote_place_in_folder(
             await _remote_remove_moved_source(
                 sftp_client, source, target, remote_fingerprint(source_attrs)
             )
-    elif replace:
+        return target
+    if replace:
         assert dest_mode is not None
         await _remote_copy_file(sftp_client, source, target, replace=True, mode=dest_mode)
-    elif move:
-        await _remote_move_new(sftp_client, source, target, source_attrs)
-    elif stat_mod.S_ISDIR(source_mode):
-        await _remote_copy_folder_new(sftp_client, source, target)
-    else:
-        await _remote_copy_file(sftp_client, source, target, replace=False, mode=source_mode)
+        return target
+
+    async def take(candidate: str) -> str:
+        if move:
+            await _remote_move_new(
+                sftp_client, source, candidate, source_attrs, keep_both=keep_both
+            )
+        elif stat_mod.S_ISDIR(source_mode):
+            await _remote_copy_folder_new(sftp_client, source, candidate, keep_both=keep_both)
+        else:
+            await _remote_copy_file(
+                sftp_client, source, candidate, replace=False, mode=source_mode, keep_both=keep_both
+            )
+        return candidate
+
+    return await _remote_take_free_name(
+        target, take, keep_both=keep_both, folder=stat_mod.S_ISDIR(source_mode)
+    )
 
 
 async def _remote_into_missing_folder[T](
@@ -532,13 +631,17 @@ async def _remote_into_missing_folder[T](
         return await attempt()
 
 
-async def _remote_write_new(sftp_client, remote_path: str, data: bytes, *, overwrite: bool) -> None:
+async def _remote_write_new(
+    sftp_client, remote_path: str, data: bytes, *, overwrite: bool, keep_both: bool = False
+) -> str:
     """Write ``data`` to a new remote file, or replace a regular file with ``overwrite``
-    through a landing: the old file stays whole until the new one is complete."""
+    through a landing: the old file stays whole until the new one is complete. With
+    ``keep_both`` a taken name gives the first free name of its series. Returns where
+    the file landed."""
     landing = await _remote_into_missing_folder(
         sftp_client,
         posixpath.dirname(remote_path),
-        lambda: _remote_landing(sftp_client, remote_path, overwrite=overwrite),
+        lambda: _remote_landing(sftp_client, remote_path, overwrite=overwrite, keep_both=keep_both),
     )
     try:
         await landing.write(data)
@@ -546,6 +649,7 @@ async def _remote_write_new(sftp_client, remote_path: str, data: bytes, *, overw
     except BaseException:
         await landing.abort()
         raise
+    return landing.path
 
 
 def du_command(flag: str, path: str) -> str:
@@ -1055,8 +1159,12 @@ class RemoteFiles:
         """A name that exists is a 409."""
         await _remote_write_new(await self._session(), path, b"", overwrite=False)
 
-    async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
-        await _remote_write_new(await self._session(), path, data, overwrite=overwrite)
+    async def upload(
+        self, path: str, data: bytes, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
+        return await _remote_write_new(
+            await self._session(), path, data, overwrite=overwrite, keep_both=keep_both
+        )
 
     async def make_folder(self, path: str) -> None:
         sftp_client = await self._session()
@@ -1068,7 +1176,9 @@ class RemoteFiles:
             raise Failure(REASON_INVALID, "Directory already exists")
         await sftp_client.mkdir(path)
 
-    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> _RemoteLanding:
+    async def land(
+        self, path: str, *, source_mode: int, overwrite: bool, keep_both: bool = False
+    ) -> _RemoteLanding:
         """The missing folders of ``path`` are made first, all of them."""
         sftp_client = await self._session()
         return await _remote_into_missing_folder(
@@ -1080,6 +1190,7 @@ class RemoteFiles:
                 overwrite=overwrite,
                 source_regular=stat_mod.S_ISREG(source_mode),
                 source_mode=source_mode,
+                keep_both=keep_both,
             ),
         )
 
@@ -1097,13 +1208,21 @@ class RemoteFiles:
     async def chmod(self, path: str, mode: int) -> None:
         await sftp_chmod(await self._conn(), path, mode)
 
-    async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
+    async def rename(
+        self, path: str, new_name: str, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         PathValidator.validate_remote_path(path)
         new_name = PathValidator.validate_filename(new_name)
         source = self._spelled.note(await remote_path(await self._conn(), path), path)
         target = str(PurePosixPath(source).parent / new_name)
-        await _remote_place(await self._session(), source, target, move=True, overwrite=overwrite)
-        return target
+        return await _remote_place(
+            await self._session(),
+            source,
+            target,
+            move=True,
+            overwrite=overwrite,
+            keep_both=keep_both,
+        )
 
     async def place_into(
         self,
@@ -1114,6 +1233,7 @@ class RemoteFiles:
         move: bool,
         overwrite: bool,
         allow_dirs: bool,
+        keep_both: bool = False,
     ) -> str:
         PathValidator.validate_remote_path(source)
         PathValidator.validate_remote_path(destination)
@@ -1129,7 +1249,7 @@ class RemoteFiles:
             # Named after the resolved source: `~` alone has no usable name.
             name = PathValidator.validate_filename(name)
         target = str(PurePosixPath(remote_dest_dir) / name)
-        await _remote_place(
+        return await _remote_place(
             await self._session(),
             remote_src,
             target,
@@ -1137,8 +1257,8 @@ class RemoteFiles:
             overwrite=overwrite,
             allow_dirs=allow_dirs,
             make_parents=True,
+            keep_both=keep_both,
         )
-        return target
 
     async def create_archive(
         self,
@@ -1289,12 +1409,18 @@ class RemoteFiles:
         return outcome
 
     async def place_many(
-        self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
+        self,
+        paths: Sequence[str],
+        destination: str,
+        *,
+        move: bool,
+        overwrite: bool,
+        keep_both: bool = False,
     ) -> BatchOutcome:
         """The destination, then every path, is checked before the connection is
         taken. A box that cannot be reached fails each path not yet done."""
         outcome = BatchOutcome()
-        succeeded, failed = outcome.succeeded, outcome.failed
+        failed = outcome.failed
         landed: set[str] = set()
         try:
             dest_validated = PathValidator.validate_remote_path(destination)
@@ -1318,22 +1444,23 @@ class RemoteFiles:
                 self._spelled.note(vpath, orig)
                 target = str(PurePosixPath(dest_resolved) / PurePosixPath(vpath).name)
                 try:
-                    refuse_a_name_this_request_placed(target, landed)
-                    await _remote_place(
+                    refuse_a_name_this_request_placed(target, landed, keep_both=keep_both)
+                    at = await _remote_place(
                         sftp_client,
                         vpath,
                         target,
                         move=move,
                         overwrite=overwrite,
                         make_parents=True,
+                        keep_both=keep_both,
                     )
                 except Exception as exc:
                     failed.append(
                         failure_entry(orig, exc, as_sent=self.as_sent, missing=MISSING_SOURCE)
                     )
                 else:
-                    landed.add(target)
-                    succeeded.append(orig)
+                    outcome.landed(orig, target, at)
+                    landed.add(at)
         except Exception as exc:
             self._unreachable_fails_the_rest(exc, validated, outcome)
         return outcome

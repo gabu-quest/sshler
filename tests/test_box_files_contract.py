@@ -588,6 +588,113 @@ async def _place_many_into_missing(files, kind: Kind, *, move: bool):
     return outcome.succeeded, outcome.failed, _placed(kind, "a.txt")[1:]
 
 
+# --- keep both: a taken name gets the first free name of its series ----------------
+
+
+async def _rename_keeping_both(files, kind: Kind):
+    target = await files.rename(kind.at("a.txt"), "taken.txt", overwrite=False, keep_both=True)
+    return target, _folder_names(kind), (kind.root / "taken (2).txt").read_bytes()
+
+
+async def _copy_onto_itself_keeping_both(files, kind: Kind):
+    target = await files.place_into(
+        kind.at("a.txt"),
+        kind.at(""),
+        None,
+        move=False,
+        overwrite=False,
+        allow_dirs=False,
+        keep_both=True,
+    )
+    return target, (kind.root / "a (2).txt").read_bytes(), (kind.root / "a.txt").read_bytes()
+
+
+async def _move_folder_keeping_both(files, kind: Kind):
+    (kind.root / "d").mkdir()
+    (kind.root / "d" / "sub").write_bytes(b"a file")
+    target = await files.place_into(
+        kind.at("sub"),
+        kind.at("d"),
+        None,
+        move=True,
+        overwrite=False,
+        allow_dirs=True,
+        keep_both=True,
+    )
+    return (
+        target,
+        _folder_names(kind, "d"),
+        (kind.root / "d" / "sub (2)" / "inner.txt").read_bytes(),
+    )
+
+
+async def _upload_keeping_both(files, kind: Kind):
+    target = await files.child(kind.at(""), "taken.txt")
+    landed = await files.upload(target, b"new", overwrite=False, keep_both=True)
+    return (
+        landed,
+        (kind.root / "taken.txt").read_bytes(),
+        (kind.root / "taken (2).txt").read_bytes(),
+    )
+
+
+async def _upload_returns_its_path(files, kind: Kind):
+    target = await files.child(kind.at(""), "free.txt")
+    return await files.upload(target, b"new", overwrite=False) == target
+
+
+async def _eight_at_once_keeping_both(files, kind: Kind, *, what: str):
+    target = await files.child(kind.at(""), "taken.txt")
+    for n in range(8):
+        (kind.root / f"src{n}").mkdir()
+        (kind.root / f"src{n}" / "taken.txt").write_bytes(f"copy {n}".encode())
+
+    async def one(n: int) -> str:
+        if what == "upload":
+            return await files.upload(target, f"copy {n}".encode(), overwrite=False, keep_both=True)
+        return await files.place_into(
+            kind.at(f"src{n}/taken.txt"),
+            kind.at(""),
+            None,
+            move=False,
+            overwrite=False,
+            allow_dirs=False,
+            keep_both=True,
+        )
+
+    landed = await asyncio.gather(*(one(n) for n in range(8)))
+    names = sorted(files.name(p) for p in landed)
+    contents = sorted((kind.root / name).read_bytes() for name in names)
+    return names, contents, (kind.root / "taken.txt").read_bytes()
+
+
+async def _land_keeping_both(files, kind: Kind):
+    target = await files.path(kind.at("taken.txt"))
+    landing = await files.land(target, source_mode=0o100644, overwrite=False, keep_both=True)
+    await landing.write(b"landed")
+    await landing.commit()
+    return files.name(landing.path), (kind.root / "taken (2).txt").read_bytes()
+
+
+async def _land_says_its_path(files, kind: Kind):
+    target = await files.path(kind.at("free.txt"))
+    landing = await files.land(target, source_mode=0o100644, overwrite=False)
+    await landing.abort()
+    return landing.path == target
+
+
+async def _place_many_keeping_both(files, kind: Kind):
+    (kind.root / "sub" / "taken.txt").write_bytes(b"inner old\n")
+    outcome = await files.place_many(
+        [kind.at("a.txt"), kind.at("taken.txt")],
+        kind.at("sub"),
+        move=False,
+        overwrite=False,
+        keep_both=True,
+    )
+    return outcome.succeeded, outcome.failed, outcome.placed, _folder_names(kind, "sub")
+
+
 async def _land_into_missing(files, kind: Kind):
     folder = kind.at(MISSING)
     landing = await files.land(
@@ -977,6 +1084,73 @@ ROWS = [
         "a batch move into a missing folder makes the folders",
         lambda f, k: _place_many_into_missing(f, k, move=True),
         same=lambda k: ([k.at("a.txt")], [], (["inner.txt", "new dir #"], ["c"])),
+    ),
+    Row(
+        "a rename with keep both lands beside the taken name",
+        _rename_keeping_both,
+        same=lambda k: (
+            k.at("taken (2).txt"),
+            ["empty.txt", "link_out", "sub", "taken (2).txt", "taken.txt"],
+            b"hello\n",
+        ),
+    ),
+    Row(
+        "a copy with keep both onto its own path makes a duplicate",
+        _copy_onto_itself_keeping_both,
+        same=lambda k: (k.at("a (2).txt"), b"hello\n", b"hello\n"),
+    ),
+    Row(
+        "a folder moved with keep both onto a name taken by a file lands beside it",
+        _move_folder_keeping_both,
+        same=lambda k: (k.at("d/sub (2)"), ["sub", "sub (2)"], b"in\n"),
+    ),
+    Row(
+        "an upload with keep both lands beside the taken name and says where",
+        _upload_keeping_both,
+        same=lambda k: (k.at("taken (2).txt"), b"old\n", b"new"),
+    ),
+    Row(
+        "an upload says the path it landed at",
+        _upload_returns_its_path,
+        same=lambda k: True,
+    ),
+    Row(
+        "eight uploads with keep both at once land under eight names",
+        lambda f, k: _eight_at_once_keeping_both(f, k, what="upload"),
+        same=lambda k: (
+            sorted(f"taken ({n}).txt" for n in range(2, 10)),
+            sorted(f"copy {n}".encode() for n in range(8)),
+            b"old\n",
+        ),
+    ),
+    Row(
+        "eight copies with keep both at once land under eight names",
+        lambda f, k: _eight_at_once_keeping_both(f, k, what="copy"),
+        same=lambda k: (
+            sorted(f"taken ({n}).txt" for n in range(2, 10)),
+            sorted(f"copy {n}".encode() for n in range(8)),
+            b"old\n",
+        ),
+    ),
+    Row(
+        "a landing with keep both says the free name it landed at",
+        _land_keeping_both,
+        same=lambda k: ("taken (2).txt", b"landed"),
+    ),
+    Row(
+        "a landing on a free name says the path asked for",
+        _land_says_its_path,
+        same=lambda k: True,
+    ),
+    Row(
+        "a batch copy with keep both lists the item placed under another name",
+        _place_many_keeping_both,
+        same=lambda k: (
+            [k.at("a.txt"), k.at("taken.txt")],
+            [],
+            [{"path": k.at("taken.txt"), "placed": k.at("sub/taken (2).txt")}],
+            ["a.txt", "inner.txt", "taken (2).txt", "taken.txt"],
+        ),
     ),
     Row(
         "a landing into a missing folder makes the folders",

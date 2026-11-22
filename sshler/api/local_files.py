@@ -16,7 +16,7 @@ import tarfile
 import tempfile
 import zipfile
 import zlib
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from functools import partial
 from pathlib import Path, PureWindowsPath
 from typing import BinaryIO
@@ -63,6 +63,7 @@ from .placement import (
     _refuse_a_folder_into_itself,
     _refuse_or_replace,
     _taken_after_check,
+    candidate_paths,
     ensure_source_unchanged,
     kept_permission_bits,
     refuse_a_name_this_request_placed,
@@ -131,6 +132,7 @@ class _LocalLanding:
 
     def __init__(self, target: str, *, replace: bool, mode: int | None = None) -> None:
         self.target = target
+        self.path = target  # where the file lands
         self.temp: str | None = None
         if replace:
             if mode is None:
@@ -185,22 +187,57 @@ def _local_landing(
     source_regular: bool = True,
     source_mode: int | None = None,
     exists_status: int = 409,
+    keep_both: bool = False,
 ) -> _LocalLanding:
     """Decide ``target`` by the rule and open it for the bytes of a file. A free name
     gets ``source_mode``'s permission bits (the default bits when None); a replace keeps
-    the replaced file's."""
+    the replaced file's. With ``keep_both`` a taken name gives the first free name of
+    its series; the landing's ``path`` says which."""
     dest_mode = _local_lstat_mode(target)
     replace = _refuse_or_replace(
-        dest_mode, overwrite=overwrite, source_regular=source_regular, exists_status=exists_status
+        dest_mode,
+        overwrite=overwrite,
+        source_regular=source_regular,
+        exists_status=exists_status,
+        keep_both=keep_both,
     )
     if not source_regular:
         raise Failure(REASON_INVALID, _ONLY_FILES)
-    try:
-        return _LocalLanding(target, replace=replace, mode=dest_mode if replace else source_mode)
-    except FileExistsError:
-        _taken_after_check(
-            _local_lstat_mode(target), source_regular=source_regular, exists_status=exists_status
-        )
+    if replace:
+        return _LocalLanding(target, replace=True, mode=dest_mode)
+    return _local_take_free_name(
+        target,
+        lambda candidate: _LocalLanding(candidate, replace=False, mode=source_mode),
+        keep_both=keep_both,
+        folder=False,
+        source_regular=source_regular,
+        exists_status=exists_status,
+    )
+
+
+def _local_take_free_name[T](
+    target: str,
+    take: Callable[[str], T],
+    *,
+    keep_both: bool,
+    folder: bool,
+    source_regular: bool = True,
+    exists_status: int = 409,
+) -> T:
+    """``take(candidate)``, the exclusive call that fails with ``FileExistsError`` when
+    its name is taken, on ``target``; with ``keep_both`` on each next name of
+    ``candidate_paths`` while the name is taken, otherwise the rule's refusal."""
+    for candidate in candidate_paths(target, keep_both=keep_both, folder=folder):
+        try:
+            return take(candidate)
+        except FileExistsError:
+            if not keep_both:
+                _taken_after_check(
+                    _local_lstat_mode(target),
+                    source_regular=source_regular,
+                    exists_status=exists_status,
+                )
+    raise AssertionError("unreachable: candidate_paths ends with a refusal")
 
 
 class _ThreadedLanding:
@@ -208,6 +245,7 @@ class _ThreadedLanding:
 
     def __init__(self, landing: _LocalLanding) -> None:
         self.landing = landing
+        self.path = landing.path
 
     async def write(self, data: bytes) -> None:
         await asyncio.to_thread(self.landing.write, data)
@@ -441,9 +479,17 @@ def _same_spelling(source: str, target: str) -> bool:
 
 
 def _local_place(
-    source: str, target: str, *, move: bool, overwrite: bool, allow_dirs: bool = True
-) -> None:
-    """Move or copy ``source`` to ``target`` under the rule (call from a worker thread).
+    source: str,
+    target: str,
+    *,
+    move: bool,
+    overwrite: bool,
+    allow_dirs: bool = True,
+    keep_both: bool = False,
+) -> str:
+    """Move or copy ``source`` to ``target`` under the rule (call from a worker thread);
+    returns where it landed: ``target``, or with ``keep_both`` the first free name of
+    its series when ``target`` is taken.
 
     A move onto the source itself (the same path, or one that differs only in letter
     case on a filesystem that ignores case) is a plain rename, not a taken name. A
@@ -453,7 +499,7 @@ def _local_place(
     same_file = dest_stat is not None and os.path.samestat(source_stat, dest_stat)
     if move and same_file and _same_spelling(source, target):
         os.rename(source, target)
-        return
+        return target
     if stat_mod.S_ISDIR(source_stat.st_mode):
         _refuse_a_folder_into_itself(
             os.path.realpath(source), os.path.realpath(os.path.dirname(target))
@@ -464,6 +510,7 @@ def _local_place(
         overwrite=overwrite,
         source_regular=source_regular,
         same_file=same_file,
+        keep_both=keep_both,
     )
     if stat_mod.S_ISDIR(source_stat.st_mode) and not allow_dirs:
         raise Failure(REASON_INVALID, _NO_FOLDER_COPY)
@@ -475,14 +522,22 @@ def _local_place(
             )
         else:
             _local_copy_file(source, target, replace_mode=dest_stat.st_mode)
-        return
-    try:
+        return target
+
+    def take(candidate: str) -> str:
         if move:
-            _local_move_new(source, target, source_stat)
+            _local_move_new(source, candidate, source_stat)
         else:
-            _local_copy_new(source, target, source_stat.st_mode)
-    except FileExistsError:
-        _taken_after_check(_local_lstat_mode(target), source_regular=source_regular)
+            _local_copy_new(source, candidate, source_stat.st_mode)
+        return candidate
+
+    return _local_take_free_name(
+        target,
+        take,
+        keep_both=keep_both,
+        folder=stat_mod.S_ISDIR(source_stat.st_mode),
+        source_regular=source_regular,
+    )
 
 
 def _local_make_folder(dest_dir: Path) -> Path:
@@ -515,35 +570,46 @@ def _local_place_into(
     move: bool,
     overwrite: bool,
     allow_dirs: bool = True,
+    keep_both: bool = False,
 ) -> str:
     """Place ``source`` in folder ``dest_dir`` (both resolved) as ``new_name`` (default:
-    its own name) under the rule; returns the target (call from a worker thread)."""
+    its own name) under the rule; returns where it landed (call from a worker thread)."""
     if not os.path.lexists(source):
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
     _local_refuse_a_folder_into_itself(source, dest_dir, move=move)
     target = str(_local_make_folder(dest_dir) / (new_name or Path(source).name))
-    _local_place(source, target, move=move, overwrite=overwrite, allow_dirs=allow_dirs)
-    return target
+    return _local_place(
+        source,
+        target,
+        move=move,
+        overwrite=overwrite,
+        allow_dirs=allow_dirs,
+        keep_both=keep_both,
+    )
 
 
 async def _local_write_new(
-    target_path: str, data: bytes, *, overwrite: bool, exists_status: int
-) -> None:
+    target_path: str, data: bytes, *, overwrite: bool, exists_status: int, keep_both: bool = False
+) -> str:
     """Write ``data`` to a new local file, or replace a regular file with ``overwrite``
     through a landing: the old file stays whole until the new one is complete. An
-    existing name answers ``exists_status``."""
+    existing name answers ``exists_status``, or with ``keep_both`` gives the first free
+    name of its series. Returns where the file landed."""
 
-    def _worker() -> None:
+    def _worker() -> str:
         _local_make_folder(Path(target_path).parent)
-        landing = _local_landing(target_path, overwrite=overwrite, exists_status=exists_status)
+        landing = _local_landing(
+            target_path, overwrite=overwrite, exists_status=exists_status, keep_both=keep_both
+        )
         try:
             landing.write(data)
             landing.commit()
         except BaseException:
             landing.abort()
             raise
+        return landing.path
 
-    await asyncio.to_thread(_worker)
+    return await asyncio.to_thread(_worker)
 
 
 def _local_children(target: Path) -> list[tuple[Path, bool]]:
@@ -857,17 +923,22 @@ def _local_extract_archive(archive: Path, dest_dir: Path, *, overwrite: bool) ->
 
 
 def _local_batch_item(
-    source: str, dest_dir: Path, landed: set[str], *, move: bool, overwrite: bool
-) -> str:
+    source: str,
+    dest_dir: Path,
+    landed: set[str],
+    *,
+    move: bool,
+    overwrite: bool,
+    keep_both: bool = False,
+) -> tuple[str, str]:
     """Move or copy one local item (resolved) into ``dest_dir`` (call from a worker
-    thread)."""
+    thread); returns the target asked for and where the item landed."""
     if not os.path.lexists(source):
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
     _local_refuse_a_folder_into_itself(source, dest_dir, move=move)
     target = str(_local_make_folder(dest_dir) / Path(source).name)
-    refuse_a_name_this_request_placed(target, landed)
-    _local_place(source, target, move=move, overwrite=overwrite)
-    return target
+    refuse_a_name_this_request_placed(target, landed, keep_both=keep_both)
+    return target, _local_place(source, target, move=move, overwrite=overwrite, keep_both=keep_both)
 
 
 class FileAnswer(FileResponse):
@@ -1107,9 +1178,13 @@ class LocalFiles:
         """A name that exists is a 400."""
         await _local_write_new(path, b"", overwrite=False, exists_status=400)
 
-    async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
+    async def upload(
+        self, path: str, data: bytes, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         """A name that exists is a 409."""
-        await _local_write_new(path, data, overwrite=overwrite, exists_status=409)
+        return await _local_write_new(
+            path, data, overwrite=overwrite, exists_status=409, keep_both=keep_both
+        )
 
     async def make_folder(self, path: str) -> None:
         path_obj = Path(path)
@@ -1117,7 +1192,9 @@ class LocalFiles:
             raise Failure(REASON_INVALID, "Directory already exists")
         path_obj.mkdir(parents=False, exist_ok=False)
 
-    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> _ThreadedLanding:
+    async def land(
+        self, path: str, *, source_mode: int, overwrite: bool, keep_both: bool = False
+    ) -> _ThreadedLanding:
         await asyncio.to_thread(_local_make_folder, Path(os.path.dirname(path)))
         landing = await asyncio.to_thread(
             _local_landing,
@@ -1125,6 +1202,7 @@ class LocalFiles:
             overwrite=overwrite,
             source_regular=stat_mod.S_ISREG(source_mode),
             source_mode=source_mode,
+            keep_both=keep_both,
         )
         return _ThreadedLanding(landing)
 
@@ -1141,14 +1219,17 @@ class LocalFiles:
     async def chmod(self, path: str, mode: int) -> None:
         await asyncio.to_thread(Path(path).chmod, mode)
 
-    async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
+    async def rename(
+        self, path: str, new_name: str, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         new_name = PathValidator.validate_filename(new_name)
 
         def _rename() -> str:
             source = Path(self._resolve(path))
             target = str(source.parent / new_name)
-            _local_place(str(source), target, move=True, overwrite=overwrite)
-            return target
+            return _local_place(
+                str(source), target, move=True, overwrite=overwrite, keep_both=keep_both
+            )
 
         return await asyncio.to_thread(_rename)
 
@@ -1161,6 +1242,7 @@ class LocalFiles:
         move: bool,
         overwrite: bool,
         allow_dirs: bool,
+        keep_both: bool = False,
     ) -> str:
         if new_name:
             PathValidator.validate_filename(new_name)
@@ -1174,6 +1256,7 @@ class LocalFiles:
             move=move,
             overwrite=overwrite,
             allow_dirs=allow_dirs,
+            keep_both=keep_both,
         )
 
     async def create_archive(
@@ -1220,7 +1303,13 @@ class LocalFiles:
         return outcome
 
     async def place_many(
-        self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
+        self,
+        paths: Sequence[str],
+        destination: str,
+        *,
+        move: bool,
+        overwrite: bool,
+        keep_both: bool = False,
     ) -> BatchOutcome:
         outcome = BatchOutcome()
         landed: set[str] = set()
@@ -1228,14 +1317,22 @@ class LocalFiles:
         for path in paths:
             try:
                 source = await asyncio.to_thread(self._resolve, path)
-                target = await asyncio.to_thread(
-                    _local_batch_item, source, dest_dir, landed, move=move, overwrite=overwrite
+                target, at = await asyncio.to_thread(
+                    partial(
+                        _local_batch_item,
+                        source,
+                        dest_dir,
+                        landed,
+                        move=move,
+                        overwrite=overwrite,
+                        keep_both=keep_both,
+                    )
                 )
             except Exception as exc:
                 outcome.failed.append(
                     failure_entry(path, exc, as_sent=self.as_sent, missing=MISSING_SOURCE)
                 )
             else:
-                landed.add(target)
-                outcome.succeeded.append(path)
+                outcome.landed(path, target, at)
+                landed.add(at)
         return outcome

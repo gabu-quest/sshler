@@ -25,6 +25,17 @@ each has a local and a remote implementation:
   placing under the existing-name rule, batches, archives, the folder zip.
   A write, a new file, an upload, a copy, a move and a transfer make the missing folders of
   their destination on both kinds of box (a remote box through `_remote_make_missing`).
+  **A taken name** (`api/placement.py`): without a word from the request it is refused;
+  `overwrite` lets a regular file replace a regular file; `keep_both` (rename, move, copy,
+  upload, batch move and copy, transfer) neither replaces nor refuses: the new thing lands
+  under the first free name of one series, `free_name` (`report (2).pdf`, `site (2).tar.gz`,
+  `photos (2)`, at most 255 bytes, up to `(999)`, then `exists`). Every name is taken by
+  the exclusive call that writes (an exclusive create, a hard link, a new folder), tried on
+  each name `candidate_paths` gives while it answers that the name exists, so two requests
+  at once never get one name. Both words together are `invalid`
+  (`refuse_replace_and_keep_both`). The answer's `path` is where the thing landed; a batch
+  answer with `keep_both` adds `placed` (`{"path", "placed"}` for each item that landed
+  under another name), and a transfer's `progress` events for such a file carry `placed`.
 - **Programs:** `BoxRunner` (`api/box_runner.py`), opened with `box_runner(deps, box, config,
   deadline=...)`. `run(words, folder=, timeout=)` for git and grep, `tmux(session, args)`,
   `force_kill(session)` (the session's own `ts-<name>` server stopped and every pane process
