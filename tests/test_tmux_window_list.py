@@ -32,15 +32,23 @@ def private_tmux(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[list[str
     pane_dir.mkdir()
 
     def run(*args: str) -> None:
-        subprocess.run([*base, *args], check=True, capture_output=True)
+        subprocess.run([*base, *args], check=True, capture_output=True, timeout=10)
+
+    def open_in_pane_dir(*args: str) -> None:
+        # tmux answers before the pane's child has changed folder; until then it reports
+        # the server's folder. The pane's own command runs after, so it says when.
+        ready = f"ready-{uuid.uuid4().hex[:8]}"
+        pane = f"tmux -L {socket} wait-for -S {ready}; exec cat"
+        run(*args, "-c", str(pane_dir), pane)
+        run("wait-for", ready)
 
     run("new-session", "-d", "-s", "m", "-x", "80", "-y", "24", "-n", NAMES[0])
-    for name in NAMES[1:]:
-        run("new-window", "-t", "m:", "-n", name, "-c", str(pane_dir))
-    run("split-window", "-t", "m:6", "-c", str(pane_dir))
-    run("split-window", "-t", "m:6", "-c", str(pane_dir))
-    run("select-window", "-t", "m:3")
     try:
+        for name in NAMES[1:]:
+            open_in_pane_dir("new-window", "-t", "m:", "-n", name)
+        open_in_pane_dir("split-window", "-t", "m:6")
+        open_in_pane_dir("split-window", "-t", "m:6")
+        run("select-window", "-t", "m:3")
         yield base
     finally:
         subprocess.run([*base, "kill-server"], capture_output=True)

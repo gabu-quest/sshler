@@ -683,6 +683,8 @@ class TestBootstrapSaysWhoAsks:
         to a request that has not signed in."""
         from sshler.api import config as config_module
 
+        monkeypatch.setattr(config_module, "LOCAL_IS_WINDOWS", False)
+        monkeypatch.setattr(config_module, "_WINDOWS_SHELLS", [])
         monkeypatch.setattr(config_module, "_WSL_DISTRO", "Ubuntu")
         monkeypatch.setattr(config_module, "_DEFAULT_SHELL", "pwsh")
         monkeypatch.setattr(config_module.PDF_RENDERER, "available", True)

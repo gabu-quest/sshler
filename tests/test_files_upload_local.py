@@ -6,8 +6,9 @@ User: "it shoudl offer to replace it, default choice is no." Local and remote bo
 flag the server never replaces. Review: `stat` follows symlinks, so a dangling link read
 as free and the write went through it. Each test names its mutation.
 
-A returned path is in the local file API's POSIX form (`C:/Users/x` on Windows, see
-`_compose_local_child_path`), which is what the frontend parses; hence `as_posix()`.
+The path of an upload or a new file is in the local file API's POSIX form (`C:/Users/x`
+on Windows, see `_compose_local_child_path`); hence `as_posix()`. A rename answers with
+the system's own spelling.
 """
 
 from __future__ import annotations
@@ -204,6 +205,6 @@ def test_local_rename_to_a_free_name_still_works(client, work):
     (work / "src.txt").write_text("source")
     resp = rename(client, work / "src.txt", "dst.txt")
     assert resp.status_code == 200
-    assert resp.json()["path"] == (work / "dst.txt").as_posix()
+    assert resp.json()["path"] == str(work / "dst.txt")
     assert not (work / "src.txt").exists()
     assert (work / "dst.txt").read_text() == "source"

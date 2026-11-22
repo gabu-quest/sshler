@@ -27,6 +27,8 @@ from sshler.ptyspawn import spawn_on_pty
 from sshler.terminal.local import list_local_tmux_windows as _list_local_tmux_windows
 from sshler.webapp import LocalPTYProcess, ServerSettings, make_app
 
+pytestmark = pytest.mark.posix_only("PTY children, sh stand-ins for tmux and signals by pid")
+
 TOKEN = "teardown-token"
 SESSION = "proj-1"
 

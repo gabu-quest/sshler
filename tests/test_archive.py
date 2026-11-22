@@ -1,5 +1,6 @@
 """Tests for archive creation and extraction API."""
 
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -382,11 +383,12 @@ class TestLocalArchiveGuards:
     def test_a_tar_entry_with_an_absolute_name_lands_inside_the_destination(self, place):
         root, client = place
         absolute = root / "outside" / "abs.txt"
-        _tar_with(root / "abs.tar.gz", _member(str(absolute)))
+        name = absolute.as_posix().removeprefix(absolute.drive)  # "/..." on every OS
+        _tar_with(root / "abs.tar.gz", _member(name))
         resp = _extract(client, root / "abs.tar.gz", root / "dest")
         assert resp.status_code == 200
         assert list((root / "outside").iterdir()) == []
-        assert (root / "dest" / str(absolute).lstrip("/")).read_bytes() == b"x"
+        assert (root / "dest" / name.lstrip("/")).read_bytes() == b"x"
 
     def test_a_tar_link_pointing_outside_is_refused(self, place):
         root, client = place
@@ -402,11 +404,12 @@ class TestLocalArchiveGuards:
         root, client = place
         absolute = root / "outside" / "abs.txt"
         with zipfile.ZipFile(str(root / "abs.zip"), "w") as zf:
-            zf.writestr(str(absolute), "z")
+            name = absolute.as_posix().removeprefix(absolute.drive)  # "/..." on every OS
+            zf.writestr(name, "z")
         resp = _extract(client, root / "abs.zip", root / "dest")
         assert resp.status_code == 200
         assert list((root / "outside").iterdir()) == []
-        assert (root / "dest" / str(absolute).lstrip("/")).read_text() == "z"
+        assert (root / "dest" / name.lstrip("/")).read_text() == "z"
 
     def test_a_zip_entry_with_a_parent_reference_writes_nothing_outside(self, place):
         root, client = place
@@ -423,7 +426,16 @@ class TestLocalArchiveGuards:
 
 @pytest.mark.parametrize(
     "archive_name",
-    ["-a.zip", "a b.zip", "it's.zip", "$HOME.zip", "`x`.zip", "a;b.zip", "a\nb.zip", "..a.zip"],
+    [
+        "-a.zip",
+        "a b.zip",
+        "it's.zip",
+        "$HOME.zip",
+        "`x`.zip",
+        "a;b.zip",
+        pytest.param("a\nb.zip", marks=pytest.mark.posix_only("a file name holding a newline")),
+        "..a.zip",
+    ],
 )
 def test_a_local_archive_name_is_one_file_name_whatever_it_holds(
     tmp_path, monkeypatch, archive_name
@@ -475,7 +487,12 @@ def test_a_local_archive_of_a_missing_source_is_404_with_its_text(tmp_path, monk
         )
     finally:
         client.close()
+    words = (
+        "The system cannot find the file specified"
+        if sys.platform == "win32"
+        else "No such file or directory"
+    )
     assert (resp.status_code, resp.json()) == (
         404,
-        {"detail": f"No such file or directory: {missing}", "reason": "not_found"},
+        {"detail": f"{words}: {missing}", "reason": "not_found"},
     )

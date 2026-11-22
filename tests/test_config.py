@@ -143,6 +143,7 @@ def test_save_config_creates_missing_config_folder(monkeypatch, tmp_path):
     assert [b["name"] for b in data["boxes"]] == ["a"]
 
 
+@pytest.mark.posix_only("POSIX permission bits")
 def test_save_config_keeps_existing_mode(monkeypatch, tmp_path):
     from sshler.config import save_config
 
@@ -154,6 +155,7 @@ def test_save_config_keeps_existing_mode(monkeypatch, tmp_path):
     assert oct(boxes_yaml.stat().st_mode & 0o777) == "0o600"
 
 
+@pytest.mark.posix_only("POSIX permission bits")
 def test_save_config_new_file_gets_umask_mode(monkeypatch, tmp_path):
     from sshler.config import save_config
 

@@ -172,6 +172,8 @@ def _local_without_tmux(mp, tmp_path, app, scene):
     empty.mkdir()
     # No program at all is on PATH: the local box has no tmux, and nothing can start.
     mp.setenv("PATH", str(empty))
+    # The tmux check is the POSIX local box's; a Windows one opens a shell instead.
+    mp.setattr(webapp, "LOCAL_IS_WINDOWS", False)
     return _url("local"), {}
 
 
