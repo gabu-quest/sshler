@@ -1324,14 +1324,14 @@ wheels = [
 
 [[package]]
 name = "sqler"
-version = "1.2026.11.2"
+version = "1.2026.11.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/d0/4f48fc142daa6d5f9972722559cb89fde96b7b98f7b4d0542fa69f248412/sqler-1.2026.11.2.tar.gz", hash = "sha256:46844e5eb4e21a1b5dc804e375c7336f884dc21ba6256981808dd9a055f1a1d9", size = 259166, upload-time = "2026-11-20T08:57:07.848Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/cb/c45b738f3bfd31bbd9ef3644303067aa1901a08a91e5191b9b9559256af7/sqler-1.2026.11.3.tar.gz", hash = "sha256:9f1c5051a367edbdbca102346af8babef7619ca62ad9df8408b8e10b141c3b4d", size = 261243, upload-time = "2026-11-22T00:47:42.08Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/ba/38f1d6b0d340cb4874dd3e472e47648874c0bd81fa9b8d9fc6d9667cb508/sqler-1.2026.11.2-py3-none-any.whl", hash = "sha256:b67dca69e3e37fa05e20a755304ef598b110c6e7077f0be82f448bdb6e54218b", size = 298001, upload-time = "2026-11-20T08:57:06.6Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/ef/130f2db8f710b6e7b36a6c2c061206bcfc827e630f5c423b9089d2cb05be/sqler-1.2026.11.3-py3-none-any.whl", hash = "sha256:52fd171e11393287452aad5fa936955c13051461e407cc17ddc16033bf595715", size = 300369, upload-time = "2026-11-22T00:47:40.377Z" },
 ]
 
 [package.optional-dependencies]
@@ -1419,7 +1419,7 @@ requires-dist = [
     { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=3.0.3" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.6" },
-    { name = "sqler", extras = ["pydantic"], specifier = ">=1.2026.11.2" },
+    { name = "sqler", extras = ["pydantic"], specifier = ">=1.2026.11.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 provides-extras = ["dev", "pdf"]
