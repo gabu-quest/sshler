@@ -242,12 +242,24 @@ async def test_a_reload_opens_tmux_after_a_plain_pick(open_page, tmp_path):
     await wait_for_prompt(page)
     await pick_shell(page, "Plain shell")
     await expect(page.locator(".toolbar-group")).to_have_count(0)
+    # The plain shell is up before the reload, so every socket of the first page is
+    # counted before the second page opens one.
+    await wait_for_prompt(page)
+    (plain_socket,) = await open_sockets(page, traffic, 1)
+    assert "shell=plain" in plain_socket.url
 
+    opened_before = len(traffic.sockets)
     await page.reload(wait_until="load")
     await wait_for_prompt(page)
     await expect(page.locator(SHELL_SELECT).first).to_have_text("tmux")
     await expect(page.locator(".toolbar-group")).to_have_count(3)
-    (socket_after,) = await open_sockets(page, traffic, 1)
+    # Only the sockets opened since the reload are counted: the browser drops the first
+    # page's socket itself, and Playwright does not always report that close.
+    await wait_for_count(
+        page, lambda: len(traffic.sockets) - opened_before, 1, "sockets opened since the reload"
+    )
+    socket_after = traffic.sockets[-1]
+    assert not socket_after.is_closed()
     assert "shell=" not in socket_after.url
     assert page.url.endswith(f"dir={directory}")
 
