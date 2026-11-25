@@ -428,8 +428,13 @@ async def force_kill_local_session(session_name: str) -> None:
     failure never blocks session deletion.
 
     It runs tmux and signals processes on this machine (``LocalRunner.force_kill``);
-    a remote box runs ``REMOTE_FORCE_KILL`` instead.
+    a remote box runs ``REMOTE_FORCE_KILL`` instead. On Windows the local tmux runs
+    inside WSL: its pane ids are WSL's, not Windows', and Windows has no ``killpg`` or
+    ``SIGKILL``, so only the server is stopped there (its panes get the SIGHUP in WSL).
     """
+    if _IS_WINDOWS:
+        await _run_local_tmux_command(session_name, ["kill-server"])
+        return
     # 1. Capture pane PIDs before the socket goes away.
     pids = await _list_local_pane_pids(session_name)
     # 2. Kill this session's tmux server (scoped to its own socket).

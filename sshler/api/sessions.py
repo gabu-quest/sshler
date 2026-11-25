@@ -205,6 +205,21 @@ def _sync_answer(rows: list[state.Session]) -> list[state.Session]:
     return answered
 
 
+async def _end_windows_shell(request: Request, box: str, session_name: str) -> bool:
+    """End the native Windows shell of ``(box, session_name)`` through the terminal
+    registry, the one owner of those shells; whether it held one. Every kill route
+    calls it, so no kill leaves a ConPTY shell running. The registry holds shells only
+    on a Windows local box, so elsewhere this ends nothing."""
+    registry = getattr(request.app.state, "win_terminal_registry", None)
+    if registry is None:
+        return False
+    try:
+        return bool(await registry.kill((box, session_name)))
+    except Exception as exc:
+        logger.warning(f"Failed to end the native shell {session_name!r} of {box}: {exc}")
+        return False
+
+
 def _refused(command: str, ran: Ran) -> str:
     """The text of tmux refusing ``command``: its error output, else its exit status."""
     words = ran.errors.strip()
@@ -377,12 +392,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
         if record is None or record.box != name:
             raise Failure(REASON_NOT_FOUND, "Session not found")
 
-        # Native Windows shells persist in the registry (no tmux). Deleting a
-        # session must terminate the live ConPTY too, not just drop the DB row.
-        registry = getattr(request.app.state, "win_terminal_registry", None)
-        if registry is not None and record.session_name:
-            with contextlib.suppress(Exception):
-                await registry.kill((record.box, record.session_name))
+        if record.session_name:
+            await _end_windows_shell(request, record.box, record.session_name)
 
         if kill_tmux and record.session_name:
             try:
@@ -409,22 +420,25 @@ def get_router(deps: APIDependencies) -> APIRouter:
         response_model=APISimpleMessage,
     )
     async def api_force_kill_session_by_name(
+        request: Request,
         name: str,
         session_name: str,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
-        """Force-kill a tmux session of the box by its name (no DB id needed).
+        """Force-kill a session of the box by its name (no DB id needed).
 
-        Powers the terminal toolbar's "super kill": ``BoxRunner.force_kill`` stops the
-        session's own tmux server and SIGKILLs any pane process that ignored the SIGHUP,
-        on either kind of box. A box that cannot be reached answers ``unreachable``, no
-        tmux on a remote box ``program_missing``, past the limit ``timeout``; a session
-        that is already gone is ``ok``.
+        Powers the terminal toolbar's "super kill". A native Windows shell of that name
+        is ended first, as a forced delete ends it; then ``BoxRunner.force_kill`` stops
+        the session's own tmux server and SIGKILLs any pane process that ignored the
+        SIGHUP, on either kind of box. A box that cannot be reached answers
+        ``unreachable``, no tmux on a remote box ``program_missing``, past the limit
+        ``timeout``; a session that is already gone is ``ok``.
         """
         box = deps.get_box_or_404(application_config, name)
         if refused_session_name(session_name):
             raise Failure(REASON_INVALID, "Invalid session name")
 
+        await _end_windows_shell(request, box.name, session_name)
         limit = dependencies.PROBE_TIMEOUT_SECONDS
         async with box_runner(deps, box, application_config, deadline=limit) as runner:
             await runner.force_kill(session_name)
@@ -464,12 +478,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         except ValidationError as exc:
             raise Failure(REASON_INVALID, str(exc)) from exc
 
-        # Terminate the live ConPTY (no-op returning False if it's already gone).
-        killed = False
-        registry = getattr(request.app.state, "win_terminal_registry", None)
-        if registry is not None:
-            with contextlib.suppress(Exception):
-                killed = await registry.kill((box.name, safe_name))
+        killed = await _end_windows_shell(request, box.name, safe_name)
 
         # Best-effort: drop the tracking row so the session list stays clean.
         record = await state.get_session_by_name_async(box.name, safe_name)

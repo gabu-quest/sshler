@@ -36,6 +36,7 @@ import yaml
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from fastapi.testclient import TestClient
+from platform_support import make_symlink
 from transfer_events import transfer_events
 
 import sshler.api
@@ -50,7 +51,18 @@ from sshler.ssh import SSHError, connect
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
 
-pytestmark = pytest.mark.posix_only("an SFTP server rooted in a temp folder with POSIX file modes")
+# The local half of the table runs on every system; on Windows the local box spells a
+# resolved path in POSIX form (`C:/x`), as `_open_local` names the tree. What needs
+# POSIX is marked where it is needed:
+# - every case on the loopback SFTP server (the remote opener, the round trips below);
+REMOTE_SERVER = pytest.mark.posix_only(
+    "an SFTP server rooted in a temp folder with POSIX file modes"
+)
+# - and each row whose expectation is POSIX's own, with one of these reasons.
+POSIX_MODES = "POSIX file modes (chmod, the bits a file is made with, a read-only folder)"
+POSIX_NAME = "a file name holding a newline, which NTFS cannot hold"
+POSIX_ENOTDIR = "ENOTDIR and its words, the POSIX error for a file used as a folder"
+POSIX_ENOENT_WORDS = "the POSIX words for a missing file (No such file or directory)"
 
 TOKEN = "contract-token"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
@@ -168,7 +180,7 @@ def _build_tree(root: Path, outside: Path) -> None:
     (root / "taken.txt").write_bytes(b"old\n")
     outside.mkdir()
     (outside / "secret.txt").write_bytes(b"secret\n")
-    (root / "link_out").symlink_to(outside / "secret.txt")
+    make_symlink(root / "link_out", outside / "secret.txt")
 
 
 @dataclass
@@ -197,8 +209,8 @@ async def _open_local(tmp_path: Path) -> AsyncIterator[Kind]:
         deps=SimpleNamespace(),
         root=root,
         outside=outside,
-        home=str(Path.home().resolve()),
-        at=lambda rel: str(root / rel) if rel else str(root),
+        home=Path.home().resolve().as_posix(),
+        at=lambda rel: (root / rel).as_posix() if rel else root.as_posix(),
     )
 
 
@@ -263,9 +275,12 @@ async def _open_remote(tmp_path: Path) -> AsyncIterator[Kind]:
 
 
 OPENERS = {"local": _open_local, "remote": _open_remote}
+OPENER_MARKS = {"remote": [REMOTE_SERVER]}
 
 
-@pytest_asyncio.fixture(params=list(OPENERS))
+@pytest_asyncio.fixture(
+    params=[pytest.param(name, marks=OPENER_MARKS.get(name, [])) for name in OPENERS]
+)
 async def kind(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Kind]:
     opened = OPENERS[request.param](tmp_path)
     yield await anext(opened)
@@ -297,6 +312,13 @@ class Row:
     operation: Callable
     same: Callable[[Kind], object] | None = None
     differs: dict[str, Callable[[Kind], object]] = field(default_factory=dict)
+    # The POSIX mechanism the expectation needs, when it does; the row is skipped on
+    # Windows with it as the reason.
+    posix_only: str | None = None
+
+    def param(self) -> object:
+        marks = [pytest.mark.posix_only(self.posix_only)] if self.posix_only else []
+        return pytest.param(self, id=self.name, marks=marks)
 
     def expected(self, kind: Kind) -> object:
         return self.same(kind) if self.same is not None else self.differs[kind.name](kind)
@@ -851,7 +873,7 @@ ROWS = [
         "a link that leaves the folder",
         lambda f, k: _link_out(f, k),
         differs={
-            "local": lambda k: (str(k.outside / "secret.txt"), "secret\n"),
+            "local": lambda k: ((k.outside / "secret.txt").as_posix(), "secret\n"),
             "remote": lambda k: ("/link_out", "secret\n"),
         },
     ),
@@ -863,11 +885,13 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"No such file or directory: {k.at('a.txt')}"),
             "remote": lambda k: ("answered", 404, "No such file or directory"),
         },
+        posix_only=POSIX_ENOENT_WORDS,
     ),
     Row(
         "a name with a space, a quote and a newline",
         _odd_name,
         same=lambda k: (k.at(ODD_NAME), (True, False, True), b""),
+        posix_only=POSIX_NAME,
     ),
     Row("~ is the home", lambda f, k: f.path("~"), same=lambda k: k.home),
     Row("~/x is in the home", lambda f, k: f.path("~/x"), same=lambda k: f"{k.home}/x"),
@@ -895,8 +919,9 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"No such file or directory: {k.at('nope')}"),
             "remote": lambda k: ("answered", 404, "No such file or directory"),
         },
+        posix_only=POSIX_ENOENT_WORDS,
     ),
-    Row("a mode is set", _chmod, same=lambda k: 0o600),
+    Row("a mode is set", _chmod, same=lambda k: 0o600, posix_only=POSIX_MODES),
     Row("text is written and read back", _write_and_read, same=lambda k: "# hi\n"),
     Row(
         # A local download streams from disk; a remote one is read into memory.
@@ -950,11 +975,13 @@ ROWS = [
         "a committed landing is the file, with the source's bits, its folder made",
         _land_new,
         same=lambda k: (ODD_NAME, b"abc", 0o640, [ODD_NAME]),
+        posix_only=POSIX_NAME + "; " + POSIX_MODES,
     ),
     Row(
         "a committed landing replaces a file and keeps its bits",
         _land_replacing,
         same=lambda k: (True, 0o660, ["a.txt", "empty.txt", "link_out", "sub", "taken.txt"]),
+        posix_only=POSIX_MODES,
     ),
     Row(
         "an aborted landing on a free name leaves nothing behind",
@@ -1174,6 +1201,7 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "an upload under a file is answered as a text write is",
@@ -1182,6 +1210,7 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "a text write into a file taken for a folder is not found",
@@ -1190,6 +1219,7 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "a new file in a file taken for a folder is not found",
@@ -1198,6 +1228,7 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "an upload into a file taken for a folder is not found",
@@ -1206,6 +1237,7 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "a copy into a file taken for a folder is not found",
@@ -1214,6 +1246,7 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "a landing in a file taken for a folder is not found",
@@ -1222,22 +1255,25 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
             "remote": lambda k: ("answered", 404, "Not a directory"),
         },
+        posix_only=POSIX_ENOTDIR,
     ),
     Row(
         "a text write under a read-only folder is forbidden",
         _write_text_under_a_read_only_folder,
         same=lambda k: ("answered", 403, "Permission denied"),
+        posix_only=POSIX_MODES,
     ),
     Row(
         "an upload under a read-only folder is forbidden",
         _upload_under_a_read_only_folder,
         same=lambda k: ("answered", 403, "Permission denied"),
+        posix_only=POSIX_MODES,
     ),
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("row", ROWS, ids=[row.name for row in ROWS])
+@pytest.mark.parametrize("row", [row.param() for row in ROWS])
 async def test_every_kind_of_box_keeps_the_contract(kind: Kind, row: Row) -> None:
     assert await _outcome(kind, row.operation) == row.expected(kind)
 
@@ -1598,8 +1634,8 @@ async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp
             [str(root / "a.txt"), str(root / "sub")], str(out), name, fmt
         )
         unpacked = await files.extract_archive(made, str(out / "x"))
-    assert (made, unpacked) == (str(out.resolve() / name), str(out.resolve() / "x"))
-    found = sorted(str(p.relative_to(out / "x")) for p in (out / "x").rglob("*"))
+    assert (made, unpacked) == ((out.resolve() / name).as_posix(), (out.resolve() / "x").as_posix())
+    found = sorted(p.relative_to(out / "x").as_posix() for p in (out / "x").rglob("*"))
     assert found == ["a.txt", "sub", "sub/inner.txt"]
     assert (out / "x" / "sub" / "inner.txt").read_bytes() == b"in\n"
 
@@ -1769,6 +1805,7 @@ def _get(counted: Counted, route: str, **params: str):
     return counted.client.get(f"/api/v1/boxes/lb/{route}", params=params, headers=HEADERS)
 
 
+@REMOTE_SERVER
 def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(counted, monkeypatch):
     """The upload route's 400 is for a name the local box refuses. A remote box whose
     connection fails with a ``ValueError`` (not a name's fault) is a fault nobody named:
@@ -1791,6 +1828,7 @@ def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(count
     assert not (counted.root / "home" / "n.txt").exists()
 
 
+@REMOTE_SERVER
 def test_a_remote_listing_opens_one_session_and_runs_only_the_health_check(counted):
     resp = _get(counted, "ls", directory="/home")
     assert resp.status_code == 200
@@ -1799,6 +1837,7 @@ def test_a_remote_listing_opens_one_session_and_runs_only_the_health_check(count
     assert counted.counts.commands == [HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_remote_listing_at_the_home_asks_for_the_home_once(counted):
     resp = _get(counted, "ls", directory="~")
     assert (resp.status_code, resp.json()["directory"]) == (200, "/home")
@@ -1806,6 +1845,7 @@ def test_a_remote_listing_at_the_home_asks_for_the_home_once(counted):
     assert counted.counts.commands == [HOME_CMD, HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_remote_rename_opens_one_session(counted):
     resp = counted.client.post(
         "/api/v1/boxes/lb/rename",
@@ -1818,6 +1858,7 @@ def test_a_remote_rename_opens_one_session(counted):
     assert counted.counts.commands == [HOME_CMD, HEALTH_CMD]
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("name", "sessions"),
     [
@@ -1835,6 +1876,7 @@ def test_a_remote_preview_opens_one_session_per_read(counted, name, sessions):
     assert counted.counts.commands == [HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_remote_listing_records_the_visit_and_a_failed_one_does_not(counted):
     listed = _get(counted, "ls", directory="/home")
     missing = _get(counted, "ls", directory="/nope")
@@ -1855,6 +1897,7 @@ def _transfer(counted: Counted, src: str, dest: str, paths: list[str], destinati
     return transfer_events(resp.text)
 
 
+@REMOTE_SERVER
 def test_a_transfer_between_two_remote_boxes_takes_one_connection_and_one_session_each(counted):
     """Two names for one server: each box has its own pooled connection and session."""
     events = _transfer(counted, "lb", "lb2", ["/home/a.txt", "/home/dot.png"], "/home/in")
@@ -1865,6 +1908,7 @@ def test_a_transfer_between_two_remote_boxes_takes_one_connection_and_one_sessio
     assert counted.counts.commands == [HEALTH_CMD, HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_transfer_from_a_remote_box_to_the_local_box_takes_one_connection_and_session(
     counted, tmp_path
 ):
@@ -1876,6 +1920,7 @@ def test_a_transfer_from_a_remote_box_to_the_local_box_takes_one_connection_and_
     assert counted.counts.commands == [HEALTH_CMD]
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize("remote_side", ["source", "destination"])
 def test_a_transfer_whose_sftp_session_cannot_open_is_one_error_before_any_item(
     counted, tmp_path, monkeypatch, remote_side
@@ -1899,6 +1944,7 @@ def test_a_transfer_whose_sftp_session_cannot_open_is_one_error_before_any_item(
     assert not (counted.root / "home" / "in").exists()
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("raised", "body"),
     [
@@ -1934,6 +1980,7 @@ def test_a_transfer_whose_source_box_cannot_be_reached_ends_with_its_reason(
     assert sorted(landing.iterdir()) == []
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("src", "dest", "paths", "destination", "detail"),
     [
@@ -1959,6 +2006,7 @@ def test_a_bad_transfer_path_is_a_400_before_any_connection(
     assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("change", "status", "detail"),
     [
@@ -1982,6 +2030,7 @@ def test_a_refused_transfer_answers_invalid_with_its_text_before_any_connection(
     assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize("overwrite", [False, True])
 def test_a_remote_write_that_fails_half_way_leaves_no_file_and_no_temp_name(
     counted, tmp_path, monkeypatch, overwrite
