@@ -28,7 +28,6 @@ import asyncio
 import contextlib
 import errno
 import os
-import resource
 import shutil
 import signal
 import socket
@@ -2278,6 +2277,8 @@ def _a_write_stops_part_way(monkeypatch: pytest.MonkeyPatch, box: str) -> Iterat
         monkeypatch.setattr(asyncssh.SFTPClientFile, "write", write)
         yield
         return
+    import resource  # POSIX only, as the module is: imported here, not at collection
+
     soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
     previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     resource.setrlimit(resource.RLIMIT_FSIZE, (FILE_SIZE_LIMIT, hard))

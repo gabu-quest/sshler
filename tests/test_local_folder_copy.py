@@ -79,7 +79,7 @@ def test_a_link_in_the_folder_is_copied_as_a_link(source, tmp_path):
     assert os.readlink(target / "link") == "plain.txt"
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads mode 0")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads mode 0")
 def test_a_file_that_cannot_be_read_fails_the_copy_with_its_error_and_leaves_nothing(
     source, tmp_path
 ):
