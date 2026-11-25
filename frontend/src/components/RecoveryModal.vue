@@ -4,6 +4,7 @@ import { NButton, NCheckbox, NIcon, NModal, NSpace, NTag, useMessage } from "nai
 import { PhTerminalWindow, PhArrowCounterClockwise, PhX, PhFolder, PhGear, PhArrowSquareOut } from "@phosphor-icons/vue";
 import type { LostSession } from "@/api/types";
 import { recreateSessionBatch, dismissRecovery, dismissRecoverySession } from "@/api/http";
+import { failureText, errorText } from "@/api/apiError";
 import { useI18n } from "@/i18n";
 
 const props = defineProps<{
@@ -21,8 +22,8 @@ const { t } = useI18n();
 const message = useMessage();
 const busy = ref(false);
 const selected = ref<Set<string>>(new Set());
-// id -> "ok" | error string
-const results = ref<Map<string, string>>(new Map());
+// Session id -> null when recreated, else the text of why it was not.
+const results = ref<Map<string, string | null>>(new Map());
 
 const pendingSessions = computed(() => props.sessions.filter(s => !results.value.has(s.id)));
 const hasSelection = computed(() => {
@@ -65,12 +66,11 @@ function terminalUrl(session: LostSession): string {
 }
 
 function isOk(id: string): boolean {
-  return results.value.get(id) === "ok";
+  return results.value.get(id) === null;
 }
 
 function isFailed(id: string): boolean {
-  const r = results.value.get(id);
-  return r !== undefined && r !== "ok";
+  return typeof results.value.get(id) === "string";
 }
 
 async function handleRecreate(ids: string[]) {
@@ -79,20 +79,17 @@ async function handleRecreate(ids: string[]) {
   try {
     const resp = await recreateSessionBatch(ids, props.token);
     const newResults = new Map(results.value);
-    for (const [id, status] of Object.entries(resp.results)) {
-      newResults.set(id, status);
-    }
+    for (const id of resp.succeeded) newResults.set(id, null);
+    for (const item of resp.failed) newResults.set(item.path, failureText(item));
     results.value = newResults;
     // Clear selected for any that succeeded
     const newSelected = new Set([...selected.value].filter(id => !isOk(id)));
     selected.value = newSelected;
 
-    const okCount = Object.values(resp.results).filter(s => s === "ok").length;
-    const failCount = Object.values(resp.results).filter(s => s !== "ok").length;
-    if (okCount > 0) message.success(`${okCount} session(s) recreated`);
-    if (failCount > 0) message.error(`${failCount} session(s) failed`);
-  } catch {
-    message.error("Request failed");
+    if (resp.succeeded.length > 0) message.success(t("recovery.selected_recreated", { count: resp.succeeded.length }));
+    if (resp.failed.length > 0) message.error(t("recovery.failed_count", { count: resp.failed.length }));
+  } catch (err) {
+    message.error(errorText(err));
   } finally {
     busy.value = false;
   }
@@ -108,7 +105,10 @@ function handleRecreateClick() {
 async function handleSkip(session: LostSession) {
   try {
     await dismissRecoverySession(session.id, props.token);
-  } catch { /* best effort */ }
+  } catch (err) {
+    // The row leaves the list either way; the message says the server did not drop it.
+    message.error(errorText(err));
+  }
   const remaining = props.sessions.filter(s => s.id !== session.id);
   emit("updated", remaining);
   if (remaining.length === 0) emit("update:show", false);
@@ -118,7 +118,10 @@ async function handleDismiss() {
   try {
     await dismissRecovery(props.token);
     message.info(t("recovery.dismissed"));
-  } catch { /* best effort */ }
+  } catch (err) {
+    // The modal closes either way; the message says the server did not drop them.
+    message.error(errorText(err));
+  }
   emit("updated", []);
   emit("update:show", false);
 }
@@ -186,7 +189,10 @@ async function handleDismiss() {
 
             <NTag size="small" :bordered="false">{{ session.windows.length }}w{{ totalPanes(session) > session.windows.length ? ` ${totalPanes(session)}p` : '' }}</NTag>
             <NTag v-if="isOk(session.id)" size="small" :bordered="false" type="success">ready</NTag>
-            <NTag v-else-if="isFailed(session.id)" size="small" :bordered="false" type="error">failed</NTag>
+            <template v-else-if="isFailed(session.id)">
+              <NTag size="small" :bordered="false" type="error">failed</NTag>
+              {{ results.get(session.id) }}
+            </template>
             <NTag v-else size="small" :bordered="false" type="warning">{{ timeAgo(session.last_snapshot_at) }} ago</NTag>
           </div>
 

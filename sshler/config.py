@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import getpass
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
-from platformdirs import user_config_dir
 
 from . import state
+from .config_dir import get_config_dir
 from .ssh_config import HostConfig, load_ssh_config
-
-ENV_CONFIG_DIR = "SSHLER_CONFIG_DIR"
 
 
 @dataclass
@@ -108,26 +107,6 @@ class AppConfig:
 
 
 DEFAULT_CONFIGURATION_TEMPLATE: dict[str, Any] = {"boxes": []}
-
-
-def get_config_dir() -> Path:
-    """Return the configuration directory, creating it when missing.
-
-    English:
-        Determines the directory that will contain ``boxes.yaml`` and creates
-        it if necessary.
-
-    日本語:
-        ``boxes.yaml`` を格納するディレクトリを決定し、存在しない場合は作成します。
-    """
-
-    override_directory = os.getenv(ENV_CONFIG_DIR)
-    if override_directory:
-        configuration_dir = Path(override_directory).expanduser()
-    else:
-        configuration_dir = Path(user_config_dir(appname="sshler", appauthor=False))
-    configuration_dir.mkdir(parents=True, exist_ok=True)
-    return configuration_dir
 
 
 def get_config_path() -> Path:
@@ -256,8 +235,36 @@ def save_config(application_config: AppConfig) -> None:
             )
         ]
     }
-    with config_path.open("w", encoding="utf-8") as file_pointer:
-        yaml.safe_dump(payload, file_pointer, sort_keys=False)
+    _write_atomically(config_path, payload)
+
+
+def _write_atomically(config_path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` as YAML so ``config_path`` is never left half written.
+
+    The content goes to a temporary file in the same folder, is flushed to disk
+    and then moved over the old file. A symbolic link keeps pointing at its
+    target, which receives the new content; existing permission bits are kept.
+    """
+
+    target = Path(os.path.realpath(config_path))
+    try:
+        mode: int | None = target.stat().st_mode & 0o7777
+    except FileNotFoundError:
+        mode = None
+    temp_path = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")
+    # 0o666 lets the umask decide the mode of a new file, as ``open("w")`` does.
+    descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file_pointer:
+            yaml.safe_dump(payload, file_pointer, sort_keys=False)
+            file_pointer.flush()
+            os.fsync(file_pointer.fileno())
+        if mode is not None:
+            os.chmod(temp_path, mode)  # not fchmod: Windows has none before Python 3.13
+        os.replace(temp_path, target)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def find_box(application_config: AppConfig, name: str) -> Box | None:
@@ -478,4 +485,4 @@ def _resolve_ssh_config_path(explicit: str | None = None) -> Path | None:
     if env_override:
         return Path(env_override).expanduser()
     default_path = Path.home() / ".ssh" / "config"
-    return default_path if default_path.exists() else default_path
+    return default_path

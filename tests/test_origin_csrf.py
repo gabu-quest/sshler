@@ -36,7 +36,7 @@ def test_hostile_origin_rejected_on_every_state_changing_method(client: TestClie
     from the `("POST", "PUT", "PATCH", "DELETE")` tuple."""
     response = client.request(method, UNROUTED, headers={"Origin": HOSTILE})
     assert response.status_code == 403
-    assert response.text == "Invalid Origin header"
+    assert response.json() == {"detail": "Invalid Origin header", "reason": "origin"}
 
 
 @pytest.mark.parametrize("method", STATE_CHANGING)
@@ -45,7 +45,7 @@ def test_public_url_origin_accepted(client: TestClient, method: str):
     public origin would get 403 instead of reaching the router's 404)."""
     response = client.request(method, UNROUTED, headers={"Origin": PUBLIC_URL})
     assert response.status_code == 404
-    assert response.text == '{"detail":"Not Found"}'
+    assert response.text == '{"detail":"Not Found","reason":"not_found"}'
 
 
 @pytest.mark.parametrize("method", STATE_CHANGING)
@@ -53,14 +53,14 @@ def test_missing_origin_accepted(client: TestClient, method: str):
     """Kills: treating a missing Origin/Referer as hostile (non-browser clients send none)."""
     response = client.request(method, UNROUTED)
     assert response.status_code == 404
-    assert response.text == '{"detail":"Not Found"}'
+    assert response.text == '{"detail":"Not Found","reason":"not_found"}'
 
 
 def test_hostile_referer_without_origin_rejected(client: TestClient):
     """Kills: dropping the `or request.headers.get("referer")` fallback."""
     response = client.post(UNROUTED, headers={"Referer": f"{HOSTILE}/some/page"})
     assert response.status_code == 403
-    assert response.text == "Invalid Origin header"
+    assert response.json() == {"detail": "Invalid Origin header", "reason": "origin"}
 
 
 def test_public_url_origin_with_path_in_referer_accepted(client: TestClient):
@@ -84,7 +84,7 @@ def test_cli_allow_origins_accepted(monkeypatch: pytest.MonkeyPatch):
     hostile = test_client.post(UNROUTED, headers={"Origin": HOSTILE})
     assert allowed.status_code == 404
     assert hostile.status_code == 403
-    assert hostile.text == "Invalid Origin header"
+    assert hostile.json() == {"detail": "Invalid Origin header", "reason": "origin"}
 
 
 def test_real_endpoint_hostile_origin_blocked_before_handler(client: TestClient):
@@ -100,6 +100,6 @@ def test_real_endpoint_hostile_origin_blocked_before_handler(client: TestClient)
         "/api/v1/ping", json={"title": "t"}, headers={**headers, "Origin": PUBLIC_URL}
     )
     assert hostile.status_code == 403
-    assert hostile.text == "Invalid Origin header"
+    assert hostile.json() == {"detail": "Invalid Origin header", "reason": "origin"}
     assert allowed.status_code == 200
     assert allowed.json()["ok"] is True

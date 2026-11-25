@@ -11,9 +11,7 @@ import pytest
 
 from sshler import snapshot, tmux
 
-pytestmark = pytest.mark.posix_only(
-    "the sh fake tmux and the #!/bin/sh tmux tripwire on PATH"
-)
+pytestmark = pytest.mark.posix_only("the sh fake tmux and the #!/bin/sh tmux tripwire on PATH")
 
 
 @pytest.mark.asyncio

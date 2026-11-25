@@ -108,7 +108,10 @@ def test_post_past_limit_gets_429_with_retry_after(limiter_clock: FrozenClock, c
     limited = client.post(UNROUTED)
     assert limited.status_code == 429
     assert limited.headers["Retry-After"] == "60"
-    assert limited.text == "Rate limit exceeded. Please try again later."
+    assert limited.json() == {
+        "detail": "Rate limit exceeded. Please try again later.",
+        "reason": "rate_limited",
+    }
 
 
 def test_get_past_limit_gets_429_with_retry_after(limiter_clock: FrozenClock, client: TestClient):
@@ -143,9 +146,7 @@ def test_limit_is_per_client_ip(limiter_clock: FrozenClock, monkeypatch: pytest.
     """
     monkeypatch.setenv("SSHLER_TRUST_PROXY_HEADERS", "true")
     reset_settings()
-    proxied = TestClient(
-        make_app(ServerSettings(csrf_token=TOKEN)), client=("127.0.0.1", 50000)
-    )
+    proxied = TestClient(make_app(ServerSettings(csrf_token=TOKEN)), client=("127.0.0.1", 50000))
     first = {"X-Real-IP": "203.0.113.1"}
     second = {"X-Real-IP": "203.0.113.2"}
     assert proxied.post(UNROUTED, headers=first).status_code == 404
@@ -187,16 +188,17 @@ def test_auth_lockout_after_five_failures_returns_429(auth_env, auth_client: Tes
     bad = {"Authorization": _basic(USER, "wrong-password")}
     failures = [auth_client.get(UNROUTED, headers=bad) for _ in range(LOCKOUT_THRESHOLD)]
     assert [r.status_code for r in failures] == [401] * LOCKOUT_THRESHOLD
-    assert [r.headers["WWW-Authenticate"] for r in failures] == [
-        'Basic realm="sshler"'
-    ] * LOCKOUT_THRESHOLD
+    assert ["www-authenticate" in r.headers for r in failures] == [False] * LOCKOUT_THRESHOLD
     assert fake_asyncio.sleeps == [2] * LOCKOUT_THRESHOLD
 
     # Even correct credentials are refused while locked out.
     locked = auth_client.get(UNROUTED, headers={"Authorization": _basic(USER, PASSWORD)})
     assert locked.status_code == 429
     assert locked.headers["Retry-After"] == str(LOCKOUT_SECONDS)
-    assert locked.text == "Too many failed authentication attempts. Try again later."
+    assert locked.json() == {
+        "detail": "Too many failed authentication attempts. Try again later.",
+        "reason": "rate_limited",
+    }
 
 
 def test_auth_lockout_retry_after_counts_down_and_expires(auth_env, auth_client: TestClient):
@@ -222,11 +224,10 @@ def test_successful_auth_resets_failure_count(auth_env, auth_client: TestClient)
     for _ in range(LOCKOUT_THRESHOLD - 1):
         auth_client.get(UNROUTED, headers=bad)
     assert auth_client.get(UNROUTED, headers=good).status_code == 404
-    # The good request set a session cookie; drop it so the next requests use Basic auth.
+    # The door makes no session from a Basic header; no cookie carries the next requests.
     auth_client.cookies.clear()
     statuses = [
-        auth_client.get(UNROUTED, headers=bad).status_code
-        for _ in range(LOCKOUT_THRESHOLD - 1)
+        auth_client.get(UNROUTED, headers=bad).status_code for _ in range(LOCKOUT_THRESHOLD - 1)
     ]
     assert statuses == [401] * (LOCKOUT_THRESHOLD - 1)
 

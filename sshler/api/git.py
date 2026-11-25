@@ -1,31 +1,41 @@
-"""Git integration API for Commander."""
+"""Git integration API for Commander.
+
+Each route runs git through the runner of its box (``box_runner``) with the same words
+on both kinds, and does not ask which kind of box it holds. Show and blame ask git for
+the repository's root, then work out the file's path under the root here, with the
+runner's ``file`` (the one place the kinds differ: the local box follows links, a
+remote box can only normalise the text). Nothing but git runs on a remote box.
+
+A folder outside any repository and a repository with no commit are ordinary answers.
+Every failure is raised: a refused ref or path is ``invalid``, a box that cannot be
+reached ``unreachable``, git past its limit ``timeout``, no git on the box
+``program_missing`` (the runner's failures, named by ``failure_of``).
+"""
 
 from __future__ import annotations
 
-import asyncio
-import logging
+import posixpath
 import re
-import shlex
 from datetime import datetime
-from pathlib import Path
+from pathlib import PurePath
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
-from ..ssh import SSHError
-from ..ssh_pool import get_pool
-from ..validation import PathValidator, ValidationError
+from .box_runner import BoxRunner, box_runner, remote_command_line
 from .dependencies import APIDependencies
-from .helpers import _normalize_local_path
+from .failure import REASON_FAILED, REASON_INVALID, REASON_NOT_FOUND, REASON_TIMEOUT, Failure
 
-logger = logging.getLogger(__name__)
-
-_REF_RE = re.compile(r"^[a-zA-Z0-9_./-]{1,200}$")
+# A ref is given to git as a bare word: one starting with "-" would be read as an
+# option (`--output` makes `git diff` write a file), so it is refused.
+_REF_RE = re.compile(r"^(?!-)[a-zA-Z0-9_./-]{1,200}$")
 _LOG_FIELD_SEP = "\x1f"
 MAX_BLAME_LINES = 10_000
 MAX_SHOW_BYTES = 1_048_576  # 1 MB
 MAX_DIFF_FILES = 2000
+GIT_TIMEOUT = 30
+BLAME_TIMEOUT = 60
 
 
 class GitCommit(BaseModel):
@@ -41,7 +51,6 @@ class GitLogResponse(BaseModel):
     directory: str
     commits: list[GitCommit]
     is_repo: bool = False
-    error: str | None = None
 
 
 class GitShowResponse(BaseModel):
@@ -63,7 +72,6 @@ class GitBlameResponse(BaseModel):
     path: str
     lines: list[GitBlameLine]
     truncated: bool = False
-    error: str | None = None
 
 
 class GitBranch(BaseModel):
@@ -78,7 +86,6 @@ class GitBranchesResponse(BaseModel):
     branches: list[GitBranch]
     root: str | None = None
     is_repo: bool = False
-    error: str | None = None
 
 
 class GitDiffFile(BaseModel):
@@ -92,111 +99,139 @@ class GitDiffFilesResponse(BaseModel):
     ref_a: str
     ref_b: str
     files: list[GitDiffFile]
-    error: str | None = None
 
 
 def _validate_ref(ref: str) -> str:
     if not _REF_RE.match(ref):
-        raise HTTPException(status_code=400, detail="Invalid git ref")
+        raise Failure(REASON_INVALID, "Invalid git ref")
     return ref
 
 
 def _require_path(path: str) -> str:
     cleaned = path.strip()
     if not cleaned:
-        raise HTTPException(status_code=400, detail="Path is required")
+        raise Failure(REASON_INVALID, "Path is required")
     return cleaned
 
 
-async def _run_local_git(args: list[str], cwd: str, timeout: int = 30) -> tuple[bool, str]:
-    """Run a local git command and return (success, stdout)."""
+async def _git(
+    runner: BoxRunner,
+    words: list[str],
+    folder: str,
+    timeout: float | None = None,
+    output_limit: int | None = None,
+) -> tuple[bool, str]:
+    """Run git on the box in ``folder``: (whether git exited 0, its output without
+    surrounding space). Past the limit (``GIT_TIMEOUT`` unless given) it raises
+    ``timeout``; any other failure of the run (no git on the box, a box that cannot be
+    reached or a connection that dropped) is raised as it is. With ``output_limit``
+    the status is not known, so the first is False."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
+        ran = await runner.run(
+            words,
+            folder=folder,
+            timeout=GIT_TIMEOUT if timeout is None else timeout,
+            output_limit=output_limit,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return proc.returncode == 0, stdout.decode("utf-8", errors="replace").strip()
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Git command timed out") from exc
-    except Exception as exc:  # pragma: no cover - local process failures vary
-        logger.warning("Local git command failed in %s: %s", cwd, exc)
-        return False, ""
+        raise Failure(REASON_TIMEOUT, "Git command timed out") from exc
+    return ran.ok, ran.output.strip()
 
 
-async def _run_remote_git(connection, cmd: str, timeout: int = 30) -> tuple[bool, str]:
-    """Run a remote git command via SSH and return (success, stdout)."""
-    try:
-        result = await asyncio.wait_for(connection.run(cmd, check=False), timeout=timeout)
-        return (result.exit_status or 0) == 0, (result.stdout or "").strip()
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Git command timed out") from exc
-    except Exception as exc:  # pragma: no cover - remote process failures vary
-        logger.warning("Remote git command failed: %s", exc)
-        return False, ""
+async def _git_folder(runner: BoxRunner, directory: str) -> str:
+    """The folder a git command runs in: on a remote box ``~`` is the home; a path that
+    fails its check raises its ``ValidationError`` (``invalid``)."""
+    return await runner.folder(directory)
 
 
-async def _get_local_repo_root(directory: str) -> str | None:
-    normalized = _normalize_local_path(directory)
-    ok, root = await _run_local_git(["git", "rev-parse", "--show-toplevel"], cwd=normalized)
+async def _has_commit(runner: BoxRunner, root: str) -> bool:
+    """Whether the repository at ``root`` has a commit: ``HEAD`` names one."""
+    ok, _ = await _git(runner, ["git", "rev-parse", "--verify", "--quiet", "HEAD"], root)
+    return ok
+
+
+async def _missing_ref(runner: BoxRunner, root: str, refs: tuple[str, ...]) -> str | None:
+    """The first of ``refs`` that names nothing in the repository at ``root``."""
+    for ref in refs:
+        ok, _ = await _git(runner, ["git", "rev-parse", "--verify", "--quiet", ref], root)
+        if not ok:
+            return ref
+    return None
+
+
+def git_log_words(fmt: str, limit: int) -> list[str]:
+    return ["git", "log", f"--pretty=format:{fmt}", "-n", str(limit)]
+
+
+def git_diff_files_words(ref_a: str, ref_b: str) -> list[str]:
+    """Files changed between two validated refs, with their status letter. The ``--``
+    ends the revisions: a file or folder named like a ref is not read as one."""
+    return ["git", "diff", "--name-status", ref_a, ref_b, "--"]
+
+
+async def _repo_root(runner: BoxRunner, folder: str) -> str | None:
+    ok, root = await _git(runner, ["git", "rev-parse", "--show-toplevel"], folder)
     if not ok or not root:
         return None
     return root
 
 
-async def _get_local_root_and_relpath(directory: str, path: str) -> tuple[str, str]:
-    root = await _get_local_repo_root(directory)
+async def _file_in_repo(runner: BoxRunner, directory: str, path: str) -> tuple[str, str]:
+    """The root of the repository at ``directory`` and the path of ``path`` (absolute,
+    or relative to ``directory``) under it, ``/`` separated. A path that is empty is a
+    400 before anything runs; a folder outside any repository is the 404; a path
+    outside the repository, or the root itself, is a 400."""
+    wanted = _require_path(path)
+    folder = await _git_folder(runner, directory)
+    root = await _repo_root(runner, folder)
     if not root:
-        raise HTTPException(status_code=404, detail="Not a git repository")
+        raise Failure(REASON_NOT_FOUND, "Not a git repository")
+    # A path that fails its check raises its ValidationError (`invalid`).
+    file = await runner.file(wanted, folder)
+    top = await runner.file(root, folder)
+    relative = _relative_to(file, top)
+    if relative is None:
+        relative = await _named_from_the_folder(runner, file, folder)
+    if relative is None:
+        raise Failure(REASON_INVALID, "Path is outside the git repository")
+    if relative == ".":
+        raise Failure(REASON_INVALID, "Path must point to a file inside the repository")
+    return root, relative
 
-    normalized_directory = _normalize_local_path(directory)
-    requested = Path(_require_path(path)).expanduser()
-    candidate = requested if requested.is_absolute() else Path(normalized_directory) / requested
-    resolved = candidate.resolve(strict=False)
 
+async def _named_from_the_folder(runner: BoxRunner, file: PurePath, folder: str) -> str | None:
+    """``file`` as git names it, worked out from where git says ``folder`` is in the
+    repository; None when that is outside it.
+
+    For a folder reached through a link: git names the root by its real path, so the
+    text of a path through the link is not under the root, while the folder's own place
+    in the repository (``git rev-parse --show-prefix``) is the same either way."""
+    ok, prefix = await _git(runner, ["git", "rev-parse", "--show-prefix"], folder)
+    if not ok:
+        return None
+    here = await runner.file(folder, folder)
+    from_the_folder = posixpath.relpath(file.as_posix(), here.as_posix())
+    named = posixpath.normpath(posixpath.join(prefix, from_the_folder))
+    return None if named == ".." or named.startswith("../") else named
+
+
+def _relative_to(file: PurePath, top: PurePath) -> str | None:
+    """``file`` under ``top`` as git names it (``/`` separated, ``.`` for the root
+    itself); None when it is not under it."""
     try:
-        relative = resolved.relative_to(Path(root).resolve(strict=False))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Path is outside the git repository") from exc
-
-    if str(relative) in {"", "."}:
-        raise HTTPException(
-            status_code=400, detail="Path must point to a file inside the repository"
-        )
-
-    return root, str(relative)
+        return file.relative_to(top).as_posix()
+    except ValueError:
+        return None
 
 
-def _build_remote_repo_path_command(directory: str, path: str) -> str:
-    return (
-        f"cd {shlex.quote(directory)} && "
-        "ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && "
-        f"REL=$(ROOT=\"$ROOT\" DIR={shlex.quote(directory)} TARGET={shlex.quote(path)} "
-        "python3 -c 'import os, sys; "
-        "root = os.environ[\"ROOT\"]; "
-        "directory = os.environ[\"DIR\"]; "
-        "target = os.environ[\"TARGET\"]; "
-        "candidate = target if os.path.isabs(target) else os.path.join(directory, target); "
-        "rel = os.path.relpath(os.path.normpath(candidate), root); "
-        "(rel in {\".\", \"..\"} or rel.startswith(\"../\")) and sys.exit(3); "
-        "print(rel)' 2>/dev/null)"
-    )
+def remote_git_log_command(directory: str, fmt: str, limit: int) -> str:
+    """The line the remote runner sends for the log."""
+    return remote_command_line(git_log_words(fmt, limit), directory)
 
 
-def _validate_remote_directory(directory: str) -> str:
-    try:
-        return PathValidator.validate_remote_path(directory)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _validate_remote_file_path(path: str) -> str:
-    try:
-        return PathValidator.validate_remote_path(_require_path(path))
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+def remote_git_diff_files_command(directory: str, ref_a: str, ref_b: str) -> str:
+    """The line the remote runner sends for the diff of two refs."""
+    return remote_command_line(git_diff_files_words(ref_a, ref_b), directory)
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -212,32 +247,18 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         fmt = f"%H{_LOG_FIELD_SEP}%h{_LOG_FIELD_SEP}%s{_LOG_FIELD_SEP}%an{_LOG_FIELD_SEP}%aI"
 
-        if box.transport == "local":
-            root = await _get_local_repo_root(directory)
-            if not root:
-                return GitLogResponse(box=name, directory=directory, commits=[], is_repo=False)
-            ok, output = await _run_local_git(
-                ["git", "log", f"--pretty=format:{fmt}", "-n", str(limit)],
-                cwd=root,
-            )
-        else:
-            validated = _validate_remote_directory(directory)
-            cmd = (
-                f"cd {shlex.quote(validated)} && "
-                f"git log --pretty=format:{shlex.quote(fmt)} -n {limit} 2>/dev/null"
-            )
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    ok, output = await _run_remote_git(conn, cmd)
-            except SSHError as exc:
-                return GitLogResponse(box=name, directory=directory, commits=[], error=str(exc))
+        async with box_runner(deps, box, application_config) as runner:
+            folder = await _git_folder(runner, directory)
+            ok, output = await _git(runner, git_log_words(fmt, limit), folder)
             if not ok:
-                return GitLogResponse(box=name, directory=directory, commits=[], is_repo=False)
+                # A folder outside any repository and a repository with no commit have
+                # no log; a log that fails in a repository with a commit is a failure.
+                root = await _repo_root(runner, folder)
+                if root and await _has_commit(runner, root):
+                    raise Failure(REASON_FAILED, "git log failed")
+                return GitLogResponse(box=name, directory=directory, commits=[], is_repo=bool(root))
 
-        if not ok or not output:
+        if not output:
             return GitLogResponse(box=name, directory=directory, commits=[], is_repo=True)
 
         commits = []
@@ -266,29 +287,18 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         ref = _validate_ref(ref)
 
-        if box.transport == "local":
-            root, rel_path = await _get_local_root_and_relpath(directory, path)
-            ok, content = await _run_local_git(["git", "show", f"{ref}:{rel_path}"], cwd=root)
-            if not ok:
-                raise HTTPException(status_code=404, detail=f"File not found at ref {ref}")
-        else:
-            validated_dir = _validate_remote_directory(directory)
-            validated_path = _validate_remote_file_path(path)
-            cmd = (
-                f"{_build_remote_repo_path_command(validated_dir, validated_path)} && "
-                f'git -C "$ROOT" show {shlex.quote(ref)}:"$REL" 2>/dev/null'
-                f" | head -c {MAX_SHOW_BYTES}"
+        async with box_runner(deps, box, application_config) as runner:
+            root, relative = await _file_in_repo(runner, directory, path)
+            shown = f"{ref}:{relative}"
+            # The cut leaves no exit status: an empty answer is asked once more, to
+            # tell an empty file from one that is not at the ref.
+            _, content = await _git(
+                runner, ["git", "show", shown], root, output_limit=MAX_SHOW_BYTES
             )
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    ok, content = await _run_remote_git(conn, cmd)
-            except SSHError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
-            if not ok:
-                raise HTTPException(status_code=404, detail=f"File not found at ref {ref}")
+            if not content:
+                found, _ = await _git(runner, ["git", "cat-file", "-e", shown], root)
+                if not found:
+                    raise Failure(REASON_NOT_FOUND, f"File not found at ref {ref}")
 
         return GitShowResponse(content=content[:MAX_SHOW_BYTES], ref=ref, path=path)
 
@@ -301,33 +311,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> GitBlameResponse:
         box = deps.get_box_or_404(application_config, name)
 
-        if box.transport == "local":
-            root, rel_path = await _get_local_root_and_relpath(directory, path)
-            ok, output = await _run_local_git(
-                ["git", "blame", "--porcelain", "--", rel_path],
-                cwd=root,
-                timeout=60,
+        async with box_runner(deps, box, application_config) as runner:
+            root, relative = await _file_in_repo(runner, directory, path)
+            ok, output = await _git(
+                runner, ["git", "blame", "--porcelain", "--", relative], root, BLAME_TIMEOUT
             )
-        else:
-            validated_dir = _validate_remote_directory(directory)
-            validated_path = _validate_remote_file_path(path)
-            cmd = (
-                f"{_build_remote_repo_path_command(validated_dir, validated_path)} && "
-                "git -C \"$ROOT\" blame --porcelain -- \"$REL\" 2>/dev/null"
-            )
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    ok, output = await _run_remote_git(conn, cmd, timeout=60)
-            except SSHError as exc:
-                return GitBlameResponse(box=name, path=path, lines=[], error=str(exc))
-
         if not ok:
-            return GitBlameResponse(
-                box=name, path=path, lines=[], error="Not a git repository or file not tracked"
-            )
+            # In a repository (`_file_in_repo` raised otherwise): git has no history of
+            # the file.
+            raise Failure(REASON_NOT_FOUND, f"File not tracked by git: {path}")
 
         lines = _parse_blame_porcelain(output)
         truncated = len(lines) > MAX_BLAME_LINES
@@ -345,46 +337,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
         box = deps.get_box_or_404(application_config, name)
         fmt = "%(refname:short)|%(HEAD)|%(objectname:short)"
 
-        if box.transport == "local":
-            root = await _get_local_repo_root(directory)
+        async with box_runner(deps, box, application_config) as runner:
+            root = await _repo_root(runner, await _git_folder(runner, directory))
             if not root:
                 return GitBranchesResponse(
                     box=name, directory=directory, branches=[], is_repo=False
                 )
-            ok, branch_output = await _run_local_git(["git", "branch", f"--format={fmt}"], cwd=root)
+            ok, branch_output = await _git(runner, ["git", "branch", f"--format={fmt}"], root)
             if not ok:
-                return GitBranchesResponse(
-                    box=name, directory=directory, branches=[], is_repo=False
-                )
-        else:
-            validated = _validate_remote_directory(directory)
-            cmd = (
-                f"cd {shlex.quote(validated)} && "
-                f"git branch --format={shlex.quote(fmt)} 2>/dev/null && "
-                "echo '---ROOT---' && "
-                "git rev-parse --show-toplevel 2>/dev/null"
-            )
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    ok, output = await _run_remote_git(conn, cmd)
-            except SSHError as exc:
-                return GitBranchesResponse(
-                    box=name, directory=directory, branches=[], error=str(exc)
-                )
-            if not ok:
-                return GitBranchesResponse(
-                    box=name, directory=directory, branches=[], is_repo=False
-                )
-            if "---ROOT---" in output:
-                branch_output, root = output.rsplit("---ROOT---", 1)
-                branch_output = branch_output.strip()
-                root = root.strip()
-            else:
-                branch_output = output
-                root = None
+                # A repository with no commit lists no branch and exits 0.
+                raise Failure(REASON_FAILED, "git branch failed")
 
         branches = []
         for line in branch_output.splitlines():
@@ -402,7 +364,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             box=name,
             directory=directory,
             branches=branches,
-            root=root if root else None,
+            root=root,
             is_repo=True,
         )
 
@@ -418,37 +380,20 @@ def get_router(deps: APIDependencies) -> APIRouter:
         ref_a = _validate_ref(ref_a)
         ref_b = _validate_ref(ref_b)
 
-        if box.transport == "local":
-            root = await _get_local_repo_root(directory)
-            if not root:
-                return GitDiffFilesResponse(
-                    box=name, directory=directory, ref_a=ref_a, ref_b=ref_b, files=[]
-                )
-            ok, output = await _run_local_git(
-                ["git", "diff", "--name-status", ref_a, ref_b],
-                cwd=root,
-            )
-        else:
-            validated = _validate_remote_directory(directory)
-            cmd = (
-                f"cd {shlex.quote(validated)} && "
-                f"git diff --name-status {shlex.quote(ref_a)} {shlex.quote(ref_b)} 2>/dev/null"
-            )
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    ok, output = await _run_remote_git(conn, cmd)
-            except SSHError as exc:
-                return GitDiffFilesResponse(
-                    box=name,
-                    directory=directory,
-                    ref_a=ref_a,
-                    ref_b=ref_b,
-                    files=[],
-                    error=str(exc),
-                )
+        async with box_runner(deps, box, application_config) as runner:
+            folder = await _git_folder(runner, directory)
+            ok, output = await _git(runner, git_diff_files_words(ref_a, ref_b), folder)
+            if not ok:
+                # Outside any repository, and in one with no commit, there are no files;
+                # with a commit, a ref that names nothing is not found and any other
+                # refusal is a failure.
+                root = await _repo_root(runner, folder)
+                if root and await _has_commit(runner, root):
+                    missing = await _missing_ref(runner, root, (ref_a, ref_b))
+                    if missing is not None:
+                        raise Failure(REASON_NOT_FOUND, f"Ref not found: {missing}")
+                    raise Failure(REASON_FAILED, "git diff failed")
+                output = ""
 
         files = []
         for line in output.splitlines()[:MAX_DIFF_FILES]:

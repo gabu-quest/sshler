@@ -129,9 +129,7 @@ def test_put_snapshot_config_reaches_the_running_loop(monkeypatch):
 
     server = ServerSettings(csrf_token="t", snapshot_enabled=True, snapshot_interval=30)
     with TestClient(make_app(server), headers={"X-SSHLER-TOKEN": "t"}) as client:
-        response = client.put(
-            "/api/v1/snapshot/config", json={"enabled": False, "interval": 90}
-        )
+        response = client.put("/api/v1/snapshot/config", json={"enabled": False, "interval": 90})
         assert response.status_code == 200
         assert response.json() == {"enabled": False, "interval": 90}
         assert len(seen) == 1

@@ -8,12 +8,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from ..auth import AuthManager
-from ..session import Session, get_session_store
+from ..session import Session, get_session_store, live_session
 from ..settings import get_settings
+from .failure import REASON_AUTH, REASON_INVALID, Failure
 from .rate_limiting import rate_limit_login
 
 if TYPE_CHECKING:
@@ -31,11 +32,7 @@ def get_client_ip(request: Request) -> str:
     get a fresh bucket, or name a victim's address to lock the victim out, so the
     socket peer is used.
     """
-    if (
-        get_settings().trust_proxy_headers
-        and request.client
-        and request.client.host == "127.0.0.1"
-    ):
+    if get_settings().trust_proxy_headers and request.client and request.client.host == "127.0.0.1":
         forwarded_ip = request.headers.get("x-real-ip")
         if forwarded_ip:
             return forwarded_ip
@@ -106,11 +103,8 @@ def create_auth_router(
         - Additional reverse proxy rate limiting recommended for production
         """
         # Check if auth is required
-        if not settings.require_auth or auth_manager is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Authentication is not enabled",
-            )
+        if auth_manager is None:
+            raise Failure(REASON_INVALID, "Authentication is not enabled")
 
         # Get client IP for rate limiting
         client_ip = get_client_ip(request)
@@ -123,10 +117,7 @@ def create_auth_router(
                 f"[Security] Failed login attempt for user '{credentials.username}' "
                 f"from {client_ip} (failure count: {failure_count})"
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid username or password",
-            )
+            raise Failure(REASON_AUTH, "Invalid username or password")
 
         # Reset failure tracker on successful auth
         failure_tracker.reset_failures(client_ip)
@@ -161,29 +152,20 @@ def create_auth_router(
 
         Returns user information if session is valid, 401 otherwise.
         """
-        if not settings.require_auth:
-            # If auth is disabled, return a default user
+        if auth_manager is None:
+            # If no password is set, return a default user
             return UserInfo(username="anonymous", user_id="anonymous")
 
         # Get session cookie
         session_id = request.cookies.get(settings.cookie_name)
         if not session_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated",
-            )
+            raise Failure(REASON_AUTH, "Not authenticated")
 
         # Validate session
-        session = session_store.get_session(
-            session_id,
-            idle_timeout=settings.session_idle_timeout_seconds,
-        )
+        session = live_session(session_id)
 
         if session is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session expired or invalid",
-            )
+            raise Failure(REASON_AUTH, "Session expired or invalid")
 
         return UserInfo(
             username=session.username,
@@ -230,12 +212,12 @@ async def get_current_session(request: Request) -> Session:
         Valid Session object
 
     Raises:
-        HTTPException: If not authenticated or session invalid
+        Failure: reason `auth`, if not authenticated or session invalid
     """
     settings = get_settings()
 
-    # If auth is disabled, create a dummy session
-    if not settings.require_auth:
+    # With no password set, create a dummy session
+    if request.app.state.settings.auth_manager is None:
         import time
 
         from ..session import Session
@@ -252,23 +234,13 @@ async def get_current_session(request: Request) -> Session:
     # Get session cookie
     session_id = request.cookies.get(settings.cookie_name)
     if not session_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated - session cookie missing",
-        )
+        raise Failure(REASON_AUTH, "Not authenticated - session cookie missing")
 
     # Validate session
-    session_store = get_session_store()
-    session = session_store.get_session(
-        session_id,
-        idle_timeout=settings.session_idle_timeout_seconds,
-    )
+    session = live_session(session_id)
 
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired or invalid",
-        )
+        raise Failure(REASON_AUTH, "Session expired or invalid")
 
     return session
 

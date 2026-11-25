@@ -21,8 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sshler
-from sshler import cli
-from sshler.cli import _cleanup_processes, _start_vite_dev_server, serve_dev
+from sshler.cli import server
+from sshler.cli.server import _cleanup_processes, _start_vite_dev_server, serve_dev
 
 DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
@@ -36,10 +36,10 @@ def reload_env_key_restored(monkeypatch):
     It requests ``monkeypatch`` and undoes it explicitly before checking, because the
     conftest's autouse fixtures hold the same monkeypatch and tear down later.
     """
-    before = os.environ.get(cli._RELOAD_ENV_KEY)
+    before = os.environ.get(server._RELOAD_ENV_KEY)
     yield
     monkeypatch.undo()
-    assert os.environ.get(cli._RELOAD_ENV_KEY) == before, "test leaked _RELOAD_ENV_KEY"
+    assert os.environ.get(server._RELOAD_ENV_KEY) == before, "test leaked _RELOAD_ENV_KEY"
 
 
 @pytest.fixture
@@ -49,11 +49,11 @@ def dev_project(tmp_path, monkeypatch):
     (project / "frontend").mkdir(parents=True)
     monkeypatch.chdir(project)
     # serve() writes and removes the PID file; keep it off the real /tmp/sshler.pid.
-    monkeypatch.setattr(cli, "_PID_FILE", tmp_path / "sshler.pid")
+    monkeypatch.setattr(server, "_PID_FILE", tmp_path / "sshler.pid")
     # setenv first so monkeypatch records the pre-test state (absent) and deletes the
     # key again at teardown; delenv(raising=False) alone records nothing when absent.
-    monkeypatch.setenv(cli._RELOAD_ENV_KEY, "")
-    monkeypatch.delenv(cli._RELOAD_ENV_KEY)
+    monkeypatch.setenv(server._RELOAD_ENV_KEY, "")
+    monkeypatch.delenv(server._RELOAD_ENV_KEY)
     saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     yield project
     for sig, handler in saved.items():
@@ -66,10 +66,11 @@ def vite():
     process = Mock()
     process.poll.return_value = None
     process.stdout = None
-    # Replace the ``time`` name inside ``sshler.cli`` only (serve_dev needs just
+    # Replace the ``time`` name inside ``sshler.cli.server`` only (serve_dev needs just
     # ``sleep``); the global ``time`` module is untouched.
-    with patch("sshler.cli._start_vite_dev_server", return_value=process) as starter, patch.object(
-        cli, "time", types.SimpleNamespace(sleep=Mock())
+    with (
+        patch("sshler.cli.server._start_vite_dev_server", return_value=process) as starter,
+        patch.object(server, "time", types.SimpleNamespace(sleep=Mock())),
     ):
         process.starter = starter
         yield process
@@ -85,20 +86,21 @@ class TestServeDev:
         the cwd, here ``dev_project``, so backend edits never reload).
         """
         assert Path.cwd() != Path(sshler.__file__).resolve().parent
-        with patch("sshler.cli.uvicorn.run") as run:
+        with patch("sshler.cli.server.uvicorn.run") as run:
             serve_dev(port=8123, token="dev-token", open_browser=False)
 
         run.assert_called_once_with(
-            "sshler.cli:_reload_app",
+            "sshler.cli.server:_reload_app",
             host="127.0.0.1",
             port=8123,
             reload=True,
             log_level="info",
             factory=True,
             reload_dirs=[str(Path(sshler.__file__).resolve().parent)],
+            loop="asyncio",
         )
         # uvicorn would now import the factory in its reloader child; do the same.
-        client = TestClient(cli._reload_app())
+        client = TestClient(server._reload_app())
         headers = {"X-SSHLER-TOKEN": "dev-token"}
         try:
             allowed = client.post(
@@ -119,16 +121,19 @@ class TestServeDev:
         Mutations killed: user origins dropped, Vite origins omitted, Vite origins
         placed before the user's.
         """
-        with patch("sshler.cli.uvicorn.run"):
+        with patch("sshler.cli.server.uvicorn.run"):
             serve_dev(port=9001, allow_origins=user_origins, open_browser=False)
 
-        origins = json.loads(cli.os.environ[cli._RELOAD_ENV_KEY])["allow_origins"]
+        origins = json.loads(server.os.environ[server._RELOAD_ENV_KEY])["allow_origins"]
         count = len(user_origins)
         assert origins[:count] == user_origins
         # The tail is a deduplicated set (order not specified): Vite's two origins
         # plus the listen address as 127.0.0.1 and localhost, nothing repeated.
         assert len(origins) == count + 4
-        assert set(origins[count:]) == set(DEV_ORIGINS) | {"http://127.0.0.1:9001", "http://localhost:9001"}
+        assert set(origins[count:]) == set(DEV_ORIGINS) | {
+            "http://127.0.0.1:9001",
+            "http://localhost:9001",
+        }
 
     def test_vite_is_started_in_frontend_dir_and_cleaned_up(self, dev_project, vite):
         """Vite runs in <cwd>/frontend and is terminated when the backend exits.
@@ -136,7 +141,7 @@ class TestServeDev:
         Mutations killed: wrong frontend dir, cleanup missing from ``finally``.
         """
         vite.wait.return_value = None
-        with patch("sshler.cli.uvicorn.run", side_effect=KeyboardInterrupt()):
+        with patch("sshler.cli.server.uvicorn.run", side_effect=KeyboardInterrupt()):
             serve_dev(open_browser=False)
 
         vite.starter.assert_called_once_with(dev_project / "frontend")
@@ -150,8 +155,8 @@ class TestServeDev:
         empty = tmp_path / "empty"
         empty.mkdir()
         monkeypatch.chdir(empty)
-        with patch("sshler.cli._start_vite_dev_server") as starter:
-            with patch("sshler.cli.uvicorn.run") as run:
+        with patch("sshler.cli.server._start_vite_dev_server") as starter:
+            with patch("sshler.cli.server.uvicorn.run") as run:
                 with pytest.raises(SystemExit) as excinfo:
                     serve_dev(open_browser=False)
 
@@ -164,9 +169,10 @@ class TestServeDev:
 
         Mutations killed: RuntimeError not caught, backend started anyway.
         """
-        with patch("sshler.cli._start_vite_dev_server", side_effect=RuntimeError("no pnpm")), patch(
-            "sshler.cli.uvicorn.run"
-        ) as run:
+        with (
+            patch("sshler.cli.server._start_vite_dev_server", side_effect=RuntimeError("no pnpm")),
+            patch("sshler.cli.server.uvicorn.run") as run,
+        ):
             with pytest.raises(SystemExit) as excinfo:
                 serve_dev(open_browser=False)
 
@@ -181,7 +187,7 @@ class TestServeDev:
         non-zero exit.
         """
         vite.wait.return_value = None
-        with patch("sshler.cli.uvicorn.run"):
+        with patch("sshler.cli.server.uvicorn.run"):
             serve_dev(open_browser=False)
         vite.terminate.reset_mock()  # the normal ``finally`` cleanup already ran once
 
@@ -191,6 +197,23 @@ class TestServeDev:
 
         assert excinfo.value.code == 0
         vite.terminate.assert_called_once_with()
+
+
+class TestEventLoop:
+    def test_the_plain_server_runs_on_the_stdlib_event_loop(self, dev_project):
+        """``serve`` asks uvicorn for the stdlib loop by name, never ``auto``.
+
+        ``auto`` picks uvloop where it is installed, and uvloop runs Python in the forked
+        child of every subprocess it starts (see ``_EVENT_LOOP``). The reloading server's
+        call is pinned whole in ``test_reload_app_factory_trusts_vite_origins``.
+        """
+        with patch("sshler.cli.server.uvicorn.run") as run:
+            server.serve(port=8124, token="plain-token", open_browser=False, serve_artifacts=False)
+
+        assert run.call_count == 1
+        assert run.call_args.kwargs["loop"] == "asyncio"
+        assert run.call_args.kwargs["reload"] is False
+
 
 class TestViteAndCleanup:
     def test_vite_dev_server_startup(self):
@@ -203,7 +226,7 @@ class TestViteAndCleanup:
             package_json.write_text('{"name": "test", "scripts": {"dev": "vite"}}')
 
             # Mock subprocess to avoid actually starting Vite
-            with patch('subprocess.Popen') as mock_popen:
+            with patch("subprocess.Popen") as mock_popen:
                 mock_process = Mock()
                 mock_process.poll.return_value = None
                 mock_process.stdout = None
@@ -213,8 +236,10 @@ class TestViteAndCleanup:
                 # Windows, where `pnpm` is a `.cmd` shim Popen can't launch by bare
                 # name). Mock the resolution + the `--version` availability check.
                 fake_pnpm = str(frontend_dir / "pnpm")
-                with patch('shutil.which', return_value=fake_pnpm) as mock_which, \
-                     patch('subprocess.run') as mock_run:
+                with (
+                    patch("shutil.which", return_value=fake_pnpm) as mock_which,
+                    patch("subprocess.run") as mock_run,
+                ):
                     mock_run.return_value = Mock(returncode=0)  # pnpm --version succeeds
 
                     result = _start_vite_dev_server(frontend_dir)
@@ -225,7 +250,7 @@ class TestViteAndCleanup:
 
                     mock_which.assert_called_once_with("pnpm")
                     assert call_args[0][0] == [fake_pnpm, "dev"]
-                    assert call_args[1]['cwd'] == frontend_dir
+                    assert call_args[1]["cwd"] == frontend_dir
                     assert result == mock_process
 
     def test_process_cleanup(self):
@@ -247,7 +272,6 @@ class TestViteAndCleanup:
 
         # Verify terminate was not called on already terminated process
         mock_process2.terminate.assert_not_called()
-
 
 
 class TestDevWorkflowIntegration:

@@ -1,6 +1,6 @@
 /**
  * Property-based tests for terminal WebSocket functionality.
- * 
+ *
  * **Feature: vue3-migration-completion, Property 15: Terminal WebSocket connection**
  * **Validates: Requirements 5.1, 5.2, 5.3**
  */
@@ -146,15 +146,15 @@ describe("TerminalView Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 15: Terminal WebSocket connection**
        * **Validates: Requirements 5.1, 5.2, 5.3**
-       * 
-       * For any terminal session creation, a WebSocket connection should be established 
+       *
+       * For any terminal session creation, a WebSocket connection should be established
        * and provide bidirectional communication.
        */
 
       await fc.assert(fc.asyncProperty(
         fc.record({
-          boxName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 20 }),
-          sessionName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 20 }),
+          boxName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 20 }),
+          sessionName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp", "/var"),
           cols: fc.integer({ min: 40, max: 200 }),
           rows: fc.integer({ min: 10, max: 60 }),
@@ -233,8 +233,8 @@ describe("TerminalView Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 16: Terminal resize handling**
        * **Validates: Requirements 5.4**
-       * 
-       * For any terminal window resize, the terminal dimensions should be updated 
+       *
+       * For any terminal window resize, the terminal dimensions should be updated
        * and the remote session should be notified of the new size.
        */
 
@@ -284,8 +284,8 @@ describe("TerminalView Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 17: Terminal disconnection handling**
        * **Validates: Requirements 5.5**
-       * 
-       * For any terminal session disconnection, the system should display connection 
+       *
+       * For any terminal session disconnection, the system should display connection
        * status and provide reconnection options.
        */
 

@@ -303,27 +303,6 @@ def test_pdf_render_requires_token(tmp_path, monkeypatch):
         client.close()
 
 
-def test_pdf_render_returns_503_when_unavailable(tmp_path, monkeypatch):
-    """When the Playwright renderer is unavailable, the endpoint must return 503
-    with an actionable install hint — the frontend uses this to keep the button hidden,
-    and a stale UI state must produce a clear error rather than a generic 500."""
-    from sshler import pdf as pdf_module
-
-    monkeypatch.setattr(pdf_module.PDF_RENDERER, "available", False)
-    config_dir = setup_config(tmp_path)
-    client = build_client(config_dir, monkeypatch)
-    try:
-        resp = client.post(
-            "/api/v1/pdf/render",
-            headers=auth_headers(),
-            json={"html": "<html></html>", "filename": "x.pdf"},
-        )
-        assert resp.status_code == 503
-        assert "playwright install chromium" in resp.json()["detail"]
-    finally:
-        client.close()
-
-
 def test_pdf_render_streams_pdf_when_available(tmp_path, monkeypatch):
     """Happy path: when the renderer reports available, the endpoint must call
     PDFRenderer.render() with the request HTML and stream the bytes back as

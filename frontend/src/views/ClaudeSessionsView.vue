@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@/i18n";
@@ -260,7 +261,7 @@ async function handleResume(session: ClaudeSession, navigate = false) {
       });
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     resumingId.value = null;
   }

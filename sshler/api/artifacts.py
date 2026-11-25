@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from .. import state
@@ -25,6 +25,7 @@ from ..artifacts import (
     resolve_registration,
 )
 from .dependencies import APIDependencies
+from .failure import REASON_EXISTS, REASON_INVALID, REASON_NOT_FOUND, Failure
 
 
 class APIArtifactProjectCreate(BaseModel):
@@ -153,16 +154,16 @@ async def _resolve_project(
     source_path: Path,
 ) -> state.ArtifactProject:
     if project_id and project_name:
-        raise HTTPException(status_code=400, detail="Use project_id or project, not both")
+        raise Failure(REASON_INVALID, "Use project_id or project, not both")
     if project_id:
         project = await state.get_artifact_project_async(project_id)
         if project is None:
-            raise HTTPException(status_code=404, detail="Artifact project not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact project not found")
         return project
     try:
         name = clean_project_name(project_name or infer_project_name(source_path))
     except ArtifactValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise Failure(REASON_INVALID, str(exc)) from exc
     project, _ = await state.get_or_create_artifact_project_async(name)
     return project
 
@@ -173,7 +174,7 @@ def _resolve_source(
     try:
         return resolve_registration(source_path, mode, entrypoint)
     except (ArtifactValidationError, FileNotFoundError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise Failure(REASON_INVALID, str(exc)) from exc
 
 
 def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
@@ -191,7 +192,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
         try:
             name = clean_project_name(body.name)
         except ArtifactValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
         project, _ = await state.get_or_create_artifact_project_async(name)
         return await _project_to_api(project)
 
@@ -199,11 +200,14 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
     async def rename_project(project_id: str, body: APIArtifactProjectUpdate) -> APIArtifactProject:
         try:
             name = clean_project_name(body.name)
+        except ArtifactValidationError as exc:
+            raise Failure(REASON_INVALID, str(exc)) from exc
+        try:
             project = await state.rename_artifact_project_async(project_id, name)
-        except (ArtifactValidationError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:  # the name belongs to another project
+            raise Failure(REASON_EXISTS, str(exc)) from exc
         if project is None:
-            raise HTTPException(status_code=404, detail="Artifact project not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact project not found")
         return await _project_to_api(project)
 
     @router.delete("/artifact-projects/{project_id}")
@@ -214,8 +218,8 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
             removed, registration_count = await state.delete_artifact_project_async(
                 project_id, cascade=cascade
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:  # the project still holds artifacts and `cascade` is off
+            raise Failure(REASON_INVALID, str(exc)) from exc
         if cascade:
             clear_page_cache()
         return {
@@ -234,7 +238,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
         exists: bool | None = Query(default=None),
     ) -> APIArtifactList:
         if mode is not None and mode not in {"file", "site", "collection"}:
-            raise HTTPException(status_code=400, detail="Invalid artifact mode")
+            raise Failure(REASON_INVALID, "Invalid artifact mode")
         rows = await state.list_artifact_registrations_async(project_id)
         projects = {item.id: item for item in await state.list_artifact_projects_async()}
         if project:
@@ -252,7 +256,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
             try:
                 wanted_group = clean_group_path(group).casefold()
             except ArtifactValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise Failure(REASON_INVALID, str(exc)) from exc
             rows = [
                 row
                 for row in rows
@@ -308,7 +312,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
             slug = clean_alias_slug(body.slug)
             mount_path = clean_mount_path(body.mount_path)
         except ArtifactValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
 
         existing = await state.find_artifact_registration_async(str(source), mode, entrypoint)
         if existing:
@@ -319,11 +323,9 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
                 or (slug is not None and existing.slug != slug)
                 or (body.mount_path is not None and existing.mount_path != mount_path)
             ):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Artifact is already registered with different metadata; update it instead"
-                    ),
+                raise Failure(
+                    REASON_EXISTS,
+                    "Artifact is already registered with different metadata; update it instead",
                 )
             api = await _artifact_to_api(existing)
             return APIArtifactCreateResult(**api.model_dump(), created=False)
@@ -340,13 +342,13 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
                 mount_path=mount_path,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise Failure(REASON_EXISTS, str(exc)) from exc
         try:
             await asyncio.to_thread(discover_pages, registration, refresh=True)
         except ArtifactValidationError as exc:
             await state.delete_artifact_registration_async(registration.id)
             clear_page_cache(registration.id)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
         api = await _artifact_to_api(registration)
         return APIArtifactCreateResult(**api.model_dump(), created=True)
 
@@ -354,14 +356,14 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
     async def get_artifact(registration_id: str) -> APIArtifact:
         registration = await state.get_artifact_registration_async(registration_id)
         if registration is None:
-            raise HTTPException(status_code=404, detail="Artifact not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact not found")
         return await _artifact_to_api(registration)
 
     @router.patch("/artifacts/{registration_id}", response_model=APIArtifact)
     async def update_artifact(registration_id: str, body: APIArtifactUpdate) -> APIArtifact:
         registration = await state.get_artifact_registration_async(registration_id)
         if registration is None:
-            raise HTTPException(status_code=404, detail="Artifact not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact not found")
 
         source_text = body.source_path or registration.source_path
         requested_mode = body.mode or registration.mode
@@ -384,7 +386,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
             else await state.get_artifact_project_async(registration.project_id)
         )
         if project is None:
-            raise HTTPException(status_code=404, detail="Artifact project not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact project not found")
 
         try:
             group_path = (
@@ -404,11 +406,11 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
                 else registration.mount_path
             )
         except ArtifactValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
 
         duplicate = await state.find_artifact_registration_async(str(source), mode, entrypoint)
         if duplicate and duplicate.id != registration_id:
-            raise HTTPException(status_code=409, detail="Artifact source is already registered")
+            raise Failure(REASON_EXISTS, "Artifact source is already registered")
 
         candidate = SimpleNamespace(
             id=registration.id,
@@ -425,7 +427,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
             await asyncio.to_thread(discover_pages, candidate, refresh=True)  # type: ignore[arg-type]
         except ArtifactValidationError as exc:
             clear_page_cache(registration_id)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
 
         try:
             updated = await state.update_artifact_registration_async(
@@ -441,7 +443,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
             )
         except ValueError as exc:
             clear_page_cache(registration_id)
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise Failure(REASON_EXISTS, str(exc)) from exc
         assert updated is not None
         return await _artifact_to_api(updated)
 
@@ -451,11 +453,11 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
     ) -> APIArtifactPageList:
         registration = await state.get_artifact_registration_async(registration_id)
         if registration is None:
-            raise HTTPException(status_code=404, detail="Artifact not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact not found")
         try:
             pages = await asyncio.to_thread(discover_pages, registration, refresh=refresh)
         except ArtifactValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
         project = await state.get_artifact_project_async(registration.project_id)
         return APIArtifactPageList(
             pages=[
@@ -481,11 +483,11 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001
     async def rescan_artifact(registration_id: str) -> APIArtifactPageList:
         registration = await state.get_artifact_registration_async(registration_id)
         if registration is None:
-            raise HTTPException(status_code=404, detail="Artifact not found")
+            raise Failure(REASON_NOT_FOUND, "Artifact not found")
         try:
             pages = await asyncio.to_thread(discover_pages, registration, refresh=True)
         except ArtifactValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise Failure(REASON_INVALID, str(exc)) from exc
         project = await state.get_artifact_project_async(registration.project_id)
         return APIArtifactPageList(
             pages=[

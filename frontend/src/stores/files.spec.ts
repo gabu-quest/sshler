@@ -1,6 +1,6 @@
 /**
  * Property-based tests for file browser functionality.
- * 
+ *
  * **Feature: vue3-migration-completion, Property 10: File browser directory navigation**
  * **Validates: Requirements 4.1**
  */
@@ -66,17 +66,17 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 10: File browser directory navigation**
        * **Validates: Requirements 4.1**
-       * 
-       * For any directory navigation action, the system should display files and 
+       *
+       * For any directory navigation action, the system should display files and
        * folders with appropriate metadata and icons.
        */
 
       await fc.assert(fc.asyncProperty(
         fc.record({
-          boxName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 20 }),
+          boxName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp", "/var/log", "/etc"),
           entries: fc.array(fc.record({
-            name: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+            name: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
             path: fc.string(),
             is_directory: fc.boolean(),
             size: fc.option(fc.nat()),
@@ -142,8 +142,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 13: File operation persistence**
        * **Validates: Requirements 4.4**
-       * 
-       * For any file operation (create, delete, rename, move, copy), the changes should be 
+       *
+       * For any file operation (create, delete, rename, move, copy), the changes should be
        * immediately reflected in the UI and persisted to the server.
        */
 
@@ -151,7 +151,7 @@ describe("Files Store Properties", () => {
         fc.record({
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp"),
-          filename: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          filename: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
         }),
         async ({ boxName, directory, filename }) => {
           const store = useFilesStore();
@@ -194,7 +194,7 @@ describe("Files Store Properties", () => {
         fc.record({
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           oldPath: fc.string({ minLength: 1, maxLength: 100 }),
-          newName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          newName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
         }),
         async ({ boxName, oldPath, newName }) => {
           const store = useFilesStore();
@@ -239,7 +239,7 @@ describe("Files Store Properties", () => {
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           sourcePath: fc.string({ minLength: 1, maxLength: 100 }),
           destinationDir: fc.string({ minLength: 1, maxLength: 100 }),
-          newName: fc.option(fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 })),
+          newName: fc.option(fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 })),
         }),
         async ({ boxName, sourcePath, destinationDir, newName }) => {
           const store = useFilesStore();
@@ -262,8 +262,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 12: File upload with progress tracking**
        * **Validates: Requirements 4.3**
-       * 
-       * For any file upload via drag and drop, the system should display upload progress 
+       *
+       * For any file upload via drag and drop, the system should display upload progress
        * and handle errors gracefully.
        */
 
@@ -271,7 +271,7 @@ describe("Files Store Properties", () => {
         fc.record({
           boxName: fc.string({ minLength: 1, maxLength: 20 }),
           directory: fc.constantFrom("/", "/home", "/tmp"),
-          fileName: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          fileName: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
           fileSize: fc.nat({ max: 1024 * 1024 }), // Up to 1MB
         }),
         async ({ boxName, directory, fileName, fileSize }) => {
@@ -364,8 +364,8 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 11: File selection and bulk operations**
        * **Validates: Requirements 4.2**
-       * 
-       * For any multi-file selection, the system should enable appropriate bulk operations 
+       *
+       * For any multi-file selection, the system should enable appropriate bulk operations
        * and display accurate selection count.
        */
 
@@ -414,14 +414,14 @@ describe("Files Store Properties", () => {
       /**
        * **Feature: vue3-migration-completion, Property 14: File search functionality**
        * **Validates: Requirements 4.5**
-       * 
-       * For any search query in the file browser, the system should return real-time 
+       *
+       * For any search query in the file browser, the system should return real-time
        * results from the current directory.
        */
 
       fc.assert(fc.property(
         fc.array(fc.record({
-          name: fc.stringOf(fc.char(), { minLength: 1, maxLength: 50 }),
+          name: fc.string({ unit: "grapheme-ascii", minLength: 1, maxLength: 50 }),
           path: fc.string({ minLength: 1, maxLength: 100 }),
           is_directory: fc.boolean(),
         }), { minLength: 0, maxLength: 100 }),
@@ -473,5 +473,22 @@ describe("Files Store Properties", () => {
 
       expect(store.error).toBeNull();
     });
+  });
+});
+
+describe("Files store rename with overwrite", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("hands the overwrite option to the rename call, and sends none when none is given", async () => {
+    const store = useFilesStore();
+    await store.doRename("b", "/d/a", "c", "tok", { overwrite: true });
+    await store.doRename("b", "/d/a", "c", "tok");
+    expect(mockRenameFile.mock.calls).toEqual([
+      ["b", "/d/a", "c", "tok", { overwrite: true }],
+      ["b", "/d/a", "c", "tok"],
+    ]);
   });
 });

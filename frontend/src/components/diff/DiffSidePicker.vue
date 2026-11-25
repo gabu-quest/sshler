@@ -65,6 +65,8 @@ async function loadRefs() {
       value: b.name,
     }));
   } catch {
+    // Silent on purpose: the branches are only suggestions; the ref field still takes any
+    // ref typed, and loading that side shows its own failure.
     refOptions.value = [];
   } finally {
     loadingRefs.value = false;

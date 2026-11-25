@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 from .helpers import MAX_IMAGE_PREVIEW_BYTES
 
@@ -41,6 +41,33 @@ class APISimpleMessage(BaseModel):
     path: str | None = None
 
 
+class APIThemeUpdate(BaseModel):
+    """Body of ``PUT /boxes/{name}/theme``; a missing, empty or null name clears the theme."""
+
+    terminal_theme: str | None = ""
+
+
+class APIThemeResult(BaseModel):
+    status: str
+    terminal_theme: str | None
+
+
+class APIRecreateBatchRequest(BaseModel):
+    """Body of ``POST /recovery/recreate-batch``; a missing key is an empty batch."""
+
+    session_ids: list[str] = Field(default_factory=list)
+
+
+class APIRecreateBatchResult(BaseModel):
+    """The shape of the file batch routes' answer: ``succeeded`` holds the session ids
+    recreated; ``failed`` holds ``{"path": <session id>, "error", "reason"}`` per other
+    session, from ``failure_entry`` (``failure.py``)."""
+
+    status: str  # "ok" | "partial"
+    succeeded: list[str]
+    failed: list[dict[str, str]]
+
+
 class APITouchRequest(BaseModel):
     directory: str
     filename: str
@@ -53,17 +80,21 @@ class APIDeleteRequest(BaseModel):
 class APIRenameRequest(BaseModel):
     path: str
     new_name: str
+    # Replace a regular file that has the name; a JSON boolean only, never "true" or 1.
+    overwrite: StrictBool = False
 
 
 class APIMoveRequest(BaseModel):
     source: str
     destination: str
+    overwrite: StrictBool = False
 
 
 class APICopyRequest(BaseModel):
     source: str
     destination: str
     new_name: str | None = None
+    overwrite: StrictBool = False
 
 
 class APIChmodRequest(BaseModel):
@@ -105,9 +136,14 @@ class APIFavoriteToggle(BaseModel):
 
 
 class APIBoxStatus(BaseModel):
+    """Whether a box answers. "offline" carries why: the failure's text in ``error``
+    and its word in ``reason``; "online" carries neither."""
+
     name: str
     status: str
     latency_ms: float | None
+    error: str | None = None
+    reason: str | None = None
 
 
 class APISession(BaseModel):
@@ -139,6 +175,7 @@ class APISessionUpdate(BaseModel):
 
 class APIClaudeSession(BaseModel):
     """A resumable Claude Code session discovered on the local filesystem."""
+
     id: str  # session UUID
     cwd: str
     title: str
@@ -158,11 +195,13 @@ class APIClaudeOpenRequest(BaseModel):
     ``{id}`` replaced by the (validated) session UUID. Defaults server-side to
     ``claude --resume {id}`` when omitted.
     """
+
     command_template: str | None = Field(default=None, max_length=500)
 
 
 class APIClaudeOpenResult(BaseModel):
     """The local tmux session/window a Claude conversation was resumed into."""
+
     box: str
     session_name: str
     working_directory: str
@@ -194,7 +233,8 @@ class APIBootstrap(BaseModel):
     version: str
     token_header: str
     token: str | None = None
-    basic_auth_required: bool
+    auth_required: bool
+    authenticated: bool
     allow_origins: list[str]
     spa_base: str = "/app/"
     spa_enabled: bool = True
@@ -234,7 +274,9 @@ class APISnapshotConfigUpdate(BaseModel):
 
 
 class APIBoxStats(BaseModel):
-    """System statistics for a box (CPU, memory, uptime)."""
+    """System statistics for a box (CPU, memory, uptime). ``error`` is set only in an
+    event of the stats stream for a box whose stats failed, beside the failure's
+    ``reason``; the stats route answers a failure by its reason instead."""
 
     name: str
     cpu_percent: float | None = None
@@ -243,6 +285,7 @@ class APIBoxStats(BaseModel):
     memory_percent: float | None = None
     uptime_seconds: int | None = None
     error: str | None = None
+    reason: str | None = None
 
 
 class APIRefreshResult(BaseModel):
@@ -259,7 +302,6 @@ class APIGitInfo(BaseModel):
     commit: str | None = None
     is_repo: bool = False
     dirty: bool = False
-    error: str | None = None
 
 
 class APISnippet(BaseModel):

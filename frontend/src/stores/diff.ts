@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 
+import { ApiError, errorText } from "@/api/apiError";
 import { gitShow } from "@/api/http";
 import type { SideSpec } from "@/utils/diffCommandParser";
 
@@ -315,16 +316,12 @@ export const useDiffStore = defineStore("diff", () => {
       side.status = "loaded";
       side.truncated = side.content.length >= MAX_SHOW_BYTES;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/not found|not a git repo/i.test(msg)) {
-        side.status = "missing";
-        side.content = "";
-        side.error = msg;
-      } else {
-        side.status = "error";
-        side.content = "";
-        side.error = msg;
-      }
+      // A file not at the ref, or a folder that is not a repository, answers
+      // `not_found`: the side is missing (an add or a delete), not an error.
+      const msg = errorText(err);
+      side.status = err instanceof ApiError && err.reason === "not_found" ? "missing" : "error";
+      side.content = "";
+      side.error = msg;
     }
   }
 

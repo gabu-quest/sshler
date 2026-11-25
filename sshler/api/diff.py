@@ -17,11 +17,12 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Path
 from pydantic import BaseModel, Field, field_validator
 
 from .. import state
 from .dependencies import APIDependencies
+from .failure import REASON_FAILED, REASON_NOT_FOUND, REASON_TOO_LARGE, Failure
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class APIDiffNotebookList(BaseModel):
 
 def _validate_id(notebook_id: str) -> None:
     if not _ID_RE.match(notebook_id):
-        raise HTTPException(status_code=404, detail="Diff notebook not found")
+        raise Failure(REASON_NOT_FOUND, "Diff notebook not found")
 
 
 def _meta_from(row: state.DiffNotebook) -> APIDiffNotebookMeta:
@@ -93,7 +94,7 @@ def _full_from(row: state.DiffNotebook) -> APIDiffNotebookFull:
     except (json.JSONDecodeError, TypeError) as exc:
         # Corrupt persisted envelope. Better to 500 than silently return garbage.
         logger.error("Corrupt envelope_json for notebook %s: %s", row.id, exc)
-        raise HTTPException(status_code=500, detail="Stored notebook is corrupt") from exc
+        raise Failure(REASON_FAILED, "Stored notebook is corrupt") from exc
     envelope = APIDiffNotebookEnvelope.model_validate(envelope_obj)
     return APIDiffNotebookFull(
         id=row.id,
@@ -125,7 +126,7 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001 - deps reser
         _validate_id(notebook_id)
         row = await state.get_diff_notebook_async(notebook_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="Diff notebook not found")
+            raise Failure(REASON_NOT_FOUND, "Diff notebook not found")
         return _full_from(row)
 
     @router.post(
@@ -138,9 +139,9 @@ def get_router(deps: APIDependencies) -> APIRouter:  # noqa: ARG001 - deps reser
         envelope_obj = body.envelope.model_dump(by_alias=True, exclude_none=True)
         envelope_json = json.dumps(envelope_obj)
         if len(envelope_json) > _MAX_ENVELOPE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Notebook envelope too large (>{_MAX_ENVELOPE_BYTES} bytes)",
+            raise Failure(
+                REASON_TOO_LARGE,
+                f"Notebook envelope too large (>{_MAX_ENVELOPE_BYTES} bytes)",
             )
         row = await state.save_diff_notebook_async(
             label=body.label,

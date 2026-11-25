@@ -14,23 +14,14 @@ import { ref } from "vue";
 
 import { createI18n } from "@/i18n";
 import * as http from "@/api/http";
+import { ApiError } from "@/api/apiError";
 import FilesView from "./FilesView.vue";
+import { REPLACE_ARM_MS } from "@/composables/useReplacePrompt";
 
-const { messageSpy, dialogSpy, UploadErrorMock } = vi.hoisted(() => {
-  class UploadErrorMock extends Error {
-    readonly status: number;
-    constructor(message: string, status: number) {
-      super(message);
-      this.name = "UploadError";
-      this.status = status;
-    }
-  }
-  return {
-    messageSpy: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
-    dialogSpy: { warning: vi.fn() },
-    UploadErrorMock,
-  };
-});
+const { messageSpy, dialogSpy } = vi.hoisted(() => ({
+  messageSpy: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+  dialogSpy: { warning: vi.fn() },
+}));
 
 vi.mock("vue-router", () => ({
   useRoute: () => ({ query: { box: "local", dir: "/home/u/proj" }, path: "/files", params: {}, name: "files" }),
@@ -38,11 +29,10 @@ vi.mock("vue-router", () => ({
 }));
 
 vi.mock("@/api/http", () => ({
-  UploadError: UploadErrorMock,
   uploadFile: vi.fn(),
   fetchBootstrap: vi.fn(async () => ({
     token: "tok", token_header: "X-SSHLER-TOKEN", version: "test",
-    spa_base: "/app/", spa_enabled: true, basic_auth_required: false,
+    spa_base: "/app/", spa_enabled: true, auth_required: false,
     wsl_distro: null, pdf_available: false, platform: "posix",
     windows_shells: [], default_shell: null,
   })),
@@ -120,7 +110,7 @@ vi.mock("@phosphor-icons/vue", () => {
 
 const i18nPlugin = { install(app: App) { createI18n(app); } };
 const uploadFile = vi.mocked(http.uploadFile);
-const exists = () => new UploadErrorMock("File already exists", 409);
+const exists = () => new ApiError(409, "exists", "File already exists");
 const OK = { status: "ok", message: "uploaded" };
 
 async function mountLoaded() {
@@ -144,6 +134,8 @@ async function choose(container: Element, names: string[]) {
 /** The options of the n-th replace prompt, once it has been shown. */
 async function prompt(n: number) {
   await waitFor(() => expect(dialogSpy.warning).toHaveBeenCalledTimes(n));
+  // Replace is dead for a moment after a prompt appears; wait until it answers.
+  await new Promise((resolve) => setTimeout(resolve, REPLACE_ARM_MS + 50));
   return dialogSpy.warning.mock.calls[n - 1]![0];
 }
 
@@ -243,15 +235,33 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
     expect(uploadedNames()).toEqual([["a.txt", {}], ["b.txt", {}], ["c.txt", {}], ["d.txt", {}]]);
   });
 
+  // Mutation: leaving only takes the open prompt down; the next taken name then asks
+  // from a view that is gone, and a Yes there sends the overwrite.
+  it("leaving the view during a multi-file upload: later taken names are kept without a prompt", async () => {
+    uploadFile.mockRejectedValueOnce(exists()).mockRejectedValueOnce(exists()).mockResolvedValueOnce(OK);
+    const { container, unmount } = await mountLoaded();
+    await choose(container, ["a.txt", "b.txt", "c.txt"]);
+    await prompt(1);
+    unmount();
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(messageSpy.warning).toHaveBeenCalledTimes(2));
+    expect(messageSpy.warning.mock.calls.map((c) => c[0])).toEqual([
+      "a.txt: skipped, the existing file was kept",
+      "b.txt: skipped, the existing file was kept",
+    ]);
+    expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
+    expect(uploadedNames()).toEqual([["a.txt", {}], ["b.txt", {}], ["c.txt", {}]]);
+  });
+
   // Mutation: retry every failure (the pre-5d loop); a 400 is sent three times with
   // "retrying" warnings.
   it("a 4xx other than 409 is reported once, not retried, and no prompt is shown", async () => {
-    uploadFile.mockRejectedValueOnce(new UploadErrorMock("Upload exceeds 1024 KB limit", 400));
+    uploadFile.mockRejectedValueOnce(new ApiError(413, "too_large", "Upload exceeds 1024 KB limit"));
     const { container } = await mountLoaded();
     await choose(container, ["big.bin"]);
     await waitFor(() => expect(messageSpy.error).toHaveBeenCalledTimes(1));
     expect(messageSpy.error).toHaveBeenCalledWith(
-      "big.bin: Upload exceeds 1024 KB limit", { closable: true, duration: 0 },
+      "big.bin: Too large — Upload exceeds 1024 KB limit", { closable: true, duration: 0 },
     );
     expect(uploadFile).toHaveBeenCalledTimes(1);
     expect(messageSpy.warning).not.toHaveBeenCalled();
@@ -259,10 +269,30 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
     expect(messageSpy.success).not.toHaveBeenCalled();
   });
 
+  // Mutation: ask "Replace?" on every 409 (the old rule); a folder's name asks, and Yes
+  // fails with "Only a regular file can be replaced".
+  it.each([
+    ["a name that can never be replaced", new ApiError(409, "cannot_replace", "File already exists"),
+      "a.txt: That name is taken and cannot be replaced — File already exists"],
+    ["a name refused with no reason", new ApiError(409, null, "File already exists"),
+      "a.txt: The request failed — File already exists"],
+  ])("a 409 for %s shows the failure's line and text, is not retried and asks nothing", async (_label, refusal, shown) => {
+    uploadFile.mockRejectedValueOnce(refusal);
+    const { container } = await mountLoaded();
+    await choose(container, ["a.txt"]);
+    await waitFor(() => expect(messageSpy.error).toHaveBeenCalledTimes(1));
+    expect(messageSpy.error).toHaveBeenCalledWith(
+      shown, { closable: true, duration: 0 },
+    );
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    expect(messageSpy.success).not.toHaveBeenCalled();
+  });
+
   // Negative control for the 4xx rule. Mutation: treat every failure as final (no
   // retry); a 502 would be reported as failed instead of retried after 1 s.
   it("a 5xx is still retried after the 1 s backoff", async () => {
-    uploadFile.mockRejectedValueOnce(new UploadErrorMock("upload failed with 502", 502)).mockResolvedValueOnce(OK);
+    uploadFile.mockRejectedValueOnce(new ApiError(502, null, "")).mockResolvedValueOnce(OK);
     const { container } = await mountLoaded();
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     await choose(container, ["a.txt"]);
@@ -299,7 +329,8 @@ describe("FilesView upload: the replace prompt's default answer is No", () => {
   // positiveText. jsdom cannot render the real dialog (cssstyle throws on its
   // `var(--n-border)` shorthand), so this pins the options that make "No" the first
   // stop. Mutation: drop `closable: false`, or give the dialog its own initial focus
-  // (`autoFocus`, `positiveButtonProps`); the option set differs.
+  // (`autoFocus`); the option set differs. The disabled `positiveButtonProps` is the
+  // half-second delay before Replace answers; a disabled button is never focused.
   it("the prompt has no close button and no focus override, so 'No, keep it' takes the first focus", async () => {
     uploadFile.mockRejectedValueOnce(exists());
     const { container } = await mountLoaded();
@@ -308,7 +339,7 @@ describe("FilesView upload: the replace prompt's default answer is No", () => {
     expect(opts.closable).toBe(false);
     expect(Object.keys(opts).sort()).toEqual([
       "closable", "content", "negativeText", "onAfterLeave", "onEsc", "onMaskClick",
-      "onNegativeClick", "onPositiveClick", "positiveText", "title",
+      "onNegativeClick", "onPositiveClick", "positiveButtonProps", "positiveText", "title",
     ]);
     // A dialog that closes any other way (onAfterLeave alone) resolves as No.
     opts.onAfterLeave();

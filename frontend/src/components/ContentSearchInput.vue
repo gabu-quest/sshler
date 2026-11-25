@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, ref, watch } from "vue";
 import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFile } from "@phosphor-icons/vue";
@@ -25,6 +26,10 @@ const loading = ref(false);
 const truncated = ref(false);
 const showDropdown = ref(false);
 const debounceTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
+// The message of a failed search, shown where "no matches" would be.
+const failureLine = ref<string | null>(null);
+// Only the newest search writes its answer: one the user replaced by typing on shows nothing.
+let searchId = 0;
 
 const hasResults = computed(() => results.value.length > 0);
 
@@ -48,8 +53,11 @@ watch(query, (newQuery) => {
   }
 
   if (!newQuery || newQuery.length < 2) {
+    searchId += 1;
+    loading.value = false;
     showDropdown.value = false;
     results.value = [];
+    failureLine.value = null;
     return;
   }
 
@@ -61,18 +69,22 @@ watch(query, (newQuery) => {
 async function performSearch(pattern: string) {
   if (!props.box) return;
 
+  const id = ++searchId;
   loading.value = true;
   showDropdown.value = true;
 
   try {
     const response = await grepContent(props.box, pattern, props.directory, props.token);
+    if (id !== searchId) return;
     results.value = response.matches;
     truncated.value = response.truncated;
+    failureLine.value = null;
   } catch (err) {
-    console.error("Grep search failed:", err);
+    if (id !== searchId || (err as { name?: unknown } | null)?.name === "AbortError") return;
     results.value = [];
+    failureLine.value = errorText(err);
   } finally {
-    loading.value = false;
+    if (id === searchId) loading.value = false;
   }
 }
 
@@ -86,6 +98,7 @@ function navigateToFile(filePath: string) {
   query.value = "";
   showDropdown.value = false;
   results.value = [];
+  failureLine.value = null;
 }
 
 function handleBlur() {
@@ -180,7 +193,7 @@ function escapeHtml(str: string): string {
       <NEmpty
         v-else
         size="small"
-        :description="t('grep.no_matches')"
+        :description="failureLine ?? t('grep.no_matches')"
         class="grep-empty"
       />
     </div>
@@ -313,9 +326,6 @@ function escapeHtml(str: string): string {
 
 @media (max-width: 768px) {
   .grep-dropdown {
-    position: fixed;
-    left: 8px;
-    right: 8px;
     max-height: 50vh;
   }
 }

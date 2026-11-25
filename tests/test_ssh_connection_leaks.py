@@ -32,7 +32,7 @@ import yaml
 from sshler import ssh_pool, state
 from sshler.api import dependencies as deps_module
 from sshler.api import stats_stream
-from sshler.api import tunnels as tunnels_module
+from sshler.api.box_runner import box_runner
 from sshler.api.dependencies import APIDependencies
 from sshler.ssh import SSHError
 from sshler.ssh_pool import SSHConnectionPool
@@ -44,7 +44,8 @@ EMPTY_POOL = {BOX: {"active_connections": 0, "total_uses": 0, "oldest_connection
 # What a polled route reports when the command hangs past a 0.05 s probe limit.
 HUNG_COMMAND_ERROR = "command on remote1 timed out (0.05 s limit for connect plus command)"
 
-# Hand-computed stats for the canned /proc output in ``Ledger.reply``:
+# Hand-computed stats for the canned /proc output in ``Ledger.reply`` (the two
+# lines of PROC_STAT are the two reads of /proc/stat):
 # cpu deltas total 1200-1000=200, active 300-200=100 -> 50.0 %;
 # MemTotal 2048000 kB = 2000.0 MB, MemAvailable 1024000 kB = 1000.0 MB used.
 PROC_STAT = "cpu  100 0 100 800 0\ncpu  150 0 150 900 0\n"
@@ -63,11 +64,14 @@ class FakeConnection:
         self._closed_event = asyncio.Event()
         self.forward_error: Exception | None = None
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         if self.closed:
             raise ConnectionError("connection is closed")
+        self.ledger.commands.append(command)
         if command == "echo test":
             return _result(0, "test\n")
+        if self.ledger.tmux_reply is not None and command.startswith("tmux -L"):
+            return self.ledger.tmux_reply(command)
         if self.ledger.hang:
             self.ledger.hung_commands += 1
             await self._closed_event.wait()
@@ -103,24 +107,32 @@ class Ledger:
         self.fail_connect = False
         self.hang_connect = False
         self.connect_attempts = 0
+        # Every command a fake connection was asked to run, in order.
+        self.commands: list[str] = []
+        # Answers the per-session tmux commands (``tmux -L ts-<name> ...``).
+        self.tmux_reply: Callable[[str], SimpleNamespace] | None = None
+
+    def tmux_commands(self) -> list[str]:
+        """The tmux commands run, without the pool's ``echo test`` health checks."""
+        return [c for c in self.commands if c.startswith("tmux")]
 
     def live(self) -> int:
         return sum(1 for conn in self.opened if not conn.closed)
 
     @staticmethod
     def reply(command: str) -> SimpleNamespace:
-        if command.startswith("cat /proc/stat"):
-            return _result(0, PROC_STAT)
-        if command.startswith("cat /proc/meminfo"):
-            return _result(0, PROC_MEMINFO)
-        if command == "cat /proc/uptime":
-            return _result(0, PROC_UPTIME)
-        if command.startswith("tmux list-sessions"):
+        # The stats read /proc/stat, then the uptime, the memory and /proc/stat again.
+        first_sample, second_sample = PROC_STAT.splitlines(keepends=True)
+        if command.startswith("cat /proc/stat "):
+            return _result(0, first_sample)
+        if command.startswith("cat /proc/uptime /proc/meminfo /proc/stat "):
+            return _result(0, PROC_UPTIME + PROC_MEMINFO + second_sample)
+        if command.startswith("sh -c ") and "list-sessions" in command:
             return _result(0, "alpha\n")
-        if command == "true":
+        if command.startswith("true "):
             return _result(0)
-        if "rev-parse --abbrev-ref" in command:
-            return _result(0, "main\n")
+        if "rev-parse --git-dir --abbrev-ref" in command:
+            return _result(0, ".git\nmain\n")
         if "rev-parse --short" in command:
             return _result(0, "abc1234\n")
         if "status --porcelain" in command:
@@ -240,7 +252,7 @@ class StreamClient:
                 block, self._buffer = self._buffer.split("\n\n", 1)
                 for line in block.splitlines():
                     if line.startswith("data: "):
-                        self.events.put_nowait(json.loads(line[len("data: "):]))
+                        self.events.put_nowait(json.loads(line[len("data: ") :]))
 
     def open(self) -> StreamClient:
         self.task = asyncio.create_task(self.app(self.scope, self._receive, self._send))
@@ -415,6 +427,7 @@ async def test_stream_emits_parsed_stats_and_keeps_one_pooled_connection(app, le
         "memory_percent": 50.0,
         "uptime_seconds": 3600,
         "error": None,
+        "reason": None,
     }
     assert len(ledger.opened) == 1
     assert ledger.live() == 1
@@ -462,25 +475,39 @@ async def test_status_stats_and_git_polls_reuse_one_connection(app, ledger):
                 "commit": "abc1234",
                 "is_repo": True,
                 "dirty": False,
-                "error": None,
             }
 
     assert len(ledger.opened) == 1
     assert ledger.live() == 1
 
 
+HUNG_COMMAND_FAILURE = {"detail": HUNG_COMMAND_ERROR, "reason": "timeout"}
+
+
 @pytest.mark.parametrize(
-    ("method", "path", "params", "expected"),
+    ("method", "path", "params", "status", "expected"),
     [
-        ("GET", "/status", None, {"name": BOX, "status": "offline", "latency_ms": None}),
-        ("GET", "/stats", None, {"name": BOX, "error": HUNG_COMMAND_ERROR}),
-        ("GET", "/git", {"directory": "/srv"}, {"error": HUNG_COMMAND_ERROR}),
-        ("POST", "/sessions/sync", None, []),
+        (
+            "GET",
+            "/status",
+            None,
+            200,
+            {
+                "name": BOX,
+                "status": "offline",
+                "latency_ms": None,
+                "error": HUNG_COMMAND_ERROR,
+                "reason": "timeout",
+            },
+        ),
+        ("GET", "/stats", None, 504, HUNG_COMMAND_FAILURE),
+        ("GET", "/git", {"directory": "/srv"}, 504, HUNG_COMMAND_FAILURE),
+        ("POST", "/sessions/sync", None, 504, HUNG_COMMAND_FAILURE),
     ],
 )
 @pytest.mark.asyncio
 async def test_polled_route_on_a_hung_box_times_out_and_closes(
-    app, ledger, monkeypatch, method, path, params, expected
+    app, ledger, monkeypatch, method, path, params, status, expected
 ):
     """A hung box answers each polled route within the probe timeout and the
     connection the request held is closed.
@@ -498,12 +525,7 @@ async def test_polled_route_on_a_hung_box_times_out_and_closes(
         except TimeoutError:
             pytest.fail(f"{method} {path} did not return within 5 s on a hung box")
 
-    assert resp.status_code == 200
-    body = resp.json()
-    if isinstance(expected, dict):
-        assert {key: body[key] for key in expected} == expected
-    else:
-        assert body == expected
+    assert (resp.status_code, resp.json()) == (status, expected)
     await wait_until(lambda: ledger.live() == 0)
     assert len(ledger.opened) == 1
     assert ledger.live() == 0
@@ -536,8 +558,7 @@ async def test_a_hung_connect_is_reported_as_a_connect_timeout(
     async with _client(app) as client:
         resp = await asyncio.wait_for(client.get(f"/api/v1/boxes/{BOX}/stats"), 10.0)
 
-    assert resp.status_code == 200
-    assert resp.json()["error"] == expected
+    assert (resp.status_code, resp.json()) == (502, {"detail": expected, "reason": "unreachable"})
     assert ledger.connect_attempts == 1
     assert len(ledger.opened) == 0
 
@@ -551,7 +572,7 @@ class ReleaseGateConnection:
         self.gate = asyncio.Event()
         self.checking = asyncio.Event()
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         if command == "echo test":
             self.checking.set()
             await self.gate.wait()
@@ -562,19 +583,18 @@ class ReleaseGateConnection:
 
 
 @pytest.mark.asyncio
-async def test_run_pooled_does_not_count_the_release_against_the_probe_limit(monkeypatch):
-    """A probe whose command finished is not a timeout because returning the
-    connection to the pool is slow: the result comes back and the healthy
+async def test_a_bounded_request_does_not_count_the_release_against_its_limit(monkeypatch):
+    """A request whose command finished is not a timeout because returning the
+    connection to the pool is slow: the output comes back and the healthy
     connection is pooled.
 
     A 0 s limit expires at the first await inside the bound. The fake connect
     and command never await, so only the release's health check suspends.
 
-    Mutation killed: the probe limit also bounding ``release`` (the health
-    check is cancelled, the call raises a timeout and the good connection is
+    Mutation killed: the request's limit also bounding ``release`` (the health
+    check is cancelled, the request raises a timeout and the good connection is
     closed).
     """
-    monkeypatch.setattr(deps_module, "PROBE_TIMEOUT_SECONDS", 0.0, raising=False)
     pool = SSHConnectionPool()
     monkeypatch.setattr(ssh_pool, "_global_pool", pool)
     conn = ReleaseGateConnection()
@@ -585,11 +605,13 @@ async def test_run_pooled_does_not_count_the_release_against_the_probe_limit(mon
     monkeypatch.setattr(APIDependencies, "connect_for_box", connect)
     deps = APIDependencies(ServerSettings(csrf_token=TOKEN))
 
-    async def operation(c):
-        result = await c.run("uptime")
-        return result.stdout
+    async def bounded_request() -> str:
+        box = SimpleNamespace(name=BOX, transport="ssh")
+        async with box_runner(deps, box, SimpleNamespace(), deadline=0.0) as runner:
+            ran = await runner.run(["uptime"], folder=None, timeout=5.0)
+        return ran.output
 
-    task = asyncio.create_task(deps.run_pooled(_box(), SimpleNamespace(), operation))
+    task = asyncio.create_task(bounded_request())
     await asyncio.wait_for(conn.checking.wait(), 5.0)
     conn.gate.set()
 
@@ -613,7 +635,13 @@ async def test_refresh_lets_the_next_probe_reconnect_at_once(app, ledger):
         refreshed = await client.post(f"/api/v1/boxes/{BOX}/refresh")
         up = await client.get(f"/api/v1/boxes/{BOX}/status")
 
-    assert down.json() == {"name": BOX, "status": "offline", "latency_ms": None}
+    assert down.json() == {
+        "name": BOX,
+        "status": "offline",
+        "latency_ms": None,
+        "error": f"{BOX}: connection refused",
+        "reason": "unreachable",
+    }
     assert refreshed.json() == {"name": BOX, "refreshed": True}
     assert up.status_code == 200, up.text
     assert up.json()["status"] == "online"
@@ -636,7 +664,7 @@ class GateConnection:
         self.gate = asyncio.Event()
         self.checking = asyncio.Event()
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False, encoding: str | None = "utf-8"):
         self.checking.set()
         await self.gate.wait()
         return _result(0, "test\n")
@@ -1189,13 +1217,6 @@ async def test_pool_context_keeps_the_connection_on_an_ordinary_error():
 # --- tunnels ---------------------------------------------------------------
 
 
-@pytest.fixture
-def no_tunnels():
-    tunnels_module._active_tunnels.clear()
-    yield
-    tunnels_module._active_tunnels.clear()
-
-
 TUNNEL = {
     "tunnel_type": "local",
     "local_host": "127.0.0.1",
@@ -1206,7 +1227,7 @@ TUNNEL = {
 
 
 @pytest.mark.asyncio
-async def test_failed_tunnel_closes_its_connection(app, ledger, no_tunnels):
+async def test_failed_tunnel_closes_its_connection(app, ledger):
     """A port forward that fails leaves no SSH connection behind.
 
     Mutation killed: the create route not closing the connection when the
@@ -1222,7 +1243,7 @@ async def test_failed_tunnel_closes_its_connection(app, ledger, no_tunnels):
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_tunnel_closes_its_connection(app, ledger, no_tunnels):
+async def test_deleting_a_tunnel_closes_its_connection(app, ledger):
     """A tunnel holds one connection for its lifetime and gives it back when
     deleted.
 
@@ -1233,10 +1254,272 @@ async def test_deleting_a_tunnel_closes_its_connection(app, ledger, no_tunnels):
         assert created.status_code == 200
         assert ledger.live() == 1
         tunnel_id = created.json()["id"]
-        listener = tunnels_module._active_tunnels[tunnel_id].listener
+        listener = app.state.tunnels.get(tunnel_id).listener
         deleted = await client.delete(f"/api/v1/boxes/{BOX}/tunnels/{tunnel_id}")
 
     assert deleted.status_code == 200
     assert listener.closed is True
     assert len(ledger.opened) == 1
     assert ledger.live() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_tunnel_made_on_one_app_is_not_listed_on_another(app, ledger):
+    """Each app owns its tunnels: the list on a second app in the same
+    process is empty while the first app lists its own.
+
+    Mutation killed: one module-level registry shared by every app (the
+    second app lists the first app's tunnel).
+    """
+    other = make_app(ServerSettings(csrf_token=TOKEN))
+    async with _client(app) as first, _client(other) as second:
+        created = await first.post(f"/api/v1/boxes/{BOX}/tunnels", json=TUNNEL)
+        listed_first = await first.get(f"/api/v1/boxes/{BOX}/tunnels")
+        listed_second = await second.get(f"/api/v1/boxes/{BOX}/tunnels")
+
+    assert created.status_code == 200
+    assert [t["id"] for t in listed_first.json()] == [created.json()["id"]]
+    assert listed_second.status_code == 200
+    assert listed_second.json() == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_tunnel_twice_answers_404_the_second_time(app, ledger):
+    """The second delete finds nothing: 404 "Tunnel not found", and the
+    first delete's close is not repeated.
+
+    Mutation killed: delete answering 200 for an id that is already gone.
+    """
+    async with _client(app) as client:
+        created = await client.post(f"/api/v1/boxes/{BOX}/tunnels", json=TUNNEL)
+        url = f"/api/v1/boxes/{BOX}/tunnels/{created.json()['id']}"
+        first = await client.delete(url)
+        second = await client.delete(url)
+
+    assert first.status_code == 200
+    assert second.status_code == 404
+    assert second.json() == {"detail": "Tunnel not found", "reason": "not_found"}
+    assert ledger.live() == 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_every_open_tunnel(app, ledger):
+    """A tunnel still open when the app shuts down has its listener and its
+    SSH connection closed, and the registry is empty afterwards.
+
+    Mutation killed: shutdown leaving tunnels open (listener.closed False,
+    live == 1).
+    """
+    async with app.router.lifespan_context(app):
+        async with _client(app) as client:
+            created = await client.post(f"/api/v1/boxes/{BOX}/tunnels", json=TUNNEL)
+            assert created.status_code == 200
+            listener = app.state.tunnels.get(created.json()["id"]).listener
+            assert ledger.live() == 1
+
+    assert listener.closed is True
+    assert ledger.live() == 0
+    assert app.state.tunnels.list_for_box(BOX) == []
+
+
+# --- session commands on the pool ------------------------------------------
+
+
+async def _new_session(client, name: str = "work") -> str:
+    created = await client.post(
+        f"/api/v1/boxes/{BOX}/sessions",
+        json={"session_name": name, "working_directory": "/srv"},
+    )
+    assert created.status_code == 200, created.text
+    return created.json()["id"]
+
+
+def _tmux_ok(command: str) -> SimpleNamespace:
+    return _result(0, "line one\n\n\n")
+
+
+@pytest.mark.asyncio
+async def test_renames_share_one_pooled_connection(app, ledger):
+    """Two renames on one box open one SSH connection, and leave it pooled.
+
+    Mutation killed: rename opening and closing a connection per request
+    (two opened, none live).
+    """
+    ledger.tmux_reply = _tmux_ok
+    async with _client(app) as client:
+        session_id = await _new_session(client)
+        first = await client.patch(
+            f"/api/v1/boxes/{BOX}/sessions/{session_id}", json={"session_name": "alpha"}
+        )
+        second = await client.patch(
+            f"/api/v1/boxes/{BOX}/sessions/{session_id}", json={"session_name": "beta"}
+        )
+
+    assert first.status_code == 200, first.text
+    assert second.json()["session_name"] == "beta"
+    assert ledger.tmux_commands()[-1] == "tmux -L ts-alpha rename-session -t alpha beta"
+    assert len(ledger.opened) == 1
+    assert ledger.live() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_remote_rename_is_a_failure_of_tmux(app, ledger):
+    """tmux refusing the rename (status 1, no words) is ``failed`` with its exit
+    status, and the stored name is unchanged."""
+    ledger.tmux_reply = lambda command: _result(1)
+    async with _client(app) as client:
+        session_id = await _new_session(client)
+        resp = await client.patch(
+            f"/api/v1/boxes/{BOX}/sessions/{session_id}", json={"session_name": "alpha"}
+        )
+        stored = await state.get_session_by_id_async(session_id)
+
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": "tmux rename-session exited with status 1", "reason": "failed"},
+    )
+    assert stored is not None
+    assert stored.session_name == "work"
+
+
+@pytest.mark.asyncio
+async def test_a_rename_on_an_unreachable_box_is_unreachable(app, ledger):
+    """An unreachable box is ``unreachable`` with the connect's words, and the
+    stored name is unchanged."""
+    ledger.fail_connect = True
+    async with _client(app) as client:
+        session_id = await _new_session(client)
+        resp = await client.patch(
+            f"/api/v1/boxes/{BOX}/sessions/{session_id}", json={"session_name": "alpha"}
+        )
+
+        stored = await state.get_session_by_id_async(session_id)
+
+    assert (resp.status_code, resp.json()) == (
+        502,
+        {"detail": f"{BOX}: connection refused", "reason": "unreachable"},
+    )
+    assert stored is not None
+    assert stored.session_name == "work"
+
+
+@pytest.mark.asyncio
+async def test_a_capture_on_an_unreachable_box_is_unreachable_and_a_kill_deletes_the_row(
+    app, ledger
+):
+    """The capture is ``unreachable`` with the connect's words; the kill still
+    deletes the row (its failure is not answered)."""
+    ledger.fail_connect = True
+    async with _client(app) as client:
+        session_id = await _new_session(client)
+        capture = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+        kill = await client.delete(f"/api/v1/boxes/{BOX}/sessions/{session_id}?kill_tmux=true")
+
+    assert (capture.status_code, capture.json()) == (
+        502,
+        {"detail": f"{BOX}: connection refused", "reason": "unreachable"},
+    )
+    assert kill.json() == {"status": "ok", "message": "deleted", "path": session_id}
+
+
+@pytest.mark.asyncio
+async def test_a_sync_reads_the_live_sessions_and_marks_the_rest_inactive(app, ledger):
+    """The fake box lists ``alpha`` only."""
+    async with _client(app) as client:
+        await _new_session(client, "alpha")
+        await _new_session(client, "beta")
+        resp = await client.post(f"/api/v1/boxes/{BOX}/sessions/sync")
+
+    assert sorted((s["session_name"], s["active"]) for s in resp.json()) == [
+        ("alpha", True),
+        ("beta", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_kills_share_one_pooled_connection_and_a_failed_kill_is_not_raised(app, ledger):
+    """Deleting two sessions with kill_tmux uses one connection; tmux
+    failing to kill still deletes the row (200).
+
+    Mutation killed: kill opening a connection per request (two opened).
+    """
+    ledger.tmux_reply = lambda command: _result(1)
+    async with _client(app) as client:
+        first_id = await _new_session(client, "one")
+        second_id = await _new_session(client, "two")
+        first = await client.delete(f"/api/v1/boxes/{BOX}/sessions/{first_id}?kill_tmux=true")
+        second = await client.delete(f"/api/v1/boxes/{BOX}/sessions/{second_id}?kill_tmux=true")
+
+    assert first.status_code == 200
+    assert second.json() == {"status": "ok", "message": "deleted", "path": second_id}
+    assert ledger.tmux_commands()[-1] == "tmux -L ts-two kill-session -t two"
+    assert len(ledger.opened) == 1
+    assert ledger.live() == 1
+
+
+@pytest.mark.asyncio
+async def test_captures_share_one_pooled_connection(app, ledger):
+    """Two captures use one pooled connection and trim trailing blank lines.
+
+    Mutation killed: capture opening a connection per request (two opened).
+    """
+    ledger.tmux_reply = _tmux_ok
+    async with _client(app) as client:
+        first = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+        second = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+
+    assert first.status_code == 200, first.text
+    assert second.json() == {
+        "session": "work",
+        "target": "work",
+        "text": "line one",
+        "lines": 1,
+        "chars": 8,
+    }
+    assert len(ledger.opened) == 1
+    assert ledger.live() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_capture_is_a_failure_with_tmux_stderr(app, ledger):
+    """tmux failing the capture is ``failed`` "tmux capture-pane failed: <stderr>",
+    and the connection goes back to the pool."""
+    ledger.tmux_reply = lambda command: SimpleNamespace(
+        exit_status=1, returncode=1, stdout="", stderr="no such session\n"
+    )
+    async with _client(app) as client:
+        resp = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+
+    assert (resp.status_code, resp.json()) == (
+        500,
+        {"detail": "tmux capture-pane failed: no such session", "reason": "failed"},
+    )
+    assert ledger.live() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_capture_past_its_limit_answers_its_own_504_and_drops_the_connection(
+    app, ledger, monkeypatch
+):
+    """A capture that outlives TMUX_CAPTURE_TIMEOUT is the capture's 504
+    (not the probe's text), and its connection is closed, not pooled.
+
+    Passes on the code before the pool change too; the pooled path must keep
+    it.
+    """
+    monkeypatch.setattr("sshler.tmux.TMUX_CAPTURE_TIMEOUT", 0.05)
+    ledger.hang = True
+    async with _client(app) as client:
+        resp = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+        assert ledger.live() == 0
+        ledger.hang = False
+        ledger.tmux_reply = _tmux_ok
+        again = await client.get(f"/api/v1/boxes/{BOX}/sessions/work/capture")
+
+    assert resp.status_code == 504
+    assert resp.json() == {
+        "detail": "tmux capture-pane timed out after 0.05 s",
+        "reason": "timeout",
+    }
+    assert again.status_code == 200
+    assert len(ledger.opened) == 2

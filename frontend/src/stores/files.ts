@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -31,7 +32,7 @@ export const useFilesStore = defineStore("files", () => {
     try {
       listing.value = await fetchDirectory(box, directory, token);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }
@@ -49,8 +50,14 @@ export const useFilesStore = defineStore("files", () => {
     await deleteFile(box, path, token);
   }
 
-  async function doRename(box: string, path: string, newName: string, token: string | null) {
-    await renameFile(box, path, newName, token);
+  async function doRename(
+    box: string,
+    path: string,
+    newName: string,
+    token: string | null,
+    options?: { overwrite?: boolean },
+  ) {
+    await renameFile(box, path, newName, token, ...(options ? [options] : []));
   }
 
   async function doMove(box: string, source: string, destination: string, token: string | null) {
@@ -71,12 +78,24 @@ export const useFilesStore = defineStore("files", () => {
     return await batchDelete(box, paths, token);
   }
 
-  async function doBatchMove(box: string, paths: string[], destination: string, token: string | null): Promise<BatchResult> {
-    return await batchMove(box, paths, destination, token);
+  async function doBatchMove(
+    box: string,
+    paths: string[],
+    destination: string,
+    token: string | null,
+    options?: { overwrite?: boolean },
+  ): Promise<BatchResult> {
+    return await batchMove(box, paths, destination, token, ...(options ? [options] : []));
   }
 
-  async function doBatchCopy(box: string, paths: string[], destination: string, token: string | null): Promise<BatchResult> {
-    return await batchCopy(box, paths, destination, token);
+  async function doBatchCopy(
+    box: string,
+    paths: string[],
+    destination: string,
+    token: string | null,
+    options?: { overwrite?: boolean },
+  ): Promise<BatchResult> {
+    return await batchCopy(box, paths, destination, token, ...(options ? [options] : []));
   }
 
   /**
@@ -102,7 +121,7 @@ export const useFilesStore = defineStore("files", () => {
       uploadProgress.value = Math.max(uploadProgress.value, 100);
       uploadFileName.value = null;
     } catch (err) {
-      uploadError.value = err instanceof Error ? err.message : String(err);
+      uploadError.value = errorText(err);
       uploadProgress.value = 0;
       uploadFileName.value = null;
       throw err;

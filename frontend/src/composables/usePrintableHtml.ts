@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 /**
  * Build a complete, self-contained HTML document representing the printable
  * version of a file (markdown rendered with mermaid SVGs + inlined images,
@@ -13,6 +14,7 @@
  */
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { mermaidConfig } from "@/utils/mermaidConfig";
 
 import { fetchFilePreview } from "@/api/http";
 
@@ -100,11 +102,7 @@ async function getMermaid(theme: PrintableTheme) {
   if (!mermaidPromise) {
     mermaidPromise = import("mermaid").then((mod) => {
       const m = mod.default;
-      m.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: theme === "dark" ? "dark" : "default",
-      });
+      m.initialize(mermaidConfig(theme));
       return m;
     });
   }
@@ -164,7 +162,7 @@ async function renderMermaidBlocks(container: HTMLElement, theme: PrintableTheme
       const errorBox = document.createElement("pre");
       errorBox.className = "mermaid-error";
       errorBox.textContent = `Mermaid render error: ${
-        err instanceof Error ? err.message : String(err)
+        errorText(err)
       }\n\n${source}`;
       host.replaceWith(errorBox);
     }
@@ -204,6 +202,8 @@ async function inlineImages(
           cache.set(p, "");
         }
       } catch {
+        // Silent on purpose: an image that cannot be read stays a broken image in the
+        // printed text, which still prints whole.
         cache.set(p, "");
       }
     }),

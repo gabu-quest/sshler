@@ -42,8 +42,7 @@ def auth_headers() -> dict[str, str]:
             marks=pytest.mark.skipif(
                 sys.platform == "win32",
                 reason=(
-                    "GNU find path runs only on a POSIX local box; "
-                    "Windows uses the built-in walk"
+                    "GNU find path runs only on a POSIX local box; Windows uses the built-in walk"
                 ),
             ),
         ),
@@ -166,8 +165,8 @@ class TestFrecencyScoring:
         assert len(results) == 3
         # Verify ordering by score (descending)
         assert results[0][0] == "/projects/sshler"  # 5 visits
-        assert results[1][0] == "/projects/other"   # 2 visits
-        assert results[2][0] == "/projects/demo"    # 1 visit
+        assert results[1][0] == "/projects/other"  # 2 visits
+        assert results[2][0] == "/projects/demo"  # 1 visit
 
         # Verify scores are descending
         assert results[0][1] > results[1][1] > results[2][1]
@@ -405,17 +404,10 @@ class TestLocalDiscovery:
         results = discover(root, "*blue*", include_files=True)
 
         expected_file = (
-            root
-            / "gadgets"
-            / "captures"
-            / "capture_x"
-            / "exports"
-            / "blue_vs_green_frame473.png"
+            root / "gadgets" / "captures" / "capture_x" / "exports" / "blue_vs_green_frame473.png"
         ).as_posix()
         expected_dir = (root / "docs" / "blue-notes").as_posix()
-        assert sorted(results) == sorted(
-            [(expected_file, False), (expected_dir, True)]
-        )
+        assert sorted(results) == sorted([(expected_file, False), (expected_dir, True)])
 
     def test_respects_limit(self, tmp_path, local_impl):
         root = tmp_path / "many"
@@ -440,8 +432,7 @@ class TestLocalDiscovery:
         level.mkdir(parents=True)
         listed = sorted(path for path, _ in discover(root, "lvl*"))
         assert listed == [
-            (root / "/".join(f"lvl{d}" for d in range(1, n + 1))).as_posix()
-            for n in range(1, 7)
+            (root / "/".join(f"lvl{d}" for d in range(1, n + 1))).as_posix() for n in range(1, 7)
         ]
 
     def test_prune_names_are_exact_and_case_sensitive(self, tmp_path, local_impl):
@@ -499,13 +490,14 @@ class TestLocalDiscovery:
 
 
 class TestBuiltinDiscoveryTimeout:
-    def test_past_the_deadline_returns_nothing(self, tmp_path):
+    def test_past_the_deadline_raises_the_discovery_timeout(self, tmp_path):
         """As the GNU path does when find is killed. Mutation killed: the
         built-in walk ignoring its timeout."""
-        from sshler.api.search import _discover_local_builtin
+        from sshler.api.search import DiscoveryTimeoutError, _discover_local_builtin
 
         root = make_tree(tmp_path)
-        assert _discover_local_builtin(str(root), "*", 6, 50, True, -1) == []
+        with pytest.raises(DiscoveryTimeoutError, match=r"^directory search timed out after -1 s$"):
+            _discover_local_builtin(str(root), "*", 6, 50, True, -1)
         everything = _discover_local_builtin(str(root), "*", 6, 50, True, 60)
         # gadgets, captures, capture_x, exports, the png, docs, blue-notes
         assert len(everything) == 7
@@ -527,18 +519,19 @@ class TestSearchEndpointDiscovery:
             )
             assert resp.status_code == 200
 
-            discovery = [
-                r for r in resp.json()["results"] if r["source"] == "discovery"
-            ]
+            discovery = [r for r in resp.json()["results"] if r["source"] == "discovery"]
             assert len(discovery) == 1
-            assert discovery[0]["path"] == (
-                root
-                / "gadgets"
-                / "captures"
-                / "capture_x"
-                / "exports"
-                / "blue_vs_green_frame473.png"
-            ).as_posix()
+            assert (
+                discovery[0]["path"]
+                == (
+                    root
+                    / "gadgets"
+                    / "captures"
+                    / "capture_x"
+                    / "exports"
+                    / "blue_vs_green_frame473.png"
+                ).as_posix()
+            )
             assert discovery[0]["is_directory"] is False
         finally:
             client.close()
@@ -556,14 +549,19 @@ class TestSearchEndpointDiscovery:
                 headers=auth_headers(),
             )
             assert resp.status_code == 200
-            discovery = [
-                r for r in resp.json()["results"] if r["source"] == "discovery"
-            ]
+            discovery = [r for r in resp.json()["results"] if r["source"] == "discovery"]
             assert len(discovery) == 1
-            assert discovery[0]["path"] == (
-                root / "gadgets" / "captures" / "capture_x" / "exports"
-                / "blue_vs_green_frame473.png"
-            ).as_posix()
+            assert (
+                discovery[0]["path"]
+                == (
+                    root
+                    / "gadgets"
+                    / "captures"
+                    / "capture_x"
+                    / "exports"
+                    / "blue_vs_green_frame473.png"
+                ).as_posix()
+            )
         finally:
             client.close()
             state.reset_state()
@@ -580,9 +578,7 @@ class TestSearchEndpointDiscovery:
                 headers=auth_headers(),
             )
             assert resp.status_code == 200
-            discovery = [
-                r for r in resp.json()["results"] if r["source"] == "discovery"
-            ]
+            discovery = [r for r in resp.json()["results"] if r["source"] == "discovery"]
             assert discovery == []
         finally:
             client.close()
@@ -644,3 +640,261 @@ class TestVisitTrackingIntegration:
         finally:
             client.close()
             state.reset_state()
+
+
+@pytest.mark.posix_only("#!/bin/sh stand-ins for find and zoxide first on PATH")
+class TestLocalChildrenKilledOnTimeout:
+    def test_find_is_gone_after_a_discovery_timeout(self, tmp_path, monkeypatch, stalled_program):
+        """Mutation killed: proc.kill() without a wait, or no kill at all."""
+        from sshler.api import search
+
+        gone = stalled_program("find")
+        monkeypatch.setattr("sshler.api.helpers.LOCAL_IS_WINDOWS", False)
+        monkeypatch.setattr(search, "LOCAL_DISCOVERY_TIMEOUT", 0.5)
+        with pytest.raises(
+            search.DiscoveryTimeoutError, match=r"^directory search timed out after 0\.5 s$"
+        ):
+            asyncio.run(search._discover_local(str(tmp_path), "*x*"))
+        gone()
+
+    def test_zoxide_is_gone_after_its_timeout(self, monkeypatch, stalled_program):
+        """Mutation killed: wait_for(proc.communicate()) with no kill."""
+        from sshler.api import search
+
+        gone = stalled_program("zoxide")
+        monkeypatch.setattr(search, "ZOXIDE_TIMEOUT", 0.5)
+        assert asyncio.run(search._query_zoxide("abc")) == []
+        gone()
+
+
+class _Home:
+    """Answers the home lookup, records every other command."""
+
+    def __init__(self, home_stdout="/home/u", status=0):
+        self.home_stdout = home_stdout
+        self.status = status
+        self.commands: list[str] = []
+
+    async def run(self, command, check=False):
+        from types import SimpleNamespace
+
+        if command == 'printf %s "$HOME"':
+            return SimpleNamespace(stdout=self.home_stdout, exit_status=self.status)
+        self.commands.append(command)
+        return SimpleNamespace(stdout="", exit_status=0)
+
+
+# What every remote discovery line begins with: status 127 when the box has no find.
+FIND_CHECK = "command -v find >/dev/null 2>&1 || exit 127; "
+
+
+def _remote_find(root, **kw):
+    from sshler.api.search import _discover_remote_directories
+
+    conn = _Home(**kw)
+    result = asyncio.run(_discover_remote_directories(conn, "*x*", root=root))
+    return result, conn.commands
+
+
+class TestRemoteRootUnderHome:
+    @pytest.mark.parametrize(
+        ("root", "sent"),
+        [
+            ("~/projects", "/home/u/projects"),
+            ("~/a b", "'/home/u/a b'"),
+            ("~/$(touch x)", "'/home/u/$(touch x)'"),
+            ("~/a;b", "'/home/u/a;b'"),
+            ("~//etc", "/home/u/etc"),
+            ("~", "/home/u"),
+        ],
+    )
+    def test_the_command_names_the_absolute_root(self, root, sent):
+        """Mutation killed: shlex.quote on '~/projects', which the remote shell takes literally."""
+        _, commands = _remote_find(root)
+        assert commands == [
+            f"{FIND_CHECK}find {sent} -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
+
+    @pytest.mark.parametrize("root", [None, ""])
+    def test_no_root_still_means_the_remote_home(self, root):
+        _, commands = _remote_find(root)
+        assert commands == [
+            f"{FIND_CHECK}find /home/u -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
+
+    def test_another_users_home_is_quoted_whole(self):
+        _, commands = _remote_find("~other/x")
+        assert commands == [
+            f"{FIND_CHECK}find '~other/x' -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
+
+    @pytest.mark.parametrize("kw", [{"home_stdout": ""}, {"status": 1}])
+    def test_a_failed_home_lookup_is_unreachable_and_sends_no_find(self, kw):
+        from sshler.api.failure import Failure
+        from sshler.api.search import _discover_remote_directories
+
+        conn = _Home(**kw)
+        with pytest.raises(Failure) as caught:
+            asyncio.run(_discover_remote_directories(conn, "*x*", root="~/p"))
+        assert (caught.value.status_code, caught.value.reason, caught.value.detail) == (
+            502,
+            "unreachable",
+            "Could not resolve the remote home directory",
+        )
+        assert conn.commands == []
+
+    def test_an_invalid_root_is_refused_and_sends_no_find(self):
+        from sshler.api.search import _discover_remote_directories
+        from sshler.validation import ValidationError
+
+        conn = _Home()
+        with pytest.raises(ValidationError, match=r"^Path cannot contain null bytes$"):
+            asyncio.run(_discover_remote_directories(conn, "*x*", root="~/a\x00b"))
+        assert conn.commands == []
+
+
+class TestRemoteRootNamedLikeAnOption:
+    def test_a_relative_root_starting_with_a_dash_is_sent_as_a_path(self):
+        """Mutation: send the root as it came; find reads `-delete` as an expression."""
+        _, commands = _remote_find("-delete")
+        assert commands == [
+            f"{FIND_CHECK}find ./-delete -maxdepth 4 -type d -iname '*x*' 2>/dev/null | head -n 50"
+        ]
+
+
+class _FindBox:
+    """A remote box whose connection answers the pool's health check and the home
+    lookup, records every other command line and answers it with ``stdout``; nothing
+    is run."""
+
+    def __init__(self, stdout: str = "") -> None:
+        self.stdout = stdout
+        self.commands: list[str] = []
+        self.refuse = False
+
+    async def connect(self, box, application_config):
+        from sshler.ssh import SSHError
+
+        if self.refuse:
+            raise SSHError("unreachable")
+        return self
+
+    async def run(self, command, check=False, encoding="utf-8"):
+        from types import SimpleNamespace
+
+        if command == "echo test":
+            return SimpleNamespace(stdout="test\n", exit_status=0)
+        if command == 'printf %s "$HOME"':
+            return SimpleNamespace(stdout="/home/u", exit_status=0)
+        self.commands.append(command)
+        return SimpleNamespace(stdout=self.stdout, exit_status=0)
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.fixture
+def remote_search(tmp_path, monkeypatch):
+    from sshler import ssh_pool
+    from sshler.api.dependencies import APIDependencies
+    from sshler.ssh_pool import SSHConnectionPool
+
+    config_dir = setup_config(tmp_path)
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text("Host rbox\n  HostName example.invalid\n  User u\n", encoding="utf-8")
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+    state.initialize(config_dir)
+    state.record_directory_visit("rbox", "/srv/proj-a")
+    box = _FindBox(stdout="/home/u/proj-b\n/srv/proj-a\n")
+
+    async def connect_for_box(deps_self, target, application_config):
+        return await box.connect(target, application_config)
+
+    monkeypatch.setattr(APIDependencies, "connect_for_box", connect_for_box)
+    monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
+    client = build_client(config_dir, monkeypatch)
+    try:
+        yield box, client
+    finally:
+        client.close()
+        state.reset_state()
+
+
+def _search_rbox(client, **params):
+    return client.get("/api/v1/boxes/rbox/search", params=params, headers=auth_headers())
+
+
+class TestRemoteSearchRoute:
+    def test_frecency_first_then_discovery_without_the_path_seen_twice(self, remote_search):
+        box, client = remote_search
+        resp = _search_rbox(client, q="proj")
+        assert resp.status_code == 200
+        results = [(r["path"], r["source"], r["is_directory"]) for r in resp.json()["results"]]
+        assert results == [
+            ("/srv/proj-a", "frecency", True),
+            ("/home/u/proj-b", "discovery", True),
+        ]
+        assert resp.json()["results"][1]["score"] == 0.1
+        assert box.commands == [
+            f"{FIND_CHECK}find /home/u -maxdepth 4 -type d -iname '*proj*' 2>/dev/null | head -n 20"
+        ]
+
+    def test_a_box_that_cannot_be_reached_gives_the_frecency_results(self, remote_search):
+        box, client = remote_search
+        box.refuse = True
+        resp = _search_rbox(client, q="proj")
+        assert resp.status_code == 200
+        assert [r["path"] for r in resp.json()["results"]] == ["/srv/proj-a"]
+        assert box.commands == []
+
+    def test_a_bad_root_is_400_before_the_box_is_reached(self, remote_search):
+        box, client = remote_search
+        resp = _search_rbox(client, q="proj", root="/srv/a\x00b")
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": "Path cannot contain null bytes", "reason": "invalid"},
+        )
+        assert box.commands == []
+
+    @pytest.mark.parametrize(
+        ("q", "root"),
+        [
+            ("*a?b*", "/srv/a b"),
+            ("it's", "/srv/it's"),
+            ("$HOME", "/srv/$(x)"),
+            ("-delete", "-delete"),
+            ("a`b`;c", "/srv/a;b`c`"),
+        ],
+    )
+    def test_a_hostile_query_and_root_each_reach_find_as_one_word(self, remote_search, q, root):
+        import shlex
+
+        box, client = remote_search
+        assert _search_rbox(client, q=q, root=root).status_code == 200
+        pattern = q if ("*" in q or "?" in q) else f"*{q}*"
+        sent_root = f"./{root}" if root.startswith("-") else root
+        assert len(box.commands) == 1
+        words = shlex.split(box.commands[0])
+        assert words == [
+            "command",
+            "-v",
+            "find",
+            ">/dev/null",
+            "2>&1",
+            "||",
+            "exit",
+            "127;",
+            "find",
+            sent_root,
+            "-maxdepth",
+            "4",
+            "-type",
+            "d",
+            "-iname",
+            pattern,
+            "2>/dev/null",
+            "|",
+            "head",
+            "-n",
+            "20",
+        ]

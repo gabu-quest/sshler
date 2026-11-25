@@ -9,6 +9,7 @@ Tests the actual mobile implementation:
 Run with:
     uv run pytest tests/e2e/test_mobile_responsive.py -v
 """
+
 from __future__ import annotations
 
 import re
@@ -140,3 +141,33 @@ async def test_tablet_viewport_layout(open_page):
     desktop_nav = page.locator(".desktop-nav")
     await expect(desktop_nav).to_be_visible()
     await expect(desktop_nav.get_by_role("link", name=re.compile(r"^Terminal \("))).to_have_count(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("wrapper", "dropdown", "query"),
+    [
+        (".directory-search", ".search-dropdown", "no-such-folder-name"),
+        (".content-search", ".grep-dropdown", "no-such-text-in-any-file"),
+    ],
+    ids=["folder-search", "content-search"],
+)
+async def test_mobile_search_dropdown_opens_under_its_input(open_page, wrapper, dropdown, query):
+    """A search's dropdown opens right under its input on a phone, inside the viewport.
+
+    Mutation: position the dropdown against the viewport with `top: 100%` -> its
+    top is the viewport's bottom edge, so nothing of it can be seen.
+    """
+    page = await open_page(MOBILE_VIEWPORT)
+    await page.goto("/app/files?box=local", wait_until="load")
+    field = page.locator(wrapper).first
+    await field.locator("input").fill(query)
+    panel = page.locator(dropdown).first
+    await expect(panel).to_be_attached()
+
+    field_box = await field.bounding_box()
+    panel_box = await panel.bounding_box()
+    # 4px is the dropdown's own margin under the input.
+    assert round(panel_box["y"]) == round(field_box["y"] + field_box["height"]) + 4
+    assert panel_box["x"] >= 0
+    assert panel_box["x"] + panel_box["width"] <= MOBILE_VIEWPORT["width"]

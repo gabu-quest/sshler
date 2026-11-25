@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { onUnmounted, ref, watch } from "vue";
 
 import { gitBranches, gitLog } from "@/api/http";
@@ -27,6 +28,9 @@ const commits = ref<GitCommit[]>([]);
 const branches = ref<GitBranch[]>([]);
 const loadingCommits = ref(false);
 const loadingBranches = ref(false);
+// The text of a failed request: "No commits" / "No branches" show only for an answer that came.
+const commitsError = ref<string | null>(null);
+const branchesError = ref<string | null>(null);
 
 let loadRequestId = 0;
 
@@ -82,15 +86,17 @@ async function loadData() {
   loadingBranches.value = true;
   commits.value = [];
   branches.value = [];
+  commitsError.value = null;
+  branchesError.value = null;
 
   const commitsPromise = gitLog(props.box, props.directory, props.token, 50)
     .then((response) => {
       if (requestId !== loadRequestId) return;
       commits.value = response.is_repo ? response.commits : [];
     })
-    .catch(() => {
+    .catch((err: unknown) => {
       if (requestId !== loadRequestId) return;
-      commits.value = [];
+      commitsError.value = errorText(err);
     })
     .finally(() => {
       if (requestId === loadRequestId) {
@@ -103,9 +109,9 @@ async function loadData() {
       if (requestId !== loadRequestId) return;
       branches.value = response.is_repo ? response.branches : [];
     })
-    .catch(() => {
+    .catch((err: unknown) => {
       if (requestId !== loadRequestId) return;
-      branches.value = [];
+      branchesError.value = errorText(err);
     })
     .finally(() => {
       if (requestId === loadRequestId) {
@@ -192,7 +198,8 @@ onUnmounted(() => {
               <span class="commit-date">{{ relativeDate(commit.date) }}</span>
             </div>
 
-            <div v-if="commits.length === 0" class="git-log-empty">
+            <div v-if="commitsError" class="git-log-empty">{{ commitsError }}</div>
+            <div v-else-if="commits.length === 0" class="git-log-empty">
               {{ translateOrFallback("commander.no_commits", "No commits") }}
             </div>
           </div>
@@ -216,7 +223,8 @@ onUnmounted(() => {
               <span v-if="branch.last_commit" class="branch-commit">{{ truncate(branch.last_commit, 24) }}</span>
             </div>
 
-            <div v-if="branches.length === 0" class="git-log-empty">
+            <div v-if="branchesError" class="git-log-empty">{{ branchesError }}</div>
+            <div v-else-if="branches.length === 0" class="git-log-empty">
               {{ translateOrFallback("commander.no_branches", "No branches") }}
             </div>
           </div>

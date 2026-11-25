@@ -171,9 +171,7 @@ def test_auth_required(tmp_path, monkeypatch):
     client = build_client(setup_config(tmp_path), monkeypatch)
     try:
         # POST without token → 403
-        resp = client.post(
-            "/api/v1/progress/x", json={"current": 1, "total": 10}
-        )
+        resp = client.post("/api/v1/progress/x", json={"current": 1, "total": 10})
         assert resp.status_code == 403
 
         # GET list without token → 403

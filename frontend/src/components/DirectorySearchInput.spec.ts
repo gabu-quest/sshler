@@ -10,6 +10,7 @@ vi.mock("@/api/http", () => ({
 }));
 
 import { searchDirectories } from "@/api/http";
+import { ApiError } from "@/api/apiError";
 
 // Mock naive-ui components
 vi.mock("naive-ui", () => {
@@ -33,7 +34,7 @@ vi.mock("naive-ui", () => {
     },
     NIcon: stub("<span><slot /></span>"),
     NSpin: stub("<span data-testid='spinner'>Loading...</span>"),
-    NEmpty: stub("<div data-testid='empty'>No results</div>"),
+    NEmpty: { props: ["description"], template: "<div data-testid='empty'>{{ description }}</div>" },
   };
 });
 
@@ -258,5 +259,61 @@ describe("DirectorySearchInput", () => {
     vi.advanceTimersByTime(300);
 
     expect(searchDirectories).not.toHaveBeenCalled();
+  });
+
+  it("a failed search shows its message where the empty result would show", async () => {
+    vi.mocked(searchDirectories).mockRejectedValue(new ApiError(502, "unreachable", "build-box did not answer"));
+    const { getByTestId, getAllByTestId } = render(DirectorySearchInput, {
+      props: { box: "testbox", token: "test-token" },
+    });
+    await fireEvent.update(getByTestId("search-input"), "proj");
+    await vi.advanceTimersByTimeAsync(300);
+
+    await waitFor(() =>
+      expect(getAllByTestId("empty").map((el) => el.textContent)).toEqual([
+        "Cannot connect to the box — build-box did not answer",
+      ]),
+    );
+  });
+
+  it("a walk that did not run shows why above the folders it still found", async () => {
+    vi.mocked(searchDirectories).mockResolvedValue({
+      box: "testbox",
+      query: "proj",
+      results: [{ path: "/home/u/proj", score: 3, source: "frecency" }],
+      error: "find timed out after 10 s",
+      reason: "timeout",
+    });
+    const { getByTestId, getAllByTestId, getByText } = render(DirectorySearchInput, {
+      props: { box: "testbox", token: "test-token" },
+    });
+    await fireEvent.update(getByTestId("search-input"), "proj");
+    await vi.advanceTimersByTimeAsync(300);
+
+    await waitFor(() => expect(getByText("/home/u/proj")).toBeTruthy());
+    expect(getAllByTestId("empty").map((el) => el.textContent)).toEqual([
+      "The box took too long to answer — find timed out after 10 s",
+    ]);
+  });
+
+  it("a search the user replaced by typing on shows nothing of its failure", async () => {
+    let failFirst: (err: unknown) => void = () => {};
+    vi.mocked(searchDirectories)
+      .mockReturnValueOnce(new Promise((_, reject) => { failFirst = reject; }))
+      .mockResolvedValueOnce({ box: "testbox", query: "proje", results: [{ path: "/srv/proje", score: 1, source: "discovery" }] });
+    const { getByTestId, getByText, queryAllByTestId } = render(DirectorySearchInput, {
+      props: { box: "testbox", token: "test-token" },
+    });
+    await fireEvent.update(getByTestId("search-input"), "proj");
+    await vi.advanceTimersByTimeAsync(300);
+    await fireEvent.update(getByTestId("search-input"), "proje");
+    await vi.advanceTimersByTimeAsync(300);
+    await waitFor(() => expect(getByText("/srv/proje")).toBeTruthy());
+
+    failFirst(new ApiError(502, "unreachable", "late failure"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(getByText("/srv/proje")).toBeTruthy();
+    expect(queryAllByTestId("empty")).toHaveLength(0);
   });
 });

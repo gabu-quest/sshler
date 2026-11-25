@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { NSelect, NButton, NIcon, NInput, NPopover, useMessage } from 'naive-ui'
@@ -121,6 +122,7 @@ const loadGitInfo = async () => {
   try {
     currentGitInfo.value = await gitInfo(selectedBox.value, initialDirectory.value, tokenValue.value)
   } catch {
+    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
     currentGitInfo.value = null
   }
 }
@@ -263,8 +265,8 @@ const handleThemeChange = async (theme: string) => {
     // Update local box data
     const box = boxesStore.items.find(b => b.name === selectedBox.value)
     if (box) box.terminal_theme = theme
-  } catch {
-    // ignore
+  } catch (err) {
+    message.error(errorText(err))
   }
 }
 
@@ -348,13 +350,13 @@ const ensureData = async () => {
 const initializeFromRoute = () => {
   const boxFromRoute = route.query.box as string
   const dirFromRoute = route.query.dir as string
-  
+
   if (boxFromRoute && boxesStore.items.some(box => box.name === boxFromRoute)) {
     selectedBox.value = boxFromRoute
   } else if (!selectedBox.value && boxesStore.items.length > 0) {
     selectedBox.value = boxesStore.items[0]?.name || null
   }
-  
+
   if (dirFromRoute) {
     initialDirectory.value = dirFromRoute
   }

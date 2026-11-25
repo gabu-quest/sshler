@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
-import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty } from 'naive-ui'
+import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
 import { PhArrowsClockwise, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX, PhHouse, PhSkull } from '@phosphor-icons/vue'
 import type { ApiSession } from '@/api/types'
 import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession } from '@/api/http'
@@ -21,12 +22,15 @@ interface Emits {
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 const { t } = useI18n()
+const message = useMessage()
 
 const sessions = ref<ApiSession[]>([])
 const loading = ref(false)
 const syncing = ref(false)
 const editingId = ref<string | null>(null)
 const editName = ref('')
+// The message of a failed load, shown where "no sessions" would be.
+const loadError = ref<string | null>(null)
 
 const effectiveHome = computed(() => props.homeSession ?? 'main')
 
@@ -64,10 +68,12 @@ function goHome() {
 
 async function load() {
   loading.value = true
+  loadError.value = null
   try {
     sessions.value = await fetchBoxSessions(props.boxName, props.token)
-  } catch {
+  } catch (err) {
     sessions.value = []
+    loadError.value = errorText(err)
   } finally {
     loading.value = false
   }
@@ -77,8 +83,10 @@ async function sync() {
   syncing.value = true
   try {
     sessions.value = await syncBoxSessions(props.boxName, props.token)
-  } catch {
-    // keep existing
+    loadError.value = null
+  } catch (err) {
+    // The list keeps the sessions it had; the message says the sync failed.
+    message.error(errorText(err))
   } finally {
     syncing.value = false
   }
@@ -88,8 +96,8 @@ async function kill(session: ApiSession, force = false) {
   try {
     await deleteSession(props.boxName, session.id, props.token, true, force)
     sessions.value = sessions.value.filter(s => s.id !== session.id)
-  } catch {
-    // ignore
+  } catch (err) {
+    message.error(errorText(err))
   }
 }
 
@@ -119,8 +127,9 @@ async function confirmRename(session: ApiSession) {
     const idx = sessions.value.findIndex(s => s.id === session.id)
     if (idx !== -1) sessions.value[idx] = updated
     editingId.value = null
-  } catch {
-    // keep editing state on error
+  } catch (err) {
+    // The name stays in its field, so it can be corrected and sent again.
+    message.error(errorText(err))
   }
 }
 
@@ -164,7 +173,7 @@ watch(() => props.boxName, load)
 
     <NSpin v-if="loading" size="small" />
 
-    <NEmpty v-else-if="sortedSessions.length === 0" :description="t('sessions.empty')" size="small" />
+    <NEmpty v-else-if="sortedSessions.length === 0" :description="loadError ?? t('sessions.empty')" size="small" />
 
     <div v-else class="session-list">
       <div

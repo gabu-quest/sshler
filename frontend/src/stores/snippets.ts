@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
@@ -21,7 +22,7 @@ export const useSnippetsStore = defineStore("snippets", () => {
       items.value = await fetchSnippets(box, token);
       loadedBox.value = box;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }
@@ -40,7 +41,7 @@ export const useSnippetsStore = defineStore("snippets", () => {
       items.value.push(snippet);
       return snippet;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return null;
     }
   }
@@ -57,7 +58,7 @@ export const useSnippetsStore = defineStore("snippets", () => {
       if (idx !== -1) items.value[idx] = updated;
       return updated;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return null;
     }
   }
@@ -69,7 +70,7 @@ export const useSnippetsStore = defineStore("snippets", () => {
       items.value = items.value.filter((s) => s.id !== snippetId);
       return true;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return false;
     }
   }

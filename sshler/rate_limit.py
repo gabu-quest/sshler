@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,16 +38,19 @@ class TokenBucket:
             return True
         return False
 
+    def seconds_until(self, tokens: int = 1) -> float:
+        """Seconds until ``tokens`` can be consumed; 0 when they can be now."""
+        self._refill()
+        missing = tokens - self.tokens
+        return 0.0 if missing <= 0 else missing / self.refill_rate
+
     def _refill(self):
         """Refill tokens based on time passed."""
         now = self.clock()
         elapsed = now - self.last_refill
 
         # Add tokens based on time elapsed
-        self.tokens = min(
-            self.capacity,
-            self.tokens + (elapsed * self.refill_rate)
-        )
+        self.tokens = min(self.capacity, self.tokens + (elapsed * self.refill_rate))
         self.last_refill = now
 
 
@@ -107,15 +111,19 @@ class RateLimiter:
 
         # Remove buckets that haven't been used in 10 minutes
         cutoff = now - 600
-        stale_keys = [
-            key for key, bucket in self._buckets.items()
-            if bucket.last_refill < cutoff
-        ]
+        stale_keys = [key for key, bucket in self._buckets.items() if bucket.last_refill < cutoff]
 
         for key in stale_keys:
             del self._buckets[key]
 
         self._last_cleanup = now
+
+    def retry_after(self, key: str) -> int:
+        """Whole seconds (at least 1) until ``key`` may make a request again."""
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            return 1
+        return max(1, math.ceil(bucket.seconds_until()))
 
     def reset(self, key: str):
         """Reset rate limit for a specific key."""

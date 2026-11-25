@@ -1,3 +1,5 @@
+import type { FailureReason } from "./apiError";
+
 export interface WindowsShell {
   id: string;
   label: string;
@@ -8,7 +10,10 @@ export interface BootstrapPayload {
   version: string;
   token_header: string;
   token: string | null;
-  basic_auth_required: boolean;
+  /** A password is set: the page is used signed in. */
+  auth_required: boolean;
+  /** This page's requests carry a live session (always true with no password set). */
+  authenticated: boolean;
   allow_origins: string[];
   spa_base: string;
   spa_enabled: boolean;
@@ -100,10 +105,13 @@ export interface SimpleMessage {
   path?: string | null;
 }
 
+/** "offline" carries why in `error` and `reason`; "online" carries neither. */
 export interface BoxStatus {
   name: string;
   status: string;
   latency_ms: number | null;
+  error?: string | null;
+  reason?: string | null;
 }
 
 export interface BoxStats {
@@ -113,7 +121,9 @@ export interface BoxStats {
   memory_total_mb: number | null;
   memory_percent: number | null;
   uptime_seconds: number | null;
-  error: string | null;
+  /** Set, with `reason`, only in a stats event of a box whose stats failed. */
+  error?: string | null;
+  reason?: string | null;
 }
 
 export interface GitInfo {
@@ -121,7 +131,6 @@ export interface GitInfo {
   commit: string | null;
   is_repo: boolean;
   dirty: boolean;
-  error?: string | null;
 }
 
 export interface DownloadResponse {
@@ -136,16 +145,23 @@ export interface SearchResult {
   is_directory?: boolean;
 }
 
+/** `error` and `reason` say why the walk of the box did not run; `results` still holds
+ * the folders found before. Both are absent from an answer whose walk ran. */
 export interface SearchResponse {
   box: string;
   query: string;
   results: SearchResult[];
+  error?: string | null;
+  reason?: string | null;
 }
 
 export interface BatchResult {
   status: "ok" | "partial";
   succeeded: string[];
-  failed: { path: string; error: string }[];
+  /** `reason` is "exists" when a regular file has the name (a retry with overwrite replaces it),
+   * "cannot_replace" when the name is taken by something overwrite cannot replace, else
+   * the reason the item failed. */
+  failed: { path: string; error: string; reason?: FailureReason }[];
 }
 
 export interface GrepMatch {
@@ -225,7 +241,6 @@ export interface GitLogResponse {
   directory: string;
   commits: GitCommit[];
   is_repo: boolean;
-  error?: string | null;
 }
 
 export interface GitBlameLine {
@@ -241,7 +256,6 @@ export interface GitBlameResponse {
   path: string;
   lines: GitBlameLine[];
   truncated?: boolean;
-  error?: string | null;
 }
 
 export interface GitBranch {
@@ -256,7 +270,6 @@ export interface GitBranchesResponse {
   branches: GitBranch[];
   root: string | null;
   is_repo: boolean;
-  error?: string | null;
 }
 
 export interface GitDiffFile {
@@ -270,7 +283,6 @@ export interface GitDiffFilesResponse {
   ref_a: string;
   ref_b: string;
   files: GitDiffFile[];
-  error?: string | null;
 }
 
 export interface GitShowResponse {

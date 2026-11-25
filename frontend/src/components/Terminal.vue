@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -6,7 +7,6 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { CanvasAddon } from '@xterm/addon-canvas'
 import { useMessage, NTooltip, NPopconfirm, NModal, NPopover } from 'naive-ui'
 import {
   PhCaretLeft,
@@ -40,10 +40,11 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName } from '@/api/http'
+import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
+import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
 import type { ApiSession } from '@/api/types'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
 
@@ -147,11 +148,12 @@ const snapshotDotStyle = computed(() => {
   }
 })
 
+const SCROLL_BAR_WIDTH = 10
+
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let searchAddon: SearchAddon | null = null
 let webglAddon: WebglAddon | null = null
-let canvasAddon: CanvasAddon | null = null
 let websocket: WebSocket | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeTimeout: number | null = null
@@ -373,6 +375,15 @@ const TERMINAL_THEMES = {
   }
 }
 
+// overviewRuler.width (set for the scroll bar's width) also makes xterm draw an overview
+// ruler. This terminal adds no decorations, so the ruler's only paint is a 1 px left
+// border, which would show as a line beside the scroll bar: make it transparent.
+type TerminalThemeName = keyof typeof TERMINAL_THEMES
+const xtermTheme = (name: TerminalThemeName) => ({
+  ...TERMINAL_THEMES[name],
+  overviewRulerBorder: 'rgba(0, 0, 0, 0)',
+})
+
 // Live working directory, learned from OSC escapes the shell emits on each
 // prompt (OSC 7 file://, ConEmu/Windows-Terminal OSC 9;9, iTerm2 OSC 1337
 // CurrentDir). Null until the shell reports one — we then prefer it over the
@@ -503,7 +514,7 @@ const handleFilePathClick = async (rawPath: string) => {
     }
   } catch (err) {
     win?.close()
-    message.error(`Failed to check path: ${err instanceof Error ? err.message : String(err)}`)
+    message.error(`Failed to check path: ${errorText(err)}`)
   }
 }
 
@@ -851,35 +862,24 @@ const toggleMouseMode = () => {
   )
 }
 
-const loadCanvasRenderer = () => {
-  if (!terminal || canvasAddon) return
-  try {
-    canvasAddon = new CanvasAddon()
-    terminal.loadAddon(canvasAddon)
-  } catch (err) {
-    console.warn('[Terminal] Canvas renderer failed; using DOM:', err)
-    canvasAddon = null
-  }
-}
-
-const loadAcceleratedRenderer = () => {
+// Disposing the WebGL addon hands rendering back to xterm's built-in DOM renderer.
+// The fallback happens once per terminal: a lost context is not retried.
+const loadWebglRenderer = () => {
   if (!terminal) return
-  // Try WebGL first.
+  const addon = new WebglAddon()
   try {
-    webglAddon = new WebglAddon()
-    webglAddon.onContextLoss(() => {
-      console.warn('[Terminal] WebGL context lost; falling back to canvas')
-      try { webglAddon?.dispose() } catch { /* noop */ }
-      webglAddon = null
-      loadCanvasRenderer()
-    })
-    terminal.loadAddon(webglAddon)
-    return
+    terminal.loadAddon(addon)
   } catch (err) {
-    console.warn('[Terminal] WebGL renderer unavailable, falling back to canvas:', err)
-    webglAddon = null
+    console.warn('[Terminal] WebGL renderer unavailable; using the DOM renderer:', err)
+    try { addon.dispose() } catch { /* noop */ }
+    return
   }
-  loadCanvasRenderer()
+  webglAddon = addon
+  addon.onContextLoss(() => {
+    console.warn('[Terminal] WebGL context lost; using the DOM renderer')
+    if (webglAddon === addon) webglAddon = null
+    try { addon.dispose() } catch { /* noop */ }
+  })
 }
 
 const createTerminal = () => {
@@ -887,9 +887,9 @@ const createTerminal = () => {
 
   // Auto-select light theme when app is in light mode (unless explicitly overridden)
   const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-  const theme = TERMINAL_THEMES[effectiveTheme]
+  const theme = xtermTheme(effectiveTheme)
   const isCyberpunk = effectiveTheme === 'cyberpunk'
-  
+
   terminal = new Terminal({
     theme,
     fontSize: effectiveFontSize.value,
@@ -901,6 +901,9 @@ const createTerminal = () => {
     cursorInactiveStyle: 'outline',
     allowTransparency: false,
     scrollback: appStore.terminalScrollback,
+    // xterm draws its own scroll bar this many px wide, and FitAddon reserves the same
+    // width; 10 px is the width of the thin native scroll bar this terminal had before.
+    overviewRuler: { width: SCROLL_BAR_WIDTH },
     smoothScrollDuration: isCyberpunk ? 150 : 100,
     rightClickSelectsWord: false,
     macOptionIsMeta: true,
@@ -918,7 +921,7 @@ const createTerminal = () => {
 
   fitAddon = new FitAddon()
   searchAddon = new SearchAddon()
-  
+
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.loadAddon(searchAddon)
@@ -981,7 +984,7 @@ const createTerminal = () => {
             // Browsers block window.open('file://...') from http:// pages.
             // Copy the URL to clipboard so the user can paste it in a new tab.
             navigator.clipboard.writeText(linkText).then(() => {
-              message.success('File URL copied — paste in a new tab to open')
+              message.success(t('terminal.file_url_copied'))
             }).catch(() => {
               message.warning(linkText)
             })
@@ -1028,8 +1031,8 @@ const createTerminal = () => {
   terminal.open(terminalRef.value)
 
   // Renderer: WebGL is 5–10× faster than DOM for heavy output and large scrollback.
-  // Fall back to canvas (also GPU-accelerated, broader compat) on WebGL failure or context loss.
-  loadAcceleratedRenderer()
+  // Without WebGL (or after a lost context) xterm draws with its DOM renderer.
+  loadWebglRenderer()
 
   // Add event listeners
   terminalRef.value.addEventListener('contextmenu', handleContextMenu)
@@ -1154,11 +1157,11 @@ const createTerminal = () => {
 
   // Setup resize observer with throttling
   setupResizeObserver()
-  
+
   // Expose terminal globally for debugging
   ;(window as any).term = terminal
   ;(window as any).fitAddon = fitAddon
-  
+
   // Initial fit - MUST wait for fonts to load for correct cell measurements
   nextTick(async () => {
     // Wait for fonts (critical for Nerd Fonts)
@@ -1268,20 +1271,9 @@ const connect = async () => {
 
   try {
     // Get WebSocket URL from backend handshake to ensure proper host resolution
-    const handshakeResponse = await fetch('/api/v1/terminal/handshake', {
-      headers: {
-        'Accept': 'application/json',
-        ...(tokenValue.value ? { 'X-SSHLER-TOKEN': tokenValue.value } : {})
-      }
-    })
-    
-    if (!handshakeResponse.ok) {
-      throw new Error(`Handshake failed: ${handshakeResponse.status}`)
-    }
-    
-    const handshake = await handshakeResponse.json()
+    const handshake = await fetchTerminalHandshake(tokenValue.value || null)
     let wsUrl = handshake.ws_url
-    
+
     // Add required query parameters
     const params = new URLSearchParams({
       host: props.boxName,
@@ -1290,7 +1282,7 @@ const connect = async () => {
       cols: '120',
       rows: '32'
     })
-    
+
     // Windows-only: pick which native shell the backend should spawn.
     if (props.shell) {
       params.set('shell', props.shell)
@@ -1302,10 +1294,10 @@ const connect = async () => {
     }
 
     wsUrl += '?' + params.toString()
-    
+
     websocket = new WebSocket(wsUrl)
     websocket.binaryType = 'arraybuffer' // Critical for binary terminal data!
-    
+
     websocket.onopen = () => {
       connecting.value = false
       connected.value = true
@@ -1345,7 +1337,7 @@ const connect = async () => {
         terminal?.focus()
       })
     }
-    
+
     websocket.onmessage = async (event) => {
       // Handle binary data (actual terminal output)
       if (event.data instanceof ArrayBuffer) {
@@ -1376,49 +1368,24 @@ const connect = async () => {
         }
       }
     }
-    
+
     websocket.onclose = (event) => {
       connected.value = false
       connecting.value = false
       emit('disconnected')
 
-      if (event.code === 4403) {
-        message.error(t('terminal.auth_failed'), {
-          duration: 5000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4401) {
-        message.error(t('terminal.auth_denied'), {
-          duration: 5000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4502) {
-        // WSL selected but no distro installed — toast, don't reconnect.
-        message.error(t('terminal.wsl_not_installed'), {
-          duration: 6000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4503) {
-        // pywinpty missing in the server environment — toast, don't reconnect.
-        message.error(t('terminal.pywinpty_missing'), {
-          duration: 8000
-        })
-        reconnecting.value = false
-      } else if (event.code === 4504) {
-        // Server-side terminal cap hit — toast, don't reconnect-loop.
-        message.error(t('terminal.too_many_terminals'), {
-          duration: 8000
-        })
-        reconnecting.value = false
-      } else if (event.code === 1000) {
-        // Normal closure - don't reconnect
-        reconnecting.value = false
-      } else {
+      const policy = classifyTerminalCloseCode(event.code)
+      if (policy.messageKey) {
+        message.error(t(policy.messageKey), { duration: policy.duration })
+      }
+      if (policy.reconnect) {
         // Unexpected disconnect - attempt reconnect with backoff
         scheduleReconnect()
+      } else {
+        reconnecting.value = false
       }
     }
-    
+
     websocket.onerror = (error) => {
       console.error('[Connection] WebSocket error:', error)
       connected.value = false
@@ -1436,7 +1403,7 @@ const connect = async () => {
 
     // Only show error message if not already reconnecting
     if (!reconnecting.value && reconnectAttempts.value === 0) {
-      message.error(t('terminal.connection_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error'))
+      message.error(t('terminal.connection_failed') + ': ' + (errorText(error)))
     }
 
     // Schedule reconnect on connection failure
@@ -1613,7 +1580,10 @@ onMounted(async () => {
     try {
       const s = await fetchSnapshotStatus(tokenValue.value)
       lastSnapshotAt.value = s.last_snapshot_at
-    } catch { /* best effort */ }
+    } catch {
+      // Silent on purpose: the snapshot mark is a decoration this poll asks about again
+      // in a moment; it keeps its last state meanwhile.
+    }
   }
   const startSnapshotPolling = () => {
     if (snapshotPollInterval) return
@@ -1685,8 +1655,6 @@ onUnmounted(() => {
 
   try { webglAddon?.dispose() } catch { /* noop */ }
   webglAddon = null
-  try { canvasAddon?.dispose() } catch { /* noop */ }
-  canvasAddon = null
 
   if (terminal) {
     terminal.dispose()
@@ -1704,7 +1672,7 @@ watch(() => props.boxName, () => {
 watch([() => props.theme, () => appStore.isDark], () => {
   if (terminal) {
     const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-    terminal.options.theme = TERMINAL_THEMES[effectiveTheme]
+    terminal.options.theme = xtermTheme(effectiveTheme)
   }
 })
 
@@ -2541,6 +2509,12 @@ defineExpose({
   width: 100% !important;
 }
 
+/* xterm paints the theme background on its scrollable element; filling the terminal
+   with it keeps the part-row below the last full row in the theme colour. */
+.terminal :deep(.xterm-scrollable-element) {
+  height: 100%;
+}
+
 /* Phosphor text glow - subtle CRT effect */
 .terminal :deep(.xterm-rows) {
   text-shadow: 0 0 1px currentColor;
@@ -2555,39 +2529,21 @@ defineExpose({
   background: rgba(83, 189, 250, 0.35) !important;
 }
 
-/* Styled scrollbars */
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 8px;
+/* Scroll bar: xterm draws it (SCROLL_BAR_WIDTH wide) on a transparent track. The thumb
+   is one flat colour inset 2px with round ends, and does not change on hover or drag.
+   The .xterm in the selector outranks the slider colours xterm injects from its theme. */
+.terminal {
+  --terminal-scrollbar-thumb: rgba(255, 255, 255, 0.1);
 }
 
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar-track {
-  background: transparent;
-  border-radius: 4px;
-}
-
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.12) 0%,
-    rgba(255, 255, 255, 0.08) 100%
-  );
-  border-radius: 4px;
+.terminal :deep(.xterm .xterm-scrollable-element > .scrollbar > .slider),
+.terminal :deep(.xterm .xterm-scrollable-element > .scrollbar > .slider:hover),
+.terminal :deep(.xterm .xterm-scrollable-element > .scrollbar > .slider.active) {
+  box-sizing: border-box;
   border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--terminal-scrollbar-thumb);
   background-clip: padding-box;
-}
-
-.terminal :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.2) 0%,
-    rgba(255, 255, 255, 0.15) 100%
-  );
-}
-
-/* Firefox scrollbars */
-.terminal :deep(.xterm-viewport) {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 /* =============================================================================
@@ -2746,12 +2702,8 @@ defineExpose({
   }
 
   /* Hide scrollbar on mobile to save space */
-  .terminal :deep(.xterm-viewport)::-webkit-scrollbar {
-    width: 0;
-  }
-
-  .terminal :deep(.xterm-viewport) {
-    scrollbar-width: none;
+  .terminal :deep(.xterm-scrollable-element > .scrollbar) {
+    display: none;
   }
 }
 
@@ -2979,15 +2931,7 @@ defineExpose({
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
-[data-theme="light"] .terminal .xterm-viewport {
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
-}
-
-[data-theme="light"] .terminal .xterm-viewport::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.08));
-}
-
-[data-theme="light"] .terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.15));
+[data-theme="light"] .terminal {
+  --terminal-scrollbar-thumb: rgba(0, 0, 0, 0.15);
 }
 </style>

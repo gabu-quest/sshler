@@ -61,7 +61,8 @@ async function loadSnapshotStatus() {
     const status = await fetchSnapshotStatus(tokenValue.value || null);
     lastSnapshotAt.value = status.last_snapshot_at;
   } catch {
-    // Best effort
+    // Silent on purpose: the snapshot dot is a decoration this poll asks about again in
+    // ten seconds; it keeps its last state meanwhile.
   }
 }
 
@@ -69,8 +70,10 @@ async function loadLocalStats() {
   try {
     const stats = await boxStats('local', tokenValue.value || null);
     localStats.value = stats;
-  } catch (e) {
-    // Stats are optional
+  } catch {
+    // Silent on purpose: the header has no room for a sentence, and this poll asks again
+    // in ten seconds. Its widget is hidden while the stats fail, never left with old numbers.
+    localStats.value = null;
   }
 }
 
@@ -98,9 +101,9 @@ function isStatCritical(percent: number | null | undefined): boolean {
 let statsInterval: number | null = null;
 
 // Auth status computed
-const showAuthIndicator = computed(() => bootstrapStore.basicAuthRequired && authStore.isAuthenticated);
+const showAuthIndicator = computed(() => bootstrapStore.authRequired && authStore.isAuthenticated);
 const authTooltip = computed(() => {
-  if (!bootstrapStore.basicAuthRequired) return '';
+  if (!bootstrapStore.authRequired) return '';
   return authStore.isAuthenticated
     ? t('header.authenticated_as', { user: authStore.displayUsername })
     : t('header.auth_required');
@@ -193,7 +196,8 @@ const handleKeydown = (event: KeyboardEvent) => {
 
 // Only poll stats when the tab is visible (saves requests when 20+ tabs open)
 const startStatsPolling = () => {
-  if (statsInterval) return;
+  // Nothing is asked of the server before the page knows it is signed in.
+  if (statsInterval || !bootstrapStore.signedIn) return;
   loadLocalStats();
   loadSnapshotStatus();
   statsInterval = window.setInterval(() => {
@@ -216,6 +220,16 @@ const handleVisibilityChange = () => {
     startStatsPolling();
   }
 };
+
+// The polls run only while the page is signed in: they start when it becomes so and stop
+// when it is signed out.
+watch(() => bootstrapStore.signedIn, (signedIn) => {
+  if (signedIn) {
+    if (!document.hidden) startStatsPolling();
+  } else {
+    stopStatsPolling();
+  }
+});
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
@@ -369,9 +383,9 @@ onUnmounted(() => {
     </div>
 
     <!-- Mobile Navigation Drawer -->
-    <NDrawer 
-      v-model:show="isMobileMenuOpen" 
-      placement="right" 
+    <NDrawer
+      v-model:show="isMobileMenuOpen"
+      placement="right"
       :width="280"
       :trap-focus="false"
       :block-scroll="false"
@@ -763,7 +777,7 @@ onUnmounted(() => {
   .nav-link {
     border-color: var(--text);
   }
-  
+
   .nav-link.active {
     background: var(--accent);
     color: white;

@@ -37,6 +37,7 @@ Mermaid rendering and image inlining run in parallel after the v-html commit. Th
 - Literal `\n` (backslash + n) in state-diagram descriptions and `classDef` strings is translated to `<br/>` — mermaid renders that as a line break wherever htmlLabels is on (the default).
 - SVG `width`/`height` attrs are stripped after render so CSS can scale via the viewBox. Without this, tall diagrams keep their literal pixel height in print and overflow onto extra pages.
 - Diagrams with aspect ratio > 1.4:1 are tagged `.mermaid-wide` and assigned `page: wide-landscape` so they get their own landscape page when printing.
+- The mermaid configuration has one owner, `frontend/src/utils/mermaidConfig.ts`, used by the preview and the print document. It pins the layout engine, the look and the minimum node width so diagrams keep their mermaid 11 shape.
 - Mermaid's own DOMPurify pass (via `securityLevel: "strict"` at init) is trusted; the rendered SVG is NOT re-sanitised. A second pass strips `<foreignObject>` HTML labels (XHTML namespace) and produces empty shapes.
 - Render errors become a visible `<pre class="mermaid-error">` containing the source — not a silent fail.
 
@@ -77,7 +78,7 @@ Separate pipeline from "Print to PDF", same visual output. Where the print path 
 **Files:**
 
 - `sshler/pdf.py` — `PDF_RENDERER` singleton; one long-lived Chromium launched in FastAPI lifespan; per-request fresh `BrowserContext` + `Page`; module-level `asyncio.Lock` serializes page creation (single-user localhost tool, no parallelism benefit).
-- `sshler/api/pdf.py` — `POST /api/v1/pdf/render`. Accepts `{html, filename}`. Returns 503 when renderer is unavailable. Filename is sanitized (path separators / quotes stripped, `.pdf` appended). HTML capped at 20 MB.
+- `sshler/api/pdf.py` — `POST /api/v1/pdf/render`. Accepts `{html, filename}`. Answers 501 `program_missing` when the renderer is unavailable. Filename is sanitized (path separators / quotes stripped, `.pdf` appended). HTML capped at 20 MB.
 - `frontend/src/composables/usePrintableHtml.ts` — `toHtml({box, path, token, theme})` returns a complete `<!DOCTYPE html>...</html>` string. Internally: fetch preview → parse markdown → render mermaid → inline images → wrap in the same print stylesheet. Mirrors the print-window pipeline but produces a string instead of writing to a popup.
 - `frontend/src/composables/usePdfExport.ts` — `exportOne(box, path)` and `exportMany(box, paths[])`. Top-of-page loading bar (`NLoadingBarProvider` mounted in `App.vue`), stage-aware spinner (`fetching` → `rendering content` → `generating PDF Ns` ticking elapsed seconds → `downloading`).
 

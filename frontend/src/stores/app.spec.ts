@@ -1,6 +1,6 @@
 /**
  * Property-based tests for app store theme functionality.
- * 
+ *
  * **Feature: vue3-migration-completion, Property 5: Theme consistency across components**
  * **Validates: Requirements 2.4**
  */
@@ -72,8 +72,8 @@ describe('App Store Theme Properties', () => {
             /**
              * **Feature: vue3-migration-completion, Property 5: Theme consistency across components**
              * **Validates: Requirements 2.4**
-             * 
-             * For any theme toggle action, all UI components should reflect the new theme 
+             *
+             * For any theme toggle action, all UI components should reflect the new theme
              * consistently without requiring page refresh.
              */
             const store = useAppStore();
@@ -184,8 +184,8 @@ describe('App Store Theme Properties', () => {
             /**
              * **Feature: vue3-migration-completion, Property 22: Motion preference respect**
              * **Validates: Requirements 7.3**
-             * 
-             * For any user with prefers-reduced-motion setting enabled, animations and 
+             *
+             * For any user with prefers-reduced-motion setting enabled, animations and
              * transitions should be reduced or disabled.
              */
             const mockReducedMotionQuery = {
@@ -287,7 +287,7 @@ describe('App Store Theme Properties', () => {
             store.destroy();
 
             // Verify cleanup was called (through the returned cleanup function)
-            // Note: We can't directly test removeEventListener calls because they're 
+            // Note: We can't directly test removeEventListener calls because they're
             // called through the cleanup function returned by setupMediaQueryListeners
         });
     });

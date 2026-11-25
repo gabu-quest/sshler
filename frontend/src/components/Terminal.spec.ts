@@ -34,7 +34,6 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: stubs.Stub }));
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: stubs.Stub }));
 vi.mock("@xterm/addon-clipboard", () => ({ ClipboardAddon: stubs.Stub }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: stubs.Stub }));
-vi.mock("@xterm/addon-canvas", () => ({ CanvasAddon: stubs.Stub }));
 
 const messageMock = { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() };
 vi.mock("naive-ui", async (importOriginal) => ({
@@ -120,10 +119,13 @@ describe("Terminal.vue close codes", () => {
   // Mutation killed for each row: deleting that code's branch in onclose (the
   // close then falls through to scheduleReconnect), or changing its toast.
   it.each([
+    [4400, "terminal.session_name_refused", 6000],
     [4403, "terminal.auth_failed", 5000],
     [4401, "terminal.auth_denied", 5000],
     [4502, "terminal.wsl_not_installed", 6000],
     [4503, "terminal.pywinpty_missing", 8000],
+    [4404, "terminal.unknown_box", 6000],
+    [4501, "terminal.tmux_not_installed", 8000],
   ])("code %i shows its toast and never reconnects", async (code, key, duration) => {
     const wrapper = await mountConnected();
     socket(0).onclose!({ code });
@@ -206,6 +208,39 @@ describe("Terminal.vue close codes", () => {
     expect(FakeWebSocket.instances).toHaveLength(11);
     expect(messageMock.error).toHaveBeenCalledTimes(1);
     expect(messageMock.error).toHaveBeenCalledWith(en["terminal.max_reconnect"], { duration: 5000 });
+    wrapper.unmount();
+  });
+});
+
+describe("Terminal.vue socket error", () => {
+  it("a socket error on the first connection shows 'Connection failed' alone", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onerror!(new Event("error"));
+    await flushPromises();
+
+    expect(messageMock.error.mock.calls).toEqual([["Connection failed"]]);
+    wrapper.unmount();
+  });
+});
+
+describe("Terminal.vue handshake", () => {
+  // A refused handshake shows the failure's line and the server's detail.
+  it("a refused handshake shows its reason's line and detail, and opens no socket", async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      new Response(JSON.stringify({ detail: "build-box: connection timed out after 10 s", reason: "unreachable" }), { status: 502 }),
+    );
+    const wrapper = mount(Terminal, {
+      props: { boxName: "box1", sessionName: "main", directory: "/tmp" },
+      global: { plugins: [createPinia()], stubs: { SessionSwitcher: true } },
+    });
+    await advance(100);
+
+    expect(messageMock.error).toHaveBeenCalledTimes(1);
+    expect(messageMock.error).toHaveBeenCalledWith(
+      "Connection failed: Cannot connect to the box — build-box: connection timed out after 10 s",
+    );
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/terminal/handshake");
     wrapper.unmount();
   });
 });

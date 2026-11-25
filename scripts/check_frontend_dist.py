@@ -5,8 +5,8 @@ Intended for release/packaging pipelines to ensure `pnpm build` ran before
 `python -m build` so the wheel/sdist contains `sshler/static/dist`.
 """
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def main() -> int:

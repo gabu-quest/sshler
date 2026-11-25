@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { failureText } from "@/api/apiError";
 import type { TransferProgress, TransferResult } from "@/api/http";
 import { useI18n } from "@/i18n";
 import { NButton, NModal, NProgress } from "naive-ui";
-import { PhCheck, PhHourglass, PhSpinner, PhWarning, PhX } from "@phosphor-icons/vue";
+import { PhCheck, PhHourglass, PhMinus, PhQuestion, PhSpinner, PhWarning, PhX } from "@phosphor-icons/vue";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean;
   mode: "copy" | "move";
   srcBox: string;
@@ -16,7 +17,19 @@ const props = defineProps<{
   progress: TransferProgress | null;
   result: TransferResult | null;
   error: string | null;
-}>();
+  /** Files the user chose to keep as they were when asked "Replace?". */
+  skipped?: string[];
+  /** Files an earlier call of this transfer already placed. */
+  placed?: string[];
+  /** Files the server found taken that the user has not answered about yet. */
+  waiting?: string[];
+  /** Files an earlier call of this transfer failed to place, with the server's text. */
+  failedSoFar?: TransferResult["failed"];
+  /** Files the call in flight found taken; they are asked about when it ends. */
+  held?: string[];
+  /** The files the call in flight carries (all of them for the first call). */
+  sending?: string[] | null;
+}>(), { skipped: () => [], placed: () => [], waiting: () => [], failedSoFar: () => [], held: () => [], sending: null });
 
 const emit = defineEmits<{
   cancel: [];
@@ -41,10 +54,8 @@ const filePercent = computed(() => {
   return Math.round((props.progress.bytes_done / props.progress.bytes_total) * 100);
 });
 
-const overallDone = computed(() => {
-  if (props.result) return props.files.length;
-  return props.progress?.index ?? 0;
-});
+// The files that were placed: a kept or failed file is not counted, also at the end.
+const overallDone = computed(() => props.files.filter((file) => getFileStatus(file) === "done").length);
 
 const overallPercent = computed(() => {
   if (!props.files.length) return 0;
@@ -62,24 +73,35 @@ function getFileName(path: string) {
   return parts[parts.length - 1] || path;
 }
 
-type FileStatus = "done" | "active" | "pending" | "failed";
+type FileStatus = "done" | "active" | "pending" | "failed" | "skipped" | "waiting";
 
 function getFileStatus(filePath: string): FileStatus {
   if (props.result) {
     if (props.result.failed.some((failedFile) => failedFile.path === filePath)) return "failed";
+    if (props.skipped.includes(filePath)) return "skipped";
     return "done";
   }
+
+  // Said so far, whatever the call in flight reports: a skipped, waiting, failed or
+  // already placed file keeps that state.
+  if (props.skipped.includes(filePath)) return "skipped";
+  if (props.waiting.includes(filePath)) return "waiting";
+  if (props.failedSoFar.some((failedFile) => failedFile.path === filePath)) return "failed";
+  if (props.placed.includes(filePath)) return "done";
+  // Not placed, though the call has moved on to the files after it.
+  if (props.held.includes(filePath)) return "pending";
 
   if (!props.progress) return "pending";
   if (props.progress.file === filePath) return "active";
 
-  const index = props.files.indexOf(filePath);
-  return index < (props.progress.index ?? 0) ? "done" : "pending";
+  // The progress index counts within the files the call in flight carries.
+  const index = (props.sending ?? props.files).indexOf(filePath);
+  return index >= 0 && index < (props.progress.index ?? 0) ? "done" : "pending";
 }
 
 function getFileError(filePath: string): string | null {
-  const failedFile = props.result?.failed.find((item) => item.path === filePath);
-  return failedFile?.error ?? null;
+  const failedFile = (props.result?.failed ?? props.failedSoFar).find((item) => item.path === filePath);
+  return failedFile ? failureText(failedFile) : null;
 }
 </script>
 
@@ -111,11 +133,19 @@ function getFileError(filePath: string): string | null {
             <PhCheck v-if="getFileStatus(file) === 'done'" weight="duotone" class="status-done" />
             <PhSpinner v-else-if="getFileStatus(file) === 'active'" weight="duotone" class="status-active" />
             <PhHourglass v-else-if="getFileStatus(file) === 'pending'" weight="duotone" class="status-pending" />
+            <PhQuestion v-else-if="getFileStatus(file) === 'waiting'" weight="duotone" class="status-waiting" />
+            <PhMinus v-else-if="getFileStatus(file) === 'skipped'" weight="duotone" class="status-skipped" />
             <PhX v-else weight="duotone" class="status-failed" />
           </span>
           <span class="file-name">{{ getFileName(file) }}</span>
           <span v-if="getFileStatus(file) === 'active' && progress" class="file-progress">
             {{ filePercent }}%
+          </span>
+          <span v-if="getFileStatus(file) === 'skipped'" class="file-skipped">
+            {{ t("commander.transfer_skipped") }}
+          </span>
+          <span v-if="getFileStatus(file) === 'waiting'" class="file-waiting">
+            {{ t("commander.transfer_waiting") }}
           </span>
           <span v-if="getFileStatus(file) === 'failed'" class="file-error" :title="getFileError(file) || ''">
             {{ getFileError(file) }}
@@ -273,6 +303,14 @@ function getFileError(filePath: string): string | null {
   color: #f87171;
 }
 
+.status-skipped {
+  color: #fbbf24;
+}
+
+.status-waiting {
+  color: #fbbf24;
+}
+
 @keyframes spin {
   from {
     transform: rotate(0deg);
@@ -297,13 +335,23 @@ function getFileError(filePath: string): string | null {
   font-size: 11px;
 }
 
+/* What happened to a file is read whole: it wraps under a long name, never cut. */
+.file-skipped,
+.file-waiting,
+.file-error {
+  font-size: 10px;
+  max-width: 65%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.file-skipped,
+.file-waiting {
+  color: #fbbf24;
+}
+
 .file-error {
   color: #f87171;
-  font-size: 10px;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .transfer-current {

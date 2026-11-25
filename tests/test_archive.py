@@ -1,5 +1,6 @@
 """Tests for archive creation and extraction API."""
 
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -195,6 +196,7 @@ class TestArchiveExtract:
             content = b"extracted content"
             info.size = len(content)
             import io
+
             tf.addfile(info, io.BytesIO(content))
 
         dest = tmp_path / "dest"
@@ -311,3 +313,186 @@ class TestArchiveExtract:
             assert resp.status_code == 404
         finally:
             client.close()
+
+
+def _extract(client: TestClient, archive: Path, dest: Path):
+    return client.post(
+        "/api/v1/boxes/local/archive/extract",
+        json={"archive_path": str(archive), "destination": str(dest)},
+        headers=auth_headers(),
+    )
+
+
+def _tar_with(archive: Path, *members: tarfile.TarInfo) -> None:
+    import io
+
+    with tarfile.open(str(archive), "w:gz") as tf:
+        for info in members:
+            if info.isreg():
+                tf.addfile(info, io.BytesIO(b"x" * info.size))
+            else:
+                tf.addfile(info)
+
+
+def _member(name: str, *, link_to: str | None = None) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name=name)
+    if link_to is None:
+        info.size = 1
+    else:
+        info.type = tarfile.SYMTYPE
+        info.linkname = link_to
+    return info
+
+
+class TestLocalArchiveGuards:
+    """Every entry stays inside the destination on the local box. The archives are
+    built in the test's own temporary folder; ``outside`` is a folder beside the
+    destination that must stay empty."""
+
+    @pytest.fixture
+    def place(self, tmp_path, monkeypatch):
+        config_dir = setup_config(tmp_path)
+        (tmp_path / "dest").mkdir()
+        (tmp_path / "outside").mkdir()
+        client = build_client(config_dir, monkeypatch)
+        yield tmp_path.resolve(), client
+        client.close()
+
+    def test_a_name_that_is_no_archive_is_400_on_the_local_box(self, place):
+        root, client = place
+        (root / "notes.txt").write_text("plain")
+        resp = _extract(client, root / "notes.txt", root / "dest")
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": "Unsupported archive format", "reason": "invalid"},
+        )
+        assert list((root / "dest").iterdir()) == []
+
+    def test_a_tar_entry_with_a_parent_reference_is_refused(self, place):
+        root, client = place
+        _tar_with(root / "up.tar.gz", _member("../outside/x.txt"))
+        resp = _extract(client, root / "up.tar.gz", root / "dest")
+        target = root / "outside" / "x.txt"
+        assert (resp.status_code, resp.json()["detail"]) == (
+            500,
+            f"'../outside/x.txt' would be extracted to {str(target)!r}, "
+            "which is outside the destination",
+        )
+        assert list((root / "outside").iterdir()) == []
+
+    def test_a_tar_entry_with_an_absolute_name_lands_inside_the_destination(self, place):
+        root, client = place
+        absolute = root / "outside" / "abs.txt"
+        name = absolute.as_posix().removeprefix(absolute.drive)  # "/..." on every OS
+        _tar_with(root / "abs.tar.gz", _member(name))
+        resp = _extract(client, root / "abs.tar.gz", root / "dest")
+        assert resp.status_code == 200
+        assert list((root / "outside").iterdir()) == []
+        assert (root / "dest" / name.lstrip("/")).read_bytes() == b"x"
+
+    def test_a_tar_link_pointing_outside_is_refused(self, place):
+        root, client = place
+        _tar_with(root / "ln.tar.gz", _member("ln", link_to="../outside"))
+        resp = _extract(client, root / "ln.tar.gz", root / "dest")
+        assert (resp.status_code, resp.json()["detail"]) == (
+            500,
+            f"'ln' would link to {str(root / 'outside')!r}, which is outside the destination",
+        )
+        assert list((root / "dest").iterdir()) == []
+
+    def test_a_zip_entry_with_an_absolute_name_lands_inside_the_destination(self, place):
+        root, client = place
+        absolute = root / "outside" / "abs.txt"
+        with zipfile.ZipFile(str(root / "abs.zip"), "w") as zf:
+            name = absolute.as_posix().removeprefix(absolute.drive)  # "/..." on every OS
+            zf.writestr(name, "z")
+        resp = _extract(client, root / "abs.zip", root / "dest")
+        assert resp.status_code == 200
+        assert list((root / "outside").iterdir()) == []
+        assert (root / "dest" / name.lstrip("/")).read_text() == "z"
+
+    def test_a_zip_entry_with_a_parent_reference_writes_nothing_outside(self, place):
+        root, client = place
+        with zipfile.ZipFile(str(root / "up.zip"), "w") as zf:
+            zf.writestr("first.txt", "1")
+            zf.writestr("../outside/x.txt", "pwned")
+        resp = _extract(client, root / "up.zip", root / "dest")
+        assert (resp.status_code, resp.json()) == (
+            400,
+            {"detail": "Archive contains unsafe path: ../outside/x.txt", "reason": "invalid"},
+        )
+        assert list((root / "outside").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "archive_name",
+    [
+        "-a.zip",
+        "a b.zip",
+        "it's.zip",
+        "$HOME.zip",
+        "`x`.zip",
+        "a;b.zip",
+        pytest.param("a\nb.zip", marks=pytest.mark.posix_only("a file name holding a newline")),
+        "..a.zip",
+    ],
+)
+def test_a_local_archive_name_is_one_file_name_whatever_it_holds(
+    tmp_path, monkeypatch, archive_name
+):
+    config_dir = setup_config(tmp_path)
+    (tmp_path / "file.txt").write_text("content")
+    dest = (tmp_path / "dest").resolve()
+    dest.mkdir()
+    client = build_client(config_dir, monkeypatch)
+    try:
+        resp = client.post(
+            "/api/v1/boxes/local/archive/create",
+            json={
+                "paths": [str(tmp_path / "file.txt")],
+                "destination": str(dest),
+                "archive_name": archive_name,
+                "format": "zip",
+            },
+            headers=auth_headers(),
+        )
+    finally:
+        client.close()
+    assert resp.json() == {
+        "status": "ok",
+        "message": f"Created {archive_name}",
+        "path": str(dest / archive_name),
+    }
+    assert [p.name for p in dest.iterdir()] == [archive_name]
+    with zipfile.ZipFile(str(dest / archive_name)) as zf:
+        assert zf.namelist() == ["file.txt"]
+
+
+def test_a_local_archive_of_a_missing_source_is_404_with_its_text(tmp_path, monkeypatch):
+    config_dir = setup_config(tmp_path)
+    dest = (tmp_path / "dest").resolve()
+    dest.mkdir()
+    missing = (tmp_path / "nope.txt").resolve()
+    client = build_client(config_dir, monkeypatch)
+    try:
+        resp = client.post(
+            "/api/v1/boxes/local/archive/create",
+            json={
+                "paths": [str(missing)],
+                "destination": str(dest),
+                "archive_name": "o.tar.gz",
+                "format": "tar.gz",
+            },
+            headers=auth_headers(),
+        )
+    finally:
+        client.close()
+    words = (
+        "The system cannot find the file specified"
+        if sys.platform == "win32"
+        else "No such file or directory"
+    )
+    assert (resp.status_code, resp.json()) == (
+        404,
+        {"detail": f"{words}: {missing}", "reason": "not_found"},
+    )

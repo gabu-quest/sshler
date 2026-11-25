@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { ref, watch } from "vue";
 import { NAlert, NButton, NIcon, NInput, NModal, NSpace, NSpin, useMessage } from "naive-ui";
 import { PhArrowsHorizontal } from "@phosphor-icons/vue";
@@ -87,7 +88,7 @@ async function compare() {
     diffLanguage.value = langA === langB ? langA : "text";
     compared.value = true;
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     loading.value = false;
   }

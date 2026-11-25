@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from sshler import snapshot, state, tmux
 from sshler.api import dependencies
-from sshler.api import sessions as sessions_api
 from sshler.webapp import ServerSettings, make_app
 
 TOKEN = "tmux-subprocess-token"
@@ -363,7 +362,7 @@ def test_capture_is_bounded_at_30s(monkeypatch: pytest.MonkeyPatch) -> None:
         calls.append((session, list(args), timeout))
         return 0, b"line one\n", b""
 
-    monkeypatch.setattr(sessions_api, "run_local_tmux", spy)
+    monkeypatch.setattr(tmux, "run_local_tmux", spy)
     client = _client()
 
     response = client.get(
@@ -406,8 +405,10 @@ def test_a_connect_timeout_is_not_reported_as_a_capture_timeout(
     )
     dependencies._CONNECT_FAIL_CACHE.clear()
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == "capture failed: "
+    assert (response.status_code, response.json()) == (
+        502,
+        {"detail": "connect to remote timed out", "reason": "unreachable"},
+    )
 
 
 def test_a_remote_capture_timeout_is_a_504(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -437,3 +438,40 @@ def test_a_remote_capture_timeout_is_a_504(monkeypatch: pytest.MonkeyPatch) -> N
     assert response.status_code == 504
     assert response.json()["detail"] == "tmux capture-pane timed out after 0.5 s"
     assert connection.closed is True
+
+
+def test_a_remote_captures_limit_is_the_commands_own_not_connect_plus_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow connect does not eat into the time a capture is allowed."""
+
+    class Reply:
+        returncode = 0
+        exit_status = 0
+        stdout = "line one\n"
+        stderr = ""
+
+    class SlowishConnection:
+        async def run(self, command: str, *_: Any, **__: Any) -> Reply:
+            if "capture-pane" in command:
+                await asyncio.sleep(0.6)
+            return Reply()
+
+        def close(self) -> None:
+            pass
+
+    async def connect_slowly(*_: Any, **__: Any) -> SlowishConnection:
+        await asyncio.sleep(1.2)
+        return SlowishConnection()
+
+    monkeypatch.setattr(dependencies, "connect", connect_slowly)
+    monkeypatch.setattr(tmux, "TMUX_CAPTURE_TIMEOUT", 1.5)
+    dependencies._CONNECT_FAIL_CACHE.clear()
+    client = _ssh_client()
+
+    response = client.get(
+        f"/api/v1/boxes/remote/sessions/{SESSION}/capture", headers={"X-SSHLER-TOKEN": TOKEN}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "line one"

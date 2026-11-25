@@ -5,6 +5,7 @@ Tests basic page loading - not the legacy HTMX form flows.
 Run with:
     uv run pytest tests/e2e/test_smoke_playwright.py -v
 """
+
 from __future__ import annotations
 
 import pytest

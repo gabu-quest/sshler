@@ -16,12 +16,42 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 # Top 100 most common passwords (subset for validation)
 COMMON_PASSWORDS = {
-    "password", "123456", "123456789", "12345678", "12345", "1234567",
-    "password1", "1234567890", "qwerty", "abc123", "111111", "123123",
-    "admin", "letmein", "welcome", "monkey", "password123", "dragon",
-    "master", "sunshine", "princess", "football", "shadow", "superman",
-    "qazwsx", "trustno1", "passw0rd", "admin123", "guest", "test",
-    "root", "changeme", "default", "user", "demo", "sample",
+    "password",
+    "123456",
+    "123456789",
+    "12345678",
+    "12345",
+    "1234567",
+    "password1",
+    "1234567890",
+    "qwerty",
+    "abc123",
+    "111111",
+    "123123",
+    "admin",
+    "letmein",
+    "welcome",
+    "monkey",
+    "password123",
+    "dragon",
+    "master",
+    "sunshine",
+    "princess",
+    "football",
+    "shadow",
+    "superman",
+    "qazwsx",
+    "trustno1",
+    "passw0rd",
+    "admin123",
+    "guest",
+    "test",
+    "root",
+    "changeme",
+    "default",
+    "user",
+    "demo",
+    "sample",
 }
 
 
@@ -81,9 +111,7 @@ class PasswordValidator:
         if policy.require_special:
             special_pattern = f"[{re.escape(policy.special_chars)}]"
             if not re.search(special_pattern, password):
-                errors.append(
-                    f"Must contain at least 1 special character ({policy.special_chars})"
-                )
+                errors.append(f"Must contain at least 1 special character ({policy.special_chars})")
 
         # Common password check
         if policy.check_common and PasswordValidator.is_common_password(password):

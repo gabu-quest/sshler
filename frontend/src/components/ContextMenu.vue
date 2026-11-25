@@ -49,25 +49,25 @@ const handleKeyDown = (event: KeyboardEvent) => {
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   document.addEventListener('keydown', handleKeyDown)
-  
+
   nextTick(() => {
     if (menuRef.value) {
       // Adjust position if menu would go off screen
       const rect = menuRef.value.getBoundingClientRect()
       const viewportWidth = window.innerWidth
       const viewportHeight = window.innerHeight
-      
+
       let adjustedX = props.x
       let adjustedY = props.y
-      
+
       if (rect.right > viewportWidth) {
         adjustedX = viewportWidth - rect.width - 10
       }
-      
+
       if (rect.bottom > viewportHeight) {
         adjustedY = viewportHeight - rect.height - 10
       }
-      
+
       menuRef.value.style.left = `${Math.max(0, adjustedX)}px`
       menuRef.value.style.top = `${Math.max(0, adjustedY)}px`
     }

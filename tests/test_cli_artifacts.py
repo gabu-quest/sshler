@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from sshler import cli
+from sshler.cli import artifacts, client
 
 
 def _args(**values: object) -> argparse.Namespace:
@@ -80,7 +80,7 @@ def test_artifact_add_posts_canonical_source_and_prints_json(
         return httpx.Response(200, json=_artifact_payload(str(page.resolve())))
 
     _patch_client(monkeypatch, handler)
-    result = cli.artifact_add(
+    result = artifacts.artifact_add(
         _args(
             path=str(page),
             project="Sample Project",
@@ -117,7 +117,7 @@ def test_artifact_add_discover_overrides_auto_mode(monkeypatch, tmp_path: Path) 
         return httpx.Response(200, json=payload)
 
     _patch_client(monkeypatch, handler)
-    result = cli.artifact_add(_args(path=str(site), discover=True))
+    result = artifacts.artifact_add(_args(path=str(site), discover=True))
 
     assert result == 0
     assert seen["mode"] == "collection"
@@ -129,7 +129,7 @@ def test_artifact_remove_describes_non_destructive_behavior(monkeypatch, capsys)
         lambda request: httpx.Response(200, json={"ok": True, "removed": True}),
     )
 
-    result = cli.artifact_remove(_args())
+    result = artifacts.artifact_remove(_args())
 
     assert result == 0
     output = capsys.readouterr().out
@@ -145,7 +145,7 @@ def test_artifact_find_sends_catalog_filters(monkeypatch, capsys) -> None:
         return httpx.Response(200, json={"artifacts": []})
 
     _patch_client(monkeypatch, handler)
-    result = cli.artifact_find(
+    result = artifacts.artifact_find(
         _args(
             query="quarterly summary",
             project="demo-tools",
@@ -167,4 +167,4 @@ def test_general_url_env_takes_precedence(monkeypatch) -> None:
     monkeypatch.setenv("SSHLER_URL", "http://localhost:9001/")
     monkeypatch.setenv("SSHLER_PROGRESS_URL", "http://localhost:9002/")
 
-    assert cli._resolve_progress_url(_args()) == "http://localhost:9001"
+    assert client._resolve_progress_url(_args()) == "http://localhost:9001"

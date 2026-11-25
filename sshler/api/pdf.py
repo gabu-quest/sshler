@@ -2,21 +2,23 @@
 
 The frontend builds a complete HTML document (the same one used for the print
 window) and POSTs it here. This module hands it to PDF_RENDERER and streams
-the resulting PDF back. If chromium isn't installed, returns 503 — the
+the resulting PDF back. If chromium isn't installed, answers `program_missing` (501) — the
 frontend hides the button when /api/v1/bootstrap reports pdf_available=false,
 so this path mostly handles the race where availability changes mid-session.
 """
+
 from __future__ import annotations
 
 import io
 import re
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..pdf import PDF_RENDERER
 from .dependencies import APIDependencies
+from .failure import REASON_FAILED, REASON_PROGRAM_MISSING, REASON_TOO_LARGE, Failure
 
 # Cap protects against runaway uploads. Real markdown docs with inlined
 # images are well under 1 MB; 20 MB is a generous sanity limit.
@@ -45,23 +47,21 @@ def get_router(deps: APIDependencies) -> APIRouter:
     @router.post("/pdf/render")
     async def render_pdf(req: PDFRenderRequest) -> StreamingResponse:
         if not PDF_RENDERER.available:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PDF export not available. Install with "
-                    "'pip install sshler[pdf]' and run 'playwright install chromium'."
-                ),
+            raise Failure(
+                REASON_PROGRAM_MISSING,
+                "PDF export not available. Install with "
+                "'pip install sshler[pdf]' and run 'playwright install chromium'.",
             )
         if len(req.html.encode("utf-8")) > _MAX_HTML_BYTES:
-            raise HTTPException(status_code=413, detail="HTML payload too large")
+            raise Failure(REASON_TOO_LARGE, "HTML payload too large")
 
         try:
             pdf_bytes = await PDF_RENDERER.render(req.html)
         except RuntimeError as exc:
             # Renderer flipped to unavailable since the request arrived.
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise Failure(REASON_PROGRAM_MISSING, str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"PDF render failed: {exc}") from exc
+            raise Failure(REASON_FAILED, f"PDF render failed: {exc}") from exc
 
         safe_name = _safe_filename(req.filename)
         return StreamingResponse(

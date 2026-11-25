@@ -10,6 +10,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from .settings import get_settings
+
 Clock = Callable[[], float]
 
 
@@ -172,9 +174,7 @@ class SessionStore:
             Number of sessions cleaned up
         """
         expired_ids = [
-            sid
-            for sid, session in self._sessions.items()
-            if session.is_expired(idle_timeout)
+            sid for sid, session in self._sessions.items() if session.is_expired(idle_timeout)
         ]
 
         for sid in expired_ids:
@@ -213,3 +213,14 @@ def reset_session_store() -> None:
     if _session_store is not None:
         _session_store.clear()
     _session_store = None
+
+
+def live_session(session_id: str) -> Session | None:
+    """The live session for this id, or None.
+
+    The one check of "this session is live": the server's door, the sockets and the
+    auth routes all ask here, so the configured idle timeout applies to each alike.
+    """
+    return get_session_store().get_session(
+        session_id, idle_timeout=get_settings().session_idle_timeout_seconds
+    )

@@ -6,15 +6,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sshler.api.tunnels import TunnelInfo, _active_tunnels
+from sshler.api.tunnels import TunnelInfo, TunnelRegistry
 
 
-@pytest.fixture(autouse=True)
-def _clear_tunnels():
-    """Clear active tunnels before and after each test."""
-    _active_tunnels.clear()
-    yield
-    _active_tunnels.clear()
+@pytest.fixture
+def registry() -> TunnelRegistry:
+    """A fresh registry, as ``make_app`` makes one per app."""
+    return TunnelRegistry()
 
 
 class TestTunnelRegistry:
@@ -36,7 +34,7 @@ class TestTunnelRegistry:
         assert t.listener is None
         assert t.created_at > 0
 
-    def test_active_tunnels_registry(self):
+    def test_active_tunnels_registry(self, registry):
         t = TunnelInfo(
             id="t1",
             box="box1",
@@ -46,49 +44,81 @@ class TestTunnelRegistry:
             remote_host="127.0.0.1",
             remote_port=3000,
         )
-        _active_tunnels["t1"] = t
-        assert "t1" in _active_tunnels
-        assert _active_tunnels["t1"].box == "box1"
+        registry.add(t)
+        found = registry.get("t1")
+        assert found is not None
+        assert found.box == "box1"
 
-        del _active_tunnels["t1"]
-        assert "t1" not in _active_tunnels
+        assert registry.remove("t1") is t
+        assert registry.get("t1") is None
 
-    def test_filter_tunnels_by_box(self):
-        _active_tunnels["t1"] = TunnelInfo(
-            id="t1", box="box1", tunnel_type="local",
-            local_host="127.0.0.1", local_port=3000,
-            remote_host="127.0.0.1", remote_port=3000,
-        )
-        _active_tunnels["t2"] = TunnelInfo(
-            id="t2", box="box2", tunnel_type="remote",
-            local_host="127.0.0.1", local_port=5432,
-            remote_host="127.0.0.1", remote_port=5432,
-        )
-        _active_tunnels["t3"] = TunnelInfo(
-            id="t3", box="box1", tunnel_type="local",
-            local_host="127.0.0.1", local_port=8080,
-            remote_host="127.0.0.1", remote_port=80,
-        )
+    def test_filter_tunnels_by_box(self, registry):
+        for tunnel_id, box, port in (
+            ("t1", "box1", 3000),
+            ("t2", "box2", 5432),
+            ("t3", "box1", 8080),
+        ):
+            registry.add(
+                TunnelInfo(
+                    id=tunnel_id,
+                    box=box,
+                    tunnel_type="local",
+                    local_host="127.0.0.1",
+                    local_port=port,
+                    remote_host="127.0.0.1",
+                    remote_port=port,
+                    created_at=port,
+                )
+            )
 
-        box1_tunnels = [t for t in _active_tunnels.values() if t.box == "box1"]
-        assert len(box1_tunnels) == 2
-        assert {t.id for t in box1_tunnels} == {"t1", "t3"}
+        box1_tunnels = registry.list_for_box("box1")
+        assert [t.id for t in box1_tunnels] == ["t1", "t3"]
+        assert [t.id for t in registry.list_for_box("box2")] == ["t2"]
 
-    def test_tunnel_listener_close(self):
+    def test_removing_a_tunnel_closes_its_listener_and_connection(self, registry):
         mock_listener = MagicMock()
-        t = TunnelInfo(
-            id="t1", box="box1", tunnel_type="local",
-            local_host="127.0.0.1", local_port=3000,
-            remote_host="127.0.0.1", remote_port=3000,
-            listener=mock_listener,
+        mock_connection = MagicMock()
+        registry.add(
+            TunnelInfo(
+                id="t1",
+                box="box1",
+                tunnel_type="local",
+                local_host="127.0.0.1",
+                local_port=3000,
+                remote_host="127.0.0.1",
+                remote_port=3000,
+                listener=mock_listener,
+                connection=mock_connection,
+            )
         )
-        _active_tunnels["t1"] = t
 
-        # Simulate closing
-        if t.listener and hasattr(t.listener, "close"):
-            t.listener.close()
+        registry.remove("t1")
 
         mock_listener.close.assert_called_once()
+        mock_connection.close.assert_called_once()
+
+    def test_close_all_closes_the_rest_when_one_listener_fails(self, registry):
+        broken = MagicMock()
+        broken.close.side_effect = OSError("already gone")
+        fine = MagicMock()
+        for tunnel_id, listener in (("t1", broken), ("t2", fine)):
+            registry.add(
+                TunnelInfo(
+                    id=tunnel_id,
+                    box="box1",
+                    tunnel_type="local",
+                    local_host="127.0.0.1",
+                    local_port=3000,
+                    remote_host="127.0.0.1",
+                    remote_port=3000,
+                    listener=listener,
+                )
+            )
+
+        registry.close_all()
+
+        fine.close.assert_called_once()
+        assert registry.list_for_box("box1") == []
 
 
 class TestTunnelApiModels:
@@ -96,9 +126,13 @@ class TestTunnelApiModels:
         from sshler.api.tunnels import _tunnel_to_api
 
         t = TunnelInfo(
-            id="t1", box="mybox", tunnel_type="local",
-            local_host="0.0.0.0", local_port=8080,
-            remote_host="10.0.0.1", remote_port=80,
+            id="t1",
+            box="mybox",
+            tunnel_type="local",
+            local_host="0.0.0.0",
+            local_port=8080,
+            remote_host="10.0.0.1",
+            remote_port=80,
         )
         api = _tunnel_to_api(t)
         assert api.id == "t1"

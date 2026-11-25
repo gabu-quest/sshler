@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NButton, NIcon, NModal, NSpace, NSpin, NSwitch, useMessage } from "naive-ui";
 import { PhArrowCounterClockwise, PhArrowsOut, PhCaretLeft, PhCaretRight, PhCopy, PhDownloadSimple, PhEye, PhFile, PhFilePdf, PhMagnifyingGlassMinus, PhMagnifyingGlassPlus, PhPencil, PhPrinter, PhX } from "@phosphor-icons/vue";
@@ -11,6 +12,7 @@ import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePdfExport } from "@/composables/usePdfExport";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { mermaidConfig } from "@/utils/mermaidConfig";
 
 const props = defineProps<{
   show: boolean;
@@ -159,11 +161,7 @@ const getMermaid = async () => {
   if (!mermaidPromise) {
     mermaidPromise = import("mermaid").then((mod) => {
       const m = mod.default;
-      m.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: props.theme === "dark" ? "dark" : "default",
-      });
+      m.initialize(mermaidConfig(props.theme));
       return m;
     });
   }
@@ -235,6 +233,8 @@ async function inlineMarkdownImages() {
           inlinedImageCache.set(p, ''); // sentinel: known-bad, don't retry
         }
       } catch {
+        // Silent on purpose: an image that cannot be read stays a broken image in the
+        // rendered text, which still shows whole.
         inlinedImageCache.set(p, '');
       }
     }),
@@ -338,7 +338,7 @@ const renderMermaidBlocks = async () => {
       const errorBox = document.createElement("pre");
       errorBox.className = "mermaid-error";
       errorBox.textContent = `Mermaid render error: ${
-        err instanceof Error ? err.message : String(err)
+        errorText(err)
       }\n\n${source}`;
       host.replaceWith(errorBox);
     }
@@ -573,7 +573,7 @@ watch(() => props.show, async (showing) => {
     content.value = payload.content || "";
     markdownRenderMode.value = !!payload.is_markdown;
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
     emit("update:show", false);
   } finally {
     loading.value = false;
@@ -603,7 +603,7 @@ async function copyToClipboard(text: string, label: string) {
     await navigator.clipboard.writeText(text);
     message.success(`${label} copied`);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -638,7 +638,7 @@ async function handleCopyRendered() {
       message.success("Rendered copied (plain text fallback)");
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -655,7 +655,7 @@ async function handleDownload() {
     document.body.removeChild(anchor);
     setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -1164,7 +1164,7 @@ defineExpose({ updateContent });
   min-height: unset !important;
 }
 
-.preview-reader-modal .n-card__content {
+.preview-reader-modal .n-card-content {
   padding: 0 !important;
   overflow: hidden !important;
 }

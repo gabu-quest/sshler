@@ -143,8 +143,7 @@ class SSHConnectionPool:
                     and (now - conn.last_used_at) > self._idle_timeout
                 )
                 is_too_old = (
-                    self._max_lifetime is not None
-                    and (now - conn.created_at) > self._max_lifetime
+                    self._max_lifetime is not None and (now - conn.created_at) > self._max_lifetime
                 )
 
                 if is_idle_too_long or is_too_old or not conn.is_healthy:
@@ -197,16 +196,21 @@ class SSHConnectionPool:
                 return connection
             self._raise_if_recently_failed(box_name)
             slot_free = self._connecting.get(box_name, 0) < self._max_connections_per_box
+            # One reading of the clock per decision: "not past the deadline"
+            # and "time remaining" must agree, or a clock that ticks between
+            # two readings sends a caller with a free slot to wait out the
+            # connect timeout.
+            now = loop.time()
             if deadline is None:
                 may_connect = slot_free and not self._waiters.get(box_name)
             else:
-                may_connect = slot_free and loop.time() >= deadline
+                may_connect = slot_free and now >= deadline
             if may_connect:
                 return await self._connect(box_name, connect_func)
             if deadline is None:
-                deadline = loop.time() + self._wait_timeout
+                deadline = now + self._wait_timeout
             successes = self._successes.get(box_name, 0)
-            remaining = deadline - loop.time()
+            remaining = deadline - now
             # Past the deadline with every slot busy: wait for a connect to
             # finish, which takes at most the connect timeout.
             timeout = remaining if remaining > 0 else self._connect_timeout
@@ -391,10 +395,9 @@ class SSHConnectionPool:
         )
         self._pools.setdefault(box_name, [])
         try:
-            healthy = (
-                self._may_keep(box_name, generation, created_at)
-                and await self._is_connection_healthy(connection)
-            )
+            healthy = self._may_keep(
+                box_name, generation, created_at
+            ) and await self._is_connection_healthy(connection)
         except BaseException:
             _close_quietly(connection, box_name, "cancelled release")
             raise
@@ -515,9 +518,7 @@ class SSHConnectionPool:
                 "active_connections": len(pool),
                 "total_uses": sum(conn.use_count for conn in pool),
                 "oldest_connection_age": (
-                    int(self._clock() - min(conn.created_at for conn in pool))
-                    if pool
-                    else 0
+                    int(self._clock() - min(conn.created_at for conn in pool)) if pool else 0
                 ),
             }
         return stats

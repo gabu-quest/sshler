@@ -3,18 +3,34 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NCard, NForm, NFormItem, NInput, NButton, NAlert, NIcon } from 'naive-ui'
 import { PhLock } from '@phosphor-icons/vue'
-import { useAuthStore } from '@/stores/auth'
 import { http } from '@/api/http'
+import { ApiError } from '@/api/apiError'
 import { useI18n } from '@/i18n'
+import { loadPage } from '@/utils/pageLoad'
 
 const { t } = useI18n()
 const router = useRouter()
-const authStore = useAuthStore()
 
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+/** The line for a lockout: how long to wait when the server said, else the plain line. */
+const lockoutLine = (err: ApiError): string => {
+  const seconds = err.retryAfter
+  if (seconds === null) return t('login.error_rate_limit')
+  if (seconds >= 60) return t('login.error_rate_limit_minutes', { minutes: Math.ceil(seconds / 60) })
+  return t('login.error_rate_limit_seconds', { seconds: Math.max(1, seconds) })
+}
+
+/** Where to go after signing in: a path of this page, never another site. */
+const redirectTarget = (): string => {
+  const redirect = router.currentRoute.value.query.redirect
+  return typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+    ? redirect
+    : '/'
+}
 
 const handleLogin = async () => {
   error.value = null
@@ -28,30 +44,21 @@ const handleLogin = async () => {
   loading.value = true
 
   try {
-    // Call /auth/login endpoint
+    // The sign-in route makes the session and sets its cookie.
     await http.post('/api/v1/auth/login', {
       username: username.value,
       password: password.value
     })
 
-    // On success, fetch user info
-    const { data: userInfo } = await http.get('/api/v1/auth/me')
-
-    // Update auth store
-    authStore.setUser(userInfo.username)
-    authStore.setBootstrapped(true)
-
-    // Redirect to the page they were trying to access or home
-    const redirect = router.currentRoute.value.query.redirect as string || '/'
-    router.push(redirect)
-  } catch (err: any) {
-    // Handle errors
-    if (err?.response?.status === 401) {
+    // Load the page afresh at `redirect`: the bootstrap now gives the token, and every
+    // socket and store of the page starts signed in.
+    loadPage(router.resolve(redirectTarget()).href)
+  } catch (err) {
+    if (err instanceof ApiError && err.reason === 'auth') {
       error.value = t('login.error_invalid')
-    } else if (err?.response?.status === 429) {
-      const retryAfter = err.response?.headers?.['retry-after'] || 'a few minutes'
-      error.value = t('login.error_rate_limit', { seconds: retryAfter })
-    } else if (err?.message) {
+    } else if (err instanceof ApiError && err.reason === 'rate_limited') {
+      error.value = lockoutLine(err)
+    } else if (err instanceof Error && err.message) {
       error.value = err.message
     } else {
       error.value = t('login.error_generic')

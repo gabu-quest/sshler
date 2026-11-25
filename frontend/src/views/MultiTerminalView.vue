@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NSpace, NModal, NPopover, NSelect, NInput, useMessage } from 'naive-ui'
@@ -65,7 +66,7 @@ const boxOptions = computed(() =>
   }))
 )
 
-const tokenValue = computed(() => 
+const tokenValue = computed(() =>
   bootstrapStore.token || bootstrapStore.payload?.token || null
 )
 
@@ -118,7 +119,7 @@ const getTerminalColor = (index: number) => {
 // T7: Directory options for dropdown - favorites from selected box only
 const directoryOptions = computed(() => {
   const options: Array<{ label: string; value: string }> = []
-  
+
   // Add favorites from selected box
   if (newTerminal.value.boxName) {
     const boxData = boxesStore.items.find(b => b.name === newTerminal.value.boxName)
@@ -137,15 +138,15 @@ const directoryOptions = computed(() => {
       }
     })
   }
-  
+
   // Default home if no favorites
   if (options.length === 0) {
     options.push({ label: '~ (Home)', value: '~' })
   }
-  
+
   // Add Browse option
   options.push({ label: '📁 Browse...', value: '__browse__' })
-  
+
   return options
 })
 
@@ -183,7 +184,7 @@ const addTerminal = () => {
     newTerminal.value.directory || '~',
     newTerminal.value.boxName,
   )
-  
+
   const id = `term-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   terminals.value.push({
     id,
@@ -235,8 +236,9 @@ const LAYOUT_KEY = 'sshler:multi-terminal:layout'
 async function loadSavedLayouts() {
   try {
     savedLayouts.value = await fetchLayouts(tokenValue.value || null)
-  } catch {
-    // Ignore layout load failures so the local layout still works.
+  } catch (error) {
+    // The local layout still works; the message says the saved ones could not be listed.
+    message.error(errorText(error))
   }
 }
 
@@ -285,7 +287,7 @@ async function saveCurrentLayout() {
     showSaveLayoutModal.value = false
     await loadSavedLayouts()
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 
@@ -305,7 +307,7 @@ async function removeSavedLayout(id: string) {
     await deleteLayout(id, tokenValue.value || null)
     await loadSavedLayouts()
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    message.error(errorText(error))
   }
 }
 
@@ -341,7 +343,7 @@ onMounted(async () => {
           <p class="text-muted">{{ terminals.length }} {{ terminals.length !== 1 ? t('multi.terminals') : t('multi.terminal') }} {{ t('multi.active') }}</p>
         </div>
       </div>
-      
+
       <div class="header-actions">
         <NButton type="primary" @click="openAddModal">
           <NIcon size="16"><PhPlus weight="duotone" /></NIcon>
@@ -398,9 +400,9 @@ onMounted(async () => {
     </div>
 
     <!-- Terminal Grid -->
-    <div 
-      class="terminal-grid" 
-      :style="{ 
+    <div
+      class="terminal-grid"
+      :style="{
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
         '--terminal-min-height': terminalMinHeight
       }"
@@ -409,12 +411,12 @@ onMounted(async () => {
         v-for="(terminal, index) in terminals"
         :key="terminal.id"
         class="terminal-container"
-        :style="{ 
+        :style="{
           borderColor: getTerminalColor(index),
           borderWidth: '2px'
         }"
       >
-        <div 
+        <div
           class="terminal-header"
           :style="{ backgroundColor: getTerminalColor(index) + '20' }"
         >
@@ -437,7 +439,7 @@ onMounted(async () => {
           />
         </div>
       </div>
-      
+
       <!-- Empty state -->
       <div v-if="terminals.length === 0" class="empty-state">
         <NIcon size="48" class="empty-icon"><PhTerminalWindow weight="duotone" /></NIcon>
@@ -457,7 +459,7 @@ onMounted(async () => {
             :placeholder="t('multi.choose_box')"
           />
         </div>
-        
+
         <div>
           <label class="form-label">{{ t('multi.session_name') }}</label>
           <NInput
@@ -466,7 +468,7 @@ onMounted(async () => {
           />
           <p class="form-help">{{ t('multi.session_help') }}</p>
         </div>
-        
+
         <div>
           <label class="form-label">{{ t('multi.directory') }}</label>
           <NSelect
@@ -478,7 +480,7 @@ onMounted(async () => {
           <p class="form-help">{{ t('multi.dir_help') }}</p>
         </div>
       </NSpace>
-      
+
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showAddModal = false">{{ t('common.cancel') }}</NButton>
@@ -517,7 +519,7 @@ onMounted(async () => {
         </NSpace>
       </template>
     </NModal>
-    
+
     <!-- Directory Picker Modal -->
     <DirectoryPickerModal
       v-if="newTerminal.boxName"

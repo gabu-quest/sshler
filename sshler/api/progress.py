@@ -12,11 +12,12 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Path
 from pydantic import BaseModel, Field
 
 from .. import state
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, REASON_NOT_FOUND, Failure
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +76,7 @@ def _to_api(bar: state.ProgressBar) -> APIProgressBar:
 
 def _validate_name(name: str) -> None:
     if not _NAME_RE.match(name):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid name: must match ^[A-Za-z0-9._:-]{1,64}$",
-        )
+        raise Failure(REASON_INVALID, "Invalid name: must match ^[A-Za-z0-9._:-]{1,64}$")
 
 
 def _validate_metadata(raw: Any) -> tuple[dict | None, str | None]:
@@ -125,7 +123,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         _validate_name(name)
         bar = await state.get_progress_async(name)
         if bar is None:
-            raise HTTPException(status_code=404, detail="Progress bar not found")
+            raise Failure(REASON_NOT_FOUND, "Progress bar not found")
         return _to_api(bar)
 
     @router.post("/progress/{name}", response_model=APIProgressBar)
@@ -135,9 +133,9 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APIProgressBar:
         _validate_name(name)
         if body.status not in _ALLOWED_STATUSES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status: must be one of {sorted(_ALLOWED_STATUSES)}",
+            raise Failure(
+                REASON_INVALID,
+                f"Invalid status: must be one of {sorted(_ALLOWED_STATUSES)}",
             )
         apply_metadata = "metadata" in body.model_fields_set
         clean_metadata: dict | None = None

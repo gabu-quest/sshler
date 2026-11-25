@@ -11,7 +11,7 @@ External scripts POST a ping; the server fans out to every connected `/ws/ping` 
 
 ```
 script (any host)
-  → sshler ping                  (CLI — sshler/cli.py)
+  → sshler ping                  (CLI — sshler/cli/ping.py)
   → POST /api/v1/ping            (REST — sshler/api/ping.py)
   → PingBroadcaster.broadcast    (per-app — sshler/webapp.py)
   → /ws/ping connected clients
@@ -51,7 +51,7 @@ All routes gated by `Depends(deps.require_token)`.
 
 ## WebSocket protocol
 
-`/ws/ping` — auth mirrors `/ws/term` (`?token=…` query param or `X-SSHLER-TOKEN` header).
+`/ws/ping` — who may connect is decided by `sshler/access.py` `websocket_refusal`, the same function as `/ws/term` and `/ws/progress`: credentials (close 4401), then the token from `?token=…` or the `X-SSHLER-TOKEN` header (close 4403), then an Origin header that is present and not allowed (close 4403). All refusals happen before the socket is accepted.
 
 **No snapshot on connect** — pings are ephemeral. The client just holds the connection open and receives events as they arrive.
 

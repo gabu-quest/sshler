@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -16,7 +17,7 @@ export const useBoxesStore = defineStore("boxes", () => {
     try {
       items.value = await fetchBoxes(token);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }

@@ -30,11 +30,11 @@ const error = ref<string | null>(null)
 const manualPath = ref('')
 const showManualInput = ref(false)
 
-const directories = computed(() => 
+const directories = computed(() =>
   entries.value.filter(e => e.is_directory).sort((a, b) => a.name.localeCompare(b.name))
 )
 
-const favorites = computed(() => 
+const favorites = computed(() =>
   Array.from(favoritesStore.favoritesForBox(props.boxName).values())
 )
 
@@ -123,11 +123,11 @@ watch(() => props.show, (show) => {
             <NIcon><PhHouse weight="duotone" /></NIcon>
           </NButton>
         </NSpace>
-        
+
         <div class="current-path" @click="showManualInput = true">
           <template v-if="showManualInput">
-            <NInput 
-              v-model:value="manualPath" 
+            <NInput
+              v-model:value="manualPath"
               size="small"
               :placeholder="currentPath"
               @keyup.enter="handleManualSubmit"
@@ -139,7 +139,7 @@ watch(() => props.show, (show) => {
             {{ currentPath }}
           </template>
         </div>
-        
+
         <NButton
           size="small"
           :type="isFavorite(currentPath) ? 'warning' : 'default'"
@@ -152,7 +152,7 @@ watch(() => props.show, (show) => {
           </NIcon>
         </NButton>
       </div>
-      
+
       <!-- Favorites section -->
       <div v-if="favorites.length > 0" class="favorites-section">
         <div class="section-label">{{ t('dirpicker.favorites') }}</div>
@@ -168,21 +168,21 @@ watch(() => props.show, (show) => {
           </div>
         </div>
       </div>
-      
+
       <!-- Directory list -->
       <div class="directory-list">
         <div v-if="loading" class="loading-state">
           <NSpin size="medium" />
         </div>
-        
+
         <NEmpty v-else-if="error" :description="error" />
 
         <NEmpty v-else-if="directories.length === 0" :description="t('dirpicker.no_subdirs')" />
-        
+
         <template v-else>
-          <div 
-            v-for="dir in directories" 
-            :key="dir.path" 
+          <div
+            v-for="dir in directories"
+            :key="dir.path"
             class="directory-item"
             @click="navigateTo(dir.path)"
             @dblclick="selectPath(dir.path)"
@@ -192,9 +192,9 @@ watch(() => props.show, (show) => {
               <PhFolder v-else weight="duotone" />
             </NIcon>
             <span class="dir-name">{{ dir.name }}</span>
-            <NButton 
-              size="tiny" 
-              quaternary 
+            <NButton
+              size="tiny"
+              quaternary
               class="star-btn"
               @click.stop="toggleFavorite(dir.path)"
             >
@@ -205,7 +205,7 @@ watch(() => props.show, (show) => {
           </div>
         </template>
       </div>
-      
+
       <!-- Footer actions -->
       <div class="footer-actions">
         <NButton @click="emit('update:show', false)">{{ t('common.cancel') }}</NButton>

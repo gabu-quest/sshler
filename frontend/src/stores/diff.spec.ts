@@ -8,6 +8,7 @@ vi.mock("@/api/http", () => ({
 }));
 
 import { gitShow } from "@/api/http";
+import { ApiError } from "@/api/apiError";
 
 const mockedGitShow = vi.mocked(gitShow);
 
@@ -113,9 +114,9 @@ describe("diff store (multi-cell)", () => {
     expect(store.cells[0]!.status).toBe("ready");
   });
 
-  it("treats 'not found at ref' as missing, not error", async () => {
+  it("treats the reason not_found as missing, not error", async () => {
     mockedGitShow
-      .mockRejectedValueOnce(new Error("File not found at ref main"))
+      .mockRejectedValueOnce(new ApiError(404, "not_found", "File not found at ref main"))
       .mockResolvedValueOnce({ content: "new\n", ref: "feat", path: "new.ts" });
 
     const store = useDiffStore();
@@ -127,6 +128,36 @@ describe("diff store (multi-cell)", () => {
     expect(store.cells[0]!.left.status).toBe("missing");
     expect(store.cells[0]!.right.status).toBe("loaded");
     expect(store.cells[0]!.status).toBe("ready");
+  });
+
+  // A folder that is not a repository answers the same reason as a file not at the ref.
+  it("a folder that is not a repository is missing too, with the failure's text", async () => {
+    mockedGitShow
+      .mockRejectedValueOnce(new ApiError(404, "not_found", "Not a git repository"))
+      .mockResolvedValueOnce({ content: "new\n", ref: "feat", path: "new.ts" });
+
+    const store = useDiffStore();
+    store.setSide(0, "left", side("local", "/r", "main", "new.ts"));
+    store.setSide(0, "right", side("local", "/r", "feat", "new.ts"));
+    await store.fetchCell(0, "tok");
+
+    expect(store.cells[0]!.left.status).toBe("missing");
+    expect(store.cells[0]!.left.error).toBe("Not found — Not a git repository");
+  });
+
+  // The words of a failure decide nothing: "not found" in another reason's text is an error.
+  it("any other reason is an error, whatever its words", async () => {
+    mockedGitShow
+      .mockRejectedValueOnce(new ApiError(502, "unreachable", "build-box: host not found"))
+      .mockResolvedValueOnce({ content: "new\n", ref: "feat", path: "new.ts" });
+
+    const store = useDiffStore();
+    store.setSide(0, "left", side("local", "/r", "main", "new.ts"));
+    store.setSide(0, "right", side("local", "/r", "feat", "new.ts"));
+    await store.fetchCell(0, "tok");
+
+    expect(store.cells[0]!.left.status).toBe("error");
+    expect(store.cells[0]!.left.error).toBe("Cannot connect to the box — build-box: host not found");
   });
 
   it("marks the cell binary when one side has a null byte", async () => {

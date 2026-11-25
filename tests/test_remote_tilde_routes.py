@@ -73,7 +73,7 @@ class FakeSFTP:
         self.calls.append(("open", path, mode))
         return FakeFile(self, path)
 
-    async def exit(self) -> None:
+    def exit(self) -> None:
         return None
 
 
@@ -152,7 +152,7 @@ def test_archive_create_resolves_tilde_in_destination_and_sources(remote, fmt, n
     )
     assert resp.status_code == 200
     assert resp.json()["path"] == f"{HOME}/{name}"
-    assert remote.log == [HOME_CMD, HOME_CMD, command]
+    assert remote.log == [HOME_CMD, command]
 
 
 def test_archive_create_with_a_failed_home_lookup_is_502_and_runs_nothing(remote):
@@ -171,7 +171,7 @@ def test_archive_create_with_a_failed_home_lookup_is_502_and_runs_nothing(remote
     )
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
     )
     assert remote.log == [HOME_CMD]
 
@@ -188,10 +188,14 @@ def test_archive_extract_resolves_tilde_in_archive_and_destination(remote, archi
     remote.replies[command] = _reply()
     resp = _post(remote, "archive/extract", {"archive_path": archive, "destination": "~/dest"})
     assert (resp.status_code, resp.json()["path"]) == (200, f"{HOME}/dest")
-    assert remote.log == [HOME_CMD, HOME_CMD, command]
+    assert remote.log == [HOME_CMD, command]
 
 
 # --- batch ---------------------------------------------------------------------
+
+
+# Batch move and copy resolve `~` too: tests/test_existing_name_rule.py checks them on
+# a real SFTP server, since they now place each item through the existing-name rule.
 
 
 def test_batch_delete_resolves_tilde_paths(remote):
@@ -202,28 +206,6 @@ def test_batch_delete_resolves_tilde_paths(remote):
         {"status": "ok", "succeeded": ["~/f"], "failed": []},
     )
     assert remote.sftp.calls == [("stat", f"{HOME}/f"), ("remove", f"{HOME}/f")]
-
-
-def test_batch_move_resolves_tilde_destination_and_sources(remote):
-    """Mutation: skip the `~` resolution in batch move; SFTP renames `~/f` to `~/d/f`."""
-    resp = _post(remote, "batch/move", {"paths": ["~/f"], "destination": "~/d"})
-    assert (resp.status_code, resp.json()) == (
-        200,
-        {"status": "ok", "succeeded": ["~/f"], "failed": []},
-    )
-    assert remote.sftp.calls == [("rename", f"{HOME}/f", f"{HOME}/d/f")]
-
-
-def test_batch_copy_resolves_tilde_destination_and_sources(remote):
-    """Mutation: skip the `~` resolution in batch copy; `cp -r '~/f' '~/d/f'` runs."""
-    command = f"cp -r {HOME}/f {HOME}/d/f"
-    remote.replies[command] = _reply()
-    resp = _post(remote, "batch/copy", {"paths": ["~/f"], "destination": "~/d"})
-    assert (resp.status_code, resp.json()) == (
-        200,
-        {"status": "ok", "succeeded": ["~/f"], "failed": []},
-    )
-    assert remote.log == [HOME_CMD, HOME_CMD, command]
 
 
 # --- excel and grep ------------------------------------------------------------
@@ -242,10 +224,68 @@ def test_excel_preview_opens_the_resolved_home_path(remote):
     assert remote.sftp.calls == [("open", f"{HOME}/book.xlsx", "rb")]
 
 
+@pytest.fixture
+def local_excel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The local box with its home in a temp folder: ``home/book.xlsx`` (one sheet, one
+    cell), ``home/sub``, and ``home/link.xlsx``, a link to the book."""
+    home = (tmp_path / "home").resolve()
+    (home / "sub").mkdir(parents=True)
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "S"
+    workbook.active["A1"] = "cell"
+    workbook.save(home / "book.xlsx")
+    (home / "link.xlsx").symlink_to(home / "book.xlsx")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "boxes.yaml").write_text(yaml.safe_dump({"boxes": []}), encoding="utf-8")
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(home / "sub")
+    client = TestClient(make_app(ServerSettings(csrf_token=TOKEN)), raise_server_exceptions=False)
+    try:
+        yield home, client
+    finally:
+        client.close()
+
+
+BOOK = {
+    "sheets": [{"name": "S", "rows": [["cell"]], "truncated_rows": False, "truncated_cols": False}],
+    "active_sheet": "S",
+    "file_too_large": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("sent", "status", "body"),
+    [
+        ("{home}/book.xlsx", 200, BOOK),
+        ("~/book.xlsx", 200, BOOK),
+        ("../book.xlsx", 200, BOOK),
+        ("{home}/link.xlsx", 200, BOOK),
+        ("{home}/sub/../book.xlsx", 200, BOOK),
+        ("{home}/nope.xlsx", 404, {"detail": "File not found", "reason": "not_found"}),
+        (
+            "{home}/bo\x00ok.xlsx",
+            400,
+            {"detail": "Path cannot contain null bytes", "reason": "invalid"},
+        ),
+    ],
+    ids=["absolute", "home", "relative", "link", "parent", "missing", "null byte"],
+)
+def test_a_local_excel_preview_takes_the_path_as_the_file_route_does(
+    local_excel, sent, status, body
+):
+    """A relative path is taken from the server's working folder (``home/sub`` here)."""
+    home, client = local_excel
+    path = sent.replace("{home}", str(home))
+    resp = client.get("/api/v1/boxes/local/excel", params={"path": path}, headers=HEADERS)
+    assert (resp.status_code, resp.json()) == (status, body)
+
+
 def test_grep_searches_the_resolved_home_directory(remote):
     """Mutation: skip `_remote_path` in grep; the command searches `'~/proj'`, which
     the shell never expands, and the response names `~/proj`."""
-    command = f"grep -rn -i -m 100 -- needle {HOME}/proj 2>/dev/null"
+    command = f"grep -rn -i -m 100 -- needle {HOME}/proj"
     remote.replies[command] = _reply(f"{HOME}/proj/a.txt:3:needle\n")
     resp = remote.client.get(
         f"/api/v1/boxes/{BOX}/grep",
@@ -282,3 +322,36 @@ async def test_rate_limit_buckets_by_the_forwarded_client_address(
         await limit(_request("127.0.0.1", "203.0.113.9"))
     assert refused.value.status_code == 429
     await limit(_request("127.0.0.1", "203.0.113.10"))
+
+
+# --- a path whose name starts with a dash --------------------------------------------
+
+
+def test_archive_create_names_a_relative_source_starting_with_a_dash_as_a_path(remote):
+    """Mutation: pass the source to tar as it came; tar reads `-rf` as options."""
+    command = "tar czf /srv/o.tar.gz -C / ./-rf"
+    remote.replies[command] = _reply()
+    resp = _post(
+        remote,
+        "archive/create",
+        {"paths": ["-rf"], "destination": "/srv", "archive_name": "o.tar.gz", "format": "tar.gz"},
+    )
+    assert resp.status_code == 200
+    assert remote.log == [command]
+
+
+def test_batch_delete_of_a_relative_folder_starting_with_a_dash_names_it_as_a_path(remote):
+    """Mutation: pass the folder to rm as it came; rm reads `-rf` as options."""
+
+    async def folder_stat(path: str):
+        remote.sftp.calls.append(("stat", path))
+        return SimpleNamespace(permissions=0o040755)
+
+    remote.sftp.stat = folder_stat
+    remote.replies["rm -rf ./-rf"] = _reply()
+    resp = _post(remote, "batch/delete", {"paths": ["-rf"]})
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {"status": "ok", "succeeded": ["-rf"], "failed": []},
+    )
+    assert remote.log == ["rm -rf ./-rf"]

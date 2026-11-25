@@ -11,12 +11,16 @@ const bootstrapMock = vi.hoisted(() => ({
   state: {
     token: null as string | null,
     loading: false,
-    basicAuthRequired: false,
+    payload: null as object | null,
+    authRequired: false,
+    authenticated: false,
     bootstrap: vi.fn(async () => {}),
   },
   throwOnUse: false,
 }))
-const authMock = vi.hoisted(() => ({ state: { isAuthenticated: false } }))
+const authMock = vi.hoisted(() => ({
+  state: { isAuthenticated: false, loadUser: vi.fn(async () => {}) },
+}))
 
 vi.mock('@/stores/bootstrap', () => ({
   useBootstrapStore: () => {
@@ -40,10 +44,13 @@ describe('router guards', () => {
     setActivePinia(createPinia())
     bootstrapMock.state.token = 'tok'
     bootstrapMock.state.loading = false
-    bootstrapMock.state.basicAuthRequired = false
+    bootstrapMock.state.payload = {}
+    bootstrapMock.state.authRequired = false
+    bootstrapMock.state.authenticated = false
     bootstrapMock.state.bootstrap.mockClear()
     bootstrapMock.throwOnUse = false
     authMock.state.isAuthenticated = false
+    authMock.state.loadUser.mockClear()
     document.head.innerHTML = ''
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
@@ -75,32 +82,48 @@ describe('router guards', () => {
     expect(document.title).toBe('Page Not Found - sshler')
   })
 
-  // Mutation killed: redirecting when basic auth is not required.
-  it('lets everyone through when basic auth is not required', async () => {
+  // Mutation killed: redirecting when no password is set.
+  it('lets everyone through when no password is set', async () => {
     await router.push('/terminal')
     expect(router.currentRoute.value.name).toBe('terminal')
   })
 
   // Mutation killed: dropping the redirect query or changing the target route name.
   it('redirects unauthenticated users to login carrying the full path', async () => {
-    bootstrapMock.state.basicAuthRequired = true
+    bootstrapMock.state.authRequired = true
     await router.push('/terminal?box=web')
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query).toEqual({ redirect: '/terminal?box=web' })
   })
 
-  // Mutation killed: guard ignoring isAuthenticated.
-  it('lets authenticated users through when basic auth is required', async () => {
-    bootstrapMock.state.basicAuthRequired = true
-    authMock.state.isAuthenticated = true
+  // Mutation killed: the guard deciding by the in-memory auth store, which a reload empties.
+  it('lets a page the bootstrap calls signed in through, and loads the user once', async () => {
+    bootstrapMock.state.authRequired = true
+    bootstrapMock.state.authenticated = true
     await router.push('/terminal')
     expect(router.currentRoute.value.name).toBe('terminal')
+    expect(authMock.state.loadUser).toHaveBeenCalledTimes(1)
+
+    authMock.state.isAuthenticated = true
+    await router.push('/')
+    expect(authMock.state.loadUser).toHaveBeenCalledTimes(1)
+  })
+
+  // Mutation killed: trusting the in-memory auth store over the bootstrap.
+  it('sends a page the bootstrap calls signed out to login even if the store says signed in', async () => {
+    bootstrapMock.state.authRequired = true
+    bootstrapMock.state.authenticated = false
+    authMock.state.isAuthenticated = true
+    await router.push('/terminal')
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query).toEqual({ redirect: '/terminal' })
   })
 
   // Mutation killed: guarding the login route too (redirect loop) or consulting bootstrap for it.
   it('never gates or bootstraps for the public login route', async () => {
     await router.push('/')
-    bootstrapMock.state.basicAuthRequired = true
+    bootstrapMock.state.authRequired = true
+    bootstrapMock.state.payload = null
     bootstrapMock.state.token = null
     bootstrapMock.state.bootstrap.mockClear()
     await router.push('/login')
@@ -108,21 +131,19 @@ describe('router guards', () => {
     expect(bootstrapMock.state.bootstrap).not.toHaveBeenCalled()
   })
 
-  // Mutation killed: bootstrapping when a token exists / not bootstrapping when it does not.
-  it('bootstraps only when there is no token and nothing is loading', async () => {
+  // Mutation killed: skipping the bootstrap because a token is stored (a reload kept
+  // the token of a session that has since ended), or asking it again on every navigation.
+  it('asks the bootstrap whenever the page has none, a stored token or not', async () => {
     await resetTo('/login')
-    bootstrapMock.state.token = null
+    bootstrapMock.state.payload = null
+    bootstrapMock.state.token = 'tok'
     await router.push('/')
     expect(bootstrapMock.state.bootstrap).toHaveBeenCalledTimes(1)
 
     bootstrapMock.state.bootstrap.mockClear()
-    bootstrapMock.state.token = 'tok'
-    await router.push('/terminal')
-    expect(bootstrapMock.state.bootstrap).not.toHaveBeenCalled()
-
+    bootstrapMock.state.payload = {}
     bootstrapMock.state.token = null
-    bootstrapMock.state.loading = true
-    await router.push('/')
+    await router.push('/terminal')
     expect(bootstrapMock.state.bootstrap).not.toHaveBeenCalled()
   })
 

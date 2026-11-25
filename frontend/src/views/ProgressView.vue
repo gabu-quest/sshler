@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "@/i18n";
 
@@ -115,7 +116,7 @@ async function handleRefresh() {
   try {
     await progressStore.refresh(bootstrapStore.token);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     refreshing.value = false;
   }
@@ -136,7 +137,7 @@ async function handleDelete(name: string) {
       message.success(t("progress.deleted", { name }));
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -150,7 +151,7 @@ async function handleClearFinished() {
     );
     message.success(t("progress.clear_finished_done", { n: targets.length }));
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     clearingFinished.value = false;
   }

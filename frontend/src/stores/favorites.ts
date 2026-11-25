@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 
 import { defineStore } from "pinia";
@@ -65,7 +66,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
       setPinnedFlag(box, !!payload.pinned);
       return payload;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return null;
     } finally {
       loading.value = false;
@@ -88,7 +89,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
       favoritesByBox.value = updated;
       return favorite;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return !favorite;
     } finally {
       loading.value = false;
@@ -103,7 +104,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
       setPinnedFlag(box, result.pinned);
       return result.pinned;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return false;
     } finally {
       loading.value = false;

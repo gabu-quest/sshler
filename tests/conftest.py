@@ -3,15 +3,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 from platform_support import posix_only_skip
+from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from failure_check import failure_body_problem  # noqa: E402
 
 from sshler import (  # noqa: E402
     artifacts,
@@ -22,7 +25,6 @@ from sshler import (  # noqa: E402
     ssh_pool,
 )
 from sshler.api import dependencies as api_dependencies  # noqa: E402
-from sshler.api import tunnels as api_tunnels  # noqa: E402
 from sshler.session import reset_session_store  # noqa: E402
 from sshler.settings import reset_settings  # noqa: E402
 from sshler.state import reset_state  # noqa: E402
@@ -91,7 +93,6 @@ def _reset_process_globals() -> None:
     claude_sessions._CACHE.clear()
     claude_sessions._GIT_ROOT_CACHE.clear()
     snapshot._recovery_sessions.clear()
-    api_tunnels._active_tunnels.clear()
     api_dependencies._CONNECT_FAIL_CACHE.clear()
     ssh_pool._global_pool = None
 
@@ -130,6 +131,22 @@ def _hermetic_env(
     _reset_process_globals()
     yield
     _reset_process_globals()
+
+
+@pytest.fixture(autouse=True)
+def _every_failure_answers_by_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every failure answer the suite's test client receives from the app is checked by
+    ``failure_body_problem``; a wrong one fails the test that received it."""
+    original = TestClient.request
+
+    def request(self, method, url, *args, **kwargs):
+        response = original(self, method, url, *args, **kwargs)
+        problem = failure_body_problem(self.app, method, response)
+        if problem is not None:
+            raise AssertionError(f"{method} {url}: {problem}")
+        return response
+
+    monkeypatch.setattr(TestClient, "request", request)
 
 
 FAKE_TMUX_SCRIPT = r"""
@@ -192,3 +209,32 @@ def tmux_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     return log
+
+
+@pytest.fixture
+def stalled_program(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str], Callable[[], None]]:
+    """Put a stand-in for a program first on PATH: it records its pid and sleeps.
+
+    ``gone = stalled_program("git")``; once the code under test has given up on
+    the child, ``gone()`` asserts that the stand-in is no longer a process
+    (a child that was killed but never reaped still is one).
+    """
+
+    def install(name: str) -> Callable[[], None]:
+        bin_dir = tmp_path / "stalled-bin"
+        bin_dir.mkdir(exist_ok=True)
+        pid_file = tmp_path / f"{name}.pid"
+        script = bin_dir / name
+        script.write_text(f'#!/bin/sh\necho $$ > "{pid_file}"\nexec sleep 30\n', encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+        def gone() -> None:
+            with pytest.raises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+
+        return gone
+
+    return install

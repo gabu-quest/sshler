@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from .. import state
 from ..snapshot import (
@@ -15,10 +17,13 @@ from ..snapshot import (
     set_recovery_sessions,
 )
 from .dependencies import APIDependencies
+from .failure import REASON_FAILED, REASON_NOT_FOUND, Failure, failure_entry, failure_of
 from .models import (
     APILostSession,
     APIRecoveryPane,
     APIRecoveryWindow,
+    APIRecreateBatchRequest,
+    APIRecreateBatchResult,
     APISimpleMessage,
     APISnapshotConfig,
     APISnapshotConfigUpdate,
@@ -26,6 +31,39 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _recreate(session_id: str, lost: Mapping[str, dict[str, Any]]) -> str:
+    """Recreate the lost session ``session_id`` and answer its tmux name; a session that
+    cannot be recreated raises the ``Failure`` of why, the one answer of the single
+    route and of each failed item of the batch."""
+    target = lost.get(session_id)
+    if not target:
+        raise Failure(REASON_NOT_FOUND, "Session not in recovery list")
+
+    windows = target.get("windows", [])
+    logger.info("Recreating %s with %d window(s)", target["session_name"], len(windows))
+    try:
+        success = await recreate_session(target["session_name"], windows)
+    except Exception as exc:
+        logger.exception("Exception recreating %s", target["session_name"])
+        raise failure_of(exc) from exc
+    if not success:
+        logger.error(
+            "recreate_session returned False for %s (windows=%r)",
+            target["session_name"],
+            windows,
+        )
+        raise Failure(REASON_FAILED, "Failed to recreate tmux session")
+
+    await state.update_session_activity_async(session_id, active=True)
+    await state.clear_session_snapshot_async(session_id)
+    remove_recovery_session(session_id)
+    return str(target["session_name"])
+
+
+def _lost_by_id() -> dict[str, dict[str, Any]]:
+    return {s["id"]: s for s in get_recovery_sessions()}
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -58,62 +96,26 @@ def get_router(deps: APIDependencies) -> APIRouter:
     @router.post("/recovery/{session_id}/recreate", response_model=APISimpleMessage)
     async def api_recreate_session(session_id: str) -> APISimpleMessage:
         """Recreate a lost tmux session from its last snapshot."""
-        lost = get_recovery_sessions()
-        target = next((s for s in lost if s["id"] == session_id), None)
-        if not target:
-            raise HTTPException(status_code=404, detail="Session not in recovery list")
+        name = await _recreate(session_id, _lost_by_id())
+        return APISimpleMessage(status="ok", message=f"Recreated {name}", path=session_id)
 
-        windows = target.get("windows", [])
-        logger.info("Recreating %s with %d window(s)", target["session_name"], len(windows))
-        try:
-            success = await recreate_session(target["session_name"], windows)
-        except Exception as exc:
-            logger.exception("Exception recreating %s", target["session_name"])
-            raise HTTPException(status_code=500, detail="Exception during recreate") from exc
-        if not success:
-            logger.error(
-                "recreate_session returned False for %s (windows=%r)",
-                target["session_name"],
-                windows,
-            )
-            raise HTTPException(status_code=500, detail="Failed to recreate tmux session")
-
-        await state.update_session_activity_async(session_id, active=True)
-        await state.clear_session_snapshot_async(session_id)
-        remove_recovery_session(session_id)
-
-        return APISimpleMessage(
-            status="ok", message=f"Recreated {target['session_name']}", path=session_id
-        )
-
-    @router.post("/recovery/recreate-batch")
-    async def api_recreate_batch(body: dict) -> dict:
-        """Recreate multiple sessions. Returns per-session results."""
-        session_ids: list[str] = body.get("session_ids", [])
-        lost = get_recovery_sessions()
-        lost_map = {s["id"]: s for s in lost}
-
-        results: dict[str, str] = {}  # id -> "ok" | error message
-        for sid in session_ids:
-            target = lost_map.get(sid)
-            if not target:
-                results[sid] = "not found"
-                continue
+    @router.post("/recovery/recreate-batch", response_model=APIRecreateBatchResult)
+    async def api_recreate_batch(body: APIRecreateBatchRequest) -> APIRecreateBatchResult:
+        """Recreate several sessions. A 200 that names the sessions recreated and, for
+        each other one, the reason and text the single route would answer for it."""
+        lost = _lost_by_id()
+        succeeded: list[str] = []
+        failed: list[dict[str, str]] = []
+        for sid in body.session_ids:
             try:
-                success = await recreate_session(target["session_name"], target.get("windows", []))
+                await _recreate(sid, lost)
             except Exception as exc:
-                results[sid] = str(exc)
+                failed.append(failure_entry(sid, exc))
                 continue
-            if not success:
-                results[sid] = "tmux creation failed"
-                continue
-            await state.update_session_activity_async(sid, active=True)
-            await state.clear_session_snapshot_async(sid)
-            remove_recovery_session(sid)
-            results[sid] = "ok"
-            logger.info("Recreated session: %s", target["session_name"])
-
-        return {"results": results}
+            succeeded.append(sid)
+        return APIRecreateBatchResult(
+            status="ok" if not failed else "partial", succeeded=succeeded, failed=failed
+        )
 
     @router.get("/snapshot/status", response_model=APISnapshotStatus)
     async def api_snapshot_status() -> APISnapshotStatus:

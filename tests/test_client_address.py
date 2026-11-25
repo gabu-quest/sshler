@@ -100,17 +100,16 @@ def trust_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _client(*, basic_auth: bool) -> TestClient:
     # No `with`: entering the client would run the lifespan (pool, PDF renderer).
-    settings = ServerSettings(
-        csrf_token=TOKEN, basic_auth=(USER, PASSWORD) if basic_auth else None
-    )
+    settings = ServerSettings(csrf_token=TOKEN, basic_auth=(USER, PASSWORD) if basic_auth else None)
     return TestClient(make_app(settings), client=PROXY)
 
 
 def _failed_login(client: TestClient, real_ip: str) -> int:
+    # The sign-in route is open: a failed login carries no other credentials.
     return client.post(
         LOGIN,
         json={"username": USER, "password": "wrong-password"},
-        headers={"Authorization": _basic(USER, PASSWORD), "X-Real-IP": real_ip},
+        headers={"X-Real-IP": real_ip},
     ).status_code
 
 
@@ -189,7 +188,7 @@ def test_spoofed_header_does_not_escape_the_login_lockout():
 
     assert statuses == [401] * 5
     assert sixth.status_code == 429
-    assert sixth.text == LOCKOUT_TEXT
+    assert sixth.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
     assert tracker.is_locked_out("127.0.0.1") is True
     assert tracker.is_locked_out(_spoofed(1)) is False
 
@@ -237,7 +236,7 @@ def test_spoofed_header_does_not_escape_the_basic_auth_failure_count():
 
     assert statuses == [401] * 5
     assert sixth.status_code == 429
-    assert sixth.text == LOCKOUT_TEXT
+    assert sixth.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
 
 
 def test_spoofed_header_does_not_escape_the_login_rate_limit():
@@ -274,15 +273,18 @@ def test_spoofed_header_does_not_escape_the_post_rate_limit():
     try:
         assert client.post(UNROUTED).status_code == 404
         limiter = rate_limit._rate_limiters["post"]
-        assert [limiter.check("127.0.0.1") for _ in range(POST_CAPACITY - 1)] == [
-            True
-        ] * (POST_CAPACITY - 1)
+        assert [limiter.check("127.0.0.1") for _ in range(POST_CAPACITY - 1)] == [True] * (
+            POST_CAPACITY - 1
+        )
         refused = client.post(UNROUTED, headers={"X-Real-IP": _spoofed(1)})
     finally:
         client.close()
 
     assert refused.status_code == 429
-    assert refused.text == "Rate limit exceeded. Please try again later."
+    assert refused.json() == {
+        "detail": "Rate limit exceeded. Please try again later.",
+        "reason": "rate_limited",
+    }
 
 
 # --- trusted: the forwarded address is used -----------------------------------
@@ -299,11 +301,11 @@ def test_trusted_proxy_login_failures_lock_out_the_forwarded_address(trust_proxy
     try:
         statuses = [_failed_login(client, VICTIM) for _ in range(5)]
         locked = client.get(
-            "/api/v1/auth/me",
+            UNROUTED,
             headers={"Authorization": _basic(USER, PASSWORD), "X-Real-IP": VICTIM},
         )
         other = client.get(
-            "/api/v1/auth/me",
+            UNROUTED,
             headers={"Authorization": _basic(USER, PASSWORD), "X-Real-IP": _spoofed(1)},
         )
         tracker = client.app.state.auth_tracker
@@ -312,13 +314,12 @@ def test_trusted_proxy_login_failures_lock_out_the_forwarded_address(trust_proxy
 
     assert statuses == [401] * 5
     assert locked.status_code == 429
-    assert locked.text == LOCKOUT_TEXT
+    assert locked.json() == {"detail": LOCKOUT_TEXT, "reason": "rate_limited"}
     assert tracker.is_locked_out(VICTIM) is True
     assert tracker.is_locked_out("127.0.0.1") is False
-    # The lockout check runs before the cookie check, so another forwarded client
-    # reaching /me with the session cookie proves it is not locked out.
-    assert other.status_code == 200
-    assert other.json() == {"username": USER, "user_id": USER, "authenticated": True}
+    # The lockout check runs before the credentials are read, so another forwarded
+    # client passing the door (404 on the unrouted path) proves it is not locked out.
+    assert other.status_code == 404
 
 
 def test_trusted_proxy_login_rate_limit_is_per_forwarded_address(trust_proxy):

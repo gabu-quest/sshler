@@ -1,4 +1,20 @@
-"""File content search (grep) API."""
+"""File content search (grep) API.
+
+The search runs ``grep`` through the runner of the box (``box_runner``), with the same
+words on both kinds. One test of the kind of box stays: the local box on Windows has no
+grep and searches in-process with ``_grep_builtin``.
+
+grep's exit status 0 (matches) and 1 (none) are the ordinary answers. Status 2 is
+grep's one word for trouble, both for a pattern it refuses and for a file or folder
+it could not read, which a recursive search meets often (it still prints what it
+found). The two are told apart by grep's status on an input with no line: 2 there is
+a refused pattern, ``invalid`` with grep's own words; otherwise the search answers
+what grep found. When it found nothing and said 2, the box is asked whether the folder
+was there to search (``_searched``): a folder that is not there is ``not_found``, one
+that cannot be read ``denied``, and a folder searched but for a file grep could not
+read is the ordinary "no matches". Any other status (grep killed, say) is ``failed``.
+No grep on the box is ``program_missing`` (from the runner).
+"""
 
 from __future__ import annotations
 
@@ -6,20 +22,23 @@ import asyncio
 import logging
 import os
 import re
-import shlex
-import shutil
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
-from ..ssh import SSHError
-from ..ssh_pool import get_pool
-from ..validation import PathValidator, ValidationError
 from . import helpers
+from .box_runner import BoxRunner, Ran, box_runner, remote_command_line
 from .dependencies import APIDependencies
-from .files import _remote_path
+from .failure import (
+    REASON_DENIED,
+    REASON_FAILED,
+    REASON_INVALID,
+    REASON_NOT_FOUND,
+    REASON_TIMEOUT,
+    Failure,
+)
 from .helpers import _normalize_local_path
 from .rate_limiting import rate_limit_grep
 
@@ -27,6 +46,12 @@ logger = logging.getLogger(__name__)
 
 MAX_PATTERN_LENGTH = 500
 GREP_TIMEOUT = 15
+# grep's exit statuses: a line matched, none did, trouble.
+GREP_MATCHED = 0
+GREP_NO_MATCH = 1
+GREP_TROUBLE = 2
+# An input with no line: grep reads the pattern and nothing else.
+EMPTY_INPUT = "/dev/null"
 
 
 class APIGrepMatch(BaseModel):
@@ -41,6 +66,27 @@ class APIGrepResponse(BaseModel):
     directory: str
     matches: list[APIGrepMatch]
     truncated: bool
+
+
+def grep_words(pattern: str, directory: str, case_sensitive: bool, limit: int) -> list[str]:
+    """``grep`` for ``pattern`` under ``directory``, at most ``limit`` matches per file.
+    ``--`` ends grep's options, so neither the pattern nor the folder is read as one."""
+    words = ["grep", "-rn", *([] if case_sensitive else ["-i"])]
+    return [*words, "-m", str(limit), "--", pattern, directory]
+
+
+def pattern_check_words(pattern: str, case_sensitive: bool) -> list[str]:
+    """``grep`` for ``pattern`` in an input with no line: status 2 only when grep
+    refuses the pattern."""
+    return ["grep", *([] if case_sensitive else ["-i"]), "--", pattern, EMPTY_INPUT]
+
+
+def remote_grep_command(pattern: str, directory: str, case_sensitive: bool, limit: int) -> str:
+    """The line the remote runner sends for the search: grep's error output kept, to say
+    why it could not search."""
+    return remote_command_line(
+        grep_words(pattern, directory, case_sensitive, limit), keep_errors=True
+    )
 
 
 def _parse_grep_output(output: str, limit: int) -> tuple[list[APIGrepMatch], bool]:
@@ -58,11 +104,13 @@ def _parse_grep_output(output: str, limit: int) -> tuple[list[APIGrepMatch], boo
         except ValueError:
             continue
         content = parts[2][:500]  # Truncate long lines
-        matches.append(APIGrepMatch(
-            file=parts[0],
-            line_number=line_number,
-            line=content,
-        ))
+        matches.append(
+            APIGrepMatch(
+                file=parts[0],
+                line_number=line_number,
+                line=content,
+            )
+        )
         if len(matches) >= limit:
             return matches, True
     return matches, False
@@ -166,9 +214,7 @@ def _bre_to_python(pattern: str) -> str:
             continue
         if char == "^" and at_start:
             out.append("^")
-        elif char == "$" and (
-            i + 1 == len(pattern) or pattern.startswith(("\\)", "\\|"), i + 1)
-        ):
+        elif char == "$" and (i + 1 == len(pattern) or pattern.startswith(("\\)", "\\|"), i + 1)):
             out.append("$")
         elif char == "*" and not at_start:
             out.append("*")
@@ -198,12 +244,10 @@ def _grep_builtin(
     file and overall. The pattern is only ever compiled, never executed.
     """
     flags = 0 if case_sensitive else re.IGNORECASE
-    try:
-        regex = re.compile(
-            "|".join(f"(?:{_bre_to_python(part)})" for part in pattern.split("\n")), flags
-        )
-    except re.error:
-        return [], False  # GNU grep exits 2 on a bad pattern and prints no matches
+    # A pattern that does not compile raises its `re.error`, as GNU grep refuses it.
+    regex = re.compile(
+        "|".join(f"(?:{_bre_to_python(part)})" for part in pattern.split("\n")), flags
+    )
     deadline = time.monotonic() + timeout
     matches: list[APIGrepMatch] = []
 
@@ -276,54 +320,26 @@ def get_router(deps: APIDependencies) -> APIRouter:
         _rate_limit: None = Depends(rate_limit_grep),
     ) -> APIGrepResponse:
         if len(pattern) > MAX_PATTERN_LENGTH:
-            raise HTTPException(
-                status_code=400, detail=f"Pattern too long (max {MAX_PATTERN_LENGTH} chars)"
-            )
+            raise Failure(REASON_INVALID, f"Pattern too long (max {MAX_PATTERN_LENGTH} chars)")
         if "\0" in pattern:
-            raise HTTPException(status_code=400, detail="Pattern cannot contain null bytes")
+            raise Failure(REASON_INVALID, "Pattern cannot contain null bytes")
 
         box = deps.get_box_or_404(application_config, name)
 
-        if box.transport == "local":
+        if box.transport == "local" and helpers.LOCAL_IS_WINDOWS:
             normalized = _normalize_local_path(directory)
-            if helpers.LOCAL_IS_WINDOWS:
-                try:
-                    matches, truncated = await asyncio.to_thread(
-                        _grep_builtin, normalized, pattern, case_sensitive, limit, GREP_TIMEOUT
-                    )
-                except _GrepDeadlineError as exc:
-                    raise HTTPException(status_code=504, detail="Search timed out") from exc
-                return APIGrepResponse(
-                    box=box.name,
-                    pattern=pattern,
-                    directory=normalized,
-                    matches=matches,
-                    truncated=truncated,
-                )
-
-            grep_path = shutil.which("grep")
-            if not grep_path:
-                raise HTTPException(status_code=500, detail="grep not available")
-
-            args = [grep_path, "-rn", f"--max-count={limit}", "--"]
-            if not case_sensitive:
-                args.insert(2, "-i")
-            args.append(pattern)
-            args.append(normalized)
-
+            if not os.path.exists(normalized):
+                raise Failure(REASON_NOT_FOUND, f"Folder not found: {directory}")
+            if not os.access(normalized, os.R_OK):
+                raise Failure(REASON_DENIED, f"Permission denied: {directory}")
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *args,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                matches, truncated = await asyncio.to_thread(
+                    _grep_builtin, normalized, pattern, case_sensitive, limit, GREP_TIMEOUT
                 )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=GREP_TIMEOUT)
-            except TimeoutError as exc:
-                raise HTTPException(status_code=504, detail="Search timed out") from exc
-
-            output = stdout.decode("utf-8", errors="replace")
-            matches, truncated = _parse_grep_output(output, limit)
-
+            except _GrepDeadlineError as exc:
+                raise Failure(REASON_TIMEOUT, "Search timed out") from exc
+            except re.error as exc:
+                raise Failure(REASON_INVALID, str(exc)) from exc
             return APIGrepResponse(
                 box=box.name,
                 pattern=pattern,
@@ -332,55 +348,56 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 truncated=truncated,
             )
 
-        # Remote box
-        try:
-            validated_dir = PathValidator.validate_remote_path(directory)
-        except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        ssh_pool = get_pool()
-        try:
-            async with ssh_pool.connection(
-                box, lambda: deps.connect_for_box(box, application_config)
-            ) as connection:
-                # The quoted shell argument would not expand `~`: resolve it here.
-                validated_dir = await _remote_path(connection, validated_dir)
-
-                # Build command as list, then join with shlex.quote for safety
-                cmd_parts = ["grep", "-rn"]
-                if not case_sensitive:
-                    cmd_parts.append("-i")
-                cmd_parts.extend(["-m", str(limit), "--", pattern, validated_dir])
-                cmd = " ".join(shlex.quote(p) for p in cmd_parts) + " 2>/dev/null"
-
-                try:
-                    result = await asyncio.wait_for(
-                        connection.run(cmd, check=False),
-                        timeout=GREP_TIMEOUT,
-                    )
-                except TimeoutError as exc:
-                    raise HTTPException(status_code=504, detail="Search timed out") from exc
-
-                remote_out = result.stdout or ""
-                output = (
-                    remote_out
-                    if isinstance(remote_out, str)
-                    else remote_out.decode("utf-8", errors="replace")
+        async with box_runner(deps, box, application_config) as runner:
+            # A remote `~` is the home: the quoted word would not expand it. A folder
+            # that fails its check raises its ValidationError (`invalid`).
+            folder = await runner.folder(directory)
+            words = grep_words(pattern, folder, case_sensitive, limit)
+            ran = await _grep(runner, words, keep_errors=True)
+            if ran.status == GREP_TROUBLE:
+                checked = await _grep(
+                    runner, pattern_check_words(pattern, case_sensitive), keep_errors=True
                 )
-                matches, truncated = _parse_grep_output(output, limit)
+                if checked.status == GREP_TROUBLE:
+                    raise Failure(REASON_INVALID, _said(checked))
+                if not ran.output.strip():
+                    await _searched(runner, folder, directory)
+            elif ran.status not in (GREP_MATCHED, GREP_NO_MATCH):
+                raise Failure(REASON_FAILED, _said(ran))
 
-                return APIGrepResponse(
-                    box=box.name,
-                    pattern=pattern,
-                    directory=validated_dir,
-                    matches=matches,
-                    truncated=truncated,
-                )
-        except HTTPException:
-            raise
-        except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except SSHError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        matches, truncated = _parse_grep_output(ran.output, limit)
+        return APIGrepResponse(
+            box=box.name,
+            pattern=pattern,
+            directory=folder,
+            matches=matches,
+            truncated=truncated,
+        )
 
     return router
+
+
+async def _grep(runner: BoxRunner, words: list[str], *, keep_errors: bool = False) -> Ran:
+    """grep on the box; past ``GREP_TIMEOUT`` it is ``timeout``."""
+    try:
+        return await runner.run(words, folder=None, timeout=GREP_TIMEOUT, keep_errors=keep_errors)
+    except TimeoutError as exc:
+        raise Failure(REASON_TIMEOUT, "Search timed out") from exc
+
+
+async def _searched(runner: BoxRunner, folder: str, as_sent: str) -> None:
+    """grep reported trouble, its pattern is sound and it found nothing: was ``folder``
+    there to search? The box is asked (``test``), grep's words are not read. A folder
+    that is not there is ``not_found`` and one that cannot be read ``denied``; otherwise
+    grep searched everything in it that it could read, and nothing matched."""
+    for flag, reason, text in (
+        ("-e", REASON_NOT_FOUND, "Folder not found"),
+        ("-r", REASON_DENIED, "Permission denied"),
+    ):
+        if not (await _grep(runner, ["test", flag, folder])).ok:
+            raise Failure(reason, f"{text}: {as_sent}")
+
+
+def _said(ran: Ran) -> str:
+    """What grep wrote on its error output (when kept), else its exit status."""
+    return ran.errors.strip() or f"grep exited with status {ran.status}"

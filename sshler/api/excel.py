@@ -4,26 +4,28 @@ parses with openpyxl, and returns structured sheet data for the frontend table.
 Only the first MAX_ROWS rows of each sheet are returned to avoid sending
 enormous payloads. Cell values are coerced to strings; None cells become "".
 """
+
 from __future__ import annotations
 
 import asyncio
 import io
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..config import AppConfig
-from ..ssh_pool import get_pool
-from ..validation import PathValidator, ValidationError
+from .box_files import Answers, box_files
 from .dependencies import APIDependencies
-from .files import _remote_path
-from .helpers import _local_read_bytes, _read_file_bytes
+from .failure import REASON_INVALID, Failure
+from .file_contract import MISSING_FILE
 
 MAX_ROWS = 2000
 MAX_COLS = 200
 # Hard cap on raw file bytes we'll parse — 50 MB is generous for a spreadsheet
 MAX_FILE_BYTES = 50_000_000
+
+_READ = Answers(missing=MISSING_FILE)
 
 
 class ExcelSheet(BaseModel):
@@ -46,7 +48,7 @@ def _parse_workbook(data: bytes) -> ExcelPreviewResponse:
     wb = openpyxl.load_workbook(
         io.BytesIO(data),
         read_only=True,
-        data_only=True,   # return cached values, not formulas
+        data_only=True,  # return cached values, not formulas
     )
 
     sheets: list[ExcelSheet] = []
@@ -78,12 +80,14 @@ def _parse_workbook(data: bytes) -> ExcelPreviewResponse:
         while rows and all(c == "" for c in rows[-1]):
             rows.pop()
 
-        sheets.append(ExcelSheet(
-            name=sheet_name,
-            rows=rows,
-            truncated_rows=truncated_rows,
-            truncated_cols=truncated_cols,
-        ))
+        sheets.append(
+            ExcelSheet(
+                name=sheet_name,
+                rows=rows,
+                truncated_rows=truncated_rows,
+                truncated_cols=truncated_cols,
+            )
+        )
 
     wb.close()
     return ExcelPreviewResponse(sheets=sheets, active_sheet=active_name)
@@ -100,43 +104,19 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> Any:
         box = deps.get_box_or_404(application_config, name)
 
-        if box.transport == "local":
-            try:
-                validated = PathValidator.validate_local_path(path)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # The path is taken as /file takes it: a local one normalised (`~` expanded,
+        # links resolved), a remote one checked, then its `~` resolved.
+        async with box_files(deps, box, application_config, _READ) as files:
+            target = await files.path(path)
+            data, too_large = await files.read_bytes(target, MAX_FILE_BYTES)
 
-            data, too_large = await _local_read_bytes(validated, MAX_FILE_BYTES)
-            if too_large:
-                return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
-        else:
-            try:
-                validated = PathValidator.validate_remote_path(path)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-            ssh_pool = get_pool()
-            try:
-                async with ssh_pool.connection(
-                    box, lambda: deps.connect_for_box(box, application_config)
-                ) as conn:
-                    # SFTP does not expand `~`: resolve it the way /file does.
-                    validated = await _remote_path(conn, validated)
-                    data, too_large = await _read_file_bytes(conn, validated, MAX_FILE_BYTES)
-            except ValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except HTTPException:
-                raise
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"SSH error: {exc}") from exc
-
-            if too_large:
-                return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
+        if too_large:
+            return ExcelPreviewResponse(sheets=[], active_sheet="", file_too_large=True)
 
         try:
             result = await asyncio.to_thread(_parse_workbook, data)
         except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Could not parse workbook: {exc}") from exc
+            raise Failure(REASON_INVALID, f"Could not parse workbook: {exc}") from exc
 
         return result
 

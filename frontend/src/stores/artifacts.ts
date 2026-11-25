@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 
@@ -59,7 +60,7 @@ export const useArtifactsStore = defineStore("artifacts", () => {
       projects.value = [...projectResult.projects].sort((a, b) => a.name.localeCompare(b.name));
       artifacts.value = artifactResult.artifacts;
     } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : String(reason);
+      error.value = errorText(reason);
       throw reason;
     } finally {
       loading.value = false;

@@ -12,6 +12,7 @@ import {
 import type { ApiBox, GitInfo } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePdfExport } from "@/composables/usePdfExport";
+import { useReplacePrompt } from "@/composables/useReplacePrompt";
 import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
 import { useFilesStore } from "@/stores/files";
@@ -27,7 +28,8 @@ import BatchMoveModal from "@/components/BatchMoveModal.vue";
 import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
-import { UploadError, touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { ApiError, failureText, errorText } from "@/api/apiError";
+import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 
@@ -72,6 +74,7 @@ const favoritesStore = useFavoritesStore();
 const filesStore = useFilesStore();
 const appStore = useAppStore();
 const dialog = useDialog();
+const { askReplace, withReplace, leave: leavePrompt } = useReplacePrompt();
 const message = useMessage();
 const { exportOne: exportOnePdf, exportMany: exportManyPdf, busy: pdfBusy } = usePdfExport();
 const { isMobile } = useResponsive();
@@ -89,6 +92,8 @@ const renameValue = ref("");
 const copyDestination = ref("");
 const copyNewName = ref("");
 const status = ref<string>("unknown");
+// Why the box is not online, shown after the status words.
+const statusText = ref<string | null>(null);
 const viewFilter = ref<"all" | "files" | "dirs">(readViewFilter());
 const previewing = ref(false);
 const previewPath = ref("");
@@ -282,12 +287,13 @@ const toggleExpandDir = async (path: string) => {
   if (!selectedBox.value) return;
   expandingDir.value = path;
   const listing = await directoryStore.fetchChildren(selectedBox.value, path, tokenValue.value || null);
+  // A folder whose listing did not come stays closed, so the next click asks again.
   if (listing?.entries) {
     childrenCache.value.set(path, listing.entries);
     childrenCache.value = new Map(childrenCache.value);
+    expandedDirs.value.add(path);
+    expandedDirs.value = new Set(expandedDirs.value);
   }
-  expandedDirs.value.add(path);
-  expandedDirs.value = new Set(expandedDirs.value);
   expandingDir.value = null;
 };
 
@@ -301,8 +307,8 @@ const expandAllDirs = async () => {
       const listing = await directoryStore.fetchChildren(selectedBox.value!, dir.path, tokenValue.value || null);
       if (listing?.entries) {
         childrenCache.value.set(dir.path, listing.entries);
+        expandedDirs.value.add(dir.path);
       }
-      expandedDirs.value.add(dir.path);
     }
   }));
   childrenCache.value = new Map(childrenCache.value);
@@ -522,8 +528,7 @@ async function ensureData() {
 onMounted(async () => {
   await ensureData();
   if (selectedBox.value) {
-    const stat = await boxStatus(selectedBox.value, tokenValue.value || null);
-    status.value = stat.status;
+    await refreshStatus(selectedBox.value);
   }
 
   // Attach scroll indicator listener after DOM settles
@@ -543,8 +548,27 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  leavePrompt();
   scrollObserver?.disconnect();
 });
+
+/**
+ * Ask whether `box` answers. An offline answer and a failed call both show the box as
+ * offline, with the text of why after the status words. An answer for a box that is no
+ * longer the selected one writes nothing.
+ */
+async function refreshStatus(box: string) {
+  try {
+    const stat = await boxStatus(box, tokenValue.value || null);
+    if (selectedBox.value !== box) return;
+    status.value = stat.status;
+    statusText.value = stat.status === "online" ? null : failureText(stat);
+  } catch (err) {
+    if (selectedBox.value !== box) return;
+    status.value = "offline";
+    statusText.value = errorText(err);
+  }
+}
 
 async function loadGitInfo() {
   if (!selectedBox.value || !currentDir.value) {
@@ -554,6 +578,7 @@ async function loadGitInfo() {
   try {
     currentGitInfo.value = await gitInfo(selectedBox.value, currentDir.value, tokenValue.value || null);
   } catch {
+    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
     currentGitInfo.value = null;
   }
 }
@@ -613,8 +638,7 @@ async function onBoxChange(val: string) {
   await refreshFavorites(val);
   await directoryStore.load(val, currentDir.value, tokenValue.value || null);
   await filesStore.load(val, currentDir.value, tokenValue.value || null);
-  const stat = await boxStatus(val, tokenValue.value || null);
-  status.value = stat.status;
+  await refreshStatus(val);
   loadGitInfo();
 }
 
@@ -628,7 +652,7 @@ async function createEmptyFile() {
     newFileName.value = "";
     message.success(t('files.file_created'));
   } catch (err) {
-    directoryStore.error = err instanceof Error ? err.message : String(err);
+    directoryStore.error = errorText(err);
   } finally {
     actionBusy.value = false;
   }
@@ -644,7 +668,7 @@ async function createNewFolder() {
     newFolderName.value = "";
     message.success(t('files.folder_created'));
   } catch (err) {
-    directoryStore.error = err instanceof Error ? err.message : String(err);
+    directoryStore.error = errorText(err);
   } finally {
     actionBusy.value = false;
   }
@@ -671,7 +695,7 @@ async function removePath(path: string) {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success(t('files.deleted'));
   } catch (err) {
-    directoryStore.error = err instanceof Error ? err.message : String(err);
+    directoryStore.error = errorText(err);
   } finally {
     actionBusy.value = false;
   }
@@ -702,7 +726,7 @@ async function applyChmod() {
     message.success(`Permissions changed to ${chmodValue.value}`);
     await reloadDir();
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -710,47 +734,40 @@ async function applyChmod() {
 
 async function doRename() {
   if (!selectedBox.value || !renameTarget.value || !renameValue.value.trim()) return;
+  const newName = renameValue.value.trim();
+  if (newName === renameTarget.value.split("/").pop()) {
+    // The name is unchanged: nothing to send, nothing to replace.
+    renameTarget.value = null;
+    renameValue.value = "";
+    return;
+  }
   actionBusy.value = true;
   try {
-    await filesStore.doRename(selectedBox.value, renameTarget.value, renameValue.value.trim(), tokenValue.value || null);
+    try {
+      await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null);
+    } catch (err) {
+      // A taken name the server would replace asks; "No" leaves the dialog open and
+      // everything as it was. Any other refusal shows the server's text.
+      if (!(err instanceof ApiError && err.reason === "exists")) throw err;
+      if (!(await askReplace(newName))) return;
+      await filesStore.doRename(selectedBox.value, renameTarget.value, newName, tokenValue.value || null, { overwrite: true });
+    }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success(t('files.renamed'));
     renameTarget.value = null;
     renameValue.value = "";
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
 }
 
 /**
- * Ask whether to replace an existing file. Resolves true only for "Replace"; "No",
- * Escape, a mask click or the dialog closing any other way resolve false. The dialog has
- * no close button, so its focus trap lands on "No, keep it" first and Enter presses it.
- */
-function askReplace(name: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    dialog.warning({
-      title: t('files.replace_title'),
-      content: t('files.replace_confirm', { name }),
-      positiveText: t('files.replace_yes'),
-      negativeText: t('files.replace_no'),
-      closable: false,
-      onPositiveClick: () => resolve(true),
-      onNegativeClick: () => resolve(false),
-      onEsc: () => resolve(false),
-      onMaskClick: () => resolve(false),
-      onAfterLeave: () => resolve(false),
-    });
-  });
-}
-
-/**
  * Upload one file: "uploaded", or "skipped" when it already exists and the user keeps
- * it. A 409 asks to replace (Yes re-sends with the overwrite flag); any other 4xx is
- * final; a network or server failure is retried with backoff.
+ * it. The reason "exists" asks to replace (Yes re-sends with the overwrite
+ * flag); any other 4xx is final; a network or server failure is retried with backoff.
  */
 async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
   uploadTarget.value = file;
@@ -762,13 +779,17 @@ async function uploadOne(file: File): Promise<"uploaded" | "skipped"> {
       await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null);
       return "uploaded";
     } catch (err) {
-      const status = err instanceof UploadError ? err.status : null;
-      if (status === 409) {
+      // Only a file the server says it may replace is asked about.
+      if (err instanceof ApiError && err.reason === "exists") {
         filesStore.uploadError = null; // the prompt answers this one
         if (!(await askReplace(file.name))) return "skipped";
         await filesStore.doUpload(selectedBox.value!, currentDir.value, file, tokenValue.value || null, { overwrite: true });
         return "uploaded";
       }
+      // Whether to retry is a rule about the answer, not about what failed: a refusal
+      // (4xx) is final and shows its text; no answer (status 0) or a server failure
+      // (5xx) is tried again.
+      const status = err instanceof ApiError ? err.status : null;
       if (status !== null && status >= 400 && status < 500) throw err;
       lastError = err;
       if (attempt < maxAttempts) {
@@ -796,7 +817,7 @@ async function handleUpload(files: FileList | null) {
         message.warning(t('files.upload_skipped', { name: file.name }), { closable: true, duration: 0 });
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = errorText(err);
       message.error(`${file.name}: ${errorMsg}`, { closable: true, duration: 0 });
     }
   }
@@ -860,7 +881,7 @@ async function handleDownload(row: any) {
     anchor.click();
     URL.revokeObjectURL(objectUrl);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -929,7 +950,7 @@ async function handleDownloadDirectory(row: any) {
     message.success(`Downloaded ${zipName} (${formatBytes(blob.size)})`);
   } catch (err) {
     loadingMsg?.destroy();
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   }
 }
 
@@ -975,7 +996,7 @@ async function bulkDelete() {
       message.success(t('files.deleted_selection'));
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -987,22 +1008,33 @@ function openBatchModal(mode: "move" | "copy") {
 
 async function handleBatchConfirm(destination: string) {
   if (!selectedBox.value || !selectedPaths.value.length) return;
+  const box = selectedBox.value;
+  const token = tokenValue.value || null;
+  const mode = batchModal.value.mode;
+  const paths = [...selectedPaths.value];
   batchModal.value.visible = false;
   actionBusy.value = true;
   try {
-    const result = batchModal.value.mode === "move"
-      ? await filesStore.doBatchMove(selectedBox.value, selectedPaths.value, destination, tokenValue.value || null)
-      : await filesStore.doBatchCopy(selectedBox.value, selectedPaths.value, destination, tokenValue.value || null);
-    await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    filesStore.setSelectedFiles([]);
-    const verb = batchModal.value.mode === "move" ? "Moved" : "Copied";
-    if (result.status === "partial") {
-      message.warning(`${verb} ${result.succeeded.length}, failed ${result.failed.length}`);
+    const place = mode === "move" ? filesStore.doBatchMove : filesStore.doBatchCopy;
+    const outcome = await withReplace(paths, (toSend, overwrite) =>
+      overwrite ? place(box, toSend, destination, token, { overwrite: true }) : place(box, toSend, destination, token),
+    );
+    await directoryStore.load(box, currentDir.value, token);
+    // Names the user kept are no failure; a selection that moved nothing stays as it was.
+    if (outcome.succeeded.length || outcome.failed.length) filesStore.setSelectedFiles([]);
+    for (const item of outcome.failed) {
+      message.error(`${item.path.split('/').pop() || item.path}: ${failureText(item)}`, { closable: true, duration: 0 });
+    }
+    const counts = { done: outcome.succeeded.length, skipped: outcome.skipped.length, failed: outcome.failed.length };
+    if (!counts.skipped && !counts.failed) {
+      message.success(t(mode === "move" ? 'files.batch_moved' : 'files.batch_copied', { count: counts.done }));
     } else {
-      message.success(`${verb} ${result.succeeded.length} item(s)`);
+      const summary = t(mode === "move" ? 'files.batch_summary_move' : 'files.batch_summary_copy', counts);
+      if (counts.failed) message.warning(summary);
+      else message.info(summary);
     }
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1024,7 +1056,7 @@ async function handleArchiveCreate(format: string, paths?: string[]) {
     filesStore.setSelectedFiles([]);
     message.success(`Created ${archiveName}`);
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1038,7 +1070,7 @@ async function handleArchiveExtract(archivePath: string) {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     message.success("Extracted archive");
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     actionBusy.value = false;
   }
@@ -1089,7 +1121,7 @@ async function bulkDownload() {
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      message.error(`Failed to download ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      message.error(`Failed to download ${path}: ${errorText(err)}`);
     }
   }
 }
@@ -1312,7 +1344,7 @@ const columns = computed(() => {
           <template #icon>
             <div class="connection-indicator" :class="{ connected: status === 'online' }" />
           </template>
-          {{ selectedBox }} is {{ status }}
+          {{ selectedBox }} is {{ status }}<template v-if="statusText">: {{ statusText }}</template>
         </NAlert>
       </NSpace>
     </NCard>
@@ -1349,7 +1381,7 @@ const columns = computed(() => {
           </NSpace>
         </div>
       </div>
-      
+
       <NSpace vertical size="small">
         <!-- Bulk Actions -->
         <div v-if="selectedCount > 0" class="bulk-actions">
@@ -1737,7 +1769,7 @@ h1 {
   .file-browser :deep(.n-data-table-td) {
     min-height: 44px;
   }
-  
+
   .file-browser :deep(.n-button) {
     min-height: 44px;
     min-width: 44px;
@@ -1749,7 +1781,7 @@ h1 {
   .surface-card {
     border: 2px solid var(--stroke);
   }
-  
+
   .connection-indicator {
     border: 1px solid var(--text);
   }

@@ -6,7 +6,8 @@ import { PhFolderSimple, PhPushPinSimple, PhStar, PhTerminalWindow } from "@phos
 
 import { useI18n } from "@/i18n";
 import { boxStatus } from "@/api/http";
-import type { ApiBox } from "@/api/types";
+import { failureText, errorText } from "@/api/apiError";
+import type { ApiBox, BoxStatus } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useFavoritesStore } from "@/stores/favorites";
@@ -68,7 +69,17 @@ async function toggleFavoritePath(boxName: string, path: string) {
 }
 
 async function checkStatus(boxName: string) {
-  const stat = await boxStatus(boxName, token.value);
+  let stat: BoxStatus;
+  try {
+    stat = await boxStatus(boxName, token.value);
+  } catch (err) {
+    message.error(errorText(err));
+    return;
+  }
+  if (stat.status !== "online") {
+    message.error(failureText(stat));
+    return;
+  }
   message.info(t('boxes.status_info', { status: stat.status, latency: String(stat.latency_ms || 0) }));
 }
 

@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 
@@ -74,7 +75,7 @@ export const usePingStore = defineStore("ping", () => {
         const parsed = JSON.parse(msg.data) as PingEvent;
         _handleEvent(parsed);
       } catch (err) {
-        lastError.value = `bad ws payload: ${err instanceof Error ? err.message : String(err)}`;
+        lastError.value = `bad ws payload: ${errorText(err)}`;
       }
     };
 

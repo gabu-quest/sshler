@@ -17,16 +17,14 @@ async def test_open_tmux_uses_remote_ts_server():
 
     result = await open_tmux(
         FakeConnection(),
-        "/home/gabu/projects/blogler",
+        "/home/u/projects/blogler",
         "blogler",
         columns=100,
         rows=40,
     )
 
     assert result == "process"
-    assert calls["command"] == (
-        "tmux -L ts-blogler new -As blogler -c /home/gabu/projects/blogler"
-    )
+    assert calls["command"] == ("tmux -L ts-blogler new -As blogler -c /home/u/projects/blogler")
     assert calls["term_size"] == (100, 40)
 
 
@@ -41,9 +39,7 @@ async def test_open_tmux_sanitizes_session_before_selecting_ts_server():
 
     await open_tmux(FakeConnection(), "/srv/My Project", "My Project")
 
-    assert calls["command"] == (
-        "tmux -L ts-My_Project new -As My_Project -c '/srv/My Project'"
-    )
+    assert calls["command"] == ("tmux -L ts-My_Project new -As My_Project -c '/srv/My Project'")
 
 
 @pytest.mark.asyncio
@@ -60,7 +56,7 @@ async def test_sftp_list_directory_skips_entries_on_stat_failure():
                 raise OSError("boom")
             return SimpleNamespace(permissions=0o40000, size=123)
 
-        async def exit(self):
+        def exit(self):
             self.exit_called = True
 
     class FakeConnection:
@@ -147,3 +143,33 @@ async def test_connect_skips_alias_when_disabled(monkeypatch):
     assert result == "connection"
     assert expand_called is False
     assert calls["host"] == "test-server"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exists", [False, True], ids=["no-config-file", "config-file"])
+async def test_connect_gives_asyncssh_only_a_config_file_that_exists(monkeypatch, tmp_path, exists):
+    """A machine without `~/.ssh/config` connects with no config; asyncssh raises
+    FileNotFoundError for a config path it cannot open."""
+    calls = {}
+
+    async def fake_asyncssh_connect(**kwargs):
+        calls.update(kwargs)
+        return "connection"
+
+    monkeypatch.setattr(ssh_module.asyncssh, "connect", fake_asyncssh_connect)
+    config_path = tmp_path / "config"
+    if exists:
+        config_path.write_text("Host *\n")
+
+    result = await connect(
+        host="10.0.0.5",
+        user="alice",
+        port=22,
+        keyfile=None,
+        known_hosts=None,
+        ssh_config_path=str(config_path),
+        allow_alias=False,
+    )
+
+    assert result == "connection"
+    assert calls["config"] == ([str(config_path)] if exists else None)

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorText } from "@/api/apiError";
 import { computed, ref, watch } from "vue";
 import { NButton, NIcon, NModal, NSpace, NSpin, NSwitch, useDialog, useMessage } from "naive-ui";
 import { PhPencil, PhUploadSimple } from "@phosphor-icons/vue";
@@ -66,7 +67,7 @@ watch(() => props.show, async (showing) => {
     content.value = payload.content || "";
     originalContent.value = content.value;
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
     emit("update:show", false);
   } finally {
     loading.value = false;
@@ -102,7 +103,7 @@ async function saveEdit() {
     emit("saved", props.path, content.value);
     closeModal();
   } catch (err) {
-    message.error(err instanceof Error ? err.message : String(err));
+    message.error(errorText(err));
   } finally {
     loading.value = false;
   }

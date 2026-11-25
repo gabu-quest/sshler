@@ -224,7 +224,7 @@ For hot-reload development:
 # Terminal 1: Backend
 sshler serve --no-browser
 
-# Terminal 2: Frontend dev server  
+# Terminal 2: Frontend dev server
 cd frontend && pnpm dev -- --host --base /app/
 # Visit http://localhost:5173/app/
 ```
@@ -353,11 +353,15 @@ export SSHLER_PASSWORD_HASH='$argon2id$...'  # Use sshler hash-password to gener
 sshler serve --host 0.0.0.0 --auth myuser:mypassword
 ```
 
+**Signing in:** with a password set, the page loads and shows its sign-in form; a session lasts 8 hours (`SSHLER_SESSION_TTL_SECONDS`), and **Settings → Sign out** ends it. Five failed sign-ins lock the address out for five minutes, and the form says how long to wait. A script may instead send an `Authorization: Basic` header with each request (plus the `X-SSHLER-TOKEN`); that header passes the one request and makes no session. The browser's own password prompt is never shown.
+
+**Upgrading:** a browser that signed in through the old password prompt keeps sending that password until it is restarted. Until then it stays signed in, and Sign out takes effect only after the restart.
+
 **Additional security notes:**
 - **Environment variables**: Never commit your `.env` file to version control. Use `.env.example` as a template. The `.env` file may contain sensitive credentials like password hashes.
 - File uploads are capped at 50 MB (tunable via `--max-upload-mb`). Uploaded content is never executed server-side.
 - SSH connections still honour your system `known_hosts`. Only set `known_hosts: ignore` if you fully understand the risk.
-- If you expose sshler beyond localhost, opt-in via `--allow-origin` and add `--auth user:pass` (basic auth). Use it only on networks you trust and put TLS in front (nginx, Caddy, etc.).
+- If you expose sshler beyond localhost, opt-in via `--allow-origin` and add `--auth user:pass` (a password). Use it only on networks you trust and put TLS in front (nginx, Caddy, etc.).
 - There is no telemetry, analytics, or call-home behaviour.
 
 ### CLI options
@@ -376,7 +380,7 @@ sshler serve \
 - `--host` (alias `--bind`) sets the bind address (default: `127.0.0.1` for localhost-only). Use `0.0.0.0` to expose on all interfaces, but **only on trusted networks with `--auth` and TLS**.
 - `--port` sets the port number (default: `8822`).
 - `--allow-origin` can be repeated to expand CORS; combine it with `--auth` if you expose the UI beyond localhost.
-- `--auth user:pass` enables HTTP basic authentication (recommended if binding to `0.0.0.0`).
+- `--auth user:pass` sets a password: the page shows its sign-in form, and scripts may send a Basic header (recommended if binding to `0.0.0.0`).
 - `--max-upload-mb` sets the upload size limit (default: 50 MB).
 - `--no-ssh-alias` disables the `ssh -G` fallback when DNS fails.
 - `--token` lets you supply your own `X-SSHLER-TOKEN` (otherwise a secure random value is generated).
@@ -630,7 +634,6 @@ When deploying sshler in production:
 - ✅ **Set `SSHLER_COOKIE_SECURE=true`** in your `.env` file
 - ✅ **Set `SSHLER_PUBLIC_URL`** to your actual HTTPS URL
 - ✅ **Use strong passwords** (generate with `sshler hash-password`)
-- ✅ **Keep `SSHLER_REQUIRE_AUTH=true`** (never disable auth in production)
 - ✅ **Bind to localhost** (`SSHLER_HOST=127.0.0.1`) when behind a reverse proxy
 - ✅ **Enable firewall rules** to restrict access to trusted networks
 - ✅ **Keep sshler updated** to receive security patches
@@ -641,7 +644,7 @@ sshler security works in layers:
 
 1. **Transport Security (HTTPS)** - Encrypts all traffic, protects session cookies
 2. **Application Auth (Session Cookies)** - Verifies user identity with httpOnly cookies
-3. **CSRF Protection** - Origin header validation on state-changing requests
+3. **CSRF Protection** - Origin header validation on state-changing requests and on every WebSocket upgrade
 4. **Network Isolation** (Optional) - Tailscale, VPN, or firewall rules
 
 **Recommendation:** Use HTTPS + session auth for most deployments. Add network isolation (Tailscale/VPN) for extra security when accessing over the internet.
@@ -1074,11 +1077,15 @@ export SSHLER_PASSWORD_HASH='$argon2id$...'  # sshler hash-password で生成
 sshler serve --host 0.0.0.0 --auth myuser:mypassword
 ```
 
+**サインイン:** パスワードを設定すると、ページが開いてサインインフォームを表示します。セッションは 8 時間（`SSHLER_SESSION_TTL_SECONDS`）有効で、**設定 → サインアウト** で終了します。サインインに 5 回失敗するとそのアドレスは 5 分間ロックされ、フォームが待ち時間を表示します。スクリプトは代わりに各リクエストで `Authorization: Basic` ヘッダー（と `X-SSHLER-TOKEN`）を送れます。このヘッダーはそのリクエストだけを通し、セッションは作りません。ブラウザ自身のパスワード入力ダイアログは表示されません。
+
+**アップグレード時の注意:** 以前のパスワード入力ダイアログでサインインしたブラウザーは、再起動するまでそのパスワードを送り続けます。その間はサインインしたままになり、サインアウトはブラウザーの再起動後に有効になります。
+
 **追加のセキュリティに関する注意:**
 - **環境変数**: `.env` ファイルをバージョン管理にコミットしないでください。`.env.example` をテンプレートとして使用してください。`.env` ファイルにはパスワードハッシュなどの機密情報が含まれる可能性があります。
 - ファイルアップロードは 50 MB まで（`--max-upload-mb` で調整可能）。アップロードされたコンテンツはサーバー側で実行されません。
 - SSH 接続はシステムの `known_hosts` を尊重します。リスクを完全に理解している場合のみ `known_hosts: ignore` を設定してください。
-- ローカルホスト以外に公開する場合は、`--allow-origin` でオプトインし、`--auth user:pass`（Basic 認証）を追加してください。信頼できるネットワークでのみ使用し、TLS（nginx、Caddy など）を前段に配置してください。
+- ローカルホスト以外に公開する場合は、`--allow-origin` でオプトインし、`--auth user:pass`（パスワード）を追加してください。信頼できるネットワークでのみ使用し、TLS（nginx、Caddy など）を前段に配置してください。
 - テレメトリ、アナリティクス、コールホーム機能は一切ありません。
 
 ### CLI オプション
@@ -1097,7 +1104,7 @@ sshler serve \
 - `--host`（別名 `--bind`）: バインドアドレスを設定（デフォルト: `127.0.0.1` でローカルホストのみ）。すべてのインターフェースに公開するには `0.0.0.0` を使用しますが、**信頼できるネットワーク上でのみ `--auth` と TLS を併用してください**。
 - `--port`: ポート番号を設定（デフォルト: `8822`）。
 - `--allow-origin`: CORS を拡張するために繰り返し使用可能。ローカルホスト以外に UI を公開する場合は `--auth` と組み合わせてください。
-- `--auth user:pass`: HTTP Basic 認証を有効化（`0.0.0.0` にバインドする場合は推奨）。
+- `--auth user:pass`: パスワードを設定。ページはサインインフォームを表示し、スクリプトは Basic ヘッダーを送れます（`0.0.0.0` にバインドする場合は推奨）。
 - `--max-upload-mb`: アップロードサイズ制限を設定（デフォルト: 50 MB）。
 - `--no-ssh-alias`: DNS 失敗時の `ssh -G` フォールバックを無効化。
 - `--token`: 独自の `X-SSHLER-TOKEN` を指定（指定しない場合は安全なランダム値が生成されます）。
@@ -1332,7 +1339,6 @@ sshler を本番環境にデプロイする際：
 - **`SSHLER_COOKIE_SECURE=true` を設定** - `.env` ファイルで
 - **`SSHLER_PUBLIC_URL` を設定** - 実際の HTTPS URL に
 - **強力なパスワードを使用** - `sshler hash-password` で生成
-- **`SSHLER_REQUIRE_AUTH=true` を維持** - 本番環境では認証を無効化しない
 - **localhost にバインド** - リバースプロキシの背後では `SSHLER_HOST=127.0.0.1`
 - **ファイアウォールルールを有効化** - 信頼できるネットワークにアクセスを制限
 - **sshler を最新に保つ** - セキュリティパッチを受け取るため
@@ -1343,7 +1349,7 @@ sshler のセキュリティは多層構造です：
 
 1. **トランスポートセキュリティ（HTTPS）** - すべてのトラフィックを暗号化し、セッション Cookie を保護
 2. **アプリケーション認証（セッション Cookie）** - httpOnly Cookie でユーザー ID を検証
-3. **CSRF 保護** - 状態変更リクエストに対する Origin ヘッダー検証
+3. **CSRF 保護** - 状態変更リクエストと全 WebSocket 接続に対する Origin ヘッダー検証
 4. **ネットワーク分離**（オプション） - Tailscale、VPN、またはファイアウォールルール
 
 **推奨:** ほとんどのデプロイでは HTTPS + セッション認証を使用してください。インターネット経由でアクセスする場合は、ネットワーク分離（Tailscale/VPN）を追加してセキュリティを強化してください。

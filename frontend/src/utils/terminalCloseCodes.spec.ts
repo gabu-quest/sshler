@@ -36,6 +36,30 @@ describe("classifyTerminalCloseCode", () => {
     expect(policy.messageKey).toBe("terminal.pywinpty_missing");
   });
 
+  it("4404 (unknown box) toasts unknown_box and stops reconnecting", () => {
+    expect(classifyTerminalCloseCode(4404)).toEqual({
+      messageKey: "terminal.unknown_box",
+      reconnect: false,
+      duration: 6000,
+    });
+  });
+
+  it("4501 (tmux not installed) toasts tmux_not_installed and stops reconnecting", () => {
+    expect(classifyTerminalCloseCode(4501)).toEqual({
+      messageKey: "terminal.tmux_not_installed",
+      reconnect: false,
+      duration: 8000,
+    });
+  });
+
+  it("4400 (refused session name) toasts session_name_refused and stops reconnecting", () => {
+    expect(classifyTerminalCloseCode(4400)).toEqual({
+      messageKey: "terminal.session_name_refused",
+      reconnect: false,
+      duration: 6000,
+    });
+  });
+
   it("1000 (normal closure) is silent and does NOT reconnect", () => {
     const policy = classifyTerminalCloseCode(1000);
     expect(policy.reconnect).toBe(false);

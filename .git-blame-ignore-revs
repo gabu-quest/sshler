@@ -1,0 +1,8 @@
+# Commits that only change layout. `git blame --ignore-revs-file .git-blame-ignore-revs`
+# skips them, and GitHub's blame view reads this file by itself.
+
+# style: format the Python files with ruff format
+871feeb9a08adcc9fa555b94843508a172f24490
+
+# style: remove trailing whitespace from 20 frontend files and the README
+52723f769223870447d33ec24c37db241b3e5149

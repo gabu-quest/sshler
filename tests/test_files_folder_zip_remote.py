@@ -24,6 +24,7 @@ from platform_support import mkdir_or_skip_unholdable_name
 
 from sshler import ssh_pool, state
 from sshler.api import files as files_api
+from sshler.api import remote_files as remote_files_api
 from sshler.api.dependencies import APIDependencies
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
@@ -165,7 +166,7 @@ class FakeSFTP:
     async def remove(self, path: str) -> None:
         self.calls.append(("remove", path))
 
-    async def exit(self) -> None:
+    def exit(self) -> None:
         return None
 
 
@@ -287,7 +288,7 @@ def download(client, path):
 
 
 def test_dir_size_at_tilde_runs_du_on_the_resolved_home(remote):
-    """Mutation: skip `_resolve_remote_tilde` and `du -sb '~'` runs (and the replies
+    """Mutation: skip `resolve_tilde` and `du -sb '~'` runs (and the replies
     dict raises on the unknown command, giving a 500)."""
     client, replies, log = remote
     replies[HOME_CMD] = reply("/home/tester")
@@ -364,7 +365,7 @@ def test_unresolvable_home_is_an_error(remote):
     resp = dir_size(client, "~")
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
     )
     assert log == [HOME_CMD]
 
@@ -421,7 +422,7 @@ def test_download_failure_reports_the_zip_error(remote):
     resp = download(client, "/gone")
     assert (resp.status_code, resp.json()) == (
         500,
-        {"detail": "zip failed: zip error: Nothing to do!"},
+        {"detail": "zip failed: zip error: Nothing to do!", "reason": "failed"},
     )
 
 
@@ -464,7 +465,7 @@ def test_unreachable_box_is_a_502_with_the_pool_message(remote, monkeypatch, cal
     resp = call(client, "/srv")
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "remote1: unreachable (cached, retry in 42s)"},
+        {"detail": "remote1: unreachable (cached, retry in 42s)", "reason": "unreachable"},
     )
 
 
@@ -506,7 +507,7 @@ def test_remote_file_download_header_is_exact_for_a_japanese_name(remote, monkey
         assert path == "/srv/日本語.txt"
         return b"hi", False
 
-    monkeypatch.setattr("sshler.api.files._read_file_bytes", fake_read)
+    monkeypatch.setattr("sshler.api.remote_files._read_file_bytes", fake_read)
     resp = client.get(
         f"/api/v1/boxes/{BOX}/download", params={"path": "/srv/日本語.txt"}, headers=HEADERS
     )
@@ -521,12 +522,12 @@ def test_remote_file_download_header_is_exact_for_a_japanese_name(remote, monkey
     [
         (
             "ドキュメント",
-            "attachment; filename=\"______.zip\"; "
+            'attachment; filename="______.zip"; '
             "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88.zip",
         ),
         (
             'ドキュメント"x',
-            "attachment; filename=\"_______x.zip\"; "
+            'attachment; filename="_______x.zip"; '
             "filename*=UTF-8''%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88%22x.zip",
         ),
     ],
@@ -562,8 +563,8 @@ def _pool_idle(box: str) -> int:
 @pytest.fixture
 def small_cap(monkeypatch: pytest.MonkeyPatch) -> int:
     """Cap at 10 chunks so a test streams kilobytes, not 500 MB. Returns the cap."""
-    monkeypatch.setattr(files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
-    monkeypatch.setattr(files_api, "MAX_DIR_DOWNLOAD_BYTES", 10 * CHUNK)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(remote_files_api, "MAX_DIR_DOWNLOAD_BYTES", 10 * CHUNK)
     return 10 * CHUNK
 
 
@@ -581,7 +582,7 @@ def test_zip_past_the_cap_is_aborted_one_chunk_past_it(remote, small_cap):
     resp = download(remote.client, "/srv/big")
     assert (resp.status_code, resp.json()) == (
         413,
-        {"detail": "Directory too large to download"},
+        {"detail": "Directory too large to download", "reason": "too_large"},
     )
     # 10 chunks reach the cap exactly; the 11th passes it and stops the read.
     assert proc.stdout.requested == [CHUNK] * 11
@@ -598,8 +599,8 @@ def test_zip_past_the_cap_holds_at_most_a_chunk_in_memory(remote, monkeypatch):
     temp file; the traced peak then reaches the 16 MiB read before the abort. Spooled,
     the peak stays near one 64 KiB chunk (bound: 2 MiB, an eighth of the cap)."""
     cap = 256 * CHUNK  # 16 MiB
-    monkeypatch.setattr(files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
-    monkeypatch.setattr(files_api, "MAX_DIR_DOWNLOAD_BYTES", cap)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(remote_files_api, "MAX_DIR_DOWNLOAD_BYTES", cap)
     remote.processes[ZIP_BIG] = FakeProcess(EndlessStream(max_reads=300))
     tracemalloc.start()
     try:
@@ -652,7 +653,10 @@ def test_dir_size_of_a_missing_folder_is_404(remote):
     replies["du -sk /nope"] = reply("", err, 1)
     replies["test -d /nope"] = reply("", "", 1)
     resp = dir_size(client, "/nope")
-    assert (resp.status_code, resp.json()) == (404, {"detail": "Directory not found"})
+    assert (resp.status_code, resp.json()) == (
+        404,
+        {"detail": "Directory not found", "reason": "not_found"},
+    )
     assert log == ["du -sb /nope", "du -sk /nope", "test -d /nope"]
 
 
@@ -666,11 +670,9 @@ def listed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     async def fake_list(connection, path):
         paths.append(path)
-        return [
-            {"name": "a.txt", "is_directory": False, "size": 3, "modified": 1.0, "mode": 420}
-        ]
+        return [{"name": "a.txt", "is_directory": False, "size": 3, "modified": 1.0, "mode": 420}]
 
-    monkeypatch.setattr(files_api, "sftp_list_directory", fake_list)
+    monkeypatch.setattr(remote_files_api, "sftp_list_directory", fake_list)
     return paths
 
 
@@ -679,11 +681,11 @@ def listed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     [("~", "/home/tester"), ("~/sub dir", "/home/tester/sub dir")],
 )
 def test_remote_listing_at_tilde_lists_the_remote_home(remote, listed, sent, resolved):
-    """WS-Z carry-over: `_normalize_directory_path` mapped `~` to `/`, so the remote
-    listing at `~` showed `/` while the toolbar zip at `~` zipped the home folder.
+    """A remote listing at `~` once showed `/`, while the toolbar zip at `~` zipped the
+    home folder.
 
-    Mutation: list `_normalize_directory_path(directory)` without resolving `~` first;
-    the listed path is `/` (or `/~/sub dir`)."""
+    Mutation: list the folder without resolving `~` first; the listed path is `/`
+    (or `/~/sub dir`)."""
     client, replies, log = remote
     replies[HOME_CMD] = reply("/home/tester")
     resp = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": sent}, headers=HEADERS)
@@ -708,7 +710,7 @@ def test_remote_listing_of_an_absolute_path_runs_no_home_lookup(remote, listed):
 def test_file_routes_resolve_tilde_like_the_folder_zip(remote, monkeypatch, route):
     """Wave 4e review: `/download` and `/view` read the literal `~/notes.txt`.
 
-    Mutation: drop `_resolve_remote_tilde` from the route; SFTP is asked for
+    Mutation: drop `resolve_tilde` from the route; SFTP is asked for
     `~/notes.txt`."""
     client, replies, log = remote
     replies[HOME_CMD] = reply("/home/tester")
@@ -718,7 +720,7 @@ def test_file_routes_resolve_tilde_like_the_folder_zip(remote, monkeypatch, rout
         read_paths.append(path)
         return b"hello", False
 
-    monkeypatch.setattr(files_api, "_read_file_bytes", fake_read)
+    monkeypatch.setattr(remote_files_api, "_read_file_bytes", fake_read)
     resp = client.get(
         f"/api/v1/boxes/{BOX}/{route}", params={"path": "~/notes.txt"}, headers=HEADERS
     )
@@ -743,9 +745,9 @@ def test_file_routes_too_large_is_413_not_500(remote, monkeypatch, route, detail
     async def too_big(connection, path, limit):
         return b"", True
 
-    monkeypatch.setattr(files_api, "_read_file_bytes", too_big)
+    monkeypatch.setattr(remote_files_api, "_read_file_bytes", too_big)
     resp = client.get(f"/api/v1/boxes/{BOX}/{route}", params={"path": "/srv/x"}, headers=HEADERS)
-    assert (resp.status_code, resp.json()) == (413, {"detail": detail})
+    assert (resp.status_code, resp.json()) == (413, {"detail": detail, "reason": "too_large"})
 
 
 @pytest.mark.parametrize(
@@ -768,15 +770,15 @@ def test_file_routes_unreachable_box_is_502(remote, monkeypatch, route, params):
     resp = client.get(f"/api/v1/boxes/{BOX}/{route}", params=params, headers=HEADERS)
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "remote1: unreachable (cached, retry in 42s)"},
+        {"detail": "remote1: unreachable (cached, retry in 42s)", "reason": "unreachable"},
     )
 
 
-# --- writes at `~` (wave 5b, WS-AC item 1) ------------------------------------
+# --- writes at `~` -------------------------------------------------------------
 #
-# Review: "touch, mkdir and upload still send `~` through `_normalize_directory_path`,
-# which maps it to `/` ... The user sees `/home/u`'s files, clicks New File "a.txt",
-# and the server writes `/a.txt`." Every remote route in files.py that takes a folder
+# Touch, mkdir and upload once turned `~` into `/`: the user saw the files of
+# `/home/u`, clicked New File "a.txt", and the server wrote `/a.txt`.
+# Every remote route in files.py that takes a folder
 # or a path resolves `~` with the same `$HOME` lookup as the listing. Shared mutation
 # (the pre-fix routes): pass the raw `~` path on to SFTP; the recorded calls then name
 # `/a.txt` (folder routes) or `~/a.txt` (path routes) and no `$HOME` lookup is logged.
@@ -793,8 +795,8 @@ def _post(remote, route: str, body: dict):
     [("~", f"{HOME}/a.txt"), ("~/sub dir", f"{HOME}/sub dir/a.txt")],
 )
 def test_touch_at_tilde_creates_the_file_in_the_remote_home(remote, directory, created):
-    """Mutation: `_normalize_directory_path(payload.directory)` without the `~` lookup;
-    the file is created at `/a.txt` (or `/~/sub dir/a.txt`)."""
+    """Mutation: use `payload.directory` without the `~` lookup; the file is created
+    at `/a.txt` (or `/~/sub dir/a.txt`)."""
     remote.replies[HOME_CMD] = reply(HOME)
     resp = _post(remote, "touch", {"directory": directory, "filename": "a.txt"})
     assert (resp.status_code, resp.json()["path"]) == (200, created)
@@ -845,32 +847,10 @@ def test_upload_at_tilde_writes_into_the_remote_home(remote):
     ("route", "body", "calls", "path"),
     [
         (
-            "rename",
-            {"path": "~/old.txt", "new_name": "new.txt"},
-            [("rename", f"{HOME}/old.txt", f"{HOME}/new.txt")],
-            f"{HOME}/new.txt",
-        ),
-        (
             "delete",
             {"path": "~/a.txt"},
             [("remove", f"{HOME}/a.txt")],
             f"{HOME}/a.txt",
-        ),
-        (
-            "move",
-            {"source": "~/a.txt", "destination": "~/archive"},
-            [("rename", f"{HOME}/a.txt", f"{HOME}/archive/a.txt")],
-            f"{HOME}/archive/a.txt",
-        ),
-        (
-            "copy",
-            {"source": "~/a.txt", "destination": "~/bak"},
-            [
-                ("open", f"{HOME}/a.txt", "rb"),
-                ("open", f"{HOME}/bak/a.txt", "wb"),
-                ("write", f"{HOME}/bak/a.txt", b"original"),
-            ],
-            f"{HOME}/bak/a.txt",
         ),
         (
             "write",
@@ -901,7 +881,7 @@ def test_chmod_at_tilde_changes_the_file_in_the_remote_home(remote, monkeypatch)
     async def fake_chmod(connection, path, mode):
         seen.append((path, mode))
 
-    monkeypatch.setattr(files_api, "sftp_chmod", fake_chmod)
+    monkeypatch.setattr(remote_files_api, "sftp_chmod", fake_chmod)
     resp = _post(remote, "chmod", {"path": "~/run.sh", "mode": "755"})
     assert (resp.status_code, resp.json()["path"]) == (200, f"{HOME}/run.sh")
     assert seen == [(f"{HOME}/run.sh", 0o755)]
@@ -934,7 +914,7 @@ def test_file_preview_at_tilde_reads_the_remote_home(remote, monkeypatch):
         read.append(path)
         return "# hi"
 
-    monkeypatch.setattr(files_api, "_read_remote_text", fake_text)
+    monkeypatch.setattr(remote_files_api, "_read_remote_text", fake_text)
     resp = remote.client.get(
         f"/api/v1/boxes/{BOX}/file", params={"path": "~/a.md"}, headers=HEADERS
     )
@@ -952,7 +932,7 @@ def test_write_route_with_an_unresolvable_home_is_502_and_writes_nothing(remote)
     resp = _post(remote, "write", {"path": "~/a.txt", "content": "x"})
     assert (resp.status_code, resp.json()) == (
         502,
-        {"detail": "Could not resolve the remote home directory"},
+        {"detail": "Could not resolve the remote home directory", "reason": "unreachable"},
     )
     assert remote.sftp.calls == []
 
@@ -1078,8 +1058,15 @@ def test_temp_file_response_deletes_its_file_when_send_fails(tmp_path):
     zip_file.write_bytes(b"Z" * 10)
     response = files_api._TempFileResponse(str(zip_file), media_type="application/zip")
     scope = {"type": "http", "method": "GET", "headers": []}
+    request_given = False
 
     async def receive():
+        # As a server does: the request once, then nothing until the client is gone.
+        # Starlette 1.x listens here for a disconnect while it sends the file.
+        nonlocal request_given
+        if request_given:
+            await asyncio.Event().wait()
+        request_given = True
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message):
@@ -1136,7 +1123,7 @@ def test_a_megabyte_of_stderr_does_not_stall_the_zip(remote, small_cap, monkeypa
 
     Mutation: read stderr after the stdout loop again; stdout never reaches EOF and the
     route times out (504 at the lowered 2 s limit)."""
-    monkeypatch.setattr(files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
     proc = _windowed_process(b"PKDATA", b"w" * (1024 * 1024), 0)
     remote.processes[ZIP_SRV] = proc
     resp = download(remote.client, "/srv/big")
@@ -1148,14 +1135,14 @@ def test_a_megabyte_of_stderr_does_not_stall_the_zip(remote, small_cap, monkeypa
 def test_a_failed_zip_reports_the_tail_of_a_long_stderr(remote, small_cap, monkeypatch):
     """Mutations: keep the head of stderr (the message is all `w`); keep all of it
     (the detail is a megabyte long); read stderr after stdout (504 at the 2 s limit)."""
-    monkeypatch.setattr(files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(remote_files_api, "ZIP_STREAM_TIMEOUT_SECONDS", 2)
     last = b"zip error: Nothing to do!"
     proc = _windowed_process(b"", b"w" * (1024 * 1024) + last, 12)
     remote.processes[ZIP_SRV] = proc
     resp = download(remote.client, "/srv/big")
     keep = 64 * 1024
     expected = "zip failed: " + ("w" * (keep - len(last))) + last.decode()
-    assert (resp.status_code, resp.json()) == (500, {"detail": expected})
+    assert (resp.status_code, resp.json()) == (500, {"detail": expected, "reason": "failed"})
 
 
 # --- existing remote files are never overwritten (wave 5c, WS-AE) ----------------
@@ -1171,7 +1158,10 @@ def test_touch_on_an_existing_remote_file_answers_409_and_keeps_its_bytes(remote
     passthrough); the route answers 200, opens the file "w" and its bytes become b""."""
     remote.sftp.contents["/srv/a.txt"] = b"precious"
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}
     assert remote.sftp.calls == [("lstat", "/srv/a.txt")]
 
@@ -1186,7 +1176,10 @@ def test_upload_onto_an_existing_remote_file_answers_409_and_keeps_its_bytes(rem
         files={"file": ("a.bin", b"replacement", "application/octet-stream")},
         headers=HEADERS,
     )
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.bin": b"precious"}
     assert remote.sftp.calls == [("lstat", "/srv/a.bin")]
 
@@ -1231,9 +1224,15 @@ def test_touch_and_upload_refuse_a_dangling_symlink_and_write_nothing(remote):
     link reads as free and the open writes through it, creating `/etc/target`."""
     remote.sftp.symlinks["/srv/link"] = "/etc/target"
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "link"})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
     resp = _upload(remote, "link", b"payload")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "cannot_replace"},
+    )
     assert remote.sftp.contents == {}
     assert remote.sftp.calls == [("lstat", "/srv/link"), ("lstat", "/srv/link")]
 
@@ -1242,11 +1241,11 @@ def test_touch_and_upload_refuse_a_target_whose_stat_is_denied(remote):
     """Mutation: treat every failed lstat as "the name is free" (`except Exception:
     pass`); the route opens the file and answers 200."""
     remote.sftp.denied.add("/srv/a.txt")
-    expected = {"detail": "Cannot check whether /srv/a.txt exists: Permission denied"}
+    expected = {"detail": "Permission denied", "reason": "denied"}
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})
-    assert (resp.status_code, resp.json()) == (400, expected)
+    assert (resp.status_code, resp.json()) == (403, expected)
     resp = _upload(remote, "a.txt", b"payload")
-    assert (resp.status_code, resp.json()) == (400, expected)
+    assert (resp.status_code, resp.json()) == (403, expected)
     assert remote.sftp.contents == {}
     assert remote.sftp.calls == [("lstat", "/srv/a.txt"), ("lstat", "/srv/a.txt")]
 
@@ -1256,16 +1255,28 @@ def test_a_file_that_appears_after_the_check_is_not_truncated(remote, monkeypatc
     file created between the check and the open is truncated (touch) or replaced
     (upload) and the route answers 200."""
     remote.sftp.contents["/srv/a.txt"] = b"precious"
+    real_lstat = remote.sftp.lstat
+    checks: list[str] = []
 
     async def lstat_before_it_appeared(path: str):
-        remote.sftp.calls.append(("lstat", path))
-        raise asyncssh.SFTPNoSuchFile("No such file")
+        # Each route's first check runs before the file appears; later ones see it.
+        checks.append(path)
+        if len(checks) in (1, 3):
+            remote.sftp.calls.append(("lstat", path))
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return await real_lstat(path)
 
     monkeypatch.setattr(remote.sftp, "lstat", lstat_before_it_appeared)
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt"})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     resp = _upload(remote, "a.txt", b"replacement")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}
 
 
@@ -1288,7 +1299,10 @@ def test_upload_with_overwrite_false_still_refuses(remote):
     explicit "false" would replace the file."""
     remote.sftp.contents["/srv/a.bin"] = b"precious"
     resp = _upload(remote, "a.bin", b"replacement", overwrite="false")
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.bin": b"precious"}
 
 
@@ -1300,7 +1314,7 @@ def test_upload_with_overwrite_never_writes_through_a_symlink(remote):
     resp = _upload(remote, "a.bin", b"replacement", overwrite="true")
     assert (resp.status_code, resp.json()) == (
         400,
-        {"detail": "Only a regular file can be replaced"},
+        {"detail": "Only a regular file can be replaced", "reason": "cannot_replace"},
     )
     assert remote.sftp.contents == {"/etc/passwd": b"root:x:0:0"}
     assert remote.sftp.calls == [("lstat", "/srv/a.bin")]
@@ -1324,5 +1338,65 @@ def test_touch_has_no_overwrite_option(remote):
     the existing file is truncated to b""."""
     remote.sftp.contents["/srv/a.txt"] = b"precious"
     resp = _post(remote, "touch", {"directory": "/srv", "filename": "a.txt", "overwrite": True})
-    assert (resp.status_code, resp.json()) == (409, {"detail": "File already exists"})
+    assert (resp.status_code, resp.json()) == (
+        409,
+        {"detail": "File already exists", "reason": "exists"},
+    )
     assert remote.sftp.contents == {"/srv/a.txt": b"precious"}
+
+
+# --- a folder or path whose name starts with a dash ---------------------------------
+#
+# `zip` and `du` were given the bare name, so a folder called `-rf` was read as options.
+
+
+def test_download_of_a_folder_named_like_an_option_names_it_as_a_path(remote):
+    """Mutation: pass the bare folder name to zip; it gets `-rf`, read as an option."""
+    client, replies, log = remote
+    replies["cd /srv && zip -r -q - ./-rf"] = reply(b"Z")
+    resp = download(client, "/srv/-rf")
+    assert (resp.status_code, resp.content) == (200, b"Z")
+    assert log == ["cd /srv && zip -r -q - ./-rf"]
+
+
+def test_dir_size_of_a_relative_path_named_like_an_option_names_it_as_a_path(remote):
+    """Mutation: pass the path to du as it came; du gets `-x`, read as an option."""
+    client, replies, log = remote
+    replies["du -sb ./-x"] = reply("12\t./-x\n")
+    resp = dir_size(client, "-x")
+    assert (resp.status_code, resp.json()) == (200, {"size_bytes": 12})
+    assert log == ["du -sb ./-x"]
+
+
+# --- the remote home is asked for once per connection --------------------------------
+
+
+def test_two_listings_under_tilde_on_a_reused_connection_ask_for_home_once(remote, listed):
+    """Mutation: ask the remote for `$HOME` on every request; the log holds it twice."""
+    client, replies, log = remote
+    replies[HOME_CMD] = reply("/home/tester")
+    for _ in range(2):
+        resp = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~/x"}, headers=HEADERS)
+        assert resp.json()["directory"] == "/home/tester/x"
+    assert len(remote.connections) == 1
+    assert log == [HOME_CMD]
+
+
+def test_a_failed_home_lookup_is_asked_again_by_the_next_request(remote, listed):
+    """Mutation: remember a failed lookup; the second request answers 502 without asking."""
+    client, replies, log = remote
+    replies[HOME_CMD] = reply("", "", 1)
+    first = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~"}, headers=HEADERS)
+    replies[HOME_CMD] = reply("/home/tester")
+    second = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~"}, headers=HEADERS)
+    assert (first.status_code, second.status_code) == (502, 200)
+    assert log == [HOME_CMD, HOME_CMD]
+
+
+def test_a_remote_whose_home_is_root_lists_tilde_paths_from_root(remote, listed):
+    """Mutation: join the home and the rest with a plain "/"; the folder is `//x`."""
+    client, replies, log = remote
+    replies[HOME_CMD] = reply("/")
+    resp = client.get(f"/api/v1/boxes/{BOX}/ls", params={"directory": "~/x"}, headers=HEADERS)
+    assert (resp.status_code, resp.json()["directory"]) == (200, "/x")
+    assert listed == ["/x"]

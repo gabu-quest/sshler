@@ -4,12 +4,13 @@ import logging
 import os
 import subprocess
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Request
 
 from .. import __version__
 from ..pdf import PDF_RENDERER
 from ..ssh_pool import get_pool
 from .dependencies import APIDependencies
+from .failure import REASON_INVALID, Failure
 from .helpers import (
     LOCAL_IS_WINDOWS,
     available_windows_shells,
@@ -40,7 +41,9 @@ def _detect_wsl_distro() -> str | None:
         # WSL confirmed — get distro name via wslpath
         result = subprocess.run(
             ["wslpath", "-m", "/"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         # Output: //wsl.localhost/Ubuntu/ or //wsl$/Ubuntu/
         if result.returncode == 0 and result.stdout.strip():
@@ -73,14 +76,38 @@ def get_router(deps: APIDependencies) -> APIRouter:
     router = APIRouter()
 
     @router.get("/bootstrap", response_model=APIBootstrap)
-    async def api_bootstrap() -> APIBootstrap:
-        """Expose runtime settings to bootstrap the SPA."""
+    async def api_bootstrap(request: Request) -> APIBootstrap:
+        """Expose runtime settings to bootstrap the SPA.
+
+        The route is open without credentials when a password is set, so the sign-in
+        page can load: ``auth_required`` says a password is set, ``authenticated``
+        whether this request carried a live session or a good Basic header (the
+        server's door decides and leaves it on ``request.state``), and the token is
+        given, with the rest of the settings, only to a request that is authenticated.
+        """
+        auth_required = deps.settings.auth_manager is not None
+        authenticated = not auth_required or getattr(request.state, "authenticated", False) is True
+
+        if not authenticated:
+            # A stranger gets only what the sign-in page needs.
+            return APIBootstrap(
+                version=__version__,
+                token_header="X-SSHLER-TOKEN",
+                token=None,
+                auth_required=auth_required,
+                authenticated=False,
+                allow_origins=[],
+                spa_base="/app/" if deps.settings.serve_spa else "",
+                spa_enabled=deps.settings.serve_spa,
+                platform="windows" if LOCAL_IS_WINDOWS else "posix",
+            )
 
         return APIBootstrap(
             version=__version__,
             token_header="X-SSHLER-TOKEN",
             token=deps.settings.csrf_token,
-            basic_auth_required=bool(deps.settings.basic_auth),
+            auth_required=auth_required,
+            authenticated=True,
             allow_origins=deps.settings.allow_origins,
             spa_base="/app/" if deps.settings.serve_spa else "",
             spa_enabled=deps.settings.serve_spa,
@@ -114,13 +141,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         # Validate inputs
         if update.idle_timeout is not None and update.idle_timeout < 0:
-            raise HTTPException(status_code=400, detail="idle_timeout must be >= 0 or null")
+            raise Failure(REASON_INVALID, "idle_timeout must be >= 0 or null")
         if update.max_lifetime is not None and update.max_lifetime < 0:
-            raise HTTPException(status_code=400, detail="max_lifetime must be >= 0 or null")
+            raise Failure(REASON_INVALID, "max_lifetime must be >= 0 or null")
         if update.max_connections_per_box is not None and update.max_connections_per_box < 1:
-            raise HTTPException(
-                status_code=400, detail="max_connections_per_box must be >= 1"
-            )
+            raise Failure(REASON_INVALID, "max_connections_per_box must be >= 1")
 
         # Apply updates
         pool.update_config(

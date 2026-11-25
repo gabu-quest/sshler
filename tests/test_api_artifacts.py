@@ -99,7 +99,7 @@ def test_project_delete_requires_explicit_cascade_and_preserves_files(
         project_id = artifact["project_id"]
 
         blocked = client.delete(f"/api/v1/artifact-projects/{project_id}", headers=_headers())
-        assert blocked.status_code == 409
+        assert blocked.status_code == 400
 
         removed = client.delete(
             f"/api/v1/artifact-projects/{project_id}?cascade=true",

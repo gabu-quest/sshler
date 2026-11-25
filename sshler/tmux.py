@@ -23,6 +23,8 @@ import shutil
 import signal
 from pathlib import Path
 
+from .proc import run_bounded as run_bounded
+
 logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = platform.system().lower().startswith("windows")
@@ -36,10 +38,6 @@ TMUX_COMMAND_TIMEOUT = 5.0
 # ``capture-pane -S -`` on a long history can take far longer than a normal
 # command, so a capture gets its own, larger bound.
 TMUX_CAPTURE_TIMEOUT = 30.0
-# After a timeout the child is SIGKILLed; this bounds the wait for asyncio to
-# see it exit. ``wait()`` also waits for the stdout/stderr pipes, which a
-# grandchild (e.g. a freshly forked tmux server) may hold open indefinitely.
-REAP_GRACE = 1.0
 # Subcommands that may fork a tmux server. The server inherits the client's
 # stdout/stderr, so these must never run with captured output.
 _SERVER_STARTING_COMMANDS = frozenset({"new-session", "new", "start-server", "start"})
@@ -63,55 +61,6 @@ def default_tmux_command() -> list[str]:
     if _IS_WINDOWS:
         return ["wsl", "--", "tmux"]
     return ["tmux"]
-
-
-async def _kill_and_reap(process: asyncio.subprocess.Process) -> None:
-    """SIGKILL *process* and wait (bounded) until it has been reaped."""
-    try:
-        with contextlib.suppress(ProcessLookupError):
-            process.kill()
-        with contextlib.suppress(asyncio.TimeoutError, Exception):
-            await asyncio.wait_for(process.wait(), timeout=REAP_GRACE)
-    finally:
-        # A grandchild may still hold the pipe write ends after the child is
-        # gone; closing the transport releases our read ends either way.
-        transport = getattr(process, "_transport", None)
-        if transport is not None:
-            with contextlib.suppress(Exception):
-                transport.close()
-
-
-async def run_bounded(
-    argv: list[str], timeout: float, *, capture_output: bool = True
-) -> tuple[int, bytes, bytes]:
-    """Run *argv* bounded by *timeout*; return ``(returncode, stdout, stderr)``.
-
-    Every local tmux (and ``ts-add``) subprocess goes through here. On timeout
-    or cancellation the child is killed and reaped before the exception
-    propagates, so a wedged command never outlives its bound. Raises
-    ``asyncio.TimeoutError`` on timeout.
-
-    With *capture_output* False, stdout/stderr go to DEVNULL and only the exit
-    is awaited: a tmux server forked by the command inherits those fds, and
-    with pipes ``communicate()`` would never see EOF.
-    """
-    stream = asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=stream,
-        stderr=stream,
-    )
-    try:
-        if capture_output:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        else:
-            await asyncio.wait_for(process.wait(), timeout=timeout)
-            stdout, stderr = b"", b""
-    except BaseException:
-        await _kill_and_reap(process)
-        raise
-    return process.returncode if process.returncode is not None else -1, stdout, stderr
 
 
 def _session_names(stdout: bytes) -> set[str]:
@@ -176,7 +125,9 @@ def _socket_dir() -> Path:
 async def _query_server(server_name: str) -> set[str]:
     """Query a single tmux server for session names, with timeout."""
     cmd = local_tmux_command(server_name.removeprefix(SOCKET_PREFIX)) + [
-        "list-sessions", "-F", "#{session_name}",
+        "list-sessions",
+        "-F",
+        "#{session_name}",
     ]
     try:
         returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
@@ -216,9 +167,7 @@ async def discover_local_sessions() -> set[str]:
     if sock_dir.is_dir():
         for entry in sock_dir.iterdir():
             if entry.name.startswith(SOCKET_PREFIX) and entry.is_socket():
-                tasks.append(
-                    asyncio.ensure_future(_query_server(entry.name))
-                )
+                tasks.append(asyncio.ensure_future(_query_server(entry.name)))
 
     # Also check default server for legacy sessions
     tasks.append(asyncio.ensure_future(_query_default_server()))
@@ -231,10 +180,49 @@ async def discover_local_sessions() -> set[str]:
     return sessions
 
 
+# Window list: the fields that cannot hold free text come first and the window name
+# is last, so a name may hold spaces, ``|`` or tabs and still comes back whole.
+WINDOW_LIST_FORMAT = "#{window_index} #{window_active} #{window_name}"
+
+# Pane list: tab-separated, the folder (free text) last. The window name is not in it;
+# tmux prints a tab in a name as a tab, so it is read from the window list instead.
+PANE_LIST_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_current_command}\t#{pane_current_path}"
+
+
+def parse_window_list(text: str) -> list[dict[str, str | bool]]:
+    """Parse ``list-windows -F WINDOW_LIST_FORMAT`` output into index/name/active dicts."""
+    windows: list[dict[str, str | bool]] = []
+    for line in text.split("\n"):
+        parts = line.split(" ", 2)
+        if len(parts) < 3:
+            continue
+        index, active, name = parts
+        windows.append({"index": index, "name": name, "active": active == "1"})
+    return windows
+
+
+def parse_pane_list(text: str) -> list[tuple[int, int, str, str]]:
+    """Parse ``list-panes -F PANE_LIST_FORMAT`` output into (window, pane, command, path)."""
+    panes: list[tuple[int, int, str, str]] = []
+    for line in text.split("\n"):
+        parts = line.split("\t", 3)
+        if len(parts) < 4:
+            continue
+        try:
+            panes.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
+        except ValueError:
+            continue
+    return panes
+
+
 async def list_local_window_names(session: str) -> set[str]:
     """Return the set of window names in a local ``ts`` session (empty if none)."""
     cmd = local_tmux_command(session) + [
-        "list-windows", "-t", session, "-F", "#{window_name}",
+        "list-windows",
+        "-t",
+        session,
+        "-F",
+        "#{window_name}",
     ]
     try:
         returncode, stdout, _ = await run_bounded(cmd, SOCKET_TIMEOUT)
@@ -255,9 +243,7 @@ async def record_ts_history(session: str, directory: str) -> None:
     if ts_add is None:
         return
     try:
-        await run_bounded(
-            [ts_add, session, directory], TMUX_COMMAND_TIMEOUT, capture_output=False
-        )
+        await run_bounded([ts_add, session, directory], TMUX_COMMAND_TIMEOUT, capture_output=False)
     except Exception:
         pass
 
@@ -299,7 +285,10 @@ async def _list_local_pane_pids(session_name: str) -> list[int]:
     runs one session per socket this only ever sees this session's panes.
     """
     cmd = local_tmux_command(session_name) + [
-        "list-panes", "-a", "-F", "#{pane_pid}",
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_pid}",
     ]
     pids: list[int] = []
     try:
@@ -323,8 +312,8 @@ async def force_kill_local_session(session_name: str) -> None:
     from the server dying. Best-effort: every step is suppressed so a partial
     failure never blocks session deletion.
 
-    LOCAL ONLY. Remote boxes share the default tmux server, so ``kill-server``
-    there would nuke unrelated sessions — callers must not use this for remote.
+    LOCAL ONLY: it runs tmux and signals processes on this machine. A remote force
+    kill is not built (``api.sessions.force_kill_supported``).
     """
     # 1. Capture pane PIDs before the socket goes away.
     pids = await _list_local_pane_pids(session_name)
@@ -347,14 +336,14 @@ _TMUX_SESSION_COLORS = [
     "colour203",  # red
     "colour208",  # orange
     "colour178",  # amber
-    "colour71",   # green
-    "colour37",   # teal
-    "colour33",   # blue
-    "colour62",   # indigo
+    "colour71",  # green
+    "colour37",  # teal
+    "colour33",  # blue
+    "colour62",  # indigo
     "colour135",  # purple
     "colour168",  # magenta
     "colour095",  # brown
-    "colour66",   # slate-teal
+    "colour66",  # slate-teal
     "colour130",  # rust
 ]
 

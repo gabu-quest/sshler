@@ -21,6 +21,7 @@ jobs:
   build-and-publish:
     name: Build & Publish
     needs: tests
+    if: github.repository == 'gabu-quest/sshler'
     runs-on: ubuntu-latest
     environment: pypi
 
@@ -42,7 +43,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Build frontend
         run: |

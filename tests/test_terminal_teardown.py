@@ -10,7 +10,6 @@ import asyncio
 import contextlib
 import errno
 import os
-import pty
 import select
 import signal
 import threading
@@ -24,7 +23,11 @@ import yaml
 from fastapi.testclient import TestClient
 
 from sshler import tmux
-from sshler.webapp import LocalPTYProcess, ServerSettings, _list_local_tmux_windows, make_app
+from sshler.ptyspawn import spawn_on_pty
+from sshler.terminal.local import list_local_tmux_windows as _list_local_tmux_windows
+from sshler.webapp import LocalPTYProcess, ServerSettings, make_app
+
+pytestmark = pytest.mark.posix_only("PTY children, sh stand-ins for tmux and signals by pid")
 
 TOKEN = "teardown-token"
 SESSION = "proj-1"
@@ -97,19 +100,7 @@ def test_window_listing_times_out_and_kills_its_child(
 
 def _spawn_on_pty(argv: list[str]) -> LocalPTYProcess:
     """Start *argv* as a session leader on a fresh PTY, like _open_local_pty_tmux does."""
-    master_fd, slave_fd = pty.openpty()
-    pid = os.posix_spawnp(
-        argv[0],
-        argv,
-        dict(os.environ),
-        file_actions=[
-            (os.POSIX_SPAWN_DUP2, slave_fd, 0),
-            (os.POSIX_SPAWN_DUP2, slave_fd, 1),
-            (os.POSIX_SPAWN_DUP2, slave_fd, 2),
-        ],
-        setsid=True,
-    )
-    os.close(slave_fd)
+    master_fd, pid = spawn_on_pty(argv, env=dict(os.environ), rows=24, cols=80)
     stdin = os.fdopen(master_fd, "wb", buffering=0, closefd=False)
     stdout = os.fdopen(master_fd, "rb", buffering=0, closefd=False)
     return LocalPTYProcess(master_fd, pid, stdin, stdout)
@@ -472,7 +463,7 @@ async def _tracked_session() -> str:
 @pytest.mark.parametrize(
     ("method", "path", "body", "expected_status"),
     [
-        ("PATCH", "/api/v1/boxes/local/sessions/{id}", {"session_name": "renamed"}, 500),
+        ("PATCH", "/api/v1/boxes/local/sessions/{id}", {"session_name": "renamed"}, 504),
         ("DELETE", "/api/v1/boxes/local/sessions/{id}?kill_tmux=true", None, 200),
         ("GET", f"/api/v1/boxes/local/sessions/{SESSION}/capture", None, 504),
     ],

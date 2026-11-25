@@ -158,7 +158,7 @@ def _iter_lines(path: Path):
                 newline = block.find(b"\n")
                 if newline == -1:
                     continue  # still inside the oversized line
-                block = block[newline + 1:]
+                block = block[newline + 1 :]
                 skipping = False
             buf += block
             while True:
@@ -166,7 +166,7 @@ def _iter_lines(path: Path):
                 if newline == -1:
                     break
                 yield buf[:newline]
-                buf = buf[newline + 1:]
+                buf = buf[newline + 1 :]
             if len(buf) > _MAX_LINE_BYTES:
                 buf = b""
                 skipping = True
@@ -227,12 +227,7 @@ def _parse_session_file(path: Path) -> ClaudeSessionInfo | None:
 
     try:
         for raw in _iter_lines(path):
-            need_meta = (
-                cwd is None
-                or version is None
-                or git_branch is None
-                or first_prompt is None
-            )
+            need_meta = cwd is None or version is None or git_branch is None or first_prompt is None
             is_title = any(marker in raw for marker in _TITLE_MARKERS)
             if not (need_meta or is_title):
                 continue
@@ -249,9 +244,7 @@ def _parse_session_file(path: Path) -> ClaudeSessionInfo | None:
     except OSError:
         return None
 
-    display = (
-        custom_title or ai_title or last_prompt or first_prompt or "(untitled session)"
-    )
+    display = custom_title or ai_title or last_prompt or first_prompt or "(untitled session)"
 
     return ClaudeSessionInfo(
         id=path.stem,

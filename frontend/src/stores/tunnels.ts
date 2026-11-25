@@ -1,3 +1,4 @@
+import { errorText } from "@/api/apiError";
 import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
@@ -20,7 +21,7 @@ export const useTunnelsStore = defineStore("tunnels", () => {
       items.value = await fetchTunnels(box, token);
       loadedBox.value = box;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
     } finally {
       loading.value = false;
     }
@@ -43,7 +44,7 @@ export const useTunnelsStore = defineStore("tunnels", () => {
       items.value.push(tunnel);
       return tunnel;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return null;
     }
   }
@@ -55,7 +56,7 @@ export const useTunnelsStore = defineStore("tunnels", () => {
       items.value = items.value.filter((t) => t.id !== tunnelId);
       return true;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      error.value = errorText(err);
       return false;
     }
   }

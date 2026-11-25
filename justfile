@@ -89,19 +89,21 @@ install-frontend:
 install: install-frontend
     uv sync
 
-# Lint: ruff over sshler/ and tests/, then the frontend type-check (the frontend
-# has no ESLint). Both always run; exits non-zero if either failed.
+# Lint: ruff check and ruff format --check over every Python file, then the
+# frontend type-check (the frontend has no ESLint). All three always run; exits
+# non-zero if any failed.
 lint:
     #!/usr/bin/env bash
     set -u
-    uv run ruff check sshler tests; ruff=$?
+    uv run ruff check .; ruff=$?
+    uv run ruff format --check .; format=$?
     just typecheck-frontend; frontend=$?
     echo
-    for s in ruff frontend; do
+    for s in ruff format frontend; do
         rc=${!s}
         if [ "$rc" -eq 0 ]; then echo "$s: pass"; else echo "$s: FAIL (exit $rc)"; fi
     done
-    [ "$ruff" -eq 0 ] && [ "$frontend" -eq 0 ]
+    [ "$ruff" -eq 0 ] && [ "$format" -eq 0 ] && [ "$frontend" -eq 0 ]
 
 # Full CI check: build + test + typecheck
 ci: build test typecheck
