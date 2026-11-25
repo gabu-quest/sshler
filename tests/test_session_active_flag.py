@@ -914,11 +914,282 @@ async def test_dismissing_a_lost_session_that_tmux_has_again_leaves_its_row_acti
     await _snapshotted_then_ended(app, workdir, servers, "flag-again")
     snapshot.set_recovery_sessions(await snapshot.reconcile_on_startup())
     [lost] = snapshot.get_recovery_sessions()
-    servers.expect("flag-again")
     _start("flag-again", "flag-again")
+    servers.record("flag-again")
 
     route = "recovery/dismiss" if all_of_them else f"recovery/{lost['id']}/dismiss"
 
     assert await _dismissed(app, route) == 200
     assert snapshot.get_recovery_sessions() == []
     assert await _listed(app) == [("flag-again", True)]
+
+
+# --- an end the running server sees, the start's lost list, and Restore layout ---------
+
+
+async def _row(name: str, box: str = "local") -> state.Session:
+    row = await state.get_session_by_name_async(box, name)
+    assert row is not None
+    return row
+
+
+def _end_seen(row: state.Session) -> Any:
+    return row.metadata.get(state.END_SEEN_AT)
+
+
+async def _end(name: str, pid: int, ending: str) -> None:
+    """Session *name* (its tmux server *pid*) ends: its shell exits, it is killed in
+    another terminal, or its tmux server is killed with SIGKILL."""
+    if ending == "exit":
+        assert _tmux(name, "send-keys", "-t", name, "exit", "Enter").returncode == 0
+    elif ending == "kill-session":
+        assert _tmux(name, "kill-session", "-t", name).returncode == 0
+    else:
+        os.kill(pid, signal.SIGKILL)
+    await _until(lambda: not _alive(pid), "the tmux server to end")
+
+
+async def _seen_ended(
+    app: Any, workdir: Path, servers: Servers, name: str, seen_by: str = "snapshot"
+) -> None:
+    """``_snapshotted_then_ended``, and the running server saw the end: by a tick of
+    the snapshot loop, or by a sync."""
+    await _snapshotted_then_ended(app, workdir, servers, name)
+    if seen_by == "snapshot":
+        assert await snapshot.snapshot_all_sessions() == 0
+    else:
+        assert (await _synced(app))[0] == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seen_by", ["snapshot", "sync"])
+async def test_an_end_the_running_server_sees_is_recorded_with_its_time(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None, seen_by: str
+) -> None:
+    before = time.time()
+
+    await _seen_ended(app, workdir, servers, "flag-seen", seen_by)
+
+    row = await _row("flag-seen")
+    assert (row.active, before <= (_end_seen(row) or 0) <= time.time()) == (False, True)
+
+
+@pytest.mark.asyncio
+async def test_an_end_a_terminal_socket_sees_is_recorded(
+    app: Any, servers: Servers, workdir: Path
+) -> None:
+    sock = await _open(app, workdir, "flag-sock", servers)
+    pid = servers.record("flag-sock")
+    sock.send_bytes(b"exit\n")
+    await sock.finished()
+    await _until(lambda: not _alive(pid), "the tmux server to end")
+
+    row = await _row("flag-sock")
+    assert (row.active, _end_seen(row) is not None) == (False, True)
+
+
+@pytest.mark.asyncio
+async def test_a_session_found_gone_at_the_start_is_not_recorded_as_seen(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _snapshotted_then_ended(app, workdir, servers, "flag-start-gone")
+
+    await snapshot.reconcile_on_startup()
+
+    row = await _row("flag-start-gone")
+    assert (row.active, _end_seen(row)) == (False, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("again_by", ["sync", "terminal"])
+async def test_a_session_tmux_has_again_loses_the_record(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None, again_by: str
+) -> None:
+    await _seen_ended(app, workdir, servers, "flag-again-seen")
+    assert _end_seen(await _row("flag-again-seen")) is not None
+
+    if again_by == "sync":
+        _start("flag-again-seen", "flag-again-seen")
+        assert (await _synced(app))[0] == 200
+    else:
+        await _close(await _open(app, workdir, "flag-again-seen", servers))
+    servers.record("flag-again-seen")
+
+    row = await _row("flag-again-seen")
+    assert (row.active, _end_seen(row)) == (True, None)
+
+
+@pytest.mark.asyncio
+async def test_a_session_seen_ended_that_tmux_has_at_the_start_loses_the_record(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _seen_ended(app, workdir, servers, "flag-back")
+    _start("flag-back", "flag-back")
+    servers.record("flag-back")
+
+    await snapshot.reconcile_on_startup()
+
+    row = await _row("flag-back")
+    assert (row.active, _end_seen(row), "recovered_at" in row.metadata) == (True, None, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["exit", "kill-session", "sigkill"])
+async def test_a_session_that_ends_while_the_server_runs_is_not_lost_at_the_next_start(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None, ending: str
+) -> None:
+    pid = await _snapshotted(app, workdir, servers, "flag-ran")
+    await _end("flag-ran", pid, ending)
+    assert await snapshot.snapshot_all_sessions() == 0
+
+    assert await snapshot.reconcile_on_startup() == []
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_end_a_sync_saw_is_not_lost_at_the_next_start(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _seen_ended(app, workdir, servers, "flag-synced", "sync")
+
+    assert await snapshot.reconcile_on_startup() == []
+
+
+async def _restorable(app: Any, box: str = "local") -> list[tuple[str, bool, bool]]:
+    """(name, active, restorable) of each row the sync answers."""
+    status, rows = await _synced(app, box)
+    assert status == 200
+    return sorted((r["session_name"], r["active"], r["restorable"]) for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_the_row_of_a_session_that_ended_with_its_layout_kept_is_restorable(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _seen_ended(app, workdir, servers, "flag-kept")
+
+    assert await _restorable(app) == [("flag-kept", False, True)]
+
+
+@pytest.mark.asyncio
+async def test_an_active_row_with_a_layout_is_not_restorable(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _snapshotted(app, workdir, servers, "flag-running")
+
+    assert await _restorable(app) == [("flag-running", True, False)]
+
+
+@pytest.mark.asyncio
+async def test_an_ended_row_with_no_layout_is_not_restorable(
+    app: Any, servers: Servers, workdir: Path
+) -> None:
+    sock = await _open(app, workdir, "flag-bare", servers)
+    pid = servers.record("flag-bare")
+    sock.send_bytes(b"exit\n")
+    await sock.finished()
+    await _until(lambda: not _alive(pid), "the tmux server to end")
+
+    assert await _restorable(app) == [("flag-bare", False, False)]
+
+
+async def _recreate(app: Any, session_id: str) -> tuple[int, Any]:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        answer = await client.post(
+            f"/api/v1/recovery/{session_id}/recreate", headers={"X-SSHLER-TOKEN": TOKEN}
+        )
+    return answer.status_code, answer.json()
+
+
+@pytest.mark.asyncio
+async def test_restore_layout_brings_back_the_windows_and_runs_no_pane_command_again(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    name = "flag-restore"
+    sock = await _open(app, workdir, name, servers)
+    pid = servers.record(name)
+    await _close(sock)
+    assert _tmux(name, "new-window", "-t", name, "-c", str(workdir)).returncode == 0
+    assert _tmux(name, "send-keys", "-t", f"{name}:1", "sleep 300", "Enter").returncode == 0
+    await _until(
+        lambda: "sleep" in _tmux(name, "list-panes", "-s", "-F", "#{pane_current_command}").stdout,
+        "the sleep to run",
+    )
+    assert await snapshot.snapshot_all_sessions() == 1
+    await _end(name, pid, "kill-session")
+    assert await snapshot.snapshot_all_sessions() == 0
+    row = await _row(name)
+
+    status, _body = await _recreate(app, row.id)
+    servers.record(name)
+
+    panes = _tmux(name, "list-panes", "-s", "-F", "#{window_index} #{pane_current_command}")
+    assert (status, panes.stdout.split("\n")[:-1]) == (200, ["0 sh", "1 sh"])
+    assert await _restorable(app) == [(name, True, False)]
+
+
+@pytest.mark.asyncio
+async def test_restore_layout_of_a_session_tmux_has_again_is_refused_and_leaves_it_running(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _seen_ended(app, workdir, servers, "flag-twice")
+    _start("flag-twice", "flag-twice")
+    pid = servers.record("flag-twice")
+    row = await _row("flag-twice")
+
+    status, body = await _recreate(app, row.id)
+
+    assert (status, body["reason"], body["detail"]) == (400, "invalid", "Session is running")
+    assert (servers._pid("flag-twice"), (await _row("flag-twice")).active) == (pid, True)
+
+
+@pytest.mark.asyncio
+async def test_restore_layout_while_tmux_does_not_answer_is_refused_and_leaves_it_running(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _seen_ended(app, workdir, servers, "flag-wedged")
+    _start("flag-wedged", "flag-wedged")
+    pid = servers.record("flag-wedged")
+    row = await _row("flag-wedged")
+    _unanswering(monkeypatch, "flag-wedged")
+
+    status, body = await _recreate(app, row.id)
+
+    assert (status, body["reason"]) == (504, "timeout")
+    assert servers._pid("flag-wedged") == pid
+
+
+@pytest.mark.asyncio
+async def test_restore_layout_of_an_active_row_is_refused(
+    app: Any, workdir: Path, servers: Servers, recovery_list: None
+) -> None:
+    await _snapshotted(app, workdir, servers, "flag-busy")
+
+    status, body = await _recreate(app, (await _row("flag-busy")).id)
+
+    assert (status, body["reason"], body["detail"]) == (400, "invalid", "Session is running")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["unknown", "no-layout", "remote"])
+async def test_restore_layout_of_a_row_with_no_layout_of_this_box_is_refused(
+    app: Any, recovery_list: None, kind: str
+) -> None:
+    session_id = "no-such-id"
+    if kind != "unknown":
+        box = REMOTE_BOX if kind == "remote" else "local"
+        row = await state.create_or_update_session_async(
+            box, "flag-forged", "/", metadata={"transport": "ssh" if box == REMOTE_BOX else "local"}
+        )
+        await state.update_session_activity_async(row.id, active=False)
+        if kind == "remote":
+            # A layout no snapshot wrote: the snapshot loop reads local sessions only.
+            await state.update_session_snapshot_async(row.id, [{"index": 0, "name": "w"}])
+        session_id = row.id
+
+    status, body = await _recreate(app, session_id)
+
+    assert (status, body["reason"], body["detail"]) == (
+        404,
+        "not_found",
+        "Session has no saved layout",
+    )

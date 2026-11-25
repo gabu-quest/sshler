@@ -3,11 +3,13 @@
 A tmux session's row is active exactly while tmux has that session. Every writer that
 learns what tmux has calls ``match_tmux`` with it: the socket's end
 (``webapp._run_terminal``), the sync route (``api/sessions.py``), the startup reconcile
-and the snapshot loop (``snapshot.py``), and a dismiss of a lost session
-(``api/recovery.py``). Where tmux could not be asked about a session, its row is left
-as it is: "could not ask" is never read as "has no such session". It sits beside the
-state store and below the API, so ``snapshot.py`` can call it too (``api`` imports
-``snapshot`` through its recovery routes).
+and the snapshot loop (``snapshot.py``), and a dismiss of a lost session or a "Restore
+layout" (``api/recovery.py``). Where tmux could not be asked about a session, its row is left
+as it is: "could not ask" is never read as "has no such session". Every one of them but
+the startup reconcile is the running server seeing what tmux has, so an end it finds
+there is recorded on the row, and the start leaves that session out of its lost list.
+It sits beside the state store and below the API, so ``snapshot.py`` can call it too
+(``api`` imports ``snapshot`` through its recovery routes).
 
 A terminal's row is made by ``track_session`` only: when a terminal opens
 (``webapp._track_terminal``) and, for a session tmux has on its own server that has no row
@@ -36,21 +38,30 @@ logger = logging.getLogger(__name__)
 def is_tmux_row(row: state.Session) -> bool:
     """Whether *row* is a tmux session's: a remote box's row always is, a local row
     unless this server runs on Windows (where the local box opens native shells)."""
-    return _is_tmux_transport(row.metadata.get("transport", "local"))
+    return is_tmux_transport(row.metadata.get("transport", "local"))
 
 
-def _is_tmux_transport(transport: str) -> bool:
+def is_tmux_transport(transport: str) -> bool:
+    """Whether a row recording *transport* is a tmux session's (``is_tmux_row``)."""
     return transport != "local" or not tmux_module._IS_WINDOWS
 
 
-async def match_tmux(row: state.Session, has_session: bool | None) -> bool:
+async def match_tmux(
+    row: state.Session, has_session: bool | None, *, at_start: bool = False
+) -> bool:
     """Make *row* active exactly when tmux has its session (*has_session*, as
     ``LiveSessions.has`` answers it). None (tmux could not be asked about it) leaves the
     row as it is, as does a row that already says so or is not a tmux session's. True
-    when the flag changed."""
+    when the flag changed.
+
+    An active row going inactive here is an end the running server saw, and the row
+    records it (``state.END_SEEN_AT``) unless *at_start*: a session the start finds gone
+    ended while sshler was not running, so it was lost. A row active again drops the
+    record."""
     if has_session is None or not is_tmux_row(row) or row.active == has_session:
         return False
-    await state.update_session_activity_async(row.id, active=has_session)
+    seen = not has_session and not at_start
+    await state.update_session_activity_async(row.id, active=has_session, end_seen=seen)
     row.active = has_session
     logger.info(
         "Session %s on %s is %s",
@@ -105,7 +116,7 @@ async def track_live_sessions(box: Box, rows: Iterable[state.Session], live: Liv
     """A row for each session *live* found on its own server that has none among
     *rows* (the box's rows), in the folder tmux gave. Nothing on a box whose rows are
     not tmux sessions' (the local box of a Windows server). The number of rows made."""
-    if not _is_tmux_transport(transport_of(box)):
+    if not is_tmux_transport(transport_of(box)):
         return 0
     known = {row.session_name for row in rows}
     made = 0

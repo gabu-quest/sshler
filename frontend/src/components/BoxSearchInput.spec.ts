@@ -35,7 +35,7 @@ const search = searchDirectories as ReturnType<typeof vi.fn>;
 function session(id: string, name: string, dir: string, active = true): ApiSession {
   return {
     id, box: "b", session_name: name, working_directory: dir,
-    created_at: 1, last_accessed_at: 1, active, window_count: 1, metadata: {},
+    created_at: 1, last_accessed_at: 1, active, window_count: 1, metadata: {}, restorable: false,
   };
 }
 

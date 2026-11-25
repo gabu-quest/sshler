@@ -81,6 +81,8 @@ export interface ApiSession {
   active: boolean;
   window_count: number;
   metadata: Record<string, unknown>;
+  // Ended, with its last layout kept: "Restore layout" recreates it (`recreateSession`).
+  restorable: boolean;
 }
 
 export interface TerminalHandshake {

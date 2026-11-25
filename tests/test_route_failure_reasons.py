@@ -280,6 +280,12 @@ def _no_lost_sessions(world: World) -> None:
     world.monkeypatch.setattr(recovery_api, "get_recovery_sessions", lambda: [])
 
 
+def _running_session_with_a_layout(world: World) -> None:
+    row = state.create_or_update_session("local", "work", "/", metadata={"transport": "local"})
+    state.update_session_snapshot(row.id, [{"index": 0, "name": "w"}])
+    world.ids["running"] = row.id
+
+
 def _unreachable_box(world: World) -> None:
     world.connect_error = SSHError("lb: connection refused")
 
@@ -637,8 +643,17 @@ ROWS: list[Row] = [
         "/api/v1/recovery/s1/recreate",
         404,
         "not_found",
-        "Session not in recovery list",
+        "Session has no saved layout",
         arrange=_no_lost_sessions,
+    ),
+    Row(
+        "recreate-session-running",
+        "POST",
+        lambda world: f"/api/v1/recovery/{world.ids['running']}/recreate",
+        400,
+        "invalid",
+        "Session is running",
+        arrange=_running_session_with_a_layout,
     ),
     Row(
         "recreate-box-unreachable",
@@ -1062,7 +1077,7 @@ def _batch_world(world: World) -> None:
 
 _UNREACHABLE_ITEM = {"path": "far", "error": "lb: connection refused", "reason": "unreachable"}
 _STUCK_ITEM = {"path": "stuck", "error": "Failed to recreate tmux session", "reason": "failed"}
-_ABSENT_ITEM = {"path": "absent", "error": "Session not in recovery list", "reason": "not_found"}
+_ABSENT_ITEM = {"path": "absent", "error": "Session has no saved layout", "reason": "not_found"}
 
 
 @pytest.mark.parametrize(

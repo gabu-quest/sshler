@@ -1304,6 +1304,8 @@ export async function fetchRecovery(
   });
 }
 
+// Recreates a session from its last layout: a lost one of the recovery dialog, or an
+// ended one whose row is `restorable` ("Restore layout"). One server route for both.
 export async function recreateSession(
   sessionId: string,
   token: string | null,

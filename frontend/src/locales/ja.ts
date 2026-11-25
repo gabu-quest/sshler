@@ -782,6 +782,7 @@ export const ja: Record<string, string> = {
   "sessions.kill_confirm": "tmuxセッション「{name}」を終了しますか？",
   "sessions.force_kill": "強制終了（SIGKILL）",
   "sessions.force_kill_confirm": "「{name}」を強制終了し、すべてのシェルプロセスをSIGKILLしますか？この操作は取り消せません。",
+  "sessions.restore_layout": "レイアウトを復元",
   "sessions.just_now": "たった今",
   "sessions.minutes_ago": "{n}分前",
   "sessions.hours_ago": "{n}時間前",

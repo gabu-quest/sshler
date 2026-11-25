@@ -782,6 +782,7 @@ export const en: Record<string, string> = {
   "sessions.kill_confirm": "Kill tmux session \"{name}\"?",
   "sessions.force_kill": "Force kill (SIGKILL)",
   "sessions.force_kill_confirm": "Force-kill \"{name}\" and SIGKILL all its shell processes? This cannot be undone.",
+  "sessions.restore_layout": "Restore layout",
   "sessions.just_now": "just now",
   "sessions.minutes_ago": "{n}m ago",
   "sessions.hours_ago": "{n}h ago",

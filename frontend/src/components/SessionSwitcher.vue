@@ -4,7 +4,7 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
 import { PhArrowsClockwise, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX, PhHouse, PhSkull } from '@phosphor-icons/vue'
 import type { ApiSession } from '@/api/types'
-import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession } from '@/api/http'
+import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession, recreateSession } from '@/api/http'
 import { useI18n } from '@/i18n'
 import { getColorForSession } from '@/utils/sessionName'
 
@@ -62,6 +62,7 @@ function goHome() {
       active: false,
       window_count: 0,
       metadata: {},
+      restorable: false,
     })
   }
 }
@@ -107,6 +108,18 @@ async function kill(session: ApiSession, force = false) {
   } catch (err) {
     message.error(errorText(err))
   }
+}
+
+// "Restore layout": the session is recreated from its last layout, then the list is
+// synced, so the row shows running.
+async function restore(session: ApiSession) {
+  try {
+    await recreateSession(session.id, props.token)
+  } catch (err) {
+    message.error(errorText(err))
+    return
+  }
+  await sync()
 }
 
 function startRename(session: ApiSession) {
@@ -225,6 +238,17 @@ watch(() => props.boxName, load)
             </NButton>
           </template>
           <template v-else>
+            <NButton
+              v-if="session.restorable"
+              size="tiny"
+              quaternary
+              type="primary"
+              class="restore-layout"
+              :title="t('sessions.restore_layout')"
+              @click.stop="restore(session)"
+            >
+              {{ t('sessions.restore_layout') }}
+            </NButton>
             <NButton size="tiny" quaternary @click.stop="startRename(session)" :title="t('sessions.rename')">
               <NIcon size="12"><PhPencilSimple weight="duotone" /></NIcon>
             </NButton>

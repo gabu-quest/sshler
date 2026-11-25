@@ -33,9 +33,9 @@ import { useBootstrapStore } from "@/stores/bootstrap";
 import { useBoxesStore } from "@/stores/boxes";
 import { useSessionsStore } from "@/stores/sessions";
 import { useFavoritesStore } from "@/stores/favorites";
-import { boxStats, statsStreamUrl } from "@/api/http";
+import { boxStats, recreateSession, statsStreamUrl } from "@/api/http";
 import { failureText, errorText } from "@/api/apiError";
-import type { BoxStats } from "@/api/types";
+import type { ApiSession, BoxStats } from "@/api/types";
 import BoxSearchInput from "@/components/BoxSearchInput.vue";
 import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
@@ -291,6 +291,22 @@ const getBoxSessions = (boxName: string) => {
   return sessionsStore.getBoxSessions(boxName);
 };
 
+// Why a "Restore layout" failed, by session id: shown on its row until the next press.
+const restoreFailure = ref<Map<string, string>>(new Map());
+
+/** "Restore layout": the session is recreated from its last layout, then the box's
+ * sessions are synced, so the row shows running. */
+async function restoreLayout(boxName: string, session: ApiSession): Promise<void> {
+  restoreFailure.value.delete(session.id);
+  try {
+    await recreateSession(session.id, tokenValue.value || null);
+  } catch (err) {
+    restoreFailure.value.set(session.id, errorText(err));
+    return;
+  }
+  await sessionsStore.syncBoxSessions(boxName, tokenValue.value || null);
+}
+
 /** The one way from a card to a terminal: every part of the query is encoded. */
 const openTerminal = (boxName: string, target: { session?: string; dir?: string } = {}) => {
   let query = `box=${encodeURIComponent(boxName)}`;
@@ -492,6 +508,17 @@ const handleBrowseServerFiles = (serverName: string) => {
                         <span class="session-name">{{ session.session_name || t('overview.unnamed') }}</span>
                       </span>
                       <span class="session-dir">{{ session.working_directory }}</span>
+                      <button
+                        v-if="session.restorable"
+                        type="button"
+                        class="restore-layout"
+                        @click.stop="restoreLayout(box.name, session)"
+                      >
+                        {{ t('sessions.restore_layout') }}
+                      </button>
+                      <span v-if="restoreFailure.get(session.id)" class="restore-failure">
+                        {{ restoreFailure.get(session.id) }}
+                      </span>
                     </div>
                   </div>
                 </NTooltip>
@@ -951,6 +978,24 @@ const handleBrowseServerFiles = (serverName: string) => {
 .session-name {
   font-weight: 500;
   font-size: 12px;
+}
+
+.restore-layout {
+  align-self: flex-start;
+  margin-left: 12px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.restore-failure {
+  margin-left: 12px;
+  font-size: 10px;
+  color: #ef4444;
 }
 
 .session-dir {

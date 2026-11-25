@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, StrictBool, field_validator
+from pydantic import BaseModel, Field, StrictBool, computed_field, field_validator
 
+from ..snapshot import saved_layout
 from .helpers import MAX_IMAGE_PREVIEW_BYTES
 
 
@@ -161,6 +162,13 @@ class APISession(BaseModel):
     active: bool
     window_count: int
     metadata: dict
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def restorable(self) -> bool:
+        """Whether the session has ended and its layout is kept, so the page offers
+        "Restore layout" (``snapshot.saved_layout``)."""
+        return bool(saved_layout(self.active, self.metadata))
 
 
 class APISessionCreate(BaseModel):

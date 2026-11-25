@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/api/apiError";
-import { boxStats, fetchBoxes, searchDirectories, syncBoxSessions } from "@/api/http";
+import { boxStats, fetchBoxes, recreateSession, searchDirectories, syncBoxSessions } from "@/api/http";
 import OverviewView from "./OverviewView.vue";
 
 const push = vi.hoisted(() => vi.fn());
@@ -29,6 +29,7 @@ vi.mock("@/api/http", () => ({
   fetchBoxSessions: vi.fn(async () => []),
   syncBoxSessions: vi.fn(async () => []),
   searchDirectories: vi.fn(),
+  recreateSession: vi.fn(),
 }));
 
 /** The stats stream: the test sends its events and its failure. */
@@ -195,5 +196,78 @@ describe("OverviewView: the search field of a box card", () => {
     const rows = await typeFoo(container);
     await fireEvent.mouseDown(rows[1]!);
     expect(push.mock.calls).toEqual([["/terminal?box=build-box&dir=%2Fh%2Fx%2Ffoo-two"]]);
+  });
+});
+
+describe("OverviewView: Restore layout on the box card's session list", () => {
+  const row = {
+    id: "1", box: "build-box", session_name: "foo", working_directory: "/h/a/foo",
+    created_at: 1, last_accessed_at: 1, active: true, window_count: 1, metadata: {}, restorable: false,
+  };
+  const ended = { ...row, id: "2", session_name: "web", active: false, restorable: true };
+  const bare = { ...row, id: "3", session_name: "old", active: false, restorable: false };
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+    FakeStream.last = null;
+    vi.stubGlobal("EventSource", FakeStream);
+    vi.mocked(fetchBoxes).mockResolvedValue([
+      { name: "build-box", host: "10.0.0.5", transport: "ssh", favorites: [], pinned: false, default_dir: "/" },
+    ] as never);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function openList(container: Element): Promise<void> {
+    await waitFor(() => expect(container.querySelector(".session-link")).not.toBeNull());
+    await fireEvent.mouseEnter(container.querySelector(".session-link")!);
+    await waitFor(() => expect(document.querySelector(".session-tooltip")).not.toBeNull());
+  }
+
+  function restoreRows(): string[] {
+    return Array.from(document.querySelectorAll(".session-tooltip .session-item"))
+      .filter((item) => item.querySelector(".restore-layout"))
+      .map((item) => item.querySelector(".session-name")!.textContent ?? "");
+  }
+
+  it("only an ended row whose layout is kept offers Restore layout", async () => {
+    vi.mocked(syncBoxSessions).mockResolvedValue([row, ended, bare] as never);
+    const { container } = render(OverviewView);
+    await openList(container);
+
+    expect(restoreRows()).toEqual(["web"]);
+    expect(document.querySelector(".session-tooltip .restore-layout")!.textContent!.trim()).toBe("Restore layout");
+  });
+
+  it("one press recreates the session by the recovery route, then the row is running", async () => {
+    vi.mocked(syncBoxSessions)
+      .mockResolvedValueOnce([ended] as never)
+      .mockResolvedValue([{ ...ended, active: true, restorable: false }] as never);
+    vi.mocked(recreateSession).mockResolvedValue({ status: "ok", message: "Recreated web" } as never);
+    const { container } = render(OverviewView);
+    await openList(container);
+    await fireEvent.click(document.querySelector(".session-tooltip .restore-layout")!);
+
+    await waitFor(() => expect(restoreRows()).toEqual([]));
+    expect(vi.mocked(recreateSession).mock.calls).toEqual([["2", "tok"]]);
+    expect(push).not.toHaveBeenCalled();
+    expect(document.querySelector(".session-tooltip .session-item")!.classList.contains("inactive")).toBe(false);
+  });
+
+  it("a failed restore shows its message on the row and keeps the entry", async () => {
+    vi.mocked(syncBoxSessions).mockResolvedValue([ended] as never);
+    vi.mocked(recreateSession).mockRejectedValue(new ApiError(404, "not_found", "Session has no saved layout"));
+    const { container } = render(OverviewView);
+    await openList(container);
+    await fireEvent.click(document.querySelector(".session-tooltip .restore-layout")!);
+
+    await waitFor(() =>
+      expect(document.querySelector(".session-tooltip .restore-failure")?.textContent?.trim()).toBe(
+        "Not found — Session has no saved layout",
+      ),
+    );
+    expect(restoreRows()).toEqual(["web"]);
   });
 });
