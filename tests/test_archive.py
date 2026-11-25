@@ -10,6 +10,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from sshler.api.helpers import local_path_form
 from sshler.webapp import ServerSettings, make_app
 
 TEST_TOKEN = "archive-test-token"
@@ -473,7 +474,7 @@ def test_a_local_archive_name_is_one_file_name_whatever_it_holds(
     assert resp.json() == {
         "status": "ok",
         "message": f"Created {archive_name}",
-        "path": str(dest / archive_name),
+        "path": local_path_form(dest / archive_name),
     }
     assert [p.name for p in dest.iterdir()] == [archive_name]
     with zipfile.ZipFile(str(dest / archive_name)) as zf:
