@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator, Sequence
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import anyio
 from fastapi.responses import FileResponse, Response
@@ -780,7 +780,8 @@ class LocalFiles:
     """
 
     def __init__(self) -> None:
-        self._spelled = SpelledPaths(os.sep)
+        # A resolved local path is in POSIX form on Windows (`_normalize_local_path`).
+        self._spelled = SpelledPaths("/" if LOCAL_IS_WINDOWS else os.sep)
 
     def _resolve(self, path: str) -> str:
         return self._spelled.note(_local_path(path), path)
@@ -817,6 +818,9 @@ class LocalFiles:
         return str(Path(folder) / name)
 
     def as_sent(self, path: str) -> str | None:
+        if LOCAL_IS_WINDOWS:
+            # The system names a path as a `Path` spells it (`C:\x`); it was noted as `C:/x`.
+            path = PureWindowsPath(path).as_posix()
         return self._spelled.as_sent(path)
 
     async def prepare(self) -> None:

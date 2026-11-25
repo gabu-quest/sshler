@@ -145,6 +145,29 @@ def test_the_system_words_name_the_path_as_sent_and_never_another():
     assert failure_of(exc, as_sent={}.get).detail == "Permission denied"
 
 
+def test_on_windows_a_local_failure_names_the_path_as_sent(tmp_path, monkeypatch):
+    """On Windows the local box keeps a resolved path in its POSIX form (`C:/x`), while
+    the system's error names the path in the Windows form (`C:\\x`) a `Path` gives it.
+    Both are one path, and the answer names it as the client sent it."""
+    from pathlib import PureWindowsPath
+
+    from sshler.api import helpers, local_files
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", True)
+    monkeypatch.setattr(local_files, "LOCAL_IS_WINDOWS", True)
+    files = local_files.LocalFiles()
+    folder = tmp_path / "work"
+    sent = f"{folder}/nope.txt"
+    resolved = files._resolve(sent)
+    exc = FileNotFoundError(
+        errno.ENOENT, "The system cannot find the file specified", str(PureWindowsPath(resolved))
+    )
+    assert "\\" in exc.filename
+    assert failure_of(exc, as_sent=files.as_sent).detail == (
+        f"The system cannot find the file specified: {sent}"
+    )
+
+
 def test_a_batch_item_carries_what_a_single_request_answers():
     exc = asyncssh.SFTPNoSuchFile("No such file")
     single = failure_of(exc, missing="File not found")
