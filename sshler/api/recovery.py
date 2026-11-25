@@ -54,7 +54,7 @@ async def _layout_of(session_id: str, lost: Mapping[str, dict[str, Any]]) -> tup
         return str(target["session_name"]), target.get("windows", [])
     row = await state.get_session_by_id_async(session_id)
     # The layout the row keeps, whether or not its session runs now.
-    windows = saved_layout(False, row.metadata) if row is not None else []
+    windows = saved_layout(False, row.box, row.metadata) if row is not None else []
     if row is None or not windows:
         raise Failure(REASON_NOT_FOUND, _NO_LAYOUT)
     if not row.active:

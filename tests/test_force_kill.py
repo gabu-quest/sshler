@@ -595,9 +595,10 @@ async def test_a_local_force_kill_on_windows_ends_the_wsl_server_and_signals_no_
     monkeypatch.setattr(tmux_module, "_IS_WINDOWS", True)
     monkeypatch.setattr(tmux_module, "run_local_tmux", fake_run_local_tmux)
     monkeypatch.setattr(tmux_module, "_list_local_pane_pids", wsl_pane_pids)
-    monkeypatch.delattr(os, "killpg")
-    monkeypatch.delattr(os, "getpgid")
-    monkeypatch.delattr(signal, "SIGKILL")
+    # Absent already on a Windows runner.
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.delattr(os, "getpgid", raising=False)
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
     monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append((pid, sig)))
 
     await tmux_module.force_kill_local_session("proj")

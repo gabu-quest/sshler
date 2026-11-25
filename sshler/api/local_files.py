@@ -19,7 +19,7 @@ import zipfile
 import zlib
 from collections.abc import AsyncIterator, Callable, Sequence
 from functools import partial
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import BinaryIO
 
 import anyio
@@ -56,6 +56,7 @@ from .file_contract import (
 from .helpers import (
     LOCAL_IS_WINDOWS,
     _normalize_local_path,
+    local_path_form,
 )
 from .models import APIDirectoryEntry
 from .placement import (
@@ -247,7 +248,7 @@ class _ThreadedLanding:
 
     def __init__(self, landing: _LocalLanding) -> None:
         self.landing = landing
-        self.path = landing.path
+        self.path = local_path_form(landing.path)
 
     async def write(self, data: bytes) -> None:
         await asyncio.to_thread(self.landing.write, data)
@@ -658,10 +659,7 @@ def _compose_local_child_path(directory: str, filename: str) -> str:
     if "\x00" in cleaned:
         raise ValueError("Filename contains unsupported characters")
     parent = Path(directory or Path.home())
-    target = parent / cleaned
-    if LOCAL_IS_WINDOWS:
-        return target.expanduser().as_posix()
-    return str(target.expanduser())
+    return local_path_form((parent / cleaned).expanduser())
 
 
 async def _local_read_text(path: str, max_bytes: int) -> str:
@@ -674,10 +672,13 @@ async def _local_read_text(path: str, max_bytes: int) -> str:
 
 
 async def _local_write_text(path: str, content: str) -> None:
+    """Write *content* as UTF-8, its line ends as they were sent: a text-mode file would
+    write each ``\\n`` as ``\\r\\n`` on Windows."""
+
     def _worker() -> None:
         _local_make_folder(Path(path).parent)
-        with open(Path(path), "w", encoding="utf-8") as handle:
-            handle.write(content)
+        with open(Path(path), "wb") as handle:
+            handle.write(content.encode("utf-8"))
 
     await asyncio.to_thread(_worker)
 
@@ -958,13 +959,15 @@ def _local_batch_item(
     keep_both: bool = False,
 ) -> tuple[str, str]:
     """Move or copy one local item (resolved) into ``dest_dir`` (call from a worker
-    thread); returns the target asked for and where the item landed."""
+    thread); returns the target asked for and where the item landed, both in
+    ``local_path_form`` (``landed`` holds that form too)."""
     if not os.path.lexists(source):
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
     _local_refuse_a_folder_into_itself(source, dest_dir, move=move)
-    target = str(_local_make_folder(dest_dir) / Path(source).name)
+    target = local_path_form(_local_make_folder(dest_dir) / Path(source).name)
     refuse_a_name_this_request_placed(target, landed, keep_both=keep_both)
-    return target, _local_place(source, target, move=move, overwrite=overwrite, keep_both=keep_both)
+    at = _local_place(source, target, move=move, overwrite=overwrite, keep_both=keep_both)
+    return target, local_path_form(at)
 
 
 class FileAnswer(FileResponse):
@@ -1052,7 +1055,9 @@ class LocalFiles:
     """The files of the local box, on ``pathlib`` and the helpers above.
 
     A path the client sent is refused when empty or holding a null byte, then
-    normalised. A failure an operation does not answer itself goes on as raised, for
+    normalised. Every path it answers is in ``local_path_form``, the form a resolved
+    path has (POSIX form on Windows, where the system spells a path it makes with
+    backslashes). A failure an operation does not answer itself goes on as raised, for
     ``box_files`` to answer. A download streams from disk and is never read into memory.
     """
 
@@ -1080,7 +1085,7 @@ class LocalFiles:
             raise NameRefusedError(str(exc)) from exc
 
     def parent(self, path: str) -> str:
-        return str(Path(path).parent)
+        return local_path_form(Path(path).parent)
 
     def check_path(self, path: str) -> str:
         return self._resolve(path)
@@ -1092,13 +1097,12 @@ class LocalFiles:
         return Path(path).name
 
     def join(self, folder: str, name: str) -> str:
-        return str(Path(folder) / name)
+        return local_path_form(Path(folder) / name)
 
     def as_sent(self, path: str) -> str | None:
-        if LOCAL_IS_WINDOWS:
-            # The system names a path as a `Path` spells it (`C:\x`); it was noted as `C:/x`.
-            path = PureWindowsPath(path).as_posix()
-        return self._spelled.as_sent(path)
+        # The system names a path as a `Path` spells it (`C:\x` on Windows); it was
+        # noted in the resolved form (`C:/x`).
+        return self._spelled.as_sent(local_path_form(path))
 
     async def prepare(self) -> None:
         return None
@@ -1120,7 +1124,7 @@ class LocalFiles:
         return [
             APIDirectoryEntry(
                 name=child.name,
-                path=str(child),
+                path=local_path_form(child),
                 is_directory=is_dir,
                 size=size,
                 modified=modified,
@@ -1208,9 +1212,10 @@ class LocalFiles:
         self, path: str, data: bytes, *, overwrite: bool, keep_both: bool = False
     ) -> str:
         """A name that exists is a 409."""
-        return await _local_write_new(
+        landed = await _local_write_new(
             path, data, overwrite=overwrite, exists_status=409, keep_both=keep_both
         )
+        return local_path_form(landed)
 
     async def make_folder(self, path: str) -> None:
         path_obj = Path(path)
@@ -1253,9 +1258,10 @@ class LocalFiles:
         def _rename() -> str:
             source = Path(self._resolve(path))
             target = str(source.parent / new_name)
-            return _local_place(
+            landed = _local_place(
                 str(source), target, move=True, overwrite=overwrite, keep_both=keep_both
             )
+            return local_path_form(landed)
 
         return await asyncio.to_thread(_rename)
 
@@ -1274,7 +1280,7 @@ class LocalFiles:
             PathValidator.validate_filename(new_name)
         resolved = await asyncio.to_thread(self._resolve, source)
         dest_dir = Path(await asyncio.to_thread(self._resolve, destination))
-        return await asyncio.to_thread(
+        landed = await asyncio.to_thread(
             _local_place_into,
             resolved,
             dest_dir,
@@ -1284,6 +1290,7 @@ class LocalFiles:
             allow_dirs=allow_dirs,
             keep_both=keep_both,
         )
+        return local_path_form(landed)
 
     async def create_archive(
         self,
@@ -1297,7 +1304,7 @@ class LocalFiles:
     ) -> str:
         archive_path = Path(self._resolve(destination)) / name
         sources = [self._resolve(p) for p in paths]
-        return await asyncio.to_thread(
+        made = await asyncio.to_thread(
             partial(
                 _local_create_archive,
                 sources,
@@ -1307,6 +1314,7 @@ class LocalFiles:
                 keep_both=keep_both,
             )
         )
+        return local_path_form(made)
 
     async def extract_archive(
         self, archive: str, destination: str, *, overwrite: bool = False, keep_both: bool = False
@@ -1317,7 +1325,7 @@ class LocalFiles:
         await asyncio.to_thread(archive_path.stat)
         if not is_archive_name(archive_path.name):
             raise Failure(REASON_INVALID, "Unsupported archive format")
-        return await asyncio.to_thread(
+        unpacked = await asyncio.to_thread(
             partial(
                 _local_extract_archive,
                 archive_path,
@@ -1326,6 +1334,7 @@ class LocalFiles:
                 keep_both=keep_both,
             )
         )
+        return local_path_form(unpacked)
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
         outcome = BatchOutcome()

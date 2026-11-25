@@ -391,13 +391,25 @@ class TestLocalArchiveGuards:
         assert (root / "dest" / name.lstrip("/")).read_bytes() == b"x"
 
     def test_a_tar_link_pointing_outside_is_refused(self, place):
+        """By the filter where this Python's guard is fixed, before any entry where it is
+        not (``tar_link_guard_is_fixed``): one outcome per Python."""
+        from sshler.api import local_files
+
         root, client = place
         _tar_with(root / "ln.tar.gz", _member("ln", link_to="../outside"))
         resp = _extract(client, root / "ln.tar.gz", root / "dest")
-        assert (resp.status_code, resp.json()) == (
-            500,
-            {"detail": "Archive contains unsafe entry: ln", "reason": "failed"},
-        )
+        if local_files.tar_link_guard_is_fixed(tuple(sys.version_info[:3])):
+            refused = (500, {"detail": "Archive contains unsafe entry: ln", "reason": "failed"})
+        else:
+            refused = (
+                400,
+                {
+                    "detail": f"This Python ({platform.python_version()}) is too old to unpack "
+                    "links from a tar safely; 3.12.11 or 3.13.4 is needed",
+                    "reason": "invalid",
+                },
+            )
+        assert (resp.status_code, resp.json()) == refused
         assert list((root / "dest").iterdir()) == []
 
     def test_a_zip_entry_with_an_absolute_name_lands_inside_the_destination(self, place):

@@ -46,10 +46,7 @@ def test_posix_only_skips_on_windows_with_the_mechanism_in_the_reason() -> None:
     assert skip is not None
     assert (skip.mark.name, skip.mark.kwargs) == (
         "skip",
-        {
-            "reason": "POSIX only: a PTY running the sh fake tmux. On Windows sshler runs "
-            "tmux through WSL, which this test does not model."
-        },
+        {"reason": "POSIX only: a PTY running the sh fake tmux."},
     )
 
 

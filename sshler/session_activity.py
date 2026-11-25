@@ -14,8 +14,10 @@ It sits beside the state store and below the API, so ``snapshot.py`` can call it
 A terminal's row is made by ``track_session`` only: when a terminal opens
 (``webapp._track_terminal``) and, for a session tmux has on its own server that has no row
 yet (one started with ``ts`` outside sshler), by the sync route (``track_live_sessions``).
-The one other maker is the Claude dashboard's open route (``api/claude_sessions.py``), for
-the local box only; its row records no ``transport``, which ``is_tmux_row`` reads as local.
+The create route (``api/sessions.py``) records the box's ``transport`` as ``track_session``
+does. The one other maker is the Claude dashboard's open route (``api/claude_sessions.py``),
+for the local box only; its row records no ``transport``, and ``row_transport`` reads it from
+its box, as it reads every row saved before rows recorded one.
 
 A row that is not a tmux session's is left alone: on a Windows server a local row is a
 persisted native shell, whose registry marks it when the shell ends. A plain shell has
@@ -25,7 +27,8 @@ no row.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from . import state
 from . import tmux as tmux_module
@@ -35,10 +38,25 @@ from .tmux import LiveSessions
 logger = logging.getLogger(__name__)
 
 
+# The box whose rows are local sessions (``config._build_local_box``); every other box is
+# reached over SSH, ``Box.transport``'s default.
+_LOCAL_BOX = "local"
+
+
+def row_transport(box: str, metadata: Mapping[str, Any]) -> str:
+    """The transport of a row of *box* whose metadata is *metadata*: the one it records,
+    else its box's (``transport_of``): ``local`` for the local box, ``ssh`` for any other,
+    one no longer configured included."""
+    recorded = metadata.get("transport")
+    if isinstance(recorded, str):
+        return recorded
+    return "local" if box == _LOCAL_BOX else "ssh"
+
+
 def is_tmux_row(row: state.Session) -> bool:
     """Whether *row* is a tmux session's: a remote box's row always is, a local row
     unless this server runs on Windows (where the local box opens native shells)."""
-    return is_tmux_transport(row.metadata.get("transport", "local"))
+    return is_tmux_transport(row_transport(row.box, row.metadata))
 
 
 def is_tmux_transport(transport: str) -> bool:
@@ -88,8 +106,13 @@ def refused_session_name(name: str) -> bool:
 
 
 def transport_of(box: Box) -> str:
-    """The ``transport`` a row of *box* records (``is_tmux_row`` reads it)."""
+    """The ``transport`` a row of *box* records (``row_transport`` reads it)."""
     return getattr(box, "transport", "ssh")
+
+
+def tracked_metadata(box: Box, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """*metadata* of a new row of *box*, recording the box's ``transport``."""
+    return {**(metadata or {}), "transport": transport_of(box)}
 
 
 async def track_session(
@@ -107,7 +130,7 @@ async def track_session(
         box_name=box.name,
         session_name=session_name,
         working_directory=folder,
-        metadata={**(metadata or {}), "transport": transport_of(box)},
+        metadata=tracked_metadata(box, metadata),
         keep_existing=keep_existing,
     )
 

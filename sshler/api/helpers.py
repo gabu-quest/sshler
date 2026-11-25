@@ -6,7 +6,7 @@ import os
 import platform
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,15 @@ def default_windows_shell() -> str | None:
     return None
 
 
+def local_path_form(path: str | os.PathLike[str]) -> str:
+    """*path* in the one form the local box answers a path in: POSIX form on a Windows
+    server (``C:/x``, whichever separators *path* holds), as the system spells it
+    elsewhere (where a backslash is a character of a name)."""
+    if LOCAL_IS_WINDOWS:
+        return PureWindowsPath(path).as_posix()
+    return os.fspath(path)
+
+
 def _normalize_local_path(directory: str | None, allowed_base: str | Path | None = None) -> str:
     """Normalize and validate local path, resolving symlinks to prevent directory escape.
 
@@ -112,7 +121,7 @@ def _normalize_local_path(directory: str | None, allowed_base: str | Path | None
                      If None, no restriction is applied (full filesystem access).
 
     Returns:
-        Normalized absolute path string
+        Normalized absolute path string, in ``local_path_form``
 
     Raises:
         ValueError: If resolved path escapes the allowed base directory (when allowed_base is set)
@@ -160,9 +169,7 @@ def _normalize_local_path(directory: str | None, allowed_base: str | Path | None
                     f"{allowed_base_resolved}"
                 ) from exc
 
-    if LOCAL_IS_WINDOWS:
-        return resolved.as_posix()
-    return str(resolved)
+    return local_path_form(resolved)
 
 
 async def _local_is_directory(path: str) -> bool:

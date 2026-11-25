@@ -83,6 +83,10 @@ def test_stop_ends_the_server_its_pid_file_names(stand_in, pid_file, capsys):
     assert pid_file.exists() is False
 
 
+@pytest.mark.posix_only(
+    "a stand-in that ignores SIGTERM; on Windows the first request is TerminateProcess, "
+    "which no process can ignore"
+)
 def test_stop_ends_a_server_that_ignores_the_first_request(stand_in, pid_file, capsys):
     child = stand_in("ignore")
     assert server.stop() == 0
@@ -170,7 +174,7 @@ def windows(pid_file: Path, monkeypatch: pytest.MonkeyPatch) -> _WindowsProcesse
 
     table = _WindowsProcesses({4242})
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.delattr(signal, "SIGKILL")
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)  # absent already on Windows
     monkeypatch.setattr(os, "kill", windows_kill)
     monkeypatch.setattr(psutil, "pid_exists", table.pid_exists)
     monkeypatch.setattr(psutil, "Process", table.process)

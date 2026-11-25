@@ -26,7 +26,12 @@ from fastapi import APIRouter, Depends, Query, Request
 from .. import state
 from .. import tmux as tmux_module
 from ..config import AppConfig, Box
-from ..session_activity import match_tmux_all, refused_session_name, track_live_sessions
+from ..session_activity import (
+    match_tmux_all,
+    refused_session_name,
+    track_live_sessions,
+    tracked_metadata,
+)
 from ..tmux import (
     LiveSessions,
     ask_local_session,
@@ -303,12 +308,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APISessionCreate,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISession:
-        deps.get_box_or_404(application_config, name)
+        box = deps.get_box_or_404(application_config, name)
         record = await state.create_session_async(
             box_name=name,
             session_name=payload.session_name,
             working_directory=payload.working_directory,
-            metadata=payload.metadata or {},
+            metadata=tracked_metadata(box, payload.metadata),
         )
         return APISession(
             id=record.id,

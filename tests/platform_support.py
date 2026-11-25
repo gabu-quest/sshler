@@ -20,10 +20,7 @@ import pytest
 WINERROR_INVALID_NAME = 123  # ERROR_INVALID_NAME: the name has a character NTFS cannot hold
 WINERROR_PRIVILEGE_NOT_HELD = 1314  # ERROR_PRIVILEGE_NOT_HELD: no symlink privilege
 
-POSIX_ONLY_REASON = (
-    "POSIX only: {mechanism}. On Windows sshler runs tmux through WSL, "
-    "which this test does not model."
-)
+POSIX_ONLY_REASON = "POSIX only: {mechanism}."
 
 
 def posix_only_skip(marker: pytest.Mark | None, platform: str) -> pytest.MarkDecorator | None:

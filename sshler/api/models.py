@@ -168,7 +168,7 @@ class APISession(BaseModel):
     def restorable(self) -> bool:
         """Whether the session has ended and its layout is kept, so the page offers
         "Restore layout" (``snapshot.saved_layout``)."""
-        return bool(saved_layout(self.active, self.metadata))
+        return bool(saved_layout(self.active, self.box, self.metadata))
 
 
 class APISessionCreate(BaseModel):

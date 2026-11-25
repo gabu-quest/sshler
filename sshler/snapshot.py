@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from . import state
-from .session_activity import is_tmux_transport, match_tmux
+from .session_activity import is_tmux_transport, match_tmux, row_transport
 from .tmux import (
     PANE_LIST_FORMAT,
     WINDOW_LIST_FORMAT,
@@ -56,13 +56,13 @@ def set_recovery_sessions(sessions: list[dict]) -> None:
     _recovery_sessions = sessions
 
 
-def saved_layout(active: bool, metadata: Mapping[str, Any]) -> list[dict]:
+def saved_layout(active: bool, box: str, metadata: Mapping[str, Any]) -> list[dict]:
     """The layout a row's session can be recreated from ("Restore layout"): the windows
     of the last snapshot of a local tmux session's row that has ended, whatever ended
     it. Empty for any other row: an active one, a remote one (the loop snapshots local
     sessions only), one with no snapshot. A layout is kept until its row is purged,
     ``state.SNAPSHOT_KEEP_DAYS`` after its last snapshot."""
-    transport = metadata.get("transport", "local")
+    transport = row_transport(box, metadata)
     if active or transport != "local" or not is_tmux_transport(transport):
         return []
     windows = metadata.get("windows")
@@ -135,7 +135,7 @@ async def snapshot_all_sessions() -> int:
     count = 0
     unread: list[state.Session] = []
     for session in sessions:
-        if session.metadata.get("transport", "local") != "local":
+        if row_transport(session.box, session.metadata) != "local":
             continue
 
         windows = await capture_local_windows(session.session_name)
@@ -188,7 +188,7 @@ async def reconcile_on_startup() -> list[dict]:
     lost: list[dict] = []
     for session in await state.list_all_sessions_async():
         meta = session.metadata
-        if meta.get("transport", "local") != "local":
+        if row_transport(session.box, meta) != "local":
             continue
         # The rows the start has always reported on: those sshler last knew running,
         # and those with a snapshot. Read before the match changes ``active``.

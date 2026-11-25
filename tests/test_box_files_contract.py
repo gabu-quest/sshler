@@ -1622,9 +1622,7 @@ async def test_a_remote_archive_past_its_limit_is_504(monkeypatch):
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
-async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp_path, fmt, name):
+async def _pack_and_unpack(tmp_path: Path, fmt: str, name: str) -> None:
     root = tmp_path / "tree"
     _build_tree(root, tmp_path / "outside")
     out = tmp_path / "out"
@@ -1638,6 +1636,121 @@ async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp
     found = sorted(p.relative_to(out / "x").as_posix() for p in (out / "x").rglob("*"))
     assert found == ["a.txt", "sub", "sub/inner.txt"]
     assert (out / "x" / "sub" / "inner.txt").read_bytes() == b"in\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
+async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp_path, fmt, name):
+    await _pack_and_unpack(tmp_path, fmt, name)
+
+
+# --- the local box of a Windows server, on any system ---------------------------------
+
+
+@pytest.fixture
+def windows_spelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local box of a Windows server: its path form is Windows' (``helpers.
+    LOCAL_IS_WINDOWS``), and where Windows spells a path the placing made with
+    backslashes (``str`` of a ``Path``, ``os.path.join``: ``C:\\x``), the placing answers
+    that spelling: where a file landed, a landing's path, an unpacked folder. The placing
+    itself stays this system's, so the table's other answers hold."""
+    from pathlib import PureWindowsPath
+
+    from sshler.api import helpers
+    from sshler.api import local_files as local_files_api
+
+    def spelled(path: str) -> str:
+        return str(PureWindowsPath(path))
+
+    place = local_files_api._local_place
+    landing = local_files_api._local_landing
+    extract = local_files_api._local_extract_archive
+
+    def windows_place(*args, **kwargs):
+        return spelled(place(*args, **kwargs))
+
+    def windows_landing(*args, **kwargs):
+        found = landing(*args, **kwargs)
+        found.path = spelled(found.path)
+        return found
+
+    def windows_extract(*args, **kwargs):
+        return spelled(extract(*args, **kwargs))
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", True)
+    monkeypatch.setattr(local_files_api, "_local_place", windows_place)
+    monkeypatch.setattr(local_files_api, "_local_landing", windows_landing)
+    monkeypatch.setattr(local_files_api, "_local_extract_archive", windows_extract)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", [row.param() for row in ROWS])
+async def test_on_windows_every_path_the_local_box_answers_is_in_its_resolved_form(
+    tmp_path: Path, windows_spelled: None, row: Row
+) -> None:
+    """The local half of the table, where Windows spells the paths it makes: every path
+    answered is in the form the box resolves a path to (``C:/x``), as the table
+    expects, never ``C:\\x`` or a mix."""
+    opened = _open_local(tmp_path)
+    kind = await anext(opened)
+    assert await _outcome(kind, row.operation) == row.expected(kind)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
+async def test_on_windows_a_local_archive_answers_its_paths_in_their_resolved_form(
+    tmp_path, windows_spelled, fmt, name
+):
+    await _pack_and_unpack(tmp_path, fmt, name)
+
+
+@pytest.mark.parametrize(
+    ("windows", "path", "answered"),
+    [
+        (True, "C:\\Users\\me\\tree\\a (2).txt", "C:/Users/me/tree/a (2).txt"),
+        (True, "C:/Users/me/tree\\taken (2).txt", "C:/Users/me/tree/taken (2).txt"),
+        (True, "C:/Users/me/tree", "C:/Users/me/tree"),
+        # On POSIX a backslash is a character of a name, not a separator.
+        (False, "/srv/tree/a\\b.txt", "/srv/tree/a\\b.txt"),
+    ],
+)
+def test_a_local_path_is_answered_in_one_form_whichever_separators_it_holds(
+    monkeypatch, windows, path, answered
+):
+    from sshler.api import helpers
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", windows)
+    assert helpers.local_path_form(path) == answered
+
+
+@pytest.fixture
+def text_mode_ends_lines_in_crlf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``open`` of the local files as Windows has it: a text-mode file opened without
+    ``newline`` writes each ``\\n`` as ``\\r\\n`` (``newline="\\r\\n"`` is that
+    translation on any system)."""
+    import builtins
+
+    from sshler.api import local_files as local_files_api
+
+    real_open = builtins.open
+
+    def windows_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if "b" not in mode and newline is None:
+            newline = "\r\n"
+        return real_open(file, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(local_files_api, "open", windows_open, raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["# hi\n", "# hi\r\n", "one\ntwo\r\nthree\rfour", "日本語\r\n"])
+async def test_a_local_text_write_puts_on_disk_the_bytes_that_were_sent(
+    tmp_path, text_mode_ends_lines_in_crlf, text
+):
+    target = tmp_path / "notes.md"
+    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
+        await files.write_text(await files.path(str(target)), text)
+    assert target.read_bytes() == text.encode("utf-8")
 
 
 @pytest.mark.asyncio
