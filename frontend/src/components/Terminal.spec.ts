@@ -97,12 +97,19 @@ function socket(i: number): FakeWebSocket {
   return ws;
 }
 
-const fetchMock = vi.fn(async (url: string) => {
+// The ping interval the handshake reports; undefined is a server that does not say.
+let handshakePingInterval: number | undefined;
+
+const defaultFetch = async (url: string) => {
   if (url === "/api/v1/terminal/handshake") {
-    return new Response(JSON.stringify({ ws_url: "ws://127.0.0.1:8822/ws/term" }), { status: 200 });
+    return new Response(
+      JSON.stringify({ ws_url: "ws://127.0.0.1:8822/ws/term", ping_interval: handshakePingInterval }),
+      { status: 200 },
+    );
   }
   return new Response("{}", { status: 200 });
-});
+};
+const fetchMock = vi.fn(defaultFetch);
 
 beforeEach(async () => {
   vi.useFakeTimers();
@@ -113,6 +120,8 @@ beforeEach(async () => {
   snapshotMock.mockClear();
   stubs.written.length = 0;
   fetchMock.mockClear();
+  fetchMock.mockImplementation(defaultFetch); // a describe may have swapped it
+  handshakePingInterval = undefined;
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn() }));
@@ -591,5 +600,271 @@ describe("Terminal: a clicked file link opens the Files view at the folder above
     const { href, statUrls } = await click("file:///C:/");
     expect(statUrls).toEqual(["/api/v1/boxes/box1/stat?path=C:/"]);
     expect(href).toBe(`/app/files?${new URLSearchParams({ box: "box1", path: "C:/" }).toString()}`);
+  });
+});
+
+describe("Terminal.vue a phone that sleeps", () => {
+  beforeEach(() => {
+    handshakePingInterval = 30;
+  });
+
+  const ping = (ws: FakeWebSocket) => ws.onmessage!({ data: JSON.stringify({ op: "ping" }) });
+  const wake = () => document.dispatchEvent(new Event("visibilitychange"));
+
+  // Every attempt fails until the policy stops trying.
+  async function giveUp() {
+    for (let i = 0; i < 11; i++) {
+      socket(i).onclose!({ code: 1006 });
+      await advance(30_000);
+    }
+  }
+
+  async function openFirst() {
+    const wrapper = await mountConnected();
+    socket(0).onopen!();
+    await flushPromises();
+    return wrapper;
+  }
+
+  // Mutation: no silence watchdog (a dead socket looks connected for ever).
+  it("a socket silent for two and a half ping intervals is let go of and reconnected", async () => {
+    const wrapper = await openFirst();
+    await advance(74_999);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await advance(1);
+    expect(socket(0).close).toHaveBeenCalled();
+    expect(wrapper.text()).toContain(en["terminal.reconnecting_to"]!.replace("{box}", "box1"));
+    await advance(1000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  // Mutation: the limit a bare 75 s on the page; it must follow what the server reports.
+  it("the silence limit follows the interval the handshake reports", async () => {
+    handshakePingInterval = 10;
+    const wrapper = await openFirst();
+    await advance(24_999);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    await advance(1);
+    expect(socket(0).close).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // Mutation: the watchdog counts from the open and not from the last frame.
+  it("a frame every 29 s never makes the socket dead", async () => {
+    const wrapper = await openFirst();
+    for (let i = 0; i < 20; i++) {
+      await advance(29_000);
+      ping(socket(0));
+    }
+    expect(socket(0).close).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  // Mutation: waking up reconnects a socket that is fine.
+  it("the page becoming visible while connected changes nothing", async () => {
+    const wrapper = await openFirst();
+    wake();
+    await advance(1000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // Mutation: no wake handler (the terminal stays given up).
+  it("visible after the attempts ran out connects at once and counts from zero again", async () => {
+    const wrapper = await mountConnected();
+    for (let i = 0; i < 10; i++) {
+      socket(i).onclose!({ code: 1006 });
+      await advance(30_000);
+    }
+    socket(10).onclose!({ code: 1006 });
+    await advance(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(11);
+
+    wake();
+    await flushPromises();
+    expect(FakeWebSocket.instances).toHaveLength(12);
+    socket(11).onopen!();
+    await flushPromises();
+    socket(11).onclose!({ code: 1006 });
+    await advance(1000);
+    expect(FakeWebSocket.instances).toHaveLength(13);
+    wrapper.unmount();
+  });
+
+  // Mutation: each event opens its own socket.
+  it("online twice within a second makes one connect", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onclose!({ code: 1006 });
+    window.dispatchEvent(new Event("online"));
+    await advance(200);
+    window.dispatchEvent(new Event("online"));
+    await advance(800);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  // Mutation: the wake path ignores the close policy.
+  it("a 4403 close then visible stays closed", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onclose!({ code: 4403 });
+    wake();
+    window.dispatchEvent(new Event("online"));
+    await advance(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  // Mutation: the wake path ignores the user's disconnect.
+  it("the user's disconnect then visible stays closed", async () => {
+    const wrapper = await openFirst();
+    (wrapper.vm as any).disconnect();
+    socket(0).onclose!({ code: 1000 });
+    wake();
+    await advance(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  // Mutation: the wake path dials while a connect is in flight.
+  it("visible while a connect is in flight opens no second socket", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onclose!({ code: 1006 });
+    let release!: () => void;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = () =>
+            resolve(new Response(JSON.stringify({ ws_url: "ws://127.0.0.1:8822/ws/term" }), { status: 200 }));
+        }),
+    );
+    await vi.advanceTimersByTimeAsync(1000); // the backoff ends: connect() waits on the handshake
+    wake();
+    await flushPromises();
+    release();
+    await flushPromises();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  // Mutation: the overdue timer drops the socket at once (a frozen page kills a running command).
+  it("a timer that fires long after it was due waits one ping interval for queued frames", async () => {
+    const wrapper = await openFirst();
+    // The page froze: the clock jumps past the limit and no timer has run yet.
+    vi.setSystemTime(Date.now() + 200_000);
+    await advance(75_000);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    ping(socket(0)); // the frame queued during the freeze arrives
+    await advance(60_000);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("after the overdue grace, silence still drops the socket", async () => {
+    const wrapper = await openFirst();
+    vi.setSystemTime(Date.now() + 200_000);
+    await advance(75_000);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    await advance(29_999);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    await advance(1);
+    expect(socket(0).close).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // Mutation: a replaced socket's late close stops the new socket's watchdog.
+  it("a replaced socket's late close leaves the new socket's watchdog running", async () => {
+    const wrapper = await openFirst();
+    (wrapper.vm as any).disconnect();
+    (wrapper.vm as any).connect();
+    await flushPromises();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    socket(1).onopen!();
+    await flushPromises();
+    socket(0).onclose!({ code: 1000 });
+    await advance(75_000);
+    expect(socket(1).close).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // Mutation: a replaced socket's late close marks the new socket closed for good.
+  it("a replaced socket's late 4403 close does not stop a wake from reconnecting the new one", async () => {
+    const wrapper = await openFirst();
+    (wrapper.vm as any).disconnect();
+    (wrapper.vm as any).connect();
+    await flushPromises();
+    socket(1).onopen!();
+    await flushPromises();
+    socket(0).onclose!({ code: 4403 });
+    socket(1).onclose!({ code: 1006 });
+    wake();
+    await advance(1000);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  // Mutation: a replaced socket's late close schedules a reconnect.
+  it("a replaced socket's late 1006 close schedules no second connect", async () => {
+    const wrapper = await openFirst();
+    (wrapper.vm as any).disconnect();
+    (wrapper.vm as any).connect();
+    await flushPromises();
+    socket(1).onopen!();
+    await flushPromises();
+    socket(0).onclose!({ code: 1006 });
+    await advance(30_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  // Mutation: onerror clears connecting before onclose ran.
+  it("a wake between onerror and onclose opens no second socket", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onerror!(new Event("error"));
+    wake();
+    await advance(1000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    socket(0).onclose!({ code: 1006 });
+    await advance(1000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  it("a handshake with no ping_interval arms no watchdog, and a wake still reconnects a dropped socket", async () => {
+    handshakePingInterval = undefined;
+    const wrapper = await openFirst();
+    await advance(600_000);
+    expect(socket(0).close).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await giveUp();
+    const n = FakeWebSocket.instances.length;
+    wake();
+    await advance(0);
+    expect(FakeWebSocket.instances).toHaveLength(n + 1);
+    wrapper.unmount();
+  });
+
+  // The brief: waking does nothing while the page is hidden; it connects when it shows.
+  it("online while the page is hidden connects nothing; becoming visible does", async () => {
+    const wrapper = await openFirst();
+    await giveUp();
+    const n = FakeWebSocket.instances.length;
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    try {
+      window.dispatchEvent(new Event("online"));
+      await advance(1000);
+      expect(FakeWebSocket.instances).toHaveLength(n);
+    } finally {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    }
+    wake();
+    await advance(0);
+    expect(FakeWebSocket.instances).toHaveLength(n + 1);
+    wrapper.unmount();
   });
 });

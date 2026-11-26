@@ -89,6 +89,8 @@ export interface TerminalHandshake {
   ws_url: string;
   token_header?: string;
   token?: string | null;
+  /** Seconds between the server's ping frames; absent from a server that does not say. */
+  ping_interval?: number;
 }
 
 export interface PinToggle {
