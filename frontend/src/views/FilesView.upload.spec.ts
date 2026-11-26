@@ -13,6 +13,9 @@ import type { App } from "vue";
 import { ref } from "vue";
 
 import { createI18n } from "@/i18n";
+
+// the real i18n, so the Japanese words can be read
+vi.mock("@/i18n", async () => await vi.importActual("@/i18n"));
 import * as http from "@/api/http";
 import { ApiError } from "@/api/apiError";
 import FilesView from "./FilesView.vue";
@@ -246,6 +249,16 @@ describe("FilesView upload: refused is never shown as uploaded", () => {
       "\"d.txt\" already exists here. Replace it?",
     ]);
     expect(uploadedNames()).toEqual([["a.txt", {}], ["b.txt", {}], ["c.txt", {}], ["d.txt", {}]]);
+  });
+
+  // Mutation: the multi-file toast left as a literal English template.
+  it("Japanese: the multi-file toast comes from the texts", async () => {
+    localStorage.setItem("sshler:locale", "ja");
+    uploadFile.mockResolvedValue(OK);
+    const { container } = await mountLoaded();
+    await choose(container, ["a.txt", "b.txt"]);
+    await waitFor(() => expect(messageSpy.success).toHaveBeenCalledTimes(1));
+    expect(messageSpy.success).toHaveBeenCalledWith("2 件をアップロードしました");
   });
 
   // Mutation: leaving only takes the open prompt down; the next taken name then asks

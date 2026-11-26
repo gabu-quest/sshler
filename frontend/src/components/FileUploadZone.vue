@@ -66,11 +66,13 @@ const handleDrop = (e: DragEvent) => {
   position: relative;
   border-radius: 8px;
   overflow: hidden;
-  transition: all var(--dur-base) ease;
+  outline: 2px dashed transparent;
+  outline-offset: -2px;
+  transition: outline-color var(--dur-base) ease, background-color var(--dur-base) ease;
 }
 
 .file-browser.drag-over {
-  border: 2px dashed var(--accent);
+  outline-color: var(--accent);
   background: var(--accent-bg);
 }
 

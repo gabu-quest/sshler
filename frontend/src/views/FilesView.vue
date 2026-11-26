@@ -134,6 +134,16 @@ const canScrollUp = ref(false);
 const canScrollDown = ref(false);
 let scrollObserver: MutationObserver | null = null;
 
+let scrollTarget: HTMLElement | null = null;
+/** Listen to the table's current scroll element; a remounted table has a new one. */
+function listenToTableScroll() {
+  const scrollEl = fileTableWrapRef.value?.querySelector('.n-scrollbar-container') as HTMLElement | null;
+  if (!scrollEl || scrollEl === scrollTarget) return;
+  scrollTarget?.removeEventListener('scroll', updateScrollIndicators);
+  scrollEl.addEventListener('scroll', updateScrollIndicators, { passive: true });
+  scrollTarget = scrollEl;
+}
+
 function updateScrollIndicators() {
   const wrap = fileTableWrapRef.value;
   if (!wrap) return;
@@ -251,11 +261,11 @@ const uploading = computed(() => !!filesStore.uploadFileName);
 // Display name for current directory (last component)
 const displayDirName = computed(() => {
   if (!currentDir.value || currentDir.value === '/' || currentDir.value === '~') {
-    return currentDir.value === '~' ? 'Home' : 'Root';
+    return currentDir.value === '~' ? t('common.home') : t('terminal.root_label');
   }
   // Split on both POSIX (/) and Windows (\) separators.
   const parts = currentDir.value.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] || 'Root';
+  return parts[parts.length - 1] || t('terminal.root_label');
 });
 
 // Persist sort order + view filter across reloads
@@ -275,7 +285,7 @@ watch([selectedBox, currentDir], () => {
     document.title = `${displayDirName.value} — ${selectedBox.value}`;
     setEmojiFavicon(`${selectedBox.value}:${currentDir.value}`);
   } else {
-    document.title = 'Files';
+    document.title = t('common.files');
     resetFavicon();
   }
 }, { immediate: true });
@@ -557,12 +567,9 @@ onMounted(async () => {
   nextTick(() => {
     const wrap = fileTableWrapRef.value;
     if (wrap) {
-      const scrollEl = wrap.querySelector('.n-scrollbar-container') as HTMLElement | null;
-      if (scrollEl) {
-        scrollEl.addEventListener('scroll', updateScrollIndicators, { passive: true });
-      }
-      // Observe DOM changes (data table re-renders) to re-check scroll state
-      scrollObserver = new MutationObserver(() => nextTick(updateScrollIndicators));
+      listenToTableScroll();
+      // Observe DOM changes: the table remounts after a folder loads, which gives it a new scroll element
+      scrollObserver = new MutationObserver(() => nextTick(() => { listenToTableScroll(); updateScrollIndicators(); }));
       scrollObserver.observe(wrap, { childList: true, subtree: true });
       updateScrollIndicators();
     }
@@ -572,6 +579,7 @@ onMounted(async () => {
 onUnmounted(() => {
   leavePrompt();
   scrollObserver?.disconnect();
+  scrollTarget?.removeEventListener('scroll', updateScrollIndicators);
 });
 
 /**
@@ -873,7 +881,7 @@ async function handleUpload(files: FileList | null) {
   actionBusy.value = false;
 
   if (uploaded > 0) {
-    message.success(uploaded === 1 ? t('files.uploaded') : `${uploaded} files uploaded`);
+    message.success(uploaded === 1 ? t('files.uploaded') : t('files.uploaded_many', { count: uploaded }));
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     showKeptBoth(landed);
@@ -1197,7 +1205,7 @@ async function bulkDownload() {
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      message.error(`Failed to download ${path}: ${errorText(err)}`);
+      message.error(`${t('files.download_failed')}: ${path}: ${errorText(err)}`);
     }
   }
 }
@@ -1333,7 +1341,7 @@ const columns = computed(() => {
               quaternary: true,
               onClick: () => toggleFavoriteDir(row.path)
             }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "duotone" })) }),
-            default: () => isFav ? "Remove from Favorites" : "Add to Favorites"
+            default: () => isFav ? t('files.remove_from_favorites') : t('files.add_to_favorites')
           }),
           row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, {
@@ -1341,7 +1349,7 @@ const columns = computed(() => {
               quaternary: true,
               onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
             }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow, { weight: 'duotone' })) }),
-            default: () => "Open Terminal Here"
+            default: () => t('files.open_terminal_here')
           }),
           row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, {
@@ -1349,27 +1357,27 @@ const columns = computed(() => {
               quaternary: true,
               onClick: () => handleDownloadDirectory(row)
             }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple, { weight: 'duotone' })) }),
-            default: () => "Download as .zip"
+            default: () => t('files.download_as_zip')
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye, { weight: 'duotone' })) }),
-            default: () => "Preview"
+            default: () => t('common.preview')
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleEdit(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhPencil, { weight: 'duotone' })) }),
-            default: () => "Edit"
+            default: () => t('common.edit')
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple, { weight: 'duotone' })) }),
-            default: () => "Download"
+            default: () => t('common.download')
           }),
           h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa, { weight: 'duotone' })) }),
-            default: () => "Rename"
+            default: () => t('common.rename')
           }),
           h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, type: "error", onClick: () => confirmDelete(row.path) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTrash, { weight: 'duotone' })) }),
-            default: () => "Delete"
+            default: () => t('common.delete')
           }),
         ]);
       },
