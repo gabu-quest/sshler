@@ -112,6 +112,7 @@ vi.mock("naive-ui", async () => {
       '<div class="stub-modal" v-if="show"><slot /><button class="modal-positive" @click="$emit(\'positive-click\')">ok</button></div>',
       ["show"], ["positive-click", "negative-click", "update:show"],
     ),
+    NPopover: stub('<div class="stub-popover"><slot name="trigger" /><div class="popover-body"><slot /></div></div>', ["show", "trigger", "placement"]),
     NProgress: stub('<div class="stub-progress" />'),
     NSelect: stub('<select class="stub-select" />', ["value", "options"]),
     NSpace: stub('<div class="stub-space"><slot /></div>'),
@@ -130,7 +131,7 @@ vi.mock("@phosphor-icons/vue", () => {
     "PhUploadSimple", "PhEye", "PhPencil", "PhPrinter", "PhDownloadSimple", "PhTextAa", "PhCopy",
     "PhClipboard", "PhTrash", "PhFolder", "PhMagnifyingGlass", "PhGear", "PhTerminalWindow",
     "PhArrowBendUpLeft", "PhCaretRight", "PhCaretDown", "PhArrowsOutSimple", "PhArrowsInSimple",
-    "PhArchive",
+    "PhArchive", "PhPlus",
   ];
   return Object.fromEntries(names.map((n) => [n, stub(n)]));
 });
@@ -182,7 +183,7 @@ async function startRename(container: Element, newName: string) {
   await fireEvent.click(container.querySelector(".modal-positive")!);
 }
 
-async function startBatch(container: Element, label: "Move To..." | "Copy To...", paths: string[]) {
+async function startBatch(container: Element, label: "Move to..." | "Copy to...", paths: string[]) {
   useFilesStore().setSelectedFiles(paths);
   const button = await waitFor(() => {
     const found = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
@@ -300,8 +301,8 @@ describe("FilesView: rename onto an existing name", () => {
 });
 
 describe.each([
-  ["move", "Move To...", batchMove, "Moved"],
-  ["copy", "Copy To...", batchCopy, "Copied"],
+  ["move", "Move to...", batchMove, "Moved"],
+  ["copy", "Copy to...", batchCopy, "Copied"],
 ] as const)("FilesView: batch %s onto existing names", (_mode, label, call, verb) => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -646,7 +647,7 @@ describe("FilesView: Keep both", () => {
       .mockResolvedValueOnce(done(["/p/b"]))
       .mockResolvedValueOnce({ ...done(["/p/c", "/p/d"]), placed: [{ path: "/p/c", placed: "/p/c (2)" }, { path: "/p/d", placed: "/p/d (2)" }] });
     const { container } = await mountLoaded();
-    await startBatch(container, "Move To...", ["/p/b", "/p/c", "/p/d"]);
+    await startBatch(container, "Move to...", ["/p/b", "/p/c", "/p/d"]);
     press(await prompt(1), "Replace");
     press(await prompt(2), "Keep both", true);
     await waitFor(() => expect(messageSpy.success).toHaveBeenCalledWith("Kept both: saved as c (2), d (2)"));

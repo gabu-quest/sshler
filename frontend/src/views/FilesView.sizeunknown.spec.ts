@@ -103,6 +103,7 @@ vi.mock("naive-ui", async () => {
     NIcon: stub('<span class="stub-icon"><slot /></span>'),
     NInput: stub('<input class="stub-input" />', ["value", "size", "placeholder"]),
     NModal: stub('<div class="stub-modal" v-if="show"><slot /></div>', ["show"]),
+    NPopover: stub('<div class="stub-popover"><slot name="trigger" /><div class="popover-body"><slot /></div></div>', ["show", "trigger", "placement"]),
     NProgress: stub('<div class="stub-progress" />'),
     NSelect: stub('<select class="stub-select" />', ["value", "options"]),
     NSpace: stub('<div class="stub-space"><slot /></div>'),
@@ -121,7 +122,7 @@ vi.mock("@phosphor-icons/vue", () => {
     "PhUploadSimple", "PhEye", "PhPencil", "PhPrinter", "PhDownloadSimple", "PhTextAa", "PhCopy",
     "PhClipboard", "PhTrash", "PhFolder", "PhMagnifyingGlass", "PhGear", "PhTerminalWindow",
     "PhArrowBendUpLeft", "PhCaretRight", "PhCaretDown", "PhArrowsOutSimple", "PhArrowsInSimple",
-    "PhArchive",
+    "PhArchive", "PhPlus",
   ];
   return Object.fromEntries(names.map((n) => [n, stub(n)]));
 });

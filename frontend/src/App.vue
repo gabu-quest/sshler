@@ -39,6 +39,10 @@ const themeOverrides = computed(() =>
 );
 const TERMINAL_PATHS = new Set(['/terminal', '/multi-terminal', '/commander']);
 const isTerminalRoute = computed(() => TERMINAL_PATHS.has(route.path));
+// Views that fill the main area and scroll inside themselves (a table, a terminal): the
+// content box takes the area's height, so their `height: 100%` resolves.
+const FILL_PATHS = new Set([...TERMINAL_PATHS, '/files']);
+const isFillRoute = computed(() => FILL_PATHS.has(route.path));
 // A view that holds a terminal fades by opacity alone: a transform on xterm's box
 // would move it under the cursor and its measurement.
 const routeTransition = (path: string) => (TERMINAL_PATHS.has(path) ? 'route-fade-plain' : 'route-fade');
@@ -58,7 +62,7 @@ const frameClass = computed(() => `app-frame ${railShell.value ? 'app-frame--rai
 // Naive applies this to the area's own scroll container.
 const mainScrollStyle = computed<CSSProperties>(() => ({
   minHeight: '0px',
-  overflowY: isTerminalRoute.value ? 'hidden' : 'auto',
+  overflowY: isFillRoute.value ? 'hidden' : 'auto',
   overflowX: 'hidden',
 }));
 
@@ -153,7 +157,7 @@ onUnmounted(() => {
     <NLoadingBarProvider>
     <NDialogProvider>
     <NNotificationProvider placement="top-right" :max="5">
-    <NMessageProvider>
+    <NMessageProvider placement="bottom">
       <PingNotificationHandler />
       <NLayout class="app-layout" :content-class="frameClass">
         <AppHeader v-if="showChrome" />
@@ -162,7 +166,7 @@ onUnmounted(() => {
             <ProgressStrip />
           </div>
           <NLayoutContent class="app-main" :content-style="mainScrollStyle">
-            <div class="app-content" :class="{ 'terminal-mode': isTerminalRoute }">
+            <div class="app-content" :class="{ 'terminal-mode': isTerminalRoute, 'fill-mode': isFillRoute }">
               <!-- Keyed by path: a change of ?box= or ?dir= alone keeps the view. -->
               <RouterView v-slot="{ Component, route: viewRoute }">
                 <Transition :name="routeTransition(viewRoute.path)" mode="out-in">
@@ -232,10 +236,14 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
+.app-content.fill-mode {
+  height: 100%;
+  box-sizing: border-box;
+}
+
 .app-content.terminal-mode {
   padding: 0;
   max-width: none;
-  height: 100%;
 }
 
 @media (max-width: 767px) {

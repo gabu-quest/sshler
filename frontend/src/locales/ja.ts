@@ -988,5 +988,13 @@ export const ja: Record<string, string> = {
   "rail.expand": "サイドバーを展開",
   "rail.collapse": "サイドバーを折りたたむ",
   "rail.progress": "進捗バー",
+  "files.rename_placeholder": "新しい名前",
+  "files.chmod_placeholder": "例: 755",
+  "files.type_file": "ファイル",
+  "files.type_text": "テキスト",
+  "files.type_log": "ログ",
+  "files.type_image": "画像",
+  "files.type_archive": "アーカイブ",
+  "commander.footer_free": "空き --",
   "palette.toggle_rail": "サイドバーを切り替え",
 };

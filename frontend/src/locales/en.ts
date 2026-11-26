@@ -988,5 +988,13 @@ export const en: Record<string, string> = {
   "rail.expand": "Expand sidebar",
   "rail.collapse": "Collapse sidebar",
   "rail.progress": "Progress bars",
+  "files.rename_placeholder": "New name",
+  "files.chmod_placeholder": "e.g. 755",
+  "files.type_file": "File",
+  "files.type_text": "Text",
+  "files.type_log": "Log",
+  "files.type_image": "Image",
+  "files.type_archive": "Archive",
+  "commander.footer_free": "Free --",
   "palette.toggle_rail": "Toggle sidebar",
 };

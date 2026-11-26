@@ -46,7 +46,7 @@ async def test_vue_app_bootstrap_and_navigation(open_page):
     await expect(page.get_by_role("heading", name="Your Servers")).to_be_visible()
 
     await page.goto("/app/files", wait_until="load")
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
 
     await page.goto("/app/boxes", wait_until="load")
     await expect(page.get_by_role("heading", name="Available boxes")).to_be_visible()
@@ -75,7 +75,7 @@ async def test_vue_app_nav_link_clicks(open_page):
 
     await nav_link(page, "Files").click(position=ICON)
     await expect(page).to_have_url(re.compile(r"/app/files(\?.*)?$"))
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
 
     await (await tool_link(page, "Boxes")).click()
     await expect(page).to_have_url(re.compile(r"/app/boxes$"))
@@ -150,7 +150,7 @@ async def test_expanded_rail_floats_and_closes(open_page):
     """
     page = await open_page(LAPTOP_VIEWPORT)
     await page.goto("/app/files?box=local", wait_until="load")
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
     await wait_panel_at(page, COLLAPSED - EXPANDED)
 
     main_before = await box_of(page, ".app-main")
@@ -259,7 +259,7 @@ async def test_a_query_change_keeps_the_view_and_a_page_change_replaces_it(open_
     """
     page = await open_page(LAPTOP_VIEWPORT)
     await page.goto("/app/files?box=local", wait_until="load")
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
     await page.evaluate("document.querySelector('.app-content > *').dataset.probe = 'kept'")
 
     await page.evaluate(
@@ -277,16 +277,64 @@ async def test_a_query_change_keeps_the_view_and_a_page_change_replaces_it(open_
 
 
 @pytest.mark.asyncio
-async def test_switching_to_the_terminal_opens_one_socket(open_page):
-    """The fade between views mounts the terminal once: one /ws/term socket per visit.
+@pytest.mark.parametrize("strip_px", [0, 60])
+async def test_files_table_fills_the_window_in_a_full_folder(open_page, tmp_path, strip_px):
+    """In a folder of 60 files at 1366 x 768 the table runs to the bottom of the window:
+    its bottom border is on screen, it is most of the window high, and the page itself does
+    not scroll; with a 60 px block in the progress strip's place it shrinks by that much.
+
+    Mutation: the content box without a height (files not a fill route) -> the table is
+    its 200 px floor; the view's own `100dvh - 32px` back -> with the strip the table's
+    bottom runs past the window.
+    """
+    for i in range(60):
+        (tmp_path / f"file-{i:02d}.txt").write_text("x")
+    viewport = {"width": 1366, "height": 768}
+    page = await open_page(viewport)
+    await page.goto(f"/app/files?box=local&dir={tmp_path}", wait_until="load")
+    await expect(page.get_by_text("file-00.txt")).to_be_visible()
+    if strip_px:
+        await page.evaluate(
+            f"""() => {{
+              const block = document.createElement('div');
+              block.style.height = '{strip_px}px';
+              document.querySelector('.app-frame-fixed').appendChild(block);
+            }}"""
+        )
+    table = page.locator(".table-region .n-data-table")
+    await expect(table).to_be_visible()
+    box = await table.bounding_box()
+    assert box is not None
+    bottom = box["y"] + box["height"]
+    assert viewport["height"] - 24 <= bottom <= viewport["height"], f"the table ends at {bottom}px"
+    assert box["height"] >= 0.6 * viewport["height"] - strip_px, f"the table is {box['height']}px high"
+    scroll = await page.evaluate(
+        "() => { const s = document.querySelector('.app-main .n-layout-scroll-container');"
+        " return s ? s.scrollHeight - s.clientHeight : -1 }"
+    )
+    assert scroll == 0, f"the page scrolls by {scroll}px"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start", "ready"),
+    [("/app/?box=local", "Your Servers"), ("/app/files?box=local", None)],
+    ids=["from-overview", "from-files"],
+)
+async def test_switching_to_the_terminal_opens_one_socket(open_page, start, ready):
+    """The fade between views mounts the terminal once: one /ws/term socket per visit,
+    from a scrolling view (the overview) and from a view that fills the frame (files).
 
     Mutation: a transition that mounts the entering view twice -> two sockets.
     """
     page = await open_page(LAPTOP_VIEWPORT)
     urls: list[str] = []
     page.on("websocket", lambda ws: urls.append(ws.url) if "/ws/term" in ws.url else None)
-    await page.goto("/app/?box=local", wait_until="load")
-    await expect(page.get_by_role("heading", name="Your Servers")).to_be_visible()
+    await page.goto(start, wait_until="load")
+    if ready:
+        await expect(page.get_by_role("heading", name=ready)).to_be_visible()
+    else:
+        await expect(page.get_by_test_id("files-workspace")).to_be_visible()
 
     await nav_link(page, "Terminal").click(position=ICON)
     await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)

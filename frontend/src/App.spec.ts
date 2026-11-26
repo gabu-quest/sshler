@@ -68,7 +68,10 @@ vi.mock("naive-ui", () => {
     },
     NLayoutHeader: wrap,
     NLoadingBarProvider: wrap,
-    NMessageProvider: wrap,
+    NMessageProvider: {
+      props: ["placement"],
+      template: '<div data-testid="messages" :data-placement="placement"><slot /></div>',
+    },
     NNotificationProvider: wrap,
     darkTheme: {},
     lightTheme: {},
@@ -101,6 +104,12 @@ beforeEach(() => {
 });
 
 describe("App on mount", () => {
+  it("messages sit at the bottom of the window, below the first row of every view", async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.get('[data-testid="messages"]').attributes("data-placement")).toBe("bottom");
+    wrapper.unmount();
+  });
+
   it("signed out: connects no socket, refreshes no bars and starts no recovery poll", async () => {
     bootstrap.authenticated = false;
     bootstrap.token = null;
@@ -138,8 +147,9 @@ describe("the main area", () => {
     ["/terminal", "hidden"],
     ["/multi-terminal", "hidden"],
     ["/commander", "hidden"],
+    // The files table scrolls inside itself; the page around it does not.
+    ["/files", "hidden"],
     ["/", "auto"],
-    ["/files", "auto"],
     ["/settings", "auto"],
     ["/login", "auto"],
   ])("on %s its overflow is %s", async (path, overflow) => {
