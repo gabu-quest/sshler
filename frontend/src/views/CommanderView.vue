@@ -16,7 +16,7 @@ import CommanderPane from "@/components/CommanderPane.vue";
 import CommanderTransferProgress from "@/components/CommanderTransferProgress.vue";
 import FileEditorModal from "@/components/FileEditorModal.vue";
 import { useI18n } from "@/i18n";
-import { useReplacePrompt } from "@/composables/useReplacePrompt";
+import { useReplacePrompt, type PlaceOptions } from "@/composables/useReplacePrompt";
 import { useResponsive } from "@/composables/useResponsive";
 import { useAppStore } from "@/stores/app";
 import { useBootstrapStore } from "@/stores/bootstrap";
@@ -301,10 +301,12 @@ async function startTransfer(mode: "copy" | "move") {
   showTransfer.value = true;
 
   const { box, otherBox, otherDir } = ctx;
-  const send = (toSend: string[], overwrite: boolean): Promise<TransferResult> => {
+  const destinationSelected = activePane.value === "left" ? rightSelected : leftSelected;
+  const send = (toSend: string[], placing: PlaceOptions): Promise<TransferResult> => {
     transferProgress.value = null;
     transferSending.value = toSend;
-    const options = overwrite ? [{ overwrite: true }] : [];
+    const retrying = Boolean(placing.overwrite || placing.keepBoth);
+    const options = retrying ? [placing] : [];
     if (box === otherBox) {
       return sameBoxTransfer(box, toSend, otherDir, mode, tokenValue.value, ...options);
     }
@@ -333,7 +335,7 @@ async function startTransfer(mode: "copy" | "move") {
           // A file the server did not place is not done, whatever the files after it
           // do: a taken name stays pending until it is asked about, any other shows why.
           onItemFailed: (item) => {
-            if (!overwrite && item.reason === "exists") transferHeld.value = [...transferHeld.value, item.path];
+            if (!retrying && item.reason === "exists") transferHeld.value = [...transferHeld.value, item.path];
             else transferFailedSoFar.value = [...transferFailedSoFar.value, item];
           },
         },
@@ -354,14 +356,28 @@ async function startTransfer(mode: "copy" | "move") {
         transferFailedSoFar.value = first.failed.filter((item) => item.reason !== "exists");
         transferWaiting.value = first.failed.filter((item) => item.reason === "exists").map((item) => item.path);
       },
-      onDecision: (path, accepted) => {
+      onDecision: (path, choice) => {
         transferWaiting.value = transferWaiting.value.filter((waiting) => waiting !== path);
-        if (!accepted) transferSkipped.value = [...transferSkipped.value, path];
+        if (choice === "no") transferSkipped.value = [...transferSkipped.value, path];
+      },
+      // "Replace" and "Keep both" go out as two calls: what the first one settled
+      // stays as it is while the second runs.
+      onRetried: (succeeded, failed) => {
+        transferPlaced.value = [...transferPlaced.value, ...succeeded];
+        const known = new Set(transferFailedSoFar.value.map((item) => item.path));
+        transferFailedSoFar.value = [...transferFailedSoFar.value, ...failed.filter((item) => !known.has(item.path))];
       },
     });
     if (transferError.value === null) {
       transferResult.value = { succeeded: outcome.succeeded, failed: outcome.failed };
       transferSkipped.value = outcome.skipped;
+      if (outcome.placed.length) {
+        // The pane the files went to names what the server used and selects those entries.
+        const landed = outcome.placed.map((item) => item.placed);
+        const nameOf = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
+        message.success(t("files.kept_both", { name: landed.map(nameOf).join(", ") }));
+        destinationSelected.value = landed;
+      }
     }
   } catch (err) {
     // A cancel has already put its own text on the dialog.

@@ -4,7 +4,7 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { NButton, NIcon, NSpin, NTooltip, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
 import { PhArrowsClockwise, PhTrash, PhCircle, PhPencilSimple, PhCheck, PhX, PhHouse, PhSkull } from '@phosphor-icons/vue'
 import type { ApiSession } from '@/api/types'
-import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession } from '@/api/http'
+import { fetchBoxSessions, syncBoxSessions, deleteSession, renameSession, recreateSession } from '@/api/http'
 import { useI18n } from '@/i18n'
 import { getColorForSession } from '@/utils/sessionName'
 
@@ -62,18 +62,27 @@ function goHome() {
       active: false,
       window_count: 0,
       metadata: {},
+      restorable: false,
     })
   }
 }
 
+// Loaded by a sync, as the overview's card is, so a session tmux no longer has shows
+// as not running here too. When the sync fails (a box that cannot be reached, a box
+// without tmux) the stored sessions are listed as they were last known, with the
+// failure's line; when they cannot be read either, the line alone.
 async function load() {
   loading.value = true
   loadError.value = null
   try {
-    sessions.value = await fetchBoxSessions(props.boxName, props.token)
+    sessions.value = await syncBoxSessions(props.boxName, props.token)
   } catch (err) {
-    sessions.value = []
     loadError.value = errorText(err)
+    try {
+      sessions.value = await fetchBoxSessions(props.boxName, props.token)
+    } catch {
+      sessions.value = []
+    }
   } finally {
     loading.value = false
   }
@@ -99,6 +108,18 @@ async function kill(session: ApiSession, force = false) {
   } catch (err) {
     message.error(errorText(err))
   }
+}
+
+// "Restore layout": the session is recreated from its last layout, then the list is
+// synced, so the row shows running.
+async function restore(session: ApiSession) {
+  try {
+    await recreateSession(session.id, props.token)
+  } catch (err) {
+    message.error(errorText(err))
+    return
+  }
+  await sync()
 }
 
 function startRename(session: ApiSession) {
@@ -176,6 +197,7 @@ watch(() => props.boxName, load)
     <NEmpty v-else-if="sortedSessions.length === 0" :description="loadError ?? t('sessions.empty')" size="small" />
 
     <div v-else class="session-list">
+      <div v-if="loadError" class="load-error" data-testid="load-error">{{ loadError }}</div>
       <div
         v-for="session in sortedSessions"
         :key="session.id"
@@ -216,6 +238,17 @@ watch(() => props.boxName, load)
             </NButton>
           </template>
           <template v-else>
+            <NButton
+              v-if="session.restorable"
+              size="tiny"
+              quaternary
+              type="primary"
+              class="restore-layout"
+              :title="t('sessions.restore_layout')"
+              @click.stop="restore(session)"
+            >
+              {{ t('sessions.restore_layout') }}
+            </NButton>
             <NButton size="tiny" quaternary @click.stop="startRename(session)" :title="t('sessions.rename')">
               <NIcon size="12"><PhPencilSimple weight="duotone" /></NIcon>
             </NButton>
@@ -243,6 +276,12 @@ watch(() => props.boxName, load)
 </template>
 
 <style scoped>
+.load-error {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .home-item {
   display: flex;
   align-items: center;

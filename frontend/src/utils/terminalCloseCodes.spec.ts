@@ -18,10 +18,8 @@ describe("classifyTerminalCloseCode", () => {
     expect(policy.duration).toBe(5000);
   });
 
-  it("4401 (unauthorized) toasts auth_denied and stops reconnecting", () => {
-    const policy = classifyTerminalCloseCode(4401);
-    expect(policy.reconnect).toBe(false);
-    expect(policy.messageKey).toBe("terminal.auth_denied");
+  it("4401 (the session ended) toasts nothing and stops reconnecting: the sign-in form is the message", () => {
+    expect(classifyTerminalCloseCode(4401)).toEqual({ messageKey: null, reconnect: false });
   });
 
   it("4502 (no WSL distro) toasts wsl_not_installed and stops reconnecting", () => {
@@ -44,20 +42,34 @@ describe("classifyTerminalCloseCode", () => {
     });
   });
 
-  it("4501 (tmux not installed) toasts tmux_not_installed and stops reconnecting", () => {
-    expect(classifyTerminalCloseCode(4501)).toEqual({
-      messageKey: "terminal.tmux_not_installed",
-      reconnect: false,
-      duration: 8000,
-    });
-  });
-
   it("4400 (refused session name) toasts session_name_refused and stops reconnecting", () => {
     expect(classifyTerminalCloseCode(4400)).toEqual({
       messageKey: "terminal.session_name_refused",
       reconnect: false,
       duration: 6000,
     });
+  });
+
+  it("4400 with the reason 'Invalid shell' toasts shell_refused and stops reconnecting", () => {
+    expect(classifyTerminalCloseCode(4400, "Invalid shell")).toEqual({
+      messageKey: "terminal.shell_refused",
+      reconnect: false,
+      duration: 6000,
+    });
+  });
+
+  it("4400 with an empty or other reason keeps the session-name words", () => {
+    const names = {
+      messageKey: "terminal.session_name_refused",
+      reconnect: false,
+      duration: 6000,
+    };
+    expect(classifyTerminalCloseCode(4400, "")).toEqual(names);
+    expect(classifyTerminalCloseCode(4400, "Invalid session name")).toEqual(names);
+  });
+
+  it("4501 is no longer a code the server sends: it falls to the unexpected-close reconnect", () => {
+    expect(classifyTerminalCloseCode(4501)).toEqual({ messageKey: null, reconnect: true });
   });
 
   it("1000 (normal closure) is silent and does NOT reconnect", () => {

@@ -15,7 +15,8 @@ import {
   touchFile,
   uploadFile,
 } from "@/api/http";
-import type { BatchResult, DirectoryListing } from "@/api/types";
+import type { OverwriteOption } from "@/api/http";
+import type { BatchResult, DirectoryListing, SimpleMessage } from "@/api/types";
 
 export const useFilesStore = defineStore("files", () => {
   const listing = ref<DirectoryListing | null>(null);
@@ -55,9 +56,9 @@ export const useFilesStore = defineStore("files", () => {
     path: string,
     newName: string,
     token: string | null,
-    options?: { overwrite?: boolean },
-  ) {
-    await renameFile(box, path, newName, token, ...(options ? [options] : []));
+    options?: OverwriteOption,
+  ): Promise<SimpleMessage> {
+    return await renameFile(box, path, newName, token, ...(options ? [options] : []));
   }
 
   async function doMove(box: string, source: string, destination: string, token: string | null) {
@@ -83,7 +84,7 @@ export const useFilesStore = defineStore("files", () => {
     paths: string[],
     destination: string,
     token: string | null,
-    options?: { overwrite?: boolean },
+    options?: OverwriteOption,
   ): Promise<BatchResult> {
     return await batchMove(box, paths, destination, token, ...(options ? [options] : []));
   }
@@ -93,7 +94,7 @@ export const useFilesStore = defineStore("files", () => {
     paths: string[],
     destination: string,
     token: string | null,
-    options?: { overwrite?: boolean },
+    options?: OverwriteOption,
   ): Promise<BatchResult> {
     return await batchCopy(box, paths, destination, token, ...(options ? [options] : []));
   }
@@ -108,18 +109,19 @@ export const useFilesStore = defineStore("files", () => {
     directory: string,
     file: File,
     token: string | null,
-    options: { overwrite?: boolean } = {},
-  ) {
+    options: OverwriteOption = {},
+  ): Promise<SimpleMessage> {
     uploadProgress.value = 0;
     uploadFileName.value = file.name;
     uploadError.value = null;
     try {
-      await uploadFile(box, directory, file, token, (percent) => {
+      const answer = await uploadFile(box, directory, file, token, (percent) => {
         uploadProgress.value = percent;
       }, options);
       // Ensure final state reflects completion even if callback did not hit 100
       uploadProgress.value = Math.max(uploadProgress.value, 100);
       uploadFileName.value = null;
+      return answer;
     } catch (err) {
       uploadError.value = errorText(err);
       uploadProgress.value = 0;

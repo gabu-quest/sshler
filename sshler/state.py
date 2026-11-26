@@ -568,14 +568,41 @@ def _next_position(box_name: str, db: SQLerDB) -> int:
 
 # Session Management Functions
 
+# The metadata key of the time the running server saw a session end (written through
+# ``session_activity.match_tmux`` only, dropped whenever the row is active again). The
+# start's lost list leaves such a session out (``snapshot.reconcile_on_startup``).
+END_SEEN_AT = "end_seen_at"
+
+# How long the last layout of an ended session is kept: after that its row is purged
+# (``purge_stale_snapshots``), and with it the layout "Restore layout" recreates.
+SNAPSHOT_KEEP_DAYS = 7
+
+
+def _set_active(session: Session, active: bool, *, end_seen: bool = False) -> None:
+    """The one write of a row's ``active`` flag. An active row holds no record that
+    its end was seen; an inactive one gets the record with *end_seen*, and otherwise
+    keeps what it had."""
+    session.active = active
+    meta = session.metadata
+    if active:
+        if meta.pop(END_SEEN_AT, None) is None:
+            return
+    elif end_seen:
+        meta[END_SEEN_AT] = time.time()
+    else:
+        return
+    session.metadata = meta
+
 
 def create_or_update_session(
     box_name: str,
     session_name: str,
     working_directory: str,
     metadata: dict | None = None,
+    keep_existing: bool = False,
 ) -> Session:
-    """Create or update a session record."""
+    """Create or update a session record (one per box and name). With
+    ``keep_existing`` a record that already exists is answered as it is."""
     db = _require_db()
     now = time.time()
 
@@ -587,10 +614,12 @@ def create_or_update_session(
             .first()
         )
 
+        if existing and keep_existing:
+            return existing
         if existing:
             # Update existing session
             existing.last_accessed_at = now
-            existing.active = True
+            _set_active(existing, True)
             existing.working_directory = working_directory
             if metadata:
                 existing.metadata = metadata
@@ -619,9 +648,10 @@ create_or_update_session_async = _in_thread(create_or_update_session)
 def list_sessions(
     box_name: str,
     active_only: bool = False,
-    limit: int = 50,
+    limit: int | None = 50,
 ) -> list[Session]:
-    """List sessions for a box, ordered by last accessed (most recent first)."""
+    """List sessions for a box, ordered by last accessed (most recent first): at most
+    ``limit`` of them, every one with ``limit=None``."""
     db = _require_db()
 
     with _DB_LOCK:
@@ -630,8 +660,10 @@ def list_sessions(
         if active_only:
             query = query.filter(F("active") == True)  # noqa: E712
 
-        rows = query.order_by("last_accessed_at", desc=True).limit(limit).all()
-        return list(rows)
+        query = query.order_by("last_accessed_at", desc=True)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(query.all())
 
 
 list_sessions_async = _in_thread(list_sessions)
@@ -664,9 +696,15 @@ get_session_by_name_async = _in_thread(get_session_by_name)
 
 
 def update_session_activity(
-    session_id: str, active: bool = True, window_count: int | None = None
+    session_id: str,
+    active: bool = True,
+    window_count: int | None = None,
+    *,
+    end_seen: bool = False,
 ) -> bool:
-    """Update session activity status and optionally window count."""
+    """Update session activity status and optionally window count; with *end_seen*
+    an inactive row records that the running server saw its session end (``END_SEEN_AT``,
+    for ``session_activity.match_tmux`` only)."""
     db = _require_db()
 
     with _DB_LOCK:
@@ -674,7 +712,7 @@ def update_session_activity(
         if not session:
             return False
 
-        session.active = active
+        _set_active(session, active, end_seen=end_seen)
         session.last_accessed_at = time.time()
         if window_count is not None:
             session.window_count = window_count
@@ -799,19 +837,14 @@ def list_all_active_sessions() -> list[Session]:
 list_all_active_sessions_async = _in_thread(list_all_active_sessions)
 
 
-def list_all_snapshotted_sessions() -> list[Session]:
-    """List all inactive sessions that have a snapshot (for recovery detection)."""
+def list_all_sessions() -> list[Session]:
+    """List every session row across all boxes, active or not."""
     db = _require_db()
     with _DB_LOCK:
-        inactive = list(
-            Session.using(db)
-            .filter(F("active") == False)  # noqa: E712
-            .all()
-        )
-        return [s for s in inactive if s.metadata.get("last_snapshot_at")]
+        return list(Session.using(db).all())
 
 
-list_all_snapshotted_sessions_async = _in_thread(list_all_snapshotted_sessions)
+list_all_sessions_async = _in_thread(list_all_sessions)
 
 
 def update_session_snapshot(session_id: str, windows: list[dict]) -> bool:
@@ -850,7 +883,7 @@ def clear_session_snapshot(session_id: str) -> bool:
 clear_session_snapshot_async = _in_thread(clear_session_snapshot)
 
 
-def purge_stale_snapshots(max_age_days: int = 7) -> int:
+def purge_stale_snapshots(max_age_days: int = SNAPSHOT_KEEP_DAYS) -> int:
     """Delete inactive sessions with snapshots older than max_age_days.
 
     Returns the number of sessions purged.

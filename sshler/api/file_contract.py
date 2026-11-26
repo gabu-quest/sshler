@@ -87,6 +87,17 @@ def is_archive_name(name: str) -> bool:
     return name.lower().endswith(ARCHIVE_SUFFIXES)
 
 
+def archive_folder_name(name: str) -> str:
+    """The folder an extract with ``keep_both`` unpacks archive ``name`` into: the name
+    without its suffix of ``ARCHIVE_SUFFIXES`` (``backup.zip`` gives ``backup``,
+    ``site.tar.gz`` gives ``site``). A name that would be left empty, ``.`` or ``..``
+    (``.zip``) keeps the whole name."""
+    lowered = name.lower()
+    suffix = next((s for s in ARCHIVE_SUFFIXES if lowered.endswith(s)), "")
+    stem = name[: len(name) - len(suffix)]
+    return name if stem in ("", ".", "..") else stem
+
+
 class PathKind(NamedTuple):
     """What ``stat`` found at a path."""
 
@@ -112,7 +123,11 @@ class SourceFile(NamedTuple):
 
 class Landing(Protocol):
     """A file being written beside its name: ``commit`` puts it in place, ``abort``
-    removes what was written (to the end, even when the request is being cancelled)."""
+    removes what was written (to the end, even when the request is being cancelled).
+    ``path`` is where it lands: the path asked for, or with ``keep_both`` the free name
+    taken beside it."""
+
+    path: str
 
     async def write(self, data: bytes) -> None: ...
 
@@ -127,10 +142,18 @@ ReadChunk = Callable[[int], Awaitable[bytes]]
 
 @dataclass
 class BatchOutcome:
-    """What a batch did: the paths done, and one entry per path that failed."""
+    """What a batch did: the paths done, one entry per path that failed, and one entry
+    per path that landed under another name than asked (``keep_both``)."""
 
     succeeded: list[str] = field(default_factory=list)
     failed: list[dict] = field(default_factory=list)
+    placed: list[dict] = field(default_factory=list)
+
+    def landed(self, path: str, target: str, at: str) -> None:
+        """``path`` (as sent) is done: asked to land at ``target``, it landed at ``at``."""
+        self.succeeded.append(path)
+        if at != target:
+            self.placed.append({"path": path, "placed": at})
 
 
 class BoxFiles(Protocol):
@@ -230,27 +253,37 @@ class BoxFiles(Protocol):
 
     # --- writing ---------------------------------------------------------------------
 
-    async def write_text(self, path: str, content: str) -> None: ...
-
-    async def touch(self, path: str) -> None:
-        """A new, empty file; a name that exists is refused."""
+    async def write_text(self, path: str, content: str) -> None:
+        """Write ``content`` at ``path``; the missing folders of the path are made."""
         ...
 
-    async def upload(self, path: str, data: bytes, *, overwrite: bool) -> None:
+    async def touch(self, path: str) -> None:
+        """A new, empty file; a name that exists is refused. The missing folders of the
+        path are made."""
+        ...
+
+    async def upload(
+        self, path: str, data: bytes, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         """A new file with ``data``; a regular file on the name is replaced only with
-        ``overwrite``."""
+        ``overwrite``; with ``keep_both`` a taken name gives the first free name of its
+        series (``placement.free_name``). The missing folders of the path are made.
+        Returns where the file landed."""
         ...
 
     async def make_folder(self, path: str) -> None: ...
 
-    async def land(self, path: str, *, source_mode: int, overwrite: bool) -> Landing:
-        """A landing for the bytes of a file at ``path``, its folder made if missing.
+    async def land(
+        self, path: str, *, source_mode: int, overwrite: bool, keep_both: bool = False
+    ) -> Landing:
+        """A landing for the bytes of a file at ``path``, all the missing folders of its path made.
 
-        The name is decided by the existing-name rule (``DestinationRefused``), and a
-        source that is not a regular file is refused. A replaced file keeps its
-        permission bits; a free name gets ``source_mode``'s nine permission bits from
-        before the first byte (the box's default bits when it is 0 on a remote box).
-        A local landing writes in a worker thread."""
+        The name is decided by the existing-name rule (``DestinationRefused``; with
+        ``keep_both`` a taken name gives the first free name of its series, which the
+        landing's ``path`` names), and a source that is not a regular file is refused.
+        A replaced file keeps its permission bits; a free name gets ``source_mode``'s
+        nine permission bits from before the first byte (the box's default bits when it
+        is 0 on a remote box). A local landing writes in a worker thread."""
         ...
 
     async def remove_if_unchanged(self, path: str, fingerprint: tuple, target: str) -> None:
@@ -264,9 +297,12 @@ class BoxFiles(Protocol):
 
     async def chmod(self, path: str, mode: int) -> None: ...
 
-    async def rename(self, path: str, new_name: str, *, overwrite: bool) -> str:
+    async def rename(
+        self, path: str, new_name: str, *, overwrite: bool, keep_both: bool = False
+    ) -> str:
         """Give ``path`` the name ``new_name`` in its own folder under the existing-name
-        rule; returns the new path."""
+        rule (with ``keep_both`` a taken name gives the first free name of its series; a
+        rename to its own name is nothing to do); returns the new path."""
         ...
 
     async def place_into(
@@ -278,24 +314,60 @@ class BoxFiles(Protocol):
         move: bool,
         overwrite: bool,
         allow_dirs: bool,
+        keep_both: bool = False,
     ) -> str:
         """Move or copy ``source`` into folder ``destination`` as ``new_name`` (its own
-        name when None) under the existing-name rule; returns the new path."""
+        name when None) under the existing-name rule (with ``keep_both`` a taken name,
+        the source itself included for a copy, gives the first free name of its series;
+        a move onto its own path is nothing to do); the missing folders of
+        ``destination`` are made; returns the path it landed at."""
         ...
 
     async def create_archive(
-        self, paths: Sequence[str], destination: str, name: str, fmt: str
+        self,
+        paths: Sequence[str],
+        destination: str,
+        name: str,
+        fmt: str,
+        *,
+        overwrite: bool = False,
+        keep_both: bool = False,
     ) -> str:
-        """Pack ``paths`` into a new archive ``name`` in folder ``destination``; ``fmt``
+        """Pack ``paths`` into archive ``name`` in folder ``destination``; ``fmt``
         (``tar.gz``, ``tgz`` or ``zip``) and ``name`` are checked by the route. Returns
         the archive's path. A folder is packed with everything in it, under its own
-        name."""
+        name. The archive is written under a temporary name beside it and placed by the
+        rule for an existing name when complete: a taken name is refused unless
+        ``overwrite`` lets a regular file be replaced, and a compress that fails leaves
+        the old archive whole and no other file. With ``keep_both`` a taken name is
+        neither replaced nor refused: the archive lands under the first free name of its
+        series, and the path returned is that one."""
         ...
 
-    async def extract_archive(self, archive: str, destination: str) -> str:
+    async def extract_archive(
+        self, archive: str, destination: str, *, overwrite: bool = False, keep_both: bool = False
+    ) -> str:
         """Unpack ``archive`` (a ``.tar.gz``, ``.tgz`` or ``.zip`` by its name; any other
-        name is a 400) into folder ``destination``; returns the destination's path. On
-        the local box no entry is written outside ``destination``."""
+        name is a 400) into folder ``destination`` (made if missing); returns the
+        destination's path. The archive is unpacked into a temp folder inside
+        ``destination``, every entry is checked against it, and only then are the
+        entries moved into place by the rule for an existing name: an entry onto a file
+        that exists refuses the whole extract (``exists``, with the count and the first
+        names) unless ``overwrite`` lets files replace files; one onto anything else
+        refuses it (``cannot_replace``); an existing folder takes the archive's entries.
+        An extract that is refused, or fails before the moves begin (an archive that
+        cannot be read, an entry the guard refuses, a command past its limit), leaves
+        ``destination`` as it was and no temp folder. The moves are one per entry and
+        not undone: one that fails after the check (an existing subfolder that takes no
+        new file) leaves the entries moved before it in place. On the local box no
+        entry is written outside ``destination``.
+
+        With ``keep_both`` nothing is checked entry by entry: the unpacked temp folder
+        is placed whole as a new folder inside ``destination``, named by
+        ``archive_folder_name``, or the first free name of its series when that name is
+        taken by anything; nothing merges into an existing folder and no entry is
+        renamed. The path returned is that new folder. A refused or failed extract
+        leaves no folder."""
         ...
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
@@ -303,8 +375,16 @@ class BoxFiles(Protocol):
         ...
 
     async def place_many(
-        self, paths: Sequence[str], destination: str, *, move: bool, overwrite: bool
+        self,
+        paths: Sequence[str],
+        destination: str,
+        *,
+        move: bool,
+        overwrite: bool,
+        keep_both: bool = False,
     ) -> BatchOutcome:
-        """Move or copy each path into ``destination`` under the existing-name rule;
-        a second item with the same name as one placed before it is refused."""
+        """Move or copy each path into ``destination`` under the existing-name rule; the
+        missing folders of ``destination`` are made; a second item with the same name as
+        one placed before it is refused, or with ``keep_both`` lands beside it. Each item
+        that landed under another name than asked is in ``placed``."""
         ...

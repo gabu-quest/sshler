@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, StrictBool, field_validator
+from pydantic import BaseModel, Field, StrictBool, computed_field, field_validator
 
+from ..snapshot import saved_layout
 from .helpers import MAX_IMAGE_PREVIEW_BYTES
 
 
@@ -82,12 +83,16 @@ class APIRenameRequest(BaseModel):
     new_name: str
     # Replace a regular file that has the name; a JSON boolean only, never "true" or 1.
     overwrite: StrictBool = False
+    # Land beside a taken name under the first free name of its series; never with
+    # `overwrite` (`placement.refuse_replace_and_keep_both`).
+    keep_both: StrictBool = False
 
 
 class APIMoveRequest(BaseModel):
     source: str
     destination: str
     overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 class APICopyRequest(BaseModel):
@@ -95,6 +100,7 @@ class APICopyRequest(BaseModel):
     destination: str
     new_name: str | None = None
     overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 class APIChmodRequest(BaseModel):
@@ -156,6 +162,13 @@ class APISession(BaseModel):
     active: bool
     window_count: int
     metadata: dict
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def restorable(self) -> bool:
+        """Whether the session has ended and its layout is kept, so the page offers
+        "Restore layout" (``snapshot.saved_layout``)."""
+        return bool(saved_layout(self.active, self.box, self.metadata))
 
 
 class APISessionCreate(BaseModel):

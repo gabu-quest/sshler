@@ -434,6 +434,8 @@ def test_windows_ws_attaches_and_detaches_without_terminating(tmp_path, monkeypa
     try:
         url = "/ws/term?host=local&dir=.&session=proj&cols=80&rows=24&token=t"
         with client.websocket_connect(url) as ws:
+            # A native shell is a plain shell, said once before any output.
+            assert ws.receive_json() == {"op": "shell", "kind": "plain", "fallback": False}
             # Receiving the replay frame proves the handler reached attach(),
             # so the subsequent disconnect exercises the detach path (not the
             # pre-attach early-return).

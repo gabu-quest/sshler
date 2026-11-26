@@ -30,6 +30,7 @@ from .models import (
     APISimpleMessage,
     APITouchRequest,
 )
+from .placement import refuse_replace_and_keep_both
 from .rate_limiting import rate_limit_delete, rate_limit_upload, rate_limit_write
 
 logger = logging.getLogger(__name__)
@@ -84,9 +85,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APIRenameRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
+        refuse_replace_and_keep_both(payload.overwrite, payload.keep_both)
         box = deps.get_box_or_404(application_config, name)
         async with box_files(deps, box, application_config, _FILE) as files:
-            target = await files.rename(payload.path, payload.new_name, overwrite=payload.overwrite)
+            target = await files.rename(
+                payload.path,
+                payload.new_name,
+                overwrite=payload.overwrite,
+                keep_both=payload.keep_both,
+            )
         return APISimpleMessage(status="ok", message="renamed", path=target)
 
     @router.post("/boxes/{name}/touch", response_model=APISimpleMessage)
@@ -133,6 +140,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APIMoveRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
+        refuse_replace_and_keep_both(payload.overwrite, payload.keep_both)
         box = deps.get_box_or_404(application_config, name)
         async with box_files(deps, box, application_config, _SOURCE) as files:
             target = await files.place_into(
@@ -142,6 +150,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 move=True,
                 overwrite=payload.overwrite,
                 allow_dirs=True,
+                keep_both=payload.keep_both,
             )
         return APISimpleMessage(status="ok", message="moved", path=target)
 
@@ -151,6 +160,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         payload: APICopyRequest,
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APISimpleMessage:
+        refuse_replace_and_keep_both(payload.overwrite, payload.keep_both)
         box = deps.get_box_or_404(application_config, name)
         async with box_files(deps, box, application_config, _SOURCE) as files:
             target = await files.place_into(
@@ -160,6 +170,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
                 move=False,
                 overwrite=payload.overwrite,
                 allow_dirs=False,
+                keep_both=payload.keep_both,
             )
         return APISimpleMessage(status="ok", message="copied", path=target)
 
@@ -291,9 +302,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         directory: str = Form(...),
         file: UploadFile = File(...),
         overwrite: bool = Form(False),
+        keep_both: bool = Form(False),
         application_config: AppConfig = Depends(deps.get_application_config),
         _rate_limit: None = Depends(rate_limit_upload),
     ) -> APISimpleMessage:
+        refuse_replace_and_keep_both(overwrite, keep_both)
         box = deps.get_box_or_404(application_config, name)
         candidate_name = (file.filename or "").strip()
         if not candidate_name:
@@ -310,7 +323,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         async with box_files(deps, box, application_config) as files:
             target = await files.child(directory, candidate_name)
-            await files.upload(target, contents, overwrite=overwrite)
+            target = await files.upload(target, contents, overwrite=overwrite, keep_both=keep_both)
         return APISimpleMessage(status="ok", message="uploaded", path=target)
 
     @router.post("/boxes/{name}/chmod", response_model=APISimpleMessage)

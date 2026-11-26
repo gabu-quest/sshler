@@ -98,6 +98,24 @@ describe("ApiError from an answer", () => {
       0, "network", "", "No answer from sshler; check the connection",
     ]);
   });
+
+  // Mutation: the names an extract found taken are dropped, so the page cannot ask about them.
+  it("keeps the names a refusal of many names is about", () => {
+    const err = apiErrorOfBody(409, {
+      detail: "Files of the archive that already exist here (7): a, b and 5 more",
+      reason: "exists",
+      taken: { count: 7, names: ["a", "b"] },
+    });
+    expect([err.reason, err.taken]).toEqual(["exists", { count: 7, names: ["a", "b"] }]);
+  });
+
+  it.each([
+    ["no taken", { detail: "x", reason: "exists" }],
+    ["a count that is no number", { detail: "x", reason: "exists", taken: { count: "7", names: ["a"] } }],
+    ["a name that is no text", { detail: "x", reason: "exists", taken: { count: 1, names: [1] } }],
+  ])("%s gives no names", (_label, body) => {
+    expect(apiErrorOfBody(409, body).taken).toBeNull();
+  });
 });
 
 describe("the text of a failure inside a 200 answer", () => {

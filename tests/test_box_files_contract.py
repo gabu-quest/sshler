@@ -36,6 +36,7 @@ import yaml
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from fastapi.testclient import TestClient
+from platform_support import make_symlink
 from transfer_events import transfer_events
 
 import sshler.api
@@ -50,7 +51,18 @@ from sshler.ssh import SSHError, connect
 from sshler.ssh_pool import SSHConnectionPool
 from sshler.webapp import ServerSettings, make_app
 
-pytestmark = pytest.mark.posix_only("an SFTP server rooted in a temp folder with POSIX file modes")
+# The local half of the table runs on every system; on Windows the local box spells a
+# resolved path in POSIX form (`C:/x`), as `_open_local` names the tree. What needs
+# POSIX is marked where it is needed:
+# - every case on the loopback SFTP server (the remote opener, the round trips below);
+REMOTE_SERVER = pytest.mark.posix_only(
+    "an SFTP server rooted in a temp folder with POSIX file modes"
+)
+# - and each row whose expectation is POSIX's own, with one of these reasons.
+POSIX_MODES = "POSIX file modes (chmod, the bits a file is made with, a read-only folder)"
+POSIX_NAME = "a file name holding a newline, which NTFS cannot hold"
+POSIX_ENOTDIR = "ENOTDIR and its words, the POSIX error for a file used as a folder"
+POSIX_ENOENT_WORDS = "the POSIX words for a missing file (No such file or directory)"
 
 TOKEN = "contract-token"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
@@ -168,7 +180,7 @@ def _build_tree(root: Path, outside: Path) -> None:
     (root / "taken.txt").write_bytes(b"old\n")
     outside.mkdir()
     (outside / "secret.txt").write_bytes(b"secret\n")
-    (root / "link_out").symlink_to(outside / "secret.txt")
+    make_symlink(root / "link_out", outside / "secret.txt")
 
 
 @dataclass
@@ -197,8 +209,8 @@ async def _open_local(tmp_path: Path) -> AsyncIterator[Kind]:
         deps=SimpleNamespace(),
         root=root,
         outside=outside,
-        home=str(Path.home().resolve()),
-        at=lambda rel: str(root / rel) if rel else str(root),
+        home=Path.home().resolve().as_posix(),
+        at=lambda rel: (root / rel).as_posix() if rel else root.as_posix(),
     )
 
 
@@ -263,9 +275,12 @@ async def _open_remote(tmp_path: Path) -> AsyncIterator[Kind]:
 
 
 OPENERS = {"local": _open_local, "remote": _open_remote}
+OPENER_MARKS = {"remote": [REMOTE_SERVER]}
 
 
-@pytest_asyncio.fixture(params=list(OPENERS))
+@pytest_asyncio.fixture(
+    params=[pytest.param(name, marks=OPENER_MARKS.get(name, [])) for name in OPENERS]
+)
 async def kind(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Kind]:
     opened = OPENERS[request.param](tmp_path)
     yield await anext(opened)
@@ -297,6 +312,13 @@ class Row:
     operation: Callable
     same: Callable[[Kind], object] | None = None
     differs: dict[str, Callable[[Kind], object]] = field(default_factory=dict)
+    # The POSIX mechanism the expectation needs, when it does; the row is skipped on
+    # Windows with it as the reason.
+    posix_only: str | None = None
+
+    def param(self) -> object:
+        marks = [pytest.mark.posix_only(self.posix_only)] if self.posix_only else []
+        return pytest.param(self, id=self.name, marks=marks)
 
     def expected(self, kind: Kind) -> object:
         return self.same(kind) if self.same is not None else self.differs[kind.name](kind)
@@ -532,6 +554,256 @@ def _listed(folder_size: int | None) -> list[tuple[str, bool, int | None]]:
     ]
 
 
+# --- a write into a folder that is not there makes the folders -----------------------
+
+MISSING = "sub/new dir #/c"
+
+
+def _placed(kind: Kind, name: str = "out.txt") -> tuple[bytes, list[str], list[str]]:
+    """What stands in the made folders: the file, the folders of ``sub``, and those of
+    the folder made first."""
+    return (
+        (kind.root / MISSING / name).read_bytes(),
+        _folder_names(kind, "sub"),
+        _folder_names(kind, "sub/new dir #"),
+    )
+
+
+async def _write_text_into_missing(files, kind: Kind):
+    await files.write_text(await files.child(kind.at(MISSING), "out.txt"), "text")
+    return _placed(kind)
+
+
+async def _touch_into_missing(files, kind: Kind):
+    await files.touch(await files.child(kind.at(MISSING), "out.txt"))
+    return _placed(kind)
+
+
+async def _upload_into_missing(files, kind: Kind):
+    await files.upload(await files.child(kind.at(MISSING), "out.txt"), b"up", overwrite=False)
+    return _placed(kind)
+
+
+async def _two_uploads_into_missing(files, kind: Kind):
+    await asyncio.gather(
+        files.upload(await files.child(kind.at(MISSING), "one.txt"), b"1", overwrite=False),
+        files.upload(await files.child(kind.at(MISSING), "two.txt"), b"2", overwrite=False),
+    )
+    return (
+        (kind.root / MISSING / "one.txt").read_bytes(),
+        (kind.root / MISSING / "two.txt").read_bytes(),
+        _folder_names(kind, MISSING),
+    )
+
+
+async def _place_into_missing(files, kind: Kind, *, move: bool):
+    target = await files.place_into(
+        kind.at("a.txt"), kind.at(MISSING), "out.txt", move=move, overwrite=False, allow_dirs=True
+    )
+    return (*_placed(kind), files.name(target), (kind.root / "a.txt").exists())
+
+
+async def _place_many_into_missing(files, kind: Kind, *, move: bool):
+    outcome = await files.place_many(
+        [kind.at("a.txt")], kind.at(MISSING), move=move, overwrite=False
+    )
+    return outcome.succeeded, outcome.failed, _placed(kind, "a.txt")[1:]
+
+
+# --- keep both: a taken name gets the first free name of its series ----------------
+
+
+async def _rename_keeping_both(files, kind: Kind):
+    target = await files.rename(kind.at("a.txt"), "taken.txt", overwrite=False, keep_both=True)
+    return target, _folder_names(kind), (kind.root / "taken (2).txt").read_bytes()
+
+
+async def _copy_onto_itself_keeping_both(files, kind: Kind):
+    target = await files.place_into(
+        kind.at("a.txt"),
+        kind.at(""),
+        None,
+        move=False,
+        overwrite=False,
+        allow_dirs=False,
+        keep_both=True,
+    )
+    return target, (kind.root / "a (2).txt").read_bytes(), (kind.root / "a.txt").read_bytes()
+
+
+async def _move_folder_keeping_both(files, kind: Kind):
+    (kind.root / "d").mkdir()
+    (kind.root / "d" / "sub").write_bytes(b"a file")
+    target = await files.place_into(
+        kind.at("sub"),
+        kind.at("d"),
+        None,
+        move=True,
+        overwrite=False,
+        allow_dirs=True,
+        keep_both=True,
+    )
+    return (
+        target,
+        _folder_names(kind, "d"),
+        (kind.root / "d" / "sub (2)" / "inner.txt").read_bytes(),
+    )
+
+
+async def _upload_keeping_both(files, kind: Kind):
+    target = await files.child(kind.at(""), "taken.txt")
+    landed = await files.upload(target, b"new", overwrite=False, keep_both=True)
+    return (
+        landed,
+        (kind.root / "taken.txt").read_bytes(),
+        (kind.root / "taken (2).txt").read_bytes(),
+    )
+
+
+async def _upload_returns_its_path(files, kind: Kind):
+    target = await files.child(kind.at(""), "free.txt")
+    return await files.upload(target, b"new", overwrite=False) == target
+
+
+async def _eight_at_once_keeping_both(files, kind: Kind, *, what: str):
+    target = await files.child(kind.at(""), "taken.txt")
+    for n in range(8):
+        (kind.root / f"src{n}").mkdir()
+        (kind.root / f"src{n}" / "taken.txt").write_bytes(f"copy {n}".encode())
+
+    async def one(n: int) -> str:
+        if what == "upload":
+            return await files.upload(target, f"copy {n}".encode(), overwrite=False, keep_both=True)
+        return await files.place_into(
+            kind.at(f"src{n}/taken.txt"),
+            kind.at(""),
+            None,
+            move=False,
+            overwrite=False,
+            allow_dirs=False,
+            keep_both=True,
+        )
+
+    landed = await asyncio.gather(*(one(n) for n in range(8)))
+    names = sorted(files.name(p) for p in landed)
+    contents = sorted((kind.root / name).read_bytes() for name in names)
+    return names, contents, (kind.root / "taken.txt").read_bytes()
+
+
+async def _land_keeping_both(files, kind: Kind):
+    target = await files.path(kind.at("taken.txt"))
+    landing = await files.land(target, source_mode=0o100644, overwrite=False, keep_both=True)
+    await landing.write(b"landed")
+    await landing.commit()
+    return files.name(landing.path), (kind.root / "taken (2).txt").read_bytes()
+
+
+async def _land_says_its_path(files, kind: Kind):
+    target = await files.path(kind.at("free.txt"))
+    landing = await files.land(target, source_mode=0o100644, overwrite=False)
+    await landing.abort()
+    return landing.path == target
+
+
+async def _place_many_keeping_both(files, kind: Kind):
+    (kind.root / "sub" / "taken.txt").write_bytes(b"inner old\n")
+    outcome = await files.place_many(
+        [kind.at("a.txt"), kind.at("taken.txt")],
+        kind.at("sub"),
+        move=False,
+        overwrite=False,
+        keep_both=True,
+    )
+    return outcome.succeeded, outcome.failed, outcome.placed, _folder_names(kind, "sub")
+
+
+async def _land_into_missing(files, kind: Kind):
+    folder = kind.at(MISSING)
+    landing = await files.land(
+        files.join(await files.path(folder), "out.txt"), source_mode=0o100644, overwrite=False
+    )
+    await landing.write(b"lan")
+    await landing.commit()
+    return _placed(kind)
+
+
+async def _write_text_under_a_file(files, kind: Kind):
+    await files.write_text(await files.child(kind.at("taken.txt/x"), "out.txt"), "t")
+
+
+async def _upload_under_a_file(files, kind: Kind):
+    await files.upload(await files.child(kind.at("taken.txt/x"), "out.txt"), b"u", overwrite=False)
+
+
+async def _write_text_into_a_file(files, kind: Kind):
+    await files.write_text(await files.child(kind.at("taken.txt"), "out.txt"), "t")
+
+
+async def _touch_into_a_file(files, kind: Kind):
+    await files.touch(await files.child(kind.at("taken.txt"), "out.txt"))
+
+
+async def _upload_into_a_file(files, kind: Kind):
+    await files.upload(await files.child(kind.at("taken.txt"), "out.txt"), b"u", overwrite=False)
+
+
+async def _copy_into_a_file(files, kind: Kind):
+    await files.place_into(
+        kind.at("a.txt"),
+        kind.at("taken.txt"),
+        "out.txt",
+        move=False,
+        overwrite=False,
+        allow_dirs=True,
+    )
+
+
+async def _land_into_a_file(files, kind: Kind):
+    await files.land(
+        files.join(await files.path(kind.at("taken.txt")), "out.txt"),
+        source_mode=0o100644,
+        overwrite=False,
+    )
+
+
+async def _write_text_under_a_read_only_folder(files, kind: Kind):
+    (kind.root / "sub").chmod(0o500)
+    try:
+        await files.write_text(await files.child(kind.at("sub/new/c"), "out.txt"), "t")
+    finally:
+        (kind.root / "sub").chmod(0o700)
+
+
+async def _upload_under_a_read_only_folder(files, kind: Kind):
+    (kind.root / "sub").chmod(0o500)
+    try:
+        await files.upload(
+            await files.child(kind.at("sub/new/c"), "out.txt"), b"u", overwrite=False
+        )
+    finally:
+        (kind.root / "sub").chmod(0o700)
+
+
+async def _a_refused_folder_copy_after_the_folders(files, kind: Kind):
+    """A folder copy is refused after its destination was asked for: what is left."""
+    (kind.root / "srcdir").mkdir()
+    try:
+        await files.place_into(
+            kind.at("srcdir"), kind.at(MISSING), None, move=False, overwrite=False, allow_dirs=False
+        )
+    except Exception as exc:  # the answer is the failure table's; the folders are the point
+        return type(exc).__name__, _folder_names(kind, "sub"), _folder_names(kind, "sub/new dir #")
+
+
+async def _a_folder_into_its_own_missing_folder(files, kind: Kind):
+    try:
+        await files.place_into(
+            kind.at("sub"), kind.at(MISSING), None, move=False, overwrite=False, allow_dirs=True
+        )
+    except Exception as exc:
+        return type(exc).__name__, _folder_names(kind, "sub")
+
+
 ATTACHMENT = "attachment; filename=\"a.txt\"; filename*=UTF-8''a.txt"
 
 ROWS = [
@@ -601,7 +873,7 @@ ROWS = [
         "a link that leaves the folder",
         lambda f, k: _link_out(f, k),
         differs={
-            "local": lambda k: (str(k.outside / "secret.txt"), "secret\n"),
+            "local": lambda k: ((k.outside / "secret.txt").as_posix(), "secret\n"),
             "remote": lambda k: ("/link_out", "secret\n"),
         },
     ),
@@ -613,11 +885,13 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"No such file or directory: {k.at('a.txt')}"),
             "remote": lambda k: ("answered", 404, "No such file or directory"),
         },
+        posix_only=POSIX_ENOENT_WORDS,
     ),
     Row(
         "a name with a space, a quote and a newline",
         _odd_name,
         same=lambda k: (k.at(ODD_NAME), (True, False, True), b""),
+        posix_only=POSIX_NAME,
     ),
     Row("~ is the home", lambda f, k: f.path("~"), same=lambda k: k.home),
     Row("~/x is in the home", lambda f, k: f.path("~/x"), same=lambda k: f"{k.home}/x"),
@@ -645,8 +919,9 @@ ROWS = [
             "local": lambda k: ("answered", 404, f"No such file or directory: {k.at('nope')}"),
             "remote": lambda k: ("answered", 404, "No such file or directory"),
         },
+        posix_only=POSIX_ENOENT_WORDS,
     ),
-    Row("a mode is set", _chmod, same=lambda k: 0o600),
+    Row("a mode is set", _chmod, same=lambda k: 0o600, posix_only=POSIX_MODES),
     Row("text is written and read back", _write_and_read, same=lambda k: "# hi\n"),
     Row(
         # A local download streams from disk; a remote one is read into memory.
@@ -700,11 +975,13 @@ ROWS = [
         "a committed landing is the file, with the source's bits, its folder made",
         _land_new,
         same=lambda k: (ODD_NAME, b"abc", 0o640, [ODD_NAME]),
+        posix_only=POSIX_NAME + "; " + POSIX_MODES,
     ),
     Row(
         "a committed landing replaces a file and keeps its bits",
         _land_replacing,
         same=lambda k: (True, 0o660, ["a.txt", "empty.txt", "link_out", "sub", "taken.txt"]),
+        posix_only=POSIX_MODES,
     ),
     Row(
         "an aborted landing on a free name leaves nothing behind",
@@ -795,11 +1072,208 @@ ROWS = [
             [{"path": k.at("taken.txt"), "error": "File already exists", "reason": "exists"}],
         ),
     ),
+    Row(
+        "a text write into a missing folder makes the folders",
+        _write_text_into_missing,
+        same=lambda k: (b"text", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "a new file into a missing folder makes the folders",
+        _touch_into_missing,
+        same=lambda k: (b"", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "an upload into a missing folder makes the folders",
+        _upload_into_missing,
+        same=lambda k: (b"up", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "two uploads into one missing folder both land",
+        _two_uploads_into_missing,
+        same=lambda k: (b"1", b"2", ["one.txt", "two.txt"]),
+    ),
+    Row(
+        "a copy into a missing folder makes the folders",
+        lambda f, k: _place_into_missing(f, k, move=False),
+        same=lambda k: (b"hello\n", ["inner.txt", "new dir #"], ["c"], "out.txt", True),
+    ),
+    Row(
+        "a move into a missing folder makes the folders",
+        lambda f, k: _place_into_missing(f, k, move=True),
+        same=lambda k: (b"hello\n", ["inner.txt", "new dir #"], ["c"], "out.txt", False),
+    ),
+    Row(
+        "a batch copy into a missing folder makes the folders",
+        lambda f, k: _place_many_into_missing(f, k, move=False),
+        same=lambda k: ([k.at("a.txt")], [], (["inner.txt", "new dir #"], ["c"])),
+    ),
+    Row(
+        "a batch move into a missing folder makes the folders",
+        lambda f, k: _place_many_into_missing(f, k, move=True),
+        same=lambda k: ([k.at("a.txt")], [], (["inner.txt", "new dir #"], ["c"])),
+    ),
+    Row(
+        "a rename with keep both lands beside the taken name",
+        _rename_keeping_both,
+        same=lambda k: (
+            k.at("taken (2).txt"),
+            ["empty.txt", "link_out", "sub", "taken (2).txt", "taken.txt"],
+            b"hello\n",
+        ),
+    ),
+    Row(
+        "a copy with keep both onto its own path makes a duplicate",
+        _copy_onto_itself_keeping_both,
+        same=lambda k: (k.at("a (2).txt"), b"hello\n", b"hello\n"),
+    ),
+    Row(
+        "a folder moved with keep both onto a name taken by a file lands beside it",
+        _move_folder_keeping_both,
+        same=lambda k: (k.at("d/sub (2)"), ["sub", "sub (2)"], b"in\n"),
+    ),
+    Row(
+        "an upload with keep both lands beside the taken name and says where",
+        _upload_keeping_both,
+        same=lambda k: (k.at("taken (2).txt"), b"old\n", b"new"),
+    ),
+    Row(
+        "an upload says the path it landed at",
+        _upload_returns_its_path,
+        same=lambda k: True,
+    ),
+    Row(
+        "eight uploads with keep both at once land under eight names",
+        lambda f, k: _eight_at_once_keeping_both(f, k, what="upload"),
+        same=lambda k: (
+            sorted(f"taken ({n}).txt" for n in range(2, 10)),
+            sorted(f"copy {n}".encode() for n in range(8)),
+            b"old\n",
+        ),
+    ),
+    Row(
+        "eight copies with keep both at once land under eight names",
+        lambda f, k: _eight_at_once_keeping_both(f, k, what="copy"),
+        same=lambda k: (
+            sorted(f"taken ({n}).txt" for n in range(2, 10)),
+            sorted(f"copy {n}".encode() for n in range(8)),
+            b"old\n",
+        ),
+    ),
+    Row(
+        "a landing with keep both says the free name it landed at",
+        _land_keeping_both,
+        same=lambda k: ("taken (2).txt", b"landed"),
+    ),
+    Row(
+        "a landing on a free name says the path asked for",
+        _land_says_its_path,
+        same=lambda k: True,
+    ),
+    Row(
+        "a batch copy with keep both lists the item placed under another name",
+        _place_many_keeping_both,
+        same=lambda k: (
+            [k.at("a.txt"), k.at("taken.txt")],
+            [],
+            [{"path": k.at("taken.txt"), "placed": k.at("sub/taken (2).txt")}],
+            ["a.txt", "inner.txt", "taken (2).txt", "taken.txt"],
+        ),
+    ),
+    Row(
+        "a landing into a missing folder makes the folders",
+        _land_into_missing,
+        same=lambda k: (b"lan", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "a refused folder copy into a missing folder leaves the folders it made",
+        _a_refused_folder_copy_after_the_folders,
+        same=lambda k: ("Failure", ["inner.txt", "new dir #"], ["c"]),
+    ),
+    Row(
+        "a folder into a missing folder of its own is refused before any folder is made",
+        _a_folder_into_its_own_missing_folder,
+        same=lambda k: ("DestinationRefused", ["inner.txt"]),
+    ),
+    Row(
+        "a text write under a file is answered as the local box answers",
+        _write_text_under_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "an upload under a file is answered as a text write is",
+        _upload_under_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt/x"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "a text write into a file taken for a folder is not found",
+        _write_text_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "a new file in a file taken for a folder is not found",
+        _touch_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "an upload into a file taken for a folder is not found",
+        _upload_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "a copy into a file taken for a folder is not found",
+        _copy_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "a landing in a file taken for a folder is not found",
+        _land_into_a_file,
+        differs={
+            "local": lambda k: ("answered", 404, f"Not a directory: {k.root}/taken.txt"),
+            "remote": lambda k: ("answered", 404, "Not a directory"),
+        },
+        posix_only=POSIX_ENOTDIR,
+    ),
+    Row(
+        "a text write under a read-only folder is forbidden",
+        _write_text_under_a_read_only_folder,
+        same=lambda k: ("answered", 403, "Permission denied"),
+        posix_only=POSIX_MODES,
+    ),
+    Row(
+        "an upload under a read-only folder is forbidden",
+        _upload_under_a_read_only_folder,
+        same=lambda k: ("answered", 403, "Permission denied"),
+        posix_only=POSIX_MODES,
+    ),
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("row", ROWS, ids=[row.name for row in ROWS])
+@pytest.mark.parametrize("row", [row.param() for row in ROWS])
 async def test_every_kind_of_box_keeps_the_contract(kind: Kind, row: Row) -> None:
     assert await _outcome(kind, row.operation) == row.expected(kind)
 
@@ -983,6 +1457,37 @@ async def test_a_local_folder_zip_holds_each_file_under_its_relative_name(tmp_pa
 # --- archives: a remote command recorded, never run; a local one made and unpacked ---
 
 
+class _PlacingSFTP:
+    """An SFTP client for an archive: the temp file is there, the archive's name is free,
+    and what it is asked to do is recorded."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    async def lstat(self, path: str) -> SimpleNamespace:
+        self.calls.append(("lstat", path))
+        if not path.endswith(".t.sshler"):
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return SimpleNamespace(permissions=0o100644, size=0, mtime=0, mtime_ns=0)
+
+    async def link(self, source: str, target: str) -> None:
+        self.calls.append(("link", source, target))
+
+    async def remove(self, path: str) -> None:
+        self.calls.append(("remove", path))
+
+    def exit(self) -> None:
+        pass
+
+
+def _fixed_temp_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    def temp(target: str, suffix: str = ".sshler") -> str:
+        parent, name = target.rsplit("/", 1)
+        return f"{parent}/.{name}.t.sshler"
+
+    monkeypatch.setattr(remote_files_api, "_remote_temp_beside", temp)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("fmt", "name", "words"),
@@ -990,20 +1495,39 @@ async def test_a_local_folder_zip_holds_each_file_under_its_relative_name(tmp_pa
         (
             "tar.gz",
             "o.tar.gz",
-            ["tar", "czf", "/home/out/o.tar.gz", "-C", "/", f"/srv/{ODD_NAME}", "/home/x"],
+            [
+                "tar",
+                "czf",
+                "/home/out/.o.tar.gz.t.sshler",
+                "-C",
+                "/",
+                f"/srv/{ODD_NAME}",
+                "/home/x",
+            ],
         ),
         (
             "zip",
             "o.zip",
-            ["cd", "/", "&&", "zip", "-r", "/home/out/o.zip", f"/srv/{ODD_NAME}", "/home/x"],
+            [
+                "cd",
+                "/",
+                "&&",
+                "zip",
+                "-r",
+                "/home/out/.o.zip.t.sshler",
+                f"/srv/{ODD_NAME}",
+                "/home/x",
+            ],
         ),
     ],
 )
 async def test_a_remote_archive_is_made_by_one_command_on_the_quoted_paths(
     monkeypatch, fmt, name, words
 ):
+    _fixed_temp_name(monkeypatch)
     home = 'printf %s "$HOME"'
-    connection = RecordingConnection({home: _Result(stdout="/home", exit_status=0)})
+    sftp = _PlacingSFTP()
+    connection = RecordingConnection({home: _Result(stdout="/home", exit_status=0)}, sftp)
     # The zip runs after a `cd /`: its `&&` is the one word left unquoted.
     made = shlex.join(words) if fmt == "tar.gz" else "cd / && " + shlex.join(words[3:])
     connection.replies[made] = _Result(stdout="", exit_status=0)
@@ -1013,30 +1537,67 @@ async def test_a_remote_archive_is_made_by_one_command_on_the_quoted_paths(
     assert target == f"/home/out/{name}"
     assert connection.commands == [home, made, HEALTH_CMD]
     assert shlex.split(made) == words
+    # The archive takes its name only now: the temp file is linked to it and removed.
+    assert sftp.calls[-2:] == [
+        ("link", f"/home/out/.{name}.t.sshler", f"/home/out/{name}"),
+        ("remove", f"/home/out/.{name}.t.sshler"),
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("archive", "words"),
     [
-        (f"/srv/{ODD_NAME}.TGZ", ["tar", "xzf", f"/srv/{ODD_NAME}.TGZ", "-C", "/home/d"]),
-        ("-a.zip", ["unzip", "-o", "./-a.zip", "-d", "/home/d"]),
+        (
+            f"/srv/{ODD_NAME}.TGZ",
+            ["tar", "xzf", f"/srv/{ODD_NAME}.TGZ", "-C", f"/home/d/.{ODD_NAME}.TGZ.t.sshler"],
+        ),
+        ("-a.zip", ["unzip", "-o", "./-a.zip", "-d", "/home/d/.-a.zip.t.sshler"]),
     ],
 )
 async def test_a_remote_archive_is_unpacked_by_one_command_on_the_quoted_paths(
     monkeypatch, archive, words
 ):
+    _fixed_temp_name(monkeypatch)
     home = 'printf %s "$HOME"'
     unpack = shlex.join(words)
+    sftp = _UnpackingSFTP()
     connection = RecordingConnection(
         {home: _Result(stdout="/home", exit_status=0), unpack: _Result(stdout="", exit_status=0)},
-        _StatSFTP(0o100644),
+        sftp,
     )
     deps = _recording(monkeypatch, connection)
     async with box_files(deps, _remote_box(), CONFIG) as files:
         destination = await files.extract_archive(archive, "~/d")
     assert destination == "/home/d"
     assert connection.commands == [home, unpack, HEALTH_CMD]
+    # The command unpacked into a temp folder of its own, which is gone at the end.
+    temp = words[-1]
+    assert sftp.calls == [("mkdir", temp), ("readdir", temp), ("readdir", temp), ("rmdir", temp)]
+
+
+class _UnpackingSFTP(_StatSFTP):
+    """An SFTP client for an extract: the archive is a file, ``/home/d`` a folder, and
+    the unpacked folder stays empty (the command is not run)."""
+
+    def __init__(self) -> None:
+        super().__init__(0o100644)
+        self.calls: list[tuple[str, str]] = []
+
+    async def lstat(self, path: str) -> SimpleNamespace:
+        if path != "/home/d":
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return SimpleNamespace(permissions=0o040755)
+
+    async def mkdir(self, path: str, attrs: object = None) -> None:
+        self.calls.append(("mkdir", path))
+
+    async def readdir(self, path: str) -> list:
+        self.calls.append(("readdir", path))
+        return []
+
+    async def rmdir(self, path: str) -> None:
+        self.calls.append(("rmdir", path))
 
 
 @pytest.mark.asyncio
@@ -1047,7 +1608,9 @@ async def test_a_remote_archive_past_its_limit_is_504(monkeypatch):
                 await asyncio.sleep(5)
             return await super().run(cmd, check, encoding)
 
-    connection = Slow({})
+    _fixed_temp_name(monkeypatch)
+    sftp = _PlacingSFTP()
+    connection = Slow({}, sftp)
     monkeypatch.setattr(remote_files_api, "ARCHIVE_TIMEOUT", 0.05)
     deps = _recording(monkeypatch, connection)
     with pytest.raises(HTTPException) as answered:
@@ -1059,9 +1622,7 @@ async def test_a_remote_archive_past_its_limit_is_504(monkeypatch):
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
-async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp_path, fmt, name):
+async def _pack_and_unpack(tmp_path: Path, fmt: str, name: str) -> None:
     root = tmp_path / "tree"
     _build_tree(root, tmp_path / "outside")
     out = tmp_path / "out"
@@ -1071,10 +1632,125 @@ async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp
             [str(root / "a.txt"), str(root / "sub")], str(out), name, fmt
         )
         unpacked = await files.extract_archive(made, str(out / "x"))
-    assert (made, unpacked) == (str(out.resolve() / name), str(out.resolve() / "x"))
-    found = sorted(str(p.relative_to(out / "x")) for p in (out / "x").rglob("*"))
+    assert (made, unpacked) == ((out.resolve() / name).as_posix(), (out.resolve() / "x").as_posix())
+    found = sorted(p.relative_to(out / "x").as_posix() for p in (out / "x").rglob("*"))
     assert found == ["a.txt", "sub", "sub/inner.txt"]
     assert (out / "x" / "sub" / "inner.txt").read_bytes() == b"in\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
+async def test_a_local_archive_packs_each_path_under_its_name_and_unpacks_it(tmp_path, fmt, name):
+    await _pack_and_unpack(tmp_path, fmt, name)
+
+
+# --- the local box of a Windows server, on any system ---------------------------------
+
+
+@pytest.fixture
+def windows_spelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local box of a Windows server: its path form is Windows' (``helpers.
+    LOCAL_IS_WINDOWS``), and where Windows spells a path the placing made with
+    backslashes (``str`` of a ``Path``, ``os.path.join``: ``C:\\x``), the placing answers
+    that spelling: where a file landed, a landing's path, an unpacked folder. The placing
+    itself stays this system's, so the table's other answers hold."""
+    from pathlib import PureWindowsPath
+
+    from sshler.api import helpers
+    from sshler.api import local_files as local_files_api
+
+    def spelled(path: str) -> str:
+        return str(PureWindowsPath(path))
+
+    place = local_files_api._local_place
+    landing = local_files_api._local_landing
+    extract = local_files_api._local_extract_archive
+
+    def windows_place(*args, **kwargs):
+        return spelled(place(*args, **kwargs))
+
+    def windows_landing(*args, **kwargs):
+        found = landing(*args, **kwargs)
+        found.path = spelled(found.path)
+        return found
+
+    def windows_extract(*args, **kwargs):
+        return spelled(extract(*args, **kwargs))
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", True)
+    monkeypatch.setattr(local_files_api, "_local_place", windows_place)
+    monkeypatch.setattr(local_files_api, "_local_landing", windows_landing)
+    monkeypatch.setattr(local_files_api, "_local_extract_archive", windows_extract)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", [row.param() for row in ROWS])
+async def test_on_windows_every_path_the_local_box_answers_is_in_its_resolved_form(
+    tmp_path: Path, windows_spelled: None, row: Row
+) -> None:
+    """The local half of the table, where Windows spells the paths it makes: every path
+    answered is in the form the box resolves a path to (``C:/x``), as the table
+    expects, never ``C:\\x`` or a mix."""
+    opened = _open_local(tmp_path)
+    kind = await anext(opened)
+    assert await _outcome(kind, row.operation) == row.expected(kind)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fmt", "name"), [("tgz", "o.tgz"), ("zip", "o.zip")])
+async def test_on_windows_a_local_archive_answers_its_paths_in_their_resolved_form(
+    tmp_path, windows_spelled, fmt, name
+):
+    await _pack_and_unpack(tmp_path, fmt, name)
+
+
+@pytest.mark.parametrize(
+    ("windows", "path", "answered"),
+    [
+        (True, "C:\\Users\\me\\tree\\a (2).txt", "C:/Users/me/tree/a (2).txt"),
+        (True, "C:/Users/me/tree\\taken (2).txt", "C:/Users/me/tree/taken (2).txt"),
+        (True, "C:/Users/me/tree", "C:/Users/me/tree"),
+        # On POSIX a backslash is a character of a name, not a separator.
+        (False, "/srv/tree/a\\b.txt", "/srv/tree/a\\b.txt"),
+    ],
+)
+def test_a_local_path_is_answered_in_one_form_whichever_separators_it_holds(
+    monkeypatch, windows, path, answered
+):
+    from sshler.api import helpers
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", windows)
+    assert helpers.local_path_form(path) == answered
+
+
+@pytest.fixture
+def text_mode_ends_lines_in_crlf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``open`` of the local files as Windows has it: a text-mode file opened without
+    ``newline`` writes each ``\\n`` as ``\\r\\n`` (``newline="\\r\\n"`` is that
+    translation on any system)."""
+    import builtins
+
+    from sshler.api import local_files as local_files_api
+
+    real_open = builtins.open
+
+    def windows_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if "b" not in mode and newline is None:
+            newline = "\r\n"
+        return real_open(file, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(local_files_api, "open", windows_open, raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["# hi\n", "# hi\r\n", "one\ntwo\r\nthree\rfour", "日本語\r\n"])
+async def test_a_local_text_write_puts_on_disk_the_bytes_that_were_sent(
+    tmp_path, text_mode_ends_lines_in_crlf, text
+):
+    target = tmp_path / "notes.md"
+    async with box_files(SimpleNamespace(), _local_box(), CONFIG) as files:
+        await files.write_text(await files.path(str(target)), text)
+    assert target.read_bytes() == text.encode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -1143,9 +1819,9 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
     the in-process search of a Windows local box (named in its module's docstring);
     boxes.py keeps one in ``box_stats`` (psutil on this machine, ``/proc`` through the
     runner on a remote box), and names the field once more when it lists a box. The
-    session routes run tmux through the runner; sessions.py keeps two: the live
-    sessions of a box (the local box scans its own sockets, a remote box runs one
-    script) and the force kill, which is built for the local box only."""
+    session routes run tmux and the force kill through the runner; sessions.py keeps
+    one: the live sessions of a box (the local box scans its own sockets, a remote box
+    runs one script)."""
     api = Path(sshler.api.__file__).parent
 
     def tests_of_the_kind(name: str) -> int:
@@ -1179,7 +1855,7 @@ def test_the_file_routes_hold_no_test_of_the_kind_of_box():
         "grep.py": 1,
         "boxes.py": 2,
         "stats_stream.py": 0,
-        "sessions.py": 2,
+        "sessions.py": 1,
     }
 
 
@@ -1242,6 +1918,7 @@ def _get(counted: Counted, route: str, **params: str):
     return counted.client.get(f"/api/v1/boxes/lb/{route}", params=params, headers=HEADERS)
 
 
+@REMOTE_SERVER
 def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(counted, monkeypatch):
     """The upload route's 400 is for a name the local box refuses. A remote box whose
     connection fails with a ``ValueError`` (not a name's fault) is a fault nobody named:
@@ -1264,6 +1941,7 @@ def test_a_remote_upload_that_cannot_connect_is_not_answered_as_a_bad_name(count
     assert not (counted.root / "home" / "n.txt").exists()
 
 
+@REMOTE_SERVER
 def test_a_remote_listing_opens_one_session_and_runs_only_the_health_check(counted):
     resp = _get(counted, "ls", directory="/home")
     assert resp.status_code == 200
@@ -1272,6 +1950,7 @@ def test_a_remote_listing_opens_one_session_and_runs_only_the_health_check(count
     assert counted.counts.commands == [HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_remote_listing_at_the_home_asks_for_the_home_once(counted):
     resp = _get(counted, "ls", directory="~")
     assert (resp.status_code, resp.json()["directory"]) == (200, "/home")
@@ -1279,6 +1958,7 @@ def test_a_remote_listing_at_the_home_asks_for_the_home_once(counted):
     assert counted.counts.commands == [HOME_CMD, HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_remote_rename_opens_one_session(counted):
     resp = counted.client.post(
         "/api/v1/boxes/lb/rename",
@@ -1291,6 +1971,7 @@ def test_a_remote_rename_opens_one_session(counted):
     assert counted.counts.commands == [HOME_CMD, HEALTH_CMD]
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("name", "sessions"),
     [
@@ -1308,6 +1989,7 @@ def test_a_remote_preview_opens_one_session_per_read(counted, name, sessions):
     assert counted.counts.commands == [HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_remote_listing_records_the_visit_and_a_failed_one_does_not(counted):
     listed = _get(counted, "ls", directory="/home")
     missing = _get(counted, "ls", directory="/nope")
@@ -1328,6 +2010,7 @@ def _transfer(counted: Counted, src: str, dest: str, paths: list[str], destinati
     return transfer_events(resp.text)
 
 
+@REMOTE_SERVER
 def test_a_transfer_between_two_remote_boxes_takes_one_connection_and_one_session_each(counted):
     """Two names for one server: each box has its own pooled connection and session."""
     events = _transfer(counted, "lb", "lb2", ["/home/a.txt", "/home/dot.png"], "/home/in")
@@ -1338,6 +2021,7 @@ def test_a_transfer_between_two_remote_boxes_takes_one_connection_and_one_sessio
     assert counted.counts.commands == [HEALTH_CMD, HEALTH_CMD]
 
 
+@REMOTE_SERVER
 def test_a_transfer_from_a_remote_box_to_the_local_box_takes_one_connection_and_session(
     counted, tmp_path
 ):
@@ -1349,6 +2033,7 @@ def test_a_transfer_from_a_remote_box_to_the_local_box_takes_one_connection_and_
     assert counted.counts.commands == [HEALTH_CMD]
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize("remote_side", ["source", "destination"])
 def test_a_transfer_whose_sftp_session_cannot_open_is_one_error_before_any_item(
     counted, tmp_path, monkeypatch, remote_side
@@ -1372,6 +2057,7 @@ def test_a_transfer_whose_sftp_session_cannot_open_is_one_error_before_any_item(
     assert not (counted.root / "home" / "in").exists()
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("raised", "body"),
     [
@@ -1407,6 +2093,7 @@ def test_a_transfer_whose_source_box_cannot_be_reached_ends_with_its_reason(
     assert sorted(landing.iterdir()) == []
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("src", "dest", "paths", "destination", "detail"),
     [
@@ -1432,6 +2119,7 @@ def test_a_bad_transfer_path_is_a_400_before_any_connection(
     assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize(
     ("change", "status", "detail"),
     [
@@ -1455,6 +2143,7 @@ def test_a_refused_transfer_answers_invalid_with_its_text_before_any_connection(
     assert (counted.counts.connections, counted.counts.sftp_sessions) == (0, 0)
 
 
+@REMOTE_SERVER
 @pytest.mark.parametrize("overwrite", [False, True])
 def test_a_remote_write_that_fails_half_way_leaves_no_file_and_no_temp_name(
     counted, tmp_path, monkeypatch, overwrite

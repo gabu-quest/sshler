@@ -316,4 +316,20 @@ describe("DirectorySearchInput", () => {
     expect(getByText("/srv/proje")).toBeTruthy();
     expect(queryAllByTestId("empty")).toHaveLength(0);
   });
+
+  it("an answer to a text the user has typed past shows none of its rows", async () => {
+    let answerFirst: (value: unknown) => void = () => {};
+    vi.mocked(searchDirectories).mockReturnValueOnce(new Promise((resolve) => { answerFirst = resolve; }) as never);
+    const { getByTestId, queryAllByText } = render(DirectorySearchInput, {
+      props: { box: "testbox", token: "test-token" },
+    });
+    await fireEvent.update(getByTestId("search-input"), "ab");
+    await vi.advanceTimersByTimeAsync(300);
+    await fireEvent.update(getByTestId("search-input"), "abc");
+
+    answerFirst({ box: "testbox", query: "ab", results: [{ path: "/srv/ab-old", score: 1, source: "discovery" }] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(queryAllByText("/srv/ab-old")).toHaveLength(0);
+  });
 });

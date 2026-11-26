@@ -165,14 +165,37 @@ async def open_tmux(
         safe_session,
         ["new", "-As", safe_session, "-c", working_directory],
     )
-    process = await connection.create_process(
+    return await open_pty_process(
+        connection,
+        command,
+        terminal_type=terminal_type,
+        columns=columns,
+        rows=rows,
+        environment=environment,
+    )
+
+
+async def open_pty_process(
+    connection: asyncssh.SSHClientConnection,
+    command: str,
+    *,
+    terminal_type: str = "xterm-256color",
+    columns: int = 120,
+    rows: int = 32,
+    environment: dict[str, str] | None = None,
+) -> asyncssh.SSHClientProcess:
+    """Run the command line ``command`` on a remote PTY of the given size, in bytes.
+
+    The box's login shell reads ``command``; build it from words
+    (``api.remote.command``), never by joining strings.
+    """
+    return await connection.create_process(
         command=command,
         term_type=terminal_type,
         term_size=(columns, rows),
         encoding=None,  # bytes
         env=environment,
     )
-    return process
 
 
 @contextlib.asynccontextmanager

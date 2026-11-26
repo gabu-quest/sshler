@@ -162,21 +162,6 @@ def _remote_tmux_fails_to_start(mp, tmp_path, app, scene):
     return _url(REMOTE_BOX), {}
 
 
-def _remote_without_tmux(mp, tmp_path, app, scene):
-    _remote(mp, scene, 127)
-    return _url(REMOTE_BOX), {}
-
-
-def _local_without_tmux(mp, tmp_path, app, scene):
-    empty = tmp_path / "empty-path"
-    empty.mkdir()
-    # No program at all is on PATH: the local box has no tmux, and nothing can start.
-    mp.setenv("PATH", str(empty))
-    # The tmux check is the POSIX local box's; a Windows one opens a shell instead.
-    mp.setattr(webapp, "LOCAL_IS_WINDOWS", False)
-    return _url("local"), {}
-
-
 def _windows_cap(mp, tmp_path, app, scene):
     class FullRegistry:
         async def get_or_create(self, key, spawn, cols, rows):
@@ -212,21 +197,12 @@ ROWS = {
     "4404-escape-sequence": Row(
         _osc_unknown_box, 4404, "Unknown box", ["Unknown box: a?]52;c;QUJD?b\r\n"]
     ),
-    "4501-remote": Row(
-        _remote_without_tmux,
-        4501,
-        "tmux not installed",
-        [f"tmux is not installed on {REMOTE_BOX}\r\n"],
-    ),
     "1000-remote-tmux-fails": Row(
         _remote_tmux_fails_to_start,
         1000,
         "",
         ["Connection failed: the row expects no terminal to open\r\n"],
         opens_tmux=True,
-    ),
-    "4501-local": Row(
-        _local_without_tmux, 4501, "tmux not installed", ["tmux is not installed on local\r\n"]
     ),
     "4504-windows-cap": Row(
         _windows_cap,

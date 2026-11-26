@@ -52,6 +52,15 @@ connect that timed out is not taken for tmux that did. No tmux on the box raises
 ``tmux.run_local_tmux`` (on Windows tmux runs in WSL); a remote box sends
 ``tmux.remote_tmux_command``.
 
+``force_kill(session)`` ends the session as the user's force kill asks: the session's own
+``ts-<session>`` server is asked for its pane process ids and stopped, and each pane's
+process group and process gets SIGKILL, so a process that ignores SIGHUP is gone too. No
+other tmux server is touched and no process that server did not list is signalled; a
+session that is already gone (or lives on the default server only) is not an error. The
+limit, the timeout and a missing tmux are those of ``tmux``. Where the kinds differ: the
+local box runs ``tmux.force_kill_local_session`` (best-effort: tmux missing or past its
+limit is not raised); a remote box runs ``tmux.REMOTE_FORCE_KILL`` as one command.
+
 A remote runner takes its box's pooled connection at the first call that needs it and
 gives it back when the block ends.
 """
@@ -153,6 +162,10 @@ class BoxRunner(Protocol):
         """tmux on ``session``'s own server with ``args``: status, output, error output."""
         ...
 
+    async def force_kill(self, session: str) -> None:
+        """Stop ``session``'s own server and SIGKILL every pane process it listed."""
+        ...
+
 
 class LocalRunner:
     """Runs a program on this machine with ``proc.run_bounded``; no shell. ``box`` is
@@ -218,6 +231,9 @@ class LocalRunner:
             # run_local_tmux runs no program but tmux (or WSL) and gives it no folder.
             raise ProgramNotFoundError("tmux", self._box) from exc
         return Ran(status, _text(stdout), _text(stderr))
+
+    async def force_kill(self, session: str) -> None:
+        await tmux_module.force_kill_local_session(session)
 
 
 def remote_command_line(
@@ -309,6 +325,15 @@ class RemoteRunner:
         if status == COMMAND_NOT_FOUND:
             raise ProgramNotFoundError("tmux", self._box)
         return Ran(-1 if status is None else status, _text(result.stdout), _text(result.stderr))
+
+    async def force_kill(self, session: str) -> None:
+        words = tmux_module.remote_force_kill_words(session)
+        try:
+            await self.run(
+                words, folder=None, timeout=tmux_module.TMUX_COMMAND_TIMEOUT, program="tmux"
+            )
+        except TimeoutError as exc:
+            raise TmuxTimeoutError(f"tmux on {session} timed out") from exc
 
 
 def over(connection: Any, box: str = "remote") -> RemoteRunner:

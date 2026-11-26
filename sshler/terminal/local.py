@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Coroutine, Iterable
+import os
+import sys
+from collections.abc import Coroutine, Iterable, Mapping
 from typing import Any, Protocol
 
 from ..tmux import WINDOW_LIST_FORMAT, _run_local_tmux_command, parse_window_list, run_local_tmux
@@ -13,9 +15,43 @@ from .transport import READ_SIZE, WindowList
 
 logger = logging.getLogger(__name__)
 
+# The shell of last resort, as for tmux.
+FALLBACK_SHELL = "/bin/sh"
+
 # How long closing waits for an in-flight read or write and for the child to be
 # reaped. A child that ignores the hangup is killed well within it.
 CLOSE_TIMEOUT = 10.0
+
+
+def _usable_shell(path: str | None) -> bool:
+    return (
+        path is not None
+        and os.path.isabs(path)
+        and os.path.isfile(path)
+        and os.access(path, os.X_OK)
+    )
+
+
+def _passwd_shell() -> str | None:
+    """The login shell the password database names for this user, or None."""
+    if sys.platform == "win32":
+        return None
+    import pwd
+
+    try:
+        return pwd.getpwuid(os.getuid()).pw_shell or None
+    except KeyError:
+        return None
+
+
+def login_shell(environ: Mapping[str, str]) -> str:
+    """The shell tmux would start for this user: ``$SHELL``, else the password
+    database's, else ``/bin/sh``; each only when it is an absolute path to a program
+    that can run."""
+    for candidate in (environ.get("SHELL"), _passwd_shell()):
+        if candidate is not None and _usable_shell(candidate):
+            return candidate
+    return FALLBACK_SHELL
 
 
 class PtyProcess(Protocol):

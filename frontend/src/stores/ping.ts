@@ -1,4 +1,5 @@
 import { errorText } from "@/api/apiError";
+import { signInAfterSocketClose } from "@/api/http";
 import { ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 
@@ -83,10 +84,12 @@ export const usePingStore = defineStore("ping", () => {
       lastError.value = "websocket error";
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       connected.value = false;
       connecting.value = false;
       if (socket === ws) socket = null;
+      // A session that ended goes to the sign-in form; trying again would be refused.
+      if (signInAfterSocketClose(event.code)) return;
       _scheduleReconnect(() => lastToken);
     };
   }

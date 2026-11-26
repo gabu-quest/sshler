@@ -24,9 +24,9 @@ async def test_snapshot_argv_goes_through_the_fake(fake_tmux, tmux_tripwire: Pat
 
 @pytest.mark.asyncio
 async def test_default_server_query_goes_through_the_fake(fake_tmux, tmux_tripwire: Path) -> None:
-    assert await tmux._query_default_server() == set()
+    assert await tmux._query_default_server() == tmux.LiveSessions()
 
-    assert fake_tmux.calls() == ["list-sessions -F #{session_name}"]
+    assert fake_tmux.calls() == [f"list-sessions -F {tmux.LIST_FORMAT}"]
     assert not tmux_tripwire.exists()
 
 

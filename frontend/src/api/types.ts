@@ -81,6 +81,8 @@ export interface ApiSession {
   active: boolean;
   window_count: number;
   metadata: Record<string, unknown>;
+  // Ended, with its last layout kept: "Restore layout" recreates it (`recreateSession`).
+  restorable: boolean;
 }
 
 export interface TerminalHandshake {
@@ -162,6 +164,9 @@ export interface BatchResult {
    * "cannot_replace" when the name is taken by something overwrite cannot replace, else
    * the reason the item failed. */
   failed: { path: string; error: string; reason?: FailureReason }[];
+  /** Only an answer to a request sent with keep_both has it: one entry per item that
+   * landed under another name than asked, empty when none did. */
+  placed?: { path: string; placed: string }[];
 }
 
 export interface GrepMatch {

@@ -210,8 +210,10 @@ def test_failed_spawn_leaves_no_fd_behind(monkeypatch: pytest.MonkeyPatch) -> No
 def test_resize_of_the_master_reaches_the_child() -> None:
     code = (
         "import os, signal, sys\n"
-        "signal.signal(signal.SIGWINCH, lambda *a: (print('WINCH', os.get_terminal_size(0), "
-        "flush=True), os._exit(0)))\n"
+        # The handler writes with os.write: a print() there re-enters stdout's buffered
+        # writer when the signal lands during print('ready') and raises RuntimeError.
+        "signal.signal(signal.SIGWINCH, lambda *a: (os.write(1, "
+        "f'WINCH {os.get_terminal_size(0)}\\n'.encode()), os._exit(0)))\n"
         "print('ready', flush=True)\n"
         "signal.pause()\n"
     )

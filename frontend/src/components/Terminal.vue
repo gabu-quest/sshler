@@ -40,7 +40,7 @@ import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake } from '@/api/http'
+import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake, signInAfterSocketClose } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
@@ -52,11 +52,15 @@ interface Props {
   boxName: string
   sessionName?: string
   directory?: string
-  /** Windows-only: which native shell to launch (pwsh/powershell/cmd/wsl) */
+  /**
+   * Which shell to ask the server for: `plain` or `tmux` (or empty, tmux) on a POSIX
+   * box, a native shell id (pwsh/powershell/cmd/wsl) on a Windows local box.
+   */
   shell?: string
   /**
-   * Explicitly mark this terminal as a native (non-tmux) shell. When
-   * omitted, falls back to the legacy `!!shell` heuristic.
+   * What the page asked for, for a terminal that is native whatever `shell` says (a
+   * Windows tab with the default shell, whose id is empty). The server's `shell`
+   * frame overrides it once it has come.
    */
   nativeShell?: boolean
   theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai' | 'light'
@@ -74,11 +78,15 @@ interface Emits {
   (e: 'notification', data: { title: string; message: string }): void
   (e: 'resize', data: { cols: number; rows: number }): void
   (e: 'session-select', session: ApiSession): void
+  /** What the server opened, told once per socket; `fallback` is a plain shell opened where tmux is missing. */
+  (e: 'shell', data: { kind: 'tmux' | 'plain'; fallback: boolean }): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
   sessionName: 'main',
   directory: '~',
+  // Absent means "go by `shell`": without this default Vue casts an absent Boolean to false.
+  nativeShell: undefined,
   theme: 'cyberpunk',
   fontSize: 14,
   // Monaspace Neon for text, Nerd Fonts for Starship symbols
@@ -97,11 +105,17 @@ const { t } = useI18n()
 // Computed font size: cap at 12px on mobile
 const effectiveFontSize = computed(() => isMobile.value ? Math.min(props.fontSize, 12) : props.fontSize)
 
-// A native Windows shell (pwsh/powershell/cmd/wsl) is plain ConPTY with no tmux.
-// `props.shell` is set ONLY for those shells, so it doubles as the "not tmux"
-// signal: every tmux control sequence (Ctrl-B prefix, `set -g`, kill-window, …)
-// must be suppressed, or it gets typed literally into the shell as garbage.
-const isNativeShell = computed(() => props.nativeShell ?? !!props.shell)
+// What the server opened, from its `shell` frame: the one truth of whether this
+// terminal is tmux. Before the first frame it is null and the page goes by what it
+// asked for. A plain shell (chosen, a fallback where tmux is missing, or a native
+// Windows shell) has no tmux: every tmux control sequence (Ctrl-B prefix, `set -g`,
+// kill-window, …) and tmux request must be suppressed, or it gets typed literally
+// into the shell as garbage.
+const openedKind = ref<'tmux' | 'plain' | null>(null)
+const askedNative = computed(() => props.nativeShell ?? (!!props.shell && props.shell !== 'tmux'))
+const isNativeShell = computed(() =>
+  openedKind.value === null ? askedNative.value : openedKind.value === 'plain',
+)
 
 const terminalRef = ref<HTMLDivElement>()
 const connected = ref(false)
@@ -195,6 +209,7 @@ const scheduleFlush = () => {
 
 const queueWrite = (data: Uint8Array | string) => {
   const chunk = typeof data === 'string' ? textEncoder.encode(data) : data
+  outputShown = true
   writeQueue.push(chunk)
   writeQueuedBytes += chunk.byteLength
   // Backpressure: drop oldest if a hidden tab accumulates too much. Visible
@@ -642,7 +657,7 @@ const openScrollbackViewer = async () => {
 }
 
 const loadTmuxHistory = async () => {
-  if (!props.sessionName) {
+  if (isNativeShell.value || !props.sessionName) {
     message.warning(t('terminal.scrollback_no_session'))
     return
   }
@@ -729,70 +744,27 @@ const toggleTitleBar = () => {
 // Tmux control sequences (Ctrl+B prefix)
 const TMUX_PREFIX = '\x02' // Ctrl+B
 
-// Kill current tmux window
-const tmuxKillWindow = () => {
+// Send a Ctrl+B key to tmux, then focus the terminal. The one place that refuses on a
+// plain shell, where the bytes would be typed into it literally.
+const sendTmuxKey = (key: string) => {
+  if (isNativeShell.value) return
   if (websocket && websocket.readyState === WebSocket.OPEN) {
-    // Send Ctrl+B & to kill window (will prompt for confirmation)
-    websocket.send(textEncoder.encode(TMUX_PREFIX + '&'))
+    websocket.send(textEncoder.encode(TMUX_PREFIX + key))
     terminal?.focus()
   }
 }
 
-// Create new tmux window
-const tmuxNewWindow = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + 'c'))
-    terminal?.focus()
-  }
-}
-
-// Previous tmux window
-const tmuxPrevWindow = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + 'p'))
-    terminal?.focus()
-  }
-}
-
-// Next tmux window
-const tmuxNextWindow = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + 'n'))
-    terminal?.focus()
-  }
-}
-
-// Split pane vertically (tmux %)
-const tmuxSplitVertical = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + '%'))
-    terminal?.focus()
-  }
-}
-
-// Split pane horizontally (tmux ")
-const tmuxSplitHorizontal = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + '"'))
-    terminal?.focus()
-  }
-}
-
-// Navigate to pane left
-const tmuxPaneLeft = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + '\x1b[D'))
-    terminal?.focus()
-  }
-}
-
-// Navigate to pane right
-const tmuxPaneRight = () => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(textEncoder.encode(TMUX_PREFIX + '\x1b[C'))
-    terminal?.focus()
-  }
-}
+// Kill current tmux window (tmux asks for confirmation)
+const tmuxKillWindow = () => sendTmuxKey('&')
+const tmuxNewWindow = () => sendTmuxKey('c')
+const tmuxPrevWindow = () => sendTmuxKey('p')
+const tmuxNextWindow = () => sendTmuxKey('n')
+// Split pane vertically (tmux %) and horizontally (tmux ")
+const tmuxSplitVertical = () => sendTmuxKey('%')
+const tmuxSplitHorizontal = () => sendTmuxKey('"')
+// Navigate to the pane left / right
+const tmuxPaneLeft = () => sendTmuxKey('\x1b[D')
+const tmuxPaneRight = () => sendTmuxKey('\x1b[C')
 
 // Send a tmux command via command mode with delay for prefix processing
 const sendTmuxCommand = (cmd: string) => {
@@ -816,7 +788,7 @@ const tmuxKillSession = () => sendTmuxCommand('kill-session')
 
 // Force-kill session ("super off"): unlike kill-session (SIGHUP over the WS),
 // this hits the REST endpoint that runs kill-server on the session's own socket
-// then SIGKILLs any pane process that ignored SIGHUP. Local box only.
+// then SIGKILLs any pane process that ignored SIGHUP. Works on every box.
 const tmuxForceKillSession = async () => {
   if (isNativeShell.value) return
   const name = sessionOverride.value ?? props.sessionName
@@ -1263,6 +1235,32 @@ const scheduleReconnect = () => {
   }, delay)
 }
 
+let shellFrameSeen = false
+// The previous socket of this terminal ended in a close the policy reconnects on (not a
+// close the user or the page made). Cleared when the next shell frame has been handled.
+let socketLost = false
+// Some output has been written: a notice then starts on a fresh line.
+let outputShown = false
+
+// The server says what it opened, once, before any output. A frame the page does not
+// understand is ignored, and the terminal goes on by what it asked for.
+const onShellFrame = (frame: { kind?: unknown; fallback?: unknown }) => {
+  if (shellFrameSeen) return
+  if ((frame.kind !== 'tmux' && frame.kind !== 'plain') || typeof frame.fallback !== 'boolean') return
+  shellFrameSeen = true
+  const lost = socketLost
+  socketLost = false
+  openedKind.value = frame.kind
+  emit('shell', { kind: frame.kind, fallback: frame.fallback })
+  // On a reconnect the old output may end mid-line: start the notice on a fresh one.
+  const lead = outputShown ? '\r\n' : ''
+  if (frame.fallback) {
+    queueWrite(lead + t('terminal.plain_fallback_notice') + '\r\n')
+  } else if (frame.kind === 'plain' && props.shell === 'plain' && lost) {
+    queueWrite(lead + t('terminal.plain_reconnected_notice') + '\r\n')
+  }
+}
+
 const connect = async () => {
   if (connecting.value || connected.value) return
 
@@ -1283,7 +1281,7 @@ const connect = async () => {
       rows: '32'
     })
 
-    // Windows-only: pick which native shell the backend should spawn.
+    // A plain shell on any box, or a native shell on a Windows local box.
     if (props.shell) {
       params.set('shell', props.shell)
     }
@@ -1295,8 +1293,11 @@ const connect = async () => {
 
     wsUrl += '?' + params.toString()
 
-    websocket = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrl)
+    websocket = ws
     websocket.binaryType = 'arraybuffer' // Critical for binary terminal data!
+    // One `shell` frame counts per socket; the next socket of this terminal is a reconnect.
+    shellFrameSeen = false
 
     websocket.onopen = () => {
       connecting.value = false
@@ -1358,6 +1359,10 @@ const connect = async () => {
         try {
           const message = JSON.parse(event.data)
           // Filter out control messages - don't display them in terminal
+          if (message.op === 'shell') {
+            onShellFrame(message)
+            return
+          }
           if (message.op === 'ping' || message.op === 'windows') {
             return // Ignore these control messages
           }
@@ -1374,11 +1379,15 @@ const connect = async () => {
       connecting.value = false
       emit('disconnected')
 
-      const policy = classifyTerminalCloseCode(event.code)
+      // A session that ended goes to the sign-in form, as a failed request does.
+      signInAfterSocketClose(event.code)
+      const policy = classifyTerminalCloseCode(event.code, event.reason)
       if (policy.messageKey) {
         message.error(t(policy.messageKey), { duration: policy.duration })
       }
       if (policy.reconnect) {
+        // Lost means this socket dropped on its own: disconnect() has let go of it otherwise.
+        socketLost = websocket === ws
         // Unexpected disconnect - attempt reconnect with backoff
         scheduleReconnect()
       } else {
@@ -1413,6 +1422,7 @@ const connect = async () => {
 
 const disconnect = () => {
   intentionalDisconnect = true
+  socketLost = false
   reconnecting.value = false
   reconnectAttempts.value = 0
 
@@ -1577,6 +1587,7 @@ onMounted(async () => {
 
   // Snapshot freshness polling — only when tab is visible
   const pollSnapshot = async () => {
+    if (isNativeShell.value) return
     try {
       const s = await fetchSnapshotStatus(tokenValue.value)
       lastSnapshotAt.value = s.last_snapshot_at
@@ -1586,7 +1597,7 @@ onMounted(async () => {
     }
   }
   const startSnapshotPolling = () => {
-    if (snapshotPollInterval) return
+    if (snapshotPollInterval || isNativeShell.value) return
     pollSnapshot()
     snapshotPollInterval = window.setInterval(pollSnapshot, 10000)
   }
@@ -1613,6 +1624,11 @@ onMounted(async () => {
   }
   document.addEventListener('visibilitychange', snapshotVisHandler)
   if (!document.hidden) startSnapshotPolling()
+  // The poll follows what the terminal is: it stops for a plain shell and starts for tmux.
+  watch(isNativeShell, (native) => {
+    if (native) stopSnapshotPolling()
+    else if (!document.hidden) startSnapshotPolling()
+  })
   snapshotTickInterval = window.setInterval(() => { snapshotNow.value = Date.now() }, 2000)
 })
 
@@ -1663,6 +1679,7 @@ onUnmounted(() => {
 
 // Watch for prop changes
 watch(() => props.boxName, () => {
+  openedKind.value = null // another box: what it opens is not yet known
   if (connected.value) {
     disconnect()
     nextTick(() => connect())
@@ -1865,7 +1882,7 @@ defineExpose({
           </NPopconfirm>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />
-        <span class="snapshot-indicator" :style="snapshotDotStyle" :title="`Snapshot: ${lastSnapshotAt ? Math.floor(snapshotNow / 1000 - lastSnapshotAt) + 's ago' : 'none'}`" />
+        <span v-if="!isNativeShell" class="snapshot-indicator" :style="snapshotDotStyle" :title="`Snapshot: ${lastSnapshotAt ? Math.floor(snapshotNow / 1000 - lastSnapshotAt) + 's ago' : 'none'}`" />
       </div>
       <div class="titlebar-center">
         <span class="session-color-dot" :style="{ background: sessionColor }" />
@@ -2073,6 +2090,7 @@ defineExpose({
           <button
             class="scrollback-btn"
             :class="{ 'source-active': scrollbackSource === 'tmux' }"
+            v-if="!isNativeShell"
             :disabled="scrollbackLoading || !sessionName"
             @click="loadTmuxHistory"
           >

@@ -1437,6 +1437,103 @@ async def test_a_sync_reads_the_live_sessions_and_marks_the_rest_inactive(app, l
 
 
 @pytest.mark.asyncio
+async def test_on_a_windows_server_a_sync_marks_a_remote_session_tmux_does_not_have_inactive(
+    app, ledger, monkeypatch
+):
+    """On Windows a local row is a native shell's, never matched to tmux; a remote
+    box's row made by the create route is a tmux session's all the same."""
+    from sshler import tmux as tmux_module
+
+    monkeypatch.setattr(tmux_module, "_IS_WINDOWS", True)
+    async with _client(app) as client:
+        await _new_session(client, "alpha")
+        await _new_session(client, "beta")
+        resp = await client.post(f"/api/v1/boxes/{BOX}/sessions/sync")
+
+    assert sorted((s["session_name"], s["active"]) for s in resp.json()) == [
+        ("alpha", True),
+        ("beta", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_create_route_records_the_transport_of_its_box(app, ledger):
+    async with _client(app) as client:
+        await _new_session(client, "alpha")
+    (row,) = await state.list_sessions_async(BOX)
+    assert row.metadata["transport"] == "ssh"
+
+
+@pytest.fixture
+def local_windows_read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The sessions the snapshot loop reads the windows of as local tmux sessions."""
+    from sshler import snapshot
+
+    read: list[str] = []
+
+    async def capture(session_name: str) -> list[dict]:
+        read.append(session_name)
+        return [{"index": 0, "name": "sh", "panes": []}]
+
+    monkeypatch.setattr(snapshot, "capture_local_windows", capture)
+    return read
+
+
+@pytest.mark.asyncio
+async def test_a_remote_session_made_by_the_create_route_is_not_snapshotted_as_local(
+    app, ledger, local_windows_read
+):
+    from sshler import snapshot
+
+    async with _client(app) as client:
+        await _new_session(client, "alpha")
+    assert await snapshot.snapshot_all_sessions() == 0
+    assert local_windows_read == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("box", "metadata", "read"),
+    [
+        # Rows saved before the transport was recorded: read from their box.
+        ("local", {}, ["work"]),
+        (BOX, {}, []),
+        # A box no longer configured: not local.
+        ("gone-box", {}, []),
+        # A recorded transport is the row's, whatever its box.
+        ("gone-box", {"transport": "local"}, ["work"]),
+        ("local", {"transport": "ssh"}, []),
+    ],
+)
+async def test_a_row_without_a_recorded_transport_is_snapshotted_as_its_box_says(
+    app, local_windows_read, box, metadata, read
+):
+    from sshler import snapshot
+
+    await state.create_session_async(
+        box_name=box, session_name="work", working_directory="/srv", metadata=metadata
+    )
+    assert await snapshot.snapshot_all_sessions() == len(read)
+    assert local_windows_read == read
+
+
+@pytest.mark.parametrize(
+    ("box", "metadata", "transport"),
+    [
+        ("local", {}, "local"),
+        (BOX, {}, "ssh"),
+        ("gone-box", {}, "ssh"),
+        ("local", {"transport": "ssh"}, "ssh"),
+        (BOX, {"transport": "local"}, "local"),
+    ],
+)
+def test_a_rows_transport_is_the_recorded_one_else_its_boxes(box, metadata, transport):
+    from sshler.session_activity import row_transport
+
+    assert row_transport(box, metadata) == transport
+
+
+@pytest.mark.asyncio
 async def test_kills_share_one_pooled_connection_and_a_failed_kill_is_not_raised(app, ledger):
     """Deleting two sessions with kill_tmux uses one connection; tmux
     failing to kill still deletes the row (200).

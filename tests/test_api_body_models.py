@@ -111,7 +111,7 @@ def test_a_batch_of_ids_is_answered_per_id(client, recreated):
     assert resp.json() == {
         "status": "partial",
         "succeeded": ["a"],
-        "failed": [{"path": "zzz", "error": "Session not in recovery list", "reason": "not_found"}],
+        "failed": [{"path": "zzz", "error": "Session has no saved layout", "reason": "not_found"}],
     }
     assert recreated == ["a"]
 
@@ -151,7 +151,7 @@ def test_a_batch_of_ten_thousand_ids_is_answered_per_id(client, recreated):
         "status": "partial",
         "succeeded": ["a"],
         "failed": [
-            {"path": str(n), "error": "Session not in recovery list", "reason": "not_found"}
+            {"path": str(n), "error": "Session has no saved layout", "reason": "not_found"}
             for n in range(10_000)
         ],
     }

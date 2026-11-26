@@ -15,8 +15,12 @@ from ..validation import ValidationError
 from .box_files import box_files
 from .dependencies import APIDependencies
 from .failure import REASON_INVALID, Failure, failure_body, failure_entry
-from .file_contract import BoxFiles
-from .placement import refuse_a_name_this_request_placed, source_not_removed
+from .file_contract import BoxFiles, Landing
+from .placement import (
+    refuse_a_name_this_request_placed,
+    refuse_replace_and_keep_both,
+    source_not_removed,
+)
 from .rate_limiting import rate_limit_transfer
 
 logger = logging.getLogger(__name__)
@@ -31,8 +35,10 @@ class APITransferRequest(BaseModel):
     paths: list[str] = Field(..., max_length=MAX_TRANSFER_PATHS)
     destination: str
     mode: str = "copy"  # "copy" or "move"
-    # Applies to every file: replace a regular file that has the file's name.
+    # Applies to every file: replace a regular file that has the file's name, or land
+    # beside a taken name under the first free name of its series; never both.
     overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 def get_router(deps: APIDependencies) -> APIRouter:
@@ -51,8 +57,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         and ``reason`` ("exists", "cannot_replace" or "failed"). A move removes only the
         sources whose copy landed. A transfer that fails as a whole after the stream
         began ends with one ``error`` event, the body a failed request would answer:
-        ``detail`` and ``reason``."""
+        ``detail`` and ``reason``. With ``keep_both`` a file that lands beside a taken
+        name under another name has that path as ``placed`` in its ``progress`` events
+        (an empty file gets one such event once it has landed)."""
 
+        refuse_replace_and_keep_both(payload.overwrite, payload.keep_both)
         if payload.src_box == payload.dest_box:
             raise Failure(REASON_INVALID, "Use batch copy/move for same-box transfers")
 
@@ -124,20 +133,28 @@ def get_router(deps: APIDependencies) -> APIRouter:
                         dest_path = dest.join(destination, source.name(src_path))
 
                         try:
-                            refuse_a_name_this_request_placed(dest_path, landed)
+                            refuse_a_name_this_request_placed(
+                                dest_path, landed, keep_both=payload.keep_both
+                            )
                             found = await source.source(src_path)
+                            if await request.is_disconnected():
+                                break
+                            landing = await dest.land(
+                                dest_path,
+                                source_mode=found.mode,
+                                overwrite=payload.overwrite,
+                                keep_both=payload.keep_both,
+                            )
                             async for event in _copy_one_file(
                                 source,
-                                dest,
+                                landing,
                                 src_path,
-                                dest_path,
                                 index,
                                 total,
                                 request,
                                 sent_path=sent_path,
-                                source_mode=found.mode,
                                 file_size=found.size,
-                                overwrite=payload.overwrite,
+                                placed=landing.path if landing.path != dest_path else None,
                             ):
                                 yield event
 
@@ -145,8 +162,8 @@ def get_router(deps: APIDependencies) -> APIRouter:
                                 break
 
                             succeeded.append(sent_path)
-                            landed_at[sent_path] = dest_path
-                            landed.add(dest_path)
+                            landed_at[sent_path] = landing.path
+                            landed.add(landing.path)
                             copied_from[sent_path] = (src_path, found.fingerprint)
                         except Exception as exc:
                             logger.warning(f"Transfer failed for {src_path}: {exc}")
@@ -198,27 +215,34 @@ def _sse_event(event: str, data: dict) -> str:
 
 async def _copy_one_file(
     source: BoxFiles,
-    dest: BoxFiles,
+    landing: Landing,
     src_path: str,
-    dest_path: str,
     index: int,
     total: int,
     request: Request,
     *,
     sent_path: str,
-    source_mode: int,
     file_size: int,
-    overwrite: bool,
+    placed: str | None,
 ):
-    """Copy a single file with chunked streaming. Yields SSE progress events.
-
-    The destination follows the rule (``DestinationRefused`` for a taken name); a copy
-    that does not finish (an error, a closed browser) removes what it wrote."""
-    if await request.is_disconnected():
-        return
-
-    landing = await dest.land(dest_path, source_mode=source_mode, overwrite=overwrite)
+    """Copy a single file with chunked streaming into ``landing`` (``BoxFiles.land``,
+    which decided the name by the rule). Yields SSE progress events, each with
+    ``placed`` when the file lands under another name than asked; a copy that does not
+    finish (an error, a closed browser) removes what it wrote."""
     committed = False
+
+    def progress(bytes_done: int) -> str:
+        data: dict[str, object] = {
+            "file": sent_path,
+            "bytes_done": bytes_done,
+            "bytes_total": file_size,
+            "index": index,
+            "total": total,
+        }
+        if placed is not None:
+            data["placed"] = placed
+        return _sse_event("progress", data)
+
     try:
         bytes_done = 0
         async with source.open_read(src_path) as read:
@@ -230,18 +254,12 @@ async def _copy_one_file(
                     break
                 await landing.write(chunk)
                 bytes_done += len(chunk)
-                yield _sse_event(
-                    "progress",
-                    {
-                        "file": sent_path,
-                        "bytes_done": bytes_done,
-                        "bytes_total": file_size,
-                        "index": index,
-                        "total": total,
-                    },
-                )
+                yield progress(bytes_done)
         await landing.commit()
         committed = True
     finally:
         if not committed:
             await landing.abort()
+    if placed is not None and bytes_done == 0:
+        # No chunk said where this empty file landed.
+        yield progress(0)

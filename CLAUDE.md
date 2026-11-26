@@ -107,7 +107,7 @@ Key suites: `test_websocket.py`/`test_terminal_websocket.py` (WS), `test_api_v1.
 ## Known Gotchas
 
 - **403 on POST, or a socket that will not open:** the backend validates `Origin` on every state-changing request and WebSocket upgrade (the log says `WebSocket refused: origin ... is not allowed`). Run with `--dev` when using the Vite dev server; set `SSHLER_PUBLIC_URL` behind a proxy.
-- **Favorites live in two places:** the SQLite state database (`state.replace_favorites_async`) and the YAML config (`save_config`). `refresh_box` resets connection overrides and must NOT touch favorites.
+- **Favorites live only in the SQLite state database** (`state.replace_favorites_async`); `boxes.yaml` keeps none. `refresh_box` resets connection overrides and must NOT touch favorites.
 - **Asset paths in the frontend are relative** in `index.html` and `manifest.webmanifest` (`favicon.png`, not `/app/favicon.png`): Vite resolves the base path at build, and absolute paths break the dev server.
 
 ## Before Committing

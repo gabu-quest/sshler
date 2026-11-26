@@ -49,6 +49,7 @@ from sshler.config import AppConfig
 from sshler.config import Box as ConfigBox
 from sshler.ssh import SSHError
 from sshler.ssh_pool import SSHConnectionPool
+from sshler.tmux import LiveSessions
 from sshler.webapp import ServerSettings, make_app
 
 pytestmark = pytest.mark.posix_only("POSIX paths for the fake programs")
@@ -291,8 +292,8 @@ def _fake_programs(monkeypatch: pytest.MonkeyPatch, box: Box) -> None:
             raise TimeoutError from None
         return status, out.encode(), box.scene.errors(status, err)
 
-    async def discover_local_sessions() -> set[str]:
-        return set()
+    async def discover_local_sessions() -> LiveSessions:
+        return LiveSessions()
 
     async def connect(self, target, application_config):
         if box.scene.unreachable:

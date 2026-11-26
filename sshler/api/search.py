@@ -148,7 +148,7 @@ def _discover_local_builtin(
     routes hand to the client on Windows. Past ``timeout`` it raises
     ``DiscoveryTimeoutError``, as the GNU path does when find is killed.
     """
-    root = root.replace("\\", "/") if helpers.LOCAL_IS_WINDOWS else root
+    root = helpers.local_path_form(root)
     if os.path.basename(root.rstrip("/")) in PRUNE_DIRS:
         return []
     folded = pattern.lower()

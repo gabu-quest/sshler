@@ -11,9 +11,11 @@ its mutation. Shared mutation: drop the route's ``_remote_path`` call, so the li
 from __future__ import annotations
 
 import io
+import posixpath
 from pathlib import Path
 from types import SimpleNamespace
 
+import asyncssh
 import openpyxl
 import pytest
 import yaml
@@ -22,6 +24,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from sshler import ssh_pool, state
+from sshler.api import remote_files as remote_files_api
 from sshler.api.dependencies import APIDependencies
 from sshler.api.rate_limiting import create_rate_limit_dependency
 from sshler.settings import reset_settings
@@ -33,6 +36,13 @@ BOX = "remote1"
 HEADERS = {"X-SSHLER-TOKEN": TOKEN}
 HOME_CMD = 'printf %s "$HOME"'
 HOME = "/home/tester"
+TEMP_SUFFIX = ".t.sshler"
+
+
+def _temp_of(archive: str) -> str:
+    """The temp name an archive is packed under (``fixed_temp_name``)."""
+    parent, name = posixpath.split(archive)
+    return f"{parent}/.{name}{TEMP_SUFFIX}"
 
 
 def _reply(stdout: str = "", status: int = 0) -> SimpleNamespace:
@@ -58,10 +68,36 @@ class FakeSFTP:
     def __init__(self, calls: list[tuple], content: bytes = b"") -> None:
         self.calls = calls
         self.content = content
+        self.folders: set[str] = set()  # folders that exist; each is empty
 
     async def stat(self, path: str):
         self.calls.append(("stat", path))
         return SimpleNamespace(permissions=0o100644)
+
+    async def lstat(self, path: str):
+        """A folder of ``folders`` and the temp file of an archive are there; every other
+        name is free."""
+        self.calls.append(("lstat", path))
+        if path in self.folders:
+            return SimpleNamespace(permissions=0o040755, size=0, mtime=0, mtime_ns=0)
+        if not path.endswith(TEMP_SUFFIX):
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return SimpleNamespace(permissions=0o100644, size=0, mtime=0, mtime_ns=0)
+
+    async def mkdir(self, path: str, attrs: object = None) -> None:
+        self.calls.append(("mkdir", path))
+        self.folders.add(path)
+
+    async def readdir(self, path: str) -> list:
+        self.calls.append(("readdir", path))
+        return []
+
+    async def rmdir(self, path: str) -> None:
+        self.calls.append(("rmdir", path))
+        self.folders.discard(path)
+
+    async def link(self, source: str, target: str) -> None:
+        self.calls.append(("link", source, target))
 
     async def remove(self, path: str) -> None:
         self.calls.append(("remove", path))
@@ -117,6 +153,10 @@ def remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def fake_connect(self, box, application_config):
         return FakeConnection(replies, log, sftp)
 
+    def fixed_temp_name(target: str, suffix: str = ".sshler") -> str:
+        return _temp_of(target)
+
+    monkeypatch.setattr(remote_files_api, "_remote_temp_beside", fixed_temp_name)
     monkeypatch.setattr(APIDependencies, "connect_for_box", fake_connect)
     monkeypatch.setattr(ssh_pool, "_global_pool", SSHConnectionPool())
     client = TestClient(make_app(ServerSettings(csrf_token=TOKEN)))
@@ -137,8 +177,8 @@ def _post(remote, route: str, body: dict):
 @pytest.mark.parametrize(
     ("fmt", "name", "command"),
     [
-        ("tar.gz", "out.tar.gz", f"tar czf {HOME}/out.tar.gz -C / {HOME}/proj"),
-        ("zip", "out.zip", f"cd / && zip -r {HOME}/out.zip {HOME}/proj"),
+        ("tar.gz", "out.tar.gz", f"tar czf {_temp_of(HOME + '/out.tar.gz')} -C / {HOME}/proj"),
+        ("zip", "out.zip", f"cd / && zip -r {_temp_of(HOME + '/out.zip')} {HOME}/proj"),
     ],
 )
 def test_archive_create_resolves_tilde_in_destination_and_sources(remote, fmt, name, command):
@@ -179,12 +219,14 @@ def test_archive_create_with_a_failed_home_lookup_is_502_and_runs_nothing(remote
 @pytest.mark.parametrize(
     ("archive", "command"),
     [
-        ("~/a b.tar.gz", f"tar xzf '{HOME}/a b.tar.gz' -C {HOME}/dest"),
-        ("~/a.zip", f"unzip -o {HOME}/a.zip -d {HOME}/dest"),
+        ("~/a b.tar.gz", f"tar xzf '{HOME}/a b.tar.gz' -C '{HOME}/dest/.a b.tar.gz{TEMP_SUFFIX}'"),
+        ("~/a.zip", f"unzip -o {HOME}/a.zip -d {HOME}/dest/.a.zip{TEMP_SUFFIX}"),
     ],
 )
 def test_archive_extract_resolves_tilde_in_archive_and_destination(remote, archive, command):
-    """Mutation: skip `_remote_path` in extract; the command names `~/a...` and `~/dest`."""
+    """Mutation: skip `_remote_path` in extract; the command names `~/a...` and `~/dest`.
+    The archive is unpacked into a temp folder inside the destination."""
+    remote.sftp.folders.add(f"{HOME}/dest")
     remote.replies[command] = _reply()
     resp = _post(remote, "archive/extract", {"archive_path": archive, "destination": "~/dest"})
     assert (resp.status_code, resp.json()["path"]) == (200, f"{HOME}/dest")
@@ -329,7 +371,7 @@ async def test_rate_limit_buckets_by_the_forwarded_client_address(
 
 def test_archive_create_names_a_relative_source_starting_with_a_dash_as_a_path(remote):
     """Mutation: pass the source to tar as it came; tar reads `-rf` as options."""
-    command = "tar czf /srv/o.tar.gz -C / ./-rf"
+    command = f"tar czf {_temp_of('/srv/o.tar.gz')} -C / ./-rf"
     remote.replies[command] = _reply()
     resp = _post(
         remote,

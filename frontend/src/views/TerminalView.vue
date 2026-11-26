@@ -15,6 +15,7 @@ import { useFavoritesStore } from '@/stores/favorites'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
+import { normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
 import Terminal from '@/components/Terminal.vue'
 import TerminalTabs from '@/components/TerminalTabs.vue'
@@ -135,7 +136,11 @@ const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
     showSessionPanel.value = false
     return
   }
-  if (terminalRef.value) {
+  if (posixShell.value === 'plain') {
+    // A session is tmux: the plain shell's terminal is replaced by a tmux one on it.
+    posixShell.value = 'tmux'
+    sessionName.value = session.session_name
+  } else if (terminalRef.value) {
     // Reconnect in-place: keeps the DOM element alive so fullscreen is preserved
     terminalRef.value.switchSession(session.session_name, dir)
     sessionName.value = session.session_name
@@ -187,21 +192,21 @@ const tokenValue = computed(() =>
   bootstrapStore.token || bootstrapStore.payload?.token || null
 )
 
-// --- Windows native-shell chooser ---------------------------------------
+// --- The Shell choice ------------------------------------------------------
+// A Windows local box picks one of its native shells (kept across visits). Every other
+// box picks "tmux" or "Plain shell" for this terminal only: each new terminal starts as tmux.
 const SHELL_STORAGE_KEY = 'sshler.windows_shell'
 
-const isLocalBox = computed(() => {
-  const box = boxesStore.items.find(b => b.name === selectedBox.value)
-  return box?.transport === 'local'
-})
-
-// Only Windows local boxes get the chooser (remote boxes use SSH+tmux).
-const showShellPicker = computed(() => bootstrapStore.isWindows && isLocalBox.value)
+const { isWindowsLocalBox, optionsOf } = useShellOptions()
+const windowsLocal = computed(() => isWindowsLocalBox(selectedBox.value))
 
 // Tabs are a Windows-local-box feature. Remote/tmux boxes already multiplex via
 // tmux windows (Ctrl+B), but a native ConPTY shell has no multiplexer — so we
-// give those boxes browser-side tabs instead. Same gate as the shell picker.
-const tabbedMode = computed(() => bootstrapStore.isWindows && isLocalBox.value)
+// give those boxes browser-side tabs instead.
+const tabbedMode = windowsLocal
+
+// The picker shows on every box that is open.
+const showShellPicker = computed(() => !!selectedBox.value)
 
 // The currently-active terminal, whichever rendering path is live. Both the
 // single <Terminal> and the <TerminalTabs> host expose send/sendRaw/focus.
@@ -219,22 +224,59 @@ const onTabKilled = (session: string) =>
 const onTabKillError = (session: string) =>
   message.error(t('terminal.tabs.kill_failed', { session }))
 
-const shellOptions = computed(() =>
-  bootstrapStore.windowsShells.map((shell) => ({
-    label: shell.available ? shell.label : `${shell.label} (not installed)`,
-    value: shell.id,
-  }))
-)
+const shellOptions = optionsOf(() => selectedBox.value)
 
 const selectedShell = ref<string>(
   (typeof localStorage !== 'undefined' && localStorage.getItem(SHELL_STORAGE_KEY)) || ''
 )
+// The kind of the terminal on a tmux-or-plain box; nothing is stored or put in the address.
+const posixShell = ref<PosixShell>('tmux')
 
-// The shell only matters for Windows local boxes; elsewhere it's the empty
-// string so Terminal omits the query param and the SSH/tmux path is used.
-const activeShell = computed(() => (showShellPicker.value ? selectedShell.value : ''))
+// Set when the server opened a plain shell where tmux was wanted (the box has none):
+// the picker then shows what is running. `shellAttempt` makes picking tmux again a new terminal.
+const fellBackToPlain = ref(false)
+const shellAttempt = ref(0)
+// `openedKind` is what the terminal reported it opened; it is null again for each new terminal.
+const openedKind = ref<string | null>(null)
+const onTerminalShell = (opened: { kind: string; fallback: boolean }) => {
+  fellBackToPlain.value = opened.fallback
+  openedKind.value = opened.kind
+}
+
+// What the picker shows, and what <Terminal> is asked for: a Windows shell id, or
+// "plain" (tmux is the empty string, so Terminal omits the query param).
+const pickerValue = computed(() =>
+  windowsLocal.value ? selectedShell.value : fellBackToPlain.value ? 'plain' : posixShell.value,
+)
+const activeShell = computed(() =>
+  windowsLocal.value ? selectedShell.value : posixShell.value === 'plain' ? 'plain' : '',
+)
+
+// Is the terminal on screen a plain shell (no tmux)? What it said it opened, or before
+// that what the page asked for; a Windows local box's shells are never tmux.
+const plainTerminal = computed(
+  () => windowsLocal.value || (openedKind.value ?? activeShell.value) === 'plain',
+)
+
+// Another box or directory is a new terminal, and a new terminal starts as tmux.
+watch([selectedBox, initialDirectory], () => {
+  posixShell.value = 'tmux'
+  fellBackToPlain.value = false
+})
+
+// The terminal is re-created when its key changes: what it reported belongs to the old one.
+watch([selectedBox, initialDirectory, activeShell, shellAttempt], () => {
+  openedKind.value = null
+})
 
 function handleShellChange(value: string) {
+  if (!windowsLocal.value) {
+    const picked = normalizePosixShell(value)
+    if (picked === posixShell.value && fellBackToPlain.value) shellAttempt.value++ // tmux again
+    posixShell.value = picked
+    fellBackToPlain.value = false
+    return
+  }
   selectedShell.value = value
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(SHELL_STORAGE_KEY, value)
@@ -453,7 +495,8 @@ watch(() => boxesStore.items, () => {
           />
           <NSelect
             v-if="showShellPicker"
-            :value="selectedShell"
+            class="shell-select"
+            :value="pickerValue"
             :options="shellOptions"
             :placeholder="t('terminal.shell_label')"
             @update:value="handleShellChange"
@@ -597,6 +640,15 @@ watch(() => boxesStore.items, () => {
         @blur="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
         @keyup.enter="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
       />
+      <NSelect
+        v-if="showShellPicker"
+        class="shell-select"
+        :value="pickerValue"
+        :options="shellOptions"
+        :placeholder="t('terminal.shell_label')"
+        @update:value="handleShellChange"
+        size="small"
+      />
       <GitBadge v-if="currentGitInfo?.is_repo" :info="currentGitInfo" compact />
     </div>
 
@@ -628,7 +680,7 @@ watch(() => boxesStore.items, () => {
       <Terminal
         v-else-if="selectedBox"
         ref="terminalRef"
-        :key="selectedBox + '-' + initialDirectory + '-' + activeShell"
+        :key="selectedBox + '-' + initialDirectory + '-' + activeShell + '-' + shellAttempt"
         :box-name="selectedBox"
         :session-name="sessionName"
         :directory="initialDirectory"
@@ -640,6 +692,7 @@ watch(() => boxesStore.items, () => {
         :external-input="isMobile && !rawMode"
         @connected="onTerminalConnected"
         @disconnected="onTerminalDisconnected"
+        @shell="onTerminalShell"
         @session-select="handleSessionSelect"
       />
 
@@ -664,6 +717,7 @@ watch(() => boxesStore.items, () => {
       v-if="isMobile && selectedBox"
       :raw-mode="rawMode"
       :connected="terminalConnected"
+      :tmux="!plainTerminal"
       @send="handleSmartSend"
       @send-raw="handleRawSend"
       @toggle-raw-mode="handleToggleRawMode"

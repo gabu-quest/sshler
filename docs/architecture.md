@@ -7,11 +7,15 @@ points here; each section stands alone.
 
 **WebSocket terminal flow:**
 1. Client calls `/api/v1/terminal/handshake` for connection info
-2. Client connects to `/ws/term?host=...&dir=...&session=...&token=...`
-3. `terminal_socket` checks access and the session name, then `webapp.py` opens one transport from `sshler/terminal/`: `LocalPtyTransport` (tmux client on a local PTY), `SshTransport` (tmux over its own SSH connection) or `ConPtyTransport` (a tab of a persisted native Windows shell). Each keeps the contract in `terminal/transport.py` (read, write, resize, close) and knows nothing of the WebSocket
-4. `terminal/pump.py` `run_pump` carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects)
-5. A terminal that cannot open is a `TerminalOpenError(message, code, reason)`, answered only in `_serve_terminal`: the message is sent as text, then the socket closes with the code. The close codes: 4400 a refused session name, 4401 credentials, 4403 the token or the Origin, 4404 a box the server does not know, 4501 tmux is not installed on the box, 4502 WSL is not installed, 4503 pywinpty is missing, 4504 too many terminals. A box is asked for tmux before anything is started: the local box by `require_local_tmux` (`api/sessions.py`), a remote box by one command (`remote.require`, sent as `sh -c` so any login shell can read it) on the terminal's own connection, where only status 127 refuses and a check that cannot run opens the terminal. A tmux that cannot be started answers "Connection failed" and an ordinary close on both kinds. The page's words for each code are in `frontend/src/utils/terminalCloseCodes.ts`, and the page reconnects after any code not named there: a new code is named there in the same change
+2. Client connects to `/ws/term?host=...&dir=...&session=...&shell=...&token=...`. On a POSIX local box and on a remote box `shell` is `""` or `tmux` (tmux, the default) or `plain` (a plain shell, no tmux); a Windows local box takes its own shell ids and opens its default shell for one it does not know
+3. `terminal_socket` checks access, the session name (also for a plain shell: the door has one rule) and `shell` (`_shell_refused`), then `webapp.py` opens one transport from `sshler/terminal/`: `LocalPtyTransport` (a tmux client, or the user's login shell, on a local PTY started by `spawn_on_pty`), `SshTransport` (tmux, or the login shell, on a PTY over its own SSH connection) or `ConPtyTransport` (a tab of a persisted native Windows shell). A plain shell is the same transport with `tmux` None: no window list, key bindings or ts history, and no session row (it ends with its socket, so the session routes have nothing to list, sync, rename or kill). Each keeps the contract in `terminal/transport.py` (read, write, resize, close) and knows nothing of the WebSocket. The local plain shell is the one tmux would start (`terminal/local.py` `login_shell`: `$SHELL`, else the password database's, else `/bin/sh`), as a login shell in the folder; the remote one is `$SHELL -l` (else `/bin/sh`) in the folder (`remote.login_shell_in`), left in the login folder when the folder cannot be entered
+4. `terminal/pump.py` `run_pump` first sends `{"op": "shell", "kind": "tmux" | "plain", "fallback": bool}` once, before any output (`kind` is `plain` when the transport has no tmux, a Windows native shell too; `fallback` is true only when tmux was wanted and the box has none). It then carries binary output and input, JSON control messages, the tmux window list and pings, and knows nothing of which transport it drives; when the terminal ends first it closes the socket (1000 `shell exited`, or 1011 `terminal connection lost` when the transport failed, so the client reconnects). The server writes no notice into the terminal: the page says what a fallback means: `Terminal.vue` reads the frame (`isNativeShell` follows it), prints one line in the page's language on `fallback: true`, and one line on a reconnect that opened a new plain shell
+5. A terminal that cannot open is a `TerminalOpenError(message, code, reason)`, answered only in `_serve_terminal`: the message is sent as text, then the socket closes with the code. The close codes: 4400 a refused session name (reason `Invalid session name`) or `shell` value (reason `Invalid shell`), both before the socket is accepted, 4401 credentials, 4403 the token or the Origin, 4404 a box the server does not know, 4502 WSL is not installed, 4503 pywinpty is missing, 4504 too many terminals. A box is asked for tmux before anything is started, unless a plain shell was asked for: the local box by `require_local_tmux` (`api/sessions.py`), a remote box by one command (`remote.require`, sent as `sh -c` so any login shell can read it) on the terminal's own connection. A box without tmux (the local check fails, or the remote check ends with status 127) gets a plain shell in its place; a remote check that cannot run opens tmux. A terminal that cannot be started answers "Connection failed" and an ordinary close on both kinds. The page's words for each code are in `frontend/src/utils/terminalCloseCodes.ts`, and the page reconnects after any code not named there: a new code is named there in the same change
 6. `_serve_terminal` has the one teardown: `transport.close()` runs however the session ends, and leaves no task, child, channel or descriptor behind (`tests/test_terminal_endings.py`; the contract is proved for every transport by `tests/test_terminal_transport_contract.py`)
+
+**What a session row's `active` means:** a tmux session's row is active exactly while tmux has that session, whether or not a tab is open on it. One function applies the rule, `session_activity.match_tmux`, and every writer that learns what tmux has calls it: the socket's end, the sync route (both ways), the startup reconcile (every local row), the snapshot loop and a dismiss of a lost session. What tmux has is one answer, `tmux.LiveSessions`: the sessions seen, and whether every server asked answered (a socket with no server behind it answers "none"; a server past its limit, or a tmux that could not be run, is not asked). A session seen is running; a session not seen while a server could not be asked is left as its row says, never written inactive. The local box asks in `tmux.py` (`discover_local_sessions` for every server, `ask_local_session` for one session's own `ts-<name>` server and the default server); a remote box runs `REMOTE_LIST_SESSIONS` (`api/sessions.py`), which says by its exit status that a server could not be asked. The socket's end asks about its own session only (`live_sessions_on`, two tmux commands locally, one command on the terminal's own connection remotely); when the box cannot be asked at all the row is left as it was. **Sessions started outside sshler:** every listing, local and remote, reads one format (`tmux.LIST_FORMAT`, read by `tmux.parse_listing`, one tmux command per server), so `LiveSessions.folders` names the folder of each session NAME that sits on its own server `ts-NAME` (what `ts` makes and what a terminal can open; a session of the default server, or of a `ts-` server of another name, is in the names only; it needs `#{socket_path}`, and a tmux without it gives no folders). After `match_tmux` the sync route makes a row for each such session that has none (`session_activity.track_live_sessions`, through `track_session`, the one maker of a row that a terminal's open uses too): active, in that folder, with the box's `transport`; a row that exists keeps its folder. From then on it is an ordinary row. A session whose folder holds a newline is seen (its row stays active) but gets no folder, so no row is made for it. The sync matches every row of the box and answers every active one, with the most recent inactive ones while fewer than 50 are active (`_sync_answer`). No row is made for the local box of a Windows server. A persisted Windows shell's row is its registry's to mark; a plain shell has no row. Every list of a box's sessions on the page loads by the sync route (the overview's card through `stores/sessions.ts`, the session switcher on its own); when the sync fails the switcher lists the stored rows with the failure's line (`tests/test_session_active_flag.py`)
+
+**Recovery: what "lost" means.** A session is lost when it ended while sshler was not running to see it end (a reboot, a crash, an end while sshler was stopped): the start's `snapshot.reconcile_on_startup` offers it in the recovery dialog. An end the running server sees (the snapshot loop, a terminal socket's end, the sync route) is recorded on the row by `match_tmux` alone (`state.END_SEEN_AT`, with the time; the start's own check records nothing, and a row active again drops it), and such a session is never in the dialog. Its row keeps its last layout for `state.SNAPSHOT_KEEP_DAYS` and answers `restorable` (`snapshot.saved_layout`); the box card's session list and the session switcher offer "Restore layout" on it, which is the dialog's recreate (`POST /recovery/{id}/recreate`, `recovery._recreate`): the windows and splits in their folders and a line naming each pane's last command, never the command run again. Kill and Force kill delete the row, so neither offers anything.
 
 ## A command on a box, and the files of a box
 
@@ -21,15 +25,34 @@ each has a local and a remote implementation:
 - **Files:** `BoxFiles` (`api/file_contract.py`), opened with `box_files(deps, box, config)`
   (`api/box_files.py`), kept by `LocalFiles` and `RemoteFiles`. Listing, reading, writing,
   placing under the existing-name rule, batches, archives, the folder zip.
+  A write, a new file, an upload, a copy, a move and a transfer make the missing folders of
+  their destination on both kinds of box (a remote box through `_remote_make_missing`).
+  **A taken name** (`api/placement.py`): without a word from the request it is refused;
+  `overwrite` lets a regular file replace a regular file; `keep_both` (rename, move, copy,
+  upload, batch move and copy, transfer, compress, extract) neither replaces nor refuses: the new thing lands
+  under the first free name of one series, `free_name` (`report (2).pdf`, `site (2).tar.gz`,
+  `photos (2)`, at most 255 bytes, up to `(999)`, then `exists`). Every name is taken by
+  the exclusive call that writes (an exclusive create, a hard link, a new folder), tried on
+  each name `candidate_paths` gives while it answers that the name exists, so two requests
+  at once never get one name. Both words together are `invalid`
+  (`refuse_replace_and_keep_both`). The answer's `path` is where the thing landed; a batch
+  answer with `keep_both` adds `placed` (`{"path", "placed"}` for each item that landed
+  under another name), and a transfer's `progress` events for such a file carry `placed`.
+  An extract with `keep_both` checks no entry against a taken name (the guard against
+  unsafe entries runs as always): its unpacked temp folder is placed whole as
+  a new folder named by `archive_folder_name` (`backup.zip` gives `backup/`, then
+  `backup (2)/`), never merged into an existing one; its `path` is that folder.
 - **Programs:** `BoxRunner` (`api/box_runner.py`), opened with `box_runner(deps, box, config,
   deadline=...)`. `run(words, folder=, timeout=)` for git and grep, `tmux(session, args)`,
+  `force_kill(session)` (the session's own `ts-<name>` server stopped and every pane process
+  it listed sent SIGKILL, on both kinds),
   `folder`/`file` for paths, `reach` for the status check. Its module docstring is the
   contract: every word reaches the program as one word, what a time limit does to the
   program and to a pooled connection, and where the two kinds differ.
 
 Work the two kinds really do differently sits in one function that decides once and returns
-the same shape for both: `box_stats` (`api/boxes.py`), `live_sessions` and
-`force_kill_supported` (`api/sessions.py`), `search_box` (`api/search.py`), and the in-process
+the same shape for both: `box_stats` (`api/boxes.py`), `live_sessions`
+(`api/sessions.py`), `search_box` (`api/search.py`), and the in-process
 grep of a Windows local box (`api/grep.py`). `tests/test_box_files_contract.py` counts the
 tests of the kind per route module, so a new one outside such a function fails there.
 
@@ -37,7 +60,9 @@ A remote path with `~`, a remote command line built from words, and an SFTP sess
 have one owner: `remote_path` and `command` in `api/remote.py`, `sftp_session` in `ssh.py`.
 
 **A failed request** answers a failure status and `{"detail": text, "reason": word}`, written
-by one owner, `api/failure.py`. `STATUS_OF_REASON` there is the list of reasons, each with its
+by one owner, `api/failure.py`; a refusal about many names of one request (an extract onto
+files that exist) adds `"taken": {"count": n, "names": [the first five]}` (`Failure(...,
+taken=Taken(...))`). `STATUS_OF_REASON` there is the list of reasons, each with its
 one status. Code that refuses a request raises `Failure(reason, text)`; `failure_of` names the
 reason of any other error by its type (errno, SFTP type), never by its words, the same for
 both kinds of box; `failure_entry` gives an item of a batch the reason a single request would
@@ -87,6 +112,18 @@ answers `rate_limited` with `Retry-After` on every closed path and on the sign-i
 the other open routes keep loading so the form can say how long to wait. Sockets decide the
 same credentials in `access.websocket_refusal` (close 4401).
 
+A socket let in on a session cookie belongs to that session until it closes: after accepting
+it, each socket handler calls `access.hold_socket`, which records it in `SessionStore` (the
+store judges the session live and records the socket in one step, so a sign-out between the
+check and the record refuses the socket with 4401). Every end of a session, a sign-out from
+any tab, an expiry a request finds, or the timer each held socket sets for its session's
+deadline (no request needed; it reads the store's clock again at least every 30 seconds, so
+time that passed while the machine slept counts), closes each of its sockets with 4401; a terminal then ends as
+on any close, its attach process (or SSH channel) closed and the tmux session left running.
+A socket let in by a Basic header, or with no password set, belongs to no session. In the
+page, a 4401 close of a terminal, progress or ping socket goes to `handleAuthErrors`, as a
+401 does, and the progress and ping stores stop reconnecting.
+
 The bootstrap says who is asking: `auth_required` (a password is set) and `authenticated`
 (this request carried a live session or a good Basic header, always true with no password);
 a request that is not authenticated gets `token: null` and only what the sign-in page needs (the version, token header, page base, platform and the two auth flags; no allowed origins, shell, PDF or artifact settings). The router's guard asks the bootstrap
@@ -113,8 +150,9 @@ transfer's first answer, the terminal handshake, the start-up token check); the 
 `XMLHttpRequest` for its progress and runs under the same policy. A failed request is an
 `ApiError` (`src/api/apiError.ts`): `status` (0 when no answer came), `reason` (one of the
 server's words, `network` when no answer came, null when an answer had none) and `detail` (the
-server's text), and `retryAfter` (the answer's `Retry-After` in seconds, or null; the sign-in
-page shows a lockout's wait from it). Its `message` is the translated line of the reason (`error.reason.<word>`,
+server's text), `retryAfter` (the answer's `Retry-After` in seconds, or null; the sign-in
+page shows a lockout's wait from it) and `taken` (the server's count and first names of a
+refusal about many names, or null; an extract asks about them once with `askReplaceMany`). Its `message` is the translated line of the reason (`error.reason.<word>`,
 `error.reason.network`, `error.reason.none`, in both locales), then " — " and the detail; an
 answer with no reason and no text shows its status in brackets instead. The page acts on the
 reason only, never on the status or the words: `token` refreshes the token once and sends once

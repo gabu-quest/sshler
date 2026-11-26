@@ -199,6 +199,177 @@ class TestSessionStore:
         assert session.is_expired() is True
 
 
+class RunningClock:
+    """The store's clock for the timer tests: wall time, read when called."""
+
+    def __call__(self) -> float:
+        import time
+
+        return time.time()
+
+
+def _ends(store: SessionStore, session_id: str, count: int, ended: list[str], name: str):
+    """Hold *count* sockets on *session_id*; each records *name* in *ended* when ended."""
+    return [store.hold(session_id, lambda i=i: ended.append(f"{name}{i}")) for i in range(count)]
+
+
+async def _one_turn() -> None:
+    """Let callbacks scheduled with `call_soon_threadsafe` run (no wall time passes)."""
+    import asyncio
+
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
+class TestSocketsOfASession:
+    """The record of which sockets belong to which session, kept by the store."""
+
+    @pytest.mark.asyncio
+    async def test_deleting_a_session_ends_each_of_its_sockets_once_and_no_other(
+        self, store: SessionStore
+    ):
+        """Kills: a session's end that reaches no socket, or one of another session."""
+        first = store.create_session("a", "a")
+        second = store.create_session("b", "b")
+        ended: list[str] = []
+        _ends(store, first.session_id, 3, ended, "a")
+        _ends(store, second.session_id, 1, ended, "b")
+        assert store.sockets_held(first.session_id) == 3
+
+        assert store.delete_session(first.session_id) is True
+        assert store.delete_session(first.session_id) is False  # logout called twice
+        await _one_turn()
+
+        assert sorted(ended) == ["a0", "a1", "a2"]
+        assert store.sockets_held(first.session_id) == 0
+        assert store.sockets_held(second.session_id) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_session_found_expired_ends_its_sockets(
+        self, store: SessionStore, clock: FakeClock
+    ):
+        """Kills: expiry noticed by a request that removes the session but leaves its
+        sockets open."""
+        session = store.create_session("a", "a", ttl_seconds=60)
+        ended: list[str] = []
+        _ends(store, session.session_id, 2, ended, "s")
+        clock.advance(60)
+        assert store.get_session(session.session_id) is None
+        await _one_turn()
+        assert sorted(ended) == ["s0", "s1"]
+        assert store.sockets_held(session.session_id) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_socket_that_closes_leaves_the_record(self, store: SessionStore):
+        """100 sockets opened and closed on one session leave no entry. Kills: a record
+        that grows with every socket ever opened."""
+        session = store.create_session("a", "a")
+        for _ in range(100):
+            hold = store.hold(session.session_id, lambda: None)
+            assert hold is not None
+            hold.release()
+            hold.release()  # a second release changes nothing
+        assert store.sockets_held(session.session_id) == 0
+        assert store._held == {}
+
+    @pytest.mark.asyncio
+    async def test_no_socket_is_held_on_a_session_that_has_ended(
+        self, store: SessionStore, clock: FakeClock
+    ):
+        """The check and the record are one step: a socket let in just before its
+        session ended is refused here. Kills: a socket that slips into the record
+        after the end and stays open."""
+        signed_out = store.create_session("a", "a")
+        timed_out = store.create_session("b", "b", ttl_seconds=10)
+        store.delete_session(signed_out.session_id)
+        clock.advance(10)
+
+        assert store.hold(signed_out.session_id, lambda: None) is None
+        assert store.hold(timed_out.session_id, lambda: None) is None
+        assert store.count() == 0
+        assert store._held == {}
+
+    @pytest.mark.asyncio
+    async def test_the_end_of_its_time_ends_a_socket_without_a_request(self):
+        """Kills: a session whose time ran out keeping its sockets until the next
+        request asks about it."""
+        import asyncio
+
+        clock = RunningClock()
+        store = SessionStore(clock=clock)
+        session = store.create_session("a", "a", ttl_seconds=1)
+        ended = asyncio.Event()
+        assert store.hold(session.session_id, ended.set) is not None
+
+        await asyncio.wait_for(ended.wait(), timeout=3)
+        late = clock() - session.expires_at
+        assert 0 <= late < 1.0
+        assert store.count() == 0
+        assert store.sockets_held(session.session_id) == 0
+
+    @pytest.mark.asyncio
+    async def test_time_that_passed_while_the_machine_slept_ends_a_socket(
+        self, store: SessionStore, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """While a machine sleeps the event loop's clock stands still and the store's
+        does not. Kills: a timer set once for the whole time left, which lets a socket
+        outlive its session by as long as the machine slept."""
+        import asyncio
+
+        import sshler.session as session_module
+
+        monkeypatch.setattr(session_module, "RECHECK_SECONDS", 0.05, raising=False)
+        session = store.create_session("a", "a", ttl_seconds=3600)
+        ended = asyncio.Event()
+        assert store.hold(session.session_id, ended.set) is not None
+
+        clock.advance(3600)  # the store's clock moved; the loop's did not
+
+        await asyncio.wait_for(ended.wait(), timeout=2)
+        assert store.count() == 0
+        assert store.sockets_held(session.session_id) == 0
+
+    @pytest.mark.asyncio
+    async def test_the_idle_limit_counts_from_the_last_use(self):
+        """A session used before its idle limit ends one idle limit after that use, not
+        at the first deadline. Kills: a timer that ends a session still in use."""
+        import asyncio
+
+        clock = RunningClock()
+        store = SessionStore(clock=clock)
+        session = store.create_session("a", "a", ttl_seconds=3600)
+        ended = asyncio.Event()
+        assert store.hold(session.session_id, ended.set, idle_timeout=1) is not None
+        asyncio.get_running_loop().call_later(0.5, session.touch)
+
+        await asyncio.wait_for(ended.wait(), timeout=4)
+        idle = clock() - session.last_accessed_at
+        assert session.last_accessed_at - session.created_at >= 0.5
+        assert 1.0 <= idle < 2.0
+
+    def test_use_never_moves_the_deadline_past_the_absolute_expiry(
+        self, store: SessionStore, clock: FakeClock
+    ):
+        """Kills: an idle limit that keeps a session alive past its absolute expiry for
+        as long as it is used."""
+        session = store.create_session("a", "a", ttl_seconds=60)
+        assert session.deadline(idle_timeout=30) == START + 30
+        clock.advance(50)
+        session.touch()
+        assert session.deadline(idle_timeout=30) == START + 60
+        assert session.deadline() == START + 60
+
+    @pytest.mark.asyncio
+    async def test_clearing_the_store_ends_every_socket(self, store: SessionStore):
+        session = store.create_session("a", "a")
+        ended: list[str] = []
+        _ends(store, session.session_id, 2, ended, "s")
+        store.clear()
+        await _one_turn()
+        assert sorted(ended) == ["s0", "s1"]
+        assert store._held == {}
+
+
 class TestSettings:
     """Tests for SshlerSettings."""
 

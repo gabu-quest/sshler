@@ -17,6 +17,7 @@ from platform_support import make_symlink
 from sshler import claude_sessions as scanner
 from sshler import state
 from sshler.api import claude_sessions as claude_api
+from sshler.tmux import LiveSessions
 from sshler.webapp import ServerSettings, make_app
 
 TEST_TOKEN = "claude-test-token"
@@ -405,7 +406,7 @@ def tmux_spy(monkeypatch):
         runs.append((name, list(args)))
 
     async def fake_discover():
-        return set(live)
+        return LiveSessions(frozenset(live))
 
     async def fake_windows(session):
         return set(windows)

@@ -81,6 +81,12 @@ describe("uploadFile", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends keep_both=true only when asked, and no overwrite with it", async () => {
+    const file = new File(["x"], "a.txt");
+    await uploadFile("box", "/srv", file, "tok", undefined, { keepBoth: true });
+    expect(FakeXHR.sent.map((f) => [f.get("keep_both"), f.get("overwrite")])).toEqual([["true", null]]);
+  });
+
   // Mutation: drop the `overwrite` field (the re-send after "Replace" is refused again)
   // or always send it (every upload would replace without asking).
   it("sends overwrite=true only when asked", async () => {

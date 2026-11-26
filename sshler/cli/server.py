@@ -12,6 +12,7 @@ import time
 import webbrowser
 from pathlib import Path
 
+import psutil
 import uvicorn
 
 from ..webapp import ServerSettings, make_app
@@ -41,16 +42,22 @@ def _write_pid() -> None:
 
 
 def _read_pid() -> int | None:
-    """Read PID from file, return None if not found or invalid."""
-    if not _PID_FILE.exists():
-        return None
+    """The pid the pid file names when that process runs, else None.
+
+    psutil asks the system on both kinds: ``os.kill(pid, 0)`` is no probe on Windows,
+    where 0 is ``CTRL_C_EVENT`` and a pid that is gone raises a plain ``OSError``.
+
+    A file a crash or a reboot left behind (``%TEMP%`` outlives a reboot) can name a pid
+    the system has since given to another program. The server writes the file after it
+    starts, so a process that started after the file was written is not the one it names
+    (a second of slack for the clocks the two times come from)."""
     try:
         pid = int(_PID_FILE.read_text().strip())
-        # Check if process exists
-        os.kill(pid, 0)
-        return pid
-    except (ValueError, ProcessLookupError, PermissionError):
+        written = _PID_FILE.stat().st_mtime
+        started = psutil.Process(pid).create_time()
+    except (OSError, ValueError, psutil.Error):
         return None
+    return pid if started <= written + 1.0 else None
 
 
 def _remove_pid() -> None:
@@ -97,6 +104,37 @@ def status() -> int:
     return 1
 
 
+# How long a server asked to stop gets before the last resort, and how long that gets.
+_GRACE_SECONDS = 5.0
+_LAST_RESORT_SECONDS = 5.0
+
+
+def _end(pids: list[int]) -> list[int]:
+    """Ask each process to stop, then end any still running after ``_GRACE_SECONDS``;
+    the pids that outlived both. The one place the stop handles processes: psutil sends
+    SIGTERM, then SIGKILL, on POSIX, and ends a process with ``TerminateProcess`` on
+    Windows, which has no SIGKILL. A process that is already gone is skipped; one this
+    user may not signal raises ``psutil.AccessDenied``."""
+    left: list[int] = []
+    for pid in pids:
+        try:
+            process = psutil.Process(pid)
+            process.terminate()
+            try:
+                process.wait(_GRACE_SECONDS)
+                continue
+            except psutil.TimeoutExpired:
+                pass
+            print(f"Force killing PID {pid}")
+            process.kill()
+            process.wait(_LAST_RESORT_SECONDS)
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.TimeoutExpired:
+            left.append(pid)
+    return left
+
+
 def stop() -> int:
     """Stop sshler if running.
 
@@ -106,26 +144,18 @@ def stop() -> int:
     # First try PID file
     pid = _read_pid()
     if pid:
+        print(f"Stopping sshler (PID: {pid})...")
         try:
-            print(f"Stopping sshler (PID: {pid})...")
-            os.kill(pid, signal.SIGTERM)
-            # Wait for process to terminate
-            for _ in range(50):  # 5 seconds max
-                time.sleep(0.1)
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    break
-            _remove_pid()
-            print("sshler stopped")
-            return 0
-        except ProcessLookupError:
-            _remove_pid()
-            print("sshler was not running (stale PID file removed)")
-            return 1
-        except PermissionError:
+            left = _end([pid])
+        except psutil.AccessDenied:
             print(f"Permission denied stopping PID {pid}")
             return 2
+        if left:
+            print(f"Could not stop sshler (PID: {pid})")
+            return 2
+        _remove_pid()
+        print("sshler stopped")
+        return 0
 
     # Try finding and stopping uvicorn processes
     pids = _get_sshler_pids()
@@ -134,23 +164,15 @@ def stop() -> int:
         return 1
 
     print(f"Stopping sshler (PIDs: {', '.join(map(str, pids))})...")
-    for pid in pids:
+    left = []
+    for found in pids:
         try:
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-
-    # Wait for processes to terminate
-    time.sleep(1)
-    remaining = _get_sshler_pids()
-    if remaining:
-        print(f"Force killing remaining processes: {remaining}")
-        for pid in remaining:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-
+            left += _end([found])
+        except psutil.AccessDenied:
+            left.append(found)
+    if left:
+        print(f"Could not stop sshler (PIDs: {', '.join(map(str, left))})")
+        return 2
     _remove_pid()
     print("sshler stopped")
     return 0

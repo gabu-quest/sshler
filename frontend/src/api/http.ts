@@ -49,16 +49,22 @@ export interface TransferProgress {
   bytes_total: number;
   index: number;
   total: number;
+  /** Where the file landed, when that is another name than asked. */
+  placed?: string;
 }
 
 export interface TransferResult {
   succeeded: string[];
   failed: { path: string; error: string; reason?: FailureReason }[];
+  /** Files that landed under another name than asked (sent with keep_both only). */
+  placed?: { path: string; placed: string }[];
 }
 
-/** Sent only when true, so a request without it is the plain, refusing one. */
+/** Each is sent only when true, so a request without them is the plain, refusing one;
+ * the server refuses both together. */
 export interface OverwriteOption {
   overwrite?: boolean;
+  keepBoth?: boolean;
 }
 
 /** A cross-box transfer's options. */
@@ -70,8 +76,11 @@ export interface CrossBoxOptions extends OverwriteOption {
   onItemFailed?: (item: TransferResult["failed"][number]) => void;
 }
 
-function overwriteField(options: OverwriteOption): { overwrite?: true } {
-  return options.overwrite ? { overwrite: true } : {};
+function overwriteField(options: OverwriteOption): { overwrite?: true; keep_both?: true } {
+  return {
+    ...(options.overwrite ? { overwrite: true as const } : {}),
+    ...(options.keepBoth ? { keep_both: true as const } : {}),
+  };
 }
 
 const API_BASE = "/api/v1";
@@ -283,6 +292,19 @@ async function handleAuthErrors(): Promise<void> {
   } catch (err) {
     console.error('Failed to handle 401 error:', err);
   }
+}
+
+/** The close code the server gives a socket whose session has ended, or that came without one. */
+const SESSION_ENDED_CLOSE = 4401;
+
+/**
+ * A socket's close, as a failed request's `auth` answer is handled: a 4401 goes to the
+ * sign-in page through `handleAuthErrors` (once, however many sockets close together)
+ * and its promise is returned; any other code returns null and does nothing, so the
+ * caller goes on with its own handling.
+ */
+export function signInAfterSocketClose(code: number): Promise<void> | null {
+  return code === SESSION_ENDED_CLOSE ? handleAuthErrors() : null;
 }
 
 export async function fetchBootstrap(): Promise<BootstrapPayload> {
@@ -551,12 +573,15 @@ export async function uploadFile(
   file: File,
   token: string | null,
   onProgress?: (percent: number) => void,
-  options: { overwrite?: boolean } = {},
+  options: OverwriteOption = {},
 ): Promise<SimpleMessage> {
   const form = new FormData();
   form.append("directory", directory);
   if (options.overwrite) {
     form.append("overwrite", "true");
+  }
+  if (options.keepBoth) {
+    form.append("keep_both", "true");
   }
   form.append("file", file);
 
@@ -1043,6 +1068,8 @@ export function crossBoxTransfer(
       // however the reads cut the stream.
       let currentEvent = "";
       let finished = false;
+      // Each file's landed path, from its progress events; the done event does not carry it.
+      const landed = new Map<string, string>();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1062,12 +1089,18 @@ export function crossBoxTransfer(
             try {
               const parsed = JSON.parse(data);
               if (currentEvent === "progress") {
-                onProgress(parsed as TransferProgress);
+                const progress = parsed as TransferProgress;
+                if (progress.placed) landed.set(progress.file, progress.placed);
+                onProgress(progress);
               } else if (currentEvent === "failed") {
                 options.onItemFailed?.(parsed as TransferResult["failed"][number]);
               } else if (currentEvent === "done") {
                 finished = true;
-                onDone(parsed as TransferResult);
+                const result = parsed as TransferResult;
+                if (options.keepBoth) {
+                  result.placed = [...landed].map(([path, placed]) => ({ path, placed }));
+                }
+                onDone(result);
               } else if (currentEvent === "error") {
                 finished = true;
                 // The event carries the failure body: its `detail` and its `reason`.
@@ -1118,11 +1151,12 @@ export async function createArchive(
   archiveName: string,
   format: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<SimpleMessage> {
   return apiFetch<SimpleMessage>(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/create`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ paths, destination, archive_name: archiveName, format }),
+    body: JSON.stringify({ paths, destination, archive_name: archiveName, format, ...overwriteField(options) }),
   });
 }
 
@@ -1131,11 +1165,12 @@ export async function extractArchive(
   archivePath: string,
   destination: string,
   token: string | null,
+  options: OverwriteOption = {},
 ): Promise<SimpleMessage> {
   return apiFetch<SimpleMessage>(`${API_BASE}/boxes/${encodeURIComponent(name)}/archive/extract`, {
     method: "POST",
     headers: { ...buildHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify({ archive_path: archivePath, destination }),
+    body: JSON.stringify({ archive_path: archivePath, destination, ...overwriteField(options) }),
   });
 }
 
@@ -1269,6 +1304,8 @@ export async function fetchRecovery(
   });
 }
 
+// Recreates a session from its last layout: a lost one of the recovery dialog, or an
+// ended one whose row is `restorable` ("Restore layout"). One server route for both.
 export async function recreateSession(
   sessionId: string,
   token: string | null,

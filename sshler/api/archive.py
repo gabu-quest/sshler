@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from ..config import AppConfig
 from ..validation import PathValidator, ValidationError
@@ -13,6 +13,7 @@ from .box_files import Answers, box_files
 from .dependencies import APIDependencies
 from .failure import REASON_INVALID, Failure
 from .file_contract import MISSING_ARCHIVE
+from .placement import refuse_replace_and_keep_both
 from .rate_limiting import rate_limit_file_ops
 
 logger = logging.getLogger(__name__)
@@ -27,11 +28,15 @@ class APIArchiveCreateRequest(BaseModel):
     destination: str
     archive_name: str
     format: str  # "tar.gz" | "tgz" | "zip"
+    overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 class APIArchiveExtractRequest(BaseModel):
     archive_path: str
     destination: str
+    overwrite: StrictBool = False
+    keep_both: StrictBool = False
 
 
 def _validate_archive_name(name: str, fmt: str) -> str:
@@ -60,6 +65,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
         _rate_limit: None = Depends(rate_limit_file_ops),
     ):
+        refuse_replace_and_keep_both(payload.overwrite, payload.keep_both)
         if len(payload.paths) > MAX_ARCHIVE_PATHS:
             raise Failure(REASON_INVALID, f"Too many paths (max {MAX_ARCHIVE_PATHS})")
         if not payload.paths:
@@ -74,9 +80,15 @@ def get_router(deps: APIDependencies) -> APIRouter:
 
         async with box_files(deps, box, application_config) as files:
             archive_path = await files.create_archive(
-                payload.paths, payload.destination, archive_name, payload.format
+                payload.paths,
+                payload.destination,
+                archive_name,
+                payload.format,
+                overwrite=payload.overwrite,
+                keep_both=payload.keep_both,
             )
-        return {"status": "ok", "message": f"Created {archive_name}", "path": archive_path}
+            landed_name = files.name(archive_path)
+        return {"status": "ok", "message": f"Created {landed_name}", "path": archive_path}
 
     @router.post("/boxes/{name}/archive/extract")
     async def api_archive_extract(
@@ -86,10 +98,16 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
         _rate_limit: None = Depends(rate_limit_file_ops),
     ):
+        refuse_replace_and_keep_both(payload.overwrite, payload.keep_both)
         box = deps.get_box_or_404(application_config, name)
 
         async with box_files(deps, box, application_config, _ARCHIVE) as files:
-            destination = await files.extract_archive(payload.archive_path, payload.destination)
+            destination = await files.extract_archive(
+                payload.archive_path,
+                payload.destination,
+                overwrite=payload.overwrite,
+                keep_both=payload.keep_both,
+            )
         return {"status": "ok", "message": "Extracted", "path": destination}
 
     return router

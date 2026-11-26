@@ -39,7 +39,7 @@ ASYNC_NAMES = [
     "get_session_by_id_async",
     "get_session_by_name_async",
     "list_all_active_sessions_async",
-    "list_all_snapshotted_sessions_async",
+    "list_all_sessions_async",
     "list_artifact_projects_async",
     "list_artifact_registrations_async",
     "list_diff_notebooks_async",

@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { NInput, NIcon, NSpin, NEmpty } from "naive-ui";
 import { PhMagnifyingGlass, PhFolder, PhFile, PhClockCounterClockwise } from "@phosphor-icons/vue";
-import { searchDirectories } from "@/api/http";
 import type { SearchResult } from "@/api/types";
-import { failureText, errorText } from "@/api/apiError";
+import { useFolderSearch, FOLDER_SEARCH_MIN_LENGTH } from "@/composables/useFolderSearch";
 import { useI18n } from "@/i18n";
 
 const props = defineProps<{
@@ -22,76 +21,19 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-const query = ref("");
-const results = ref<SearchResult[]>([]);
-const loading = ref(false);
-const showDropdown = ref(false);
-const debounceTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
-// The message of a failed search, shown where "no matches" would be.
-const failureLine = ref<string | null>(null);
-// Why the walk of the box did not run; the folders found before it still show below.
-const walkLine = ref<string | null>(null);
-// Only the newest search writes its answer: one the user replaced by typing on shows nothing.
-let searchId = 0;
-
-const hasResults = computed(() => results.value.length > 0);
-
-watch(query, (newQuery) => {
-  // Clear previous debounce
-  if (debounceTimeout.value) {
-    clearTimeout(debounceTimeout.value);
-  }
-
-  // Hide dropdown and clear results if query too short
-  if (!newQuery || newQuery.length < 2) {
-    searchId += 1;
-    loading.value = false;
-    showDropdown.value = false;
-    results.value = [];
-    failureLine.value = null;
-    walkLine.value = null;
-    return;
-  }
-
-  // Debounce API call by 300ms
-  debounceTimeout.value = setTimeout(async () => {
-    await performSearch(newQuery);
-  }, 300);
+const { query, results, loading, showDropdown, failureLine, walkLine, reset } = useFolderSearch({
+  box: () => props.box,
+  token: () => props.token,
+  root: () => props.root,
+  files: () => props.files,
 });
 
-async function performSearch(searchQuery: string) {
-  if (!props.box) return;
-
-  const id = ++searchId;
-  loading.value = true;
-  showDropdown.value = true;
-
-  try {
-    const response = await searchDirectories(props.box, searchQuery, props.token, 20, {
-      root: props.root ?? undefined,
-      files: props.files,
-    });
-    if (id !== searchId) return;
-    results.value = response.results;
-    failureLine.value = null;
-    walkLine.value = response.error != null || response.reason != null ? failureText(response) : null;
-  } catch (err) {
-    if (id !== searchId || (err as { name?: unknown } | null)?.name === "AbortError") return;
-    results.value = [];
-    walkLine.value = null;
-    failureLine.value = errorText(err);
-  } finally {
-    if (id === searchId) loading.value = false;
-  }
-}
+const hasResults = computed(() => results.value.length > 0);
 
 function selectResult(result: SearchResult) {
   emit("select", result.path, result.is_directory !== false);
   query.value = "";
-  showDropdown.value = false;
-  results.value = [];
-  failureLine.value = null;
-  walkLine.value = null;
+  reset();
 }
 
 function handleBlur() {
@@ -102,7 +44,7 @@ function handleBlur() {
 }
 
 function handleFocus() {
-  if (query.value.length >= 2 && results.value.length > 0) {
+  if (query.value.length >= FOLDER_SEARCH_MIN_LENGTH && results.value.length > 0) {
     showDropdown.value = true;
   }
 }

@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from platform_support import make_symlink
 
 from sshler import state
+from sshler.api.helpers import local_path_form
 from sshler.webapp import ServerSettings, make_app
 
 TOKEN = "upload-token"
@@ -205,6 +206,6 @@ def test_local_rename_to_a_free_name_still_works(client, work):
     (work / "src.txt").write_text("source")
     resp = rename(client, work / "src.txt", "dst.txt")
     assert resp.status_code == 200
-    assert resp.json()["path"] == str(work / "dst.txt")
+    assert resp.json()["path"] == local_path_form(work / "dst.txt")
     assert not (work / "src.txt").exists()
     assert (work / "dst.txt").read_text() == "source"

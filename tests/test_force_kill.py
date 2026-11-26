@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import select
+import shlex
 import shutil
 import time
 import uuid
@@ -23,12 +24,15 @@ from sshler.tmux import (
     _list_local_pane_pids,
     force_kill_local_session,
     local_tmux_command,
+    remote_force_kill_words,
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("tmux") is None or os.name == "nt",
-    reason="requires a POSIX tmux",
-)
+
+def real_tmux(test):
+    """Marks a test that drives a real tmux on its own ``-L`` server (or the route's
+    real force kill, which asks one); the tests that stand in for tmux run everywhere."""
+    test = pytest.mark.skipif(shutil.which("tmux") is None, reason="needs tmux")(test)
+    return pytest.mark.posix_only("a real tmux server on its own -L socket")(test)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -83,6 +87,7 @@ def bystander_session():
     yield from _session_fixture("bystander")
 
 
+@real_tmux
 @pytest.mark.asyncio
 async def test_sessions_live_in_isolated_socket_dir(victim_session, tmux_tmpdir):
     """The test tmux server's socket is in the private dir, never the user's."""
@@ -92,6 +97,7 @@ async def test_sessions_live_in_isolated_socket_dir(victim_session, tmux_tmpdir)
     assert await _socket_exists(victim_session) is True
 
 
+@real_tmux
 @pytest.mark.asyncio
 async def test_force_kill_terminates_sighup_ignoring_process(victim_session):
     await _run(victim_session, "new-session", "-d", "-s", victim_session)
@@ -116,6 +122,7 @@ async def test_force_kill_terminates_sighup_ignoring_process(victim_session):
     assert _pid_alive(shell_pid) is False
 
 
+@real_tmux
 @pytest.mark.asyncio
 async def test_force_kill_leaves_other_sessions_untouched(victim_session, bystander_session):
     await _run(victim_session, "new-session", "-d", "-s", victim_session)
@@ -134,6 +141,7 @@ async def test_force_kill_leaves_other_sessions_untouched(victim_session, bystan
     assert _pid_alive(bystander_pid) is True
 
 
+@real_tmux
 def test_delete_endpoint_accepts_force_and_removes_row(tmp_path, monkeypatch):
     """The DELETE endpoint accepts ?force=true and deletes the session row.
 
@@ -170,6 +178,7 @@ def test_delete_endpoint_accepts_force_and_removes_row(tmp_path, monkeypatch):
         state.reset_state()
 
 
+@real_tmux
 def test_force_kill_by_name_route_terminates_real_session(victim_session, tmp_path, monkeypatch):
     """POST by-name/force-kill kills a live local session through the ROUTE.
 
@@ -228,6 +237,7 @@ def test_force_kill_by_name_route_terminates_real_session(victim_session, tmp_pa
     assert _pid_alive(shell_pid) is False
 
 
+@real_tmux
 def test_force_kill_by_name_rejects_blank_and_remote(tmp_path, monkeypatch):
     """Blank names are 400; local box accepts a (no-op) unknown name with 200."""
     from sshler import state
@@ -278,7 +288,8 @@ def kill_recorders(monkeypatch):
         plain_calls.append((session_name, list(args)))
         return 0, b"", b""
 
-    monkeypatch.setattr("sshler.api.sessions.force_kill_local_session", fake_force)
+    # The runner of the local box force-kills through this one helper.
+    monkeypatch.setattr("sshler.tmux.force_kill_local_session", fake_force)
     # The runner of the local box runs every session's tmux through this one helper.
     monkeypatch.setattr("sshler.tmux.run_local_tmux", fake_run_local_tmux)
     return {"force": force_calls, "plain": plain_calls}
@@ -354,16 +365,10 @@ def test_delete_route_force_without_kill_tmux_calls_nothing(tmp_path, monkeypatc
         state.reset_state()
 
 
-def test_delete_route_remote_force_never_uses_local_force_helper(
-    tmp_path, monkeypatch, kill_recorders
-):
-    """Mutation killed: a remote box with ``force=true`` reaching the local
-    helper (which would nuke a local socket) instead of a plain remote
-    ``tmux kill-session``.
-    """
-    from sshler import state
-    from tests.test_api_v1 import auth_headers, build_client
-
+@pytest.fixture
+def remote_commands(monkeypatch):
+    """A remote box ``remote1`` whose connection records each command line and answers
+    status 0 with no output."""
     commands: list[str] = []
 
     class FakeConnection:
@@ -378,6 +383,22 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
         return FakeConnection()
 
     monkeypatch.setattr("sshler.api.dependencies.APIDependencies.connect_for_box", fake_connect)
+    return commands
+
+
+def _force_kill_line(session: str) -> list[str]:
+    """The words of the remote force-kill line of ``session``, as a shell reads them."""
+    return [*remote_force_kill_words(session), "2>/dev/null"]
+
+
+def test_delete_route_remote_force_runs_the_remote_force_kill_of_its_own_server(
+    tmp_path, monkeypatch, kill_recorders, remote_commands
+):
+    """A forced remote delete stops the session's own ts server and SIGKILLs its panes
+    on the remote box (never the local helper, never a plain kill-session)."""
+    from sshler import state
+    from tests.test_api_v1 import auth_headers, build_client
+
     config_dir = _write_boxes(tmp_path, [{"name": "remote1", "host": "example.invalid"}])
     client = build_client(config_dir, monkeypatch)
     try:
@@ -392,9 +413,9 @@ def test_delete_route_remote_force_never_uses_local_force_helper(
         assert kill_recorders["force"] == []
         assert kill_recorders["plain"] == []
         # The pool health-checks the connection it gets back with ``echo test``.
-        assert [c for c in commands if c != "echo test"] == [
-            "tmux -L ts-rsess kill-session -t rsess"
-        ]
+        sent = [shlex.split(c) for c in remote_commands if c != "echo test"]
+        assert sent == [_force_kill_line("rsess")]
+        assert state.get_session_by_id(record.id) is None
     finally:
         client.close()
         state.reset_state()
@@ -422,10 +443,42 @@ def test_force_kill_by_name_route_calls_helper_once_with_the_name(
         state.reset_state()
 
 
-def test_force_kill_by_name_remote_box_is_400_and_never_kills(
-    tmp_path, monkeypatch, kill_recorders
+@pytest.mark.parametrize("name", ["target-sess", "a b", "it's", 'a"b', "$HOME;id"], ids=repr)
+def test_force_kill_by_name_on_a_remote_box_kills_its_own_server_and_drops_its_rows(
+    tmp_path, monkeypatch, kill_recorders, remote_commands, name
 ):
-    """Mutation killed: dropping the ``transport != "local"`` guard."""
+    """A remote box is force-killed as the local one: one remote line whose last word is
+    the session's own server, ``ok``, and the box's rows of that name gone."""
+    from urllib.parse import quote
+
+    from sshler import state
+    from tests.test_api_v1 import auth_headers, build_client
+
+    config_dir = _write_boxes(tmp_path, [{"name": "remote1", "host": "example.invalid"}])
+    client = build_client(config_dir, monkeypatch)
+    try:
+        state.initialize(config_dir)
+        kept = state.create_or_update_session("remote1", "other", "/")
+        state.create_or_update_session("remote1", name, "/")
+        resp = client.post(
+            f"/api/v1/boxes/remote1/sessions/by-name/{quote(name, safe='')}/force-kill",
+            headers=auth_headers(),
+        )
+        assert (resp.status_code, resp.json()["message"]) == (200, "force-killed")
+        sent = [shlex.split(c) for c in remote_commands if c != "echo test"]
+        assert sent == [_force_kill_line(name)]
+        assert sent[0][4] == f"ts-{name}"
+        assert kill_recorders["force"] == []
+        assert [r.session_name for r in state.list_sessions("remote1")] == [kept.session_name]
+    finally:
+        client.close()
+        state.reset_state()
+
+
+@pytest.mark.parametrize("name", ["%20", "a%0Db", "a%0Ab", "a%00b"])
+def test_force_kill_by_name_on_a_remote_box_refuses_a_bad_name_before_it_connects(
+    tmp_path, monkeypatch, kill_recorders, remote_commands, name
+):
     from sshler import state
     from tests.test_api_v1 import auth_headers, build_client
 
@@ -433,12 +486,122 @@ def test_force_kill_by_name_remote_box_is_400_and_never_kills(
     client = build_client(config_dir, monkeypatch)
     try:
         resp = client.post(
-            "/api/v1/boxes/remote1/sessions/by-name/target-sess/force-kill",
+            f"/api/v1/boxes/remote1/sessions/by-name/{name}/force-kill",
             headers=auth_headers(),
         )
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "force-kill by name is supported for the local box only"
+        assert (resp.status_code, resp.json()["detail"]) == (400, "Invalid session name")
+        assert remote_commands == []
         assert kill_recorders["force"] == []
     finally:
         client.close()
         state.reset_state()
+
+
+# --- a Windows local box: its shells live in the terminal registry, not in tmux ------
+
+
+class _ConPtyShell:
+    """Stands in for a ConPTY shell the registry holds; records its end."""
+
+    def __init__(self) -> None:
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def close(self) -> None:
+        pass
+
+
+def _held_shell(registry, session: str) -> _ConPtyShell:
+    """Puts a shell for ``("local", session)`` into *registry* as the terminal socket
+    would, without a ConPTY to read from."""
+    from sshler.win_terminal_registry import TerminalSession
+
+    shell = _ConPtyShell()
+    key = ("local", session)
+    registry._sessions[key] = TerminalSession(key, shell, 80, 24, 1024)
+    return shell
+
+
+def test_force_kill_by_name_ends_the_windows_shell_through_the_registry_then_drops_the_row(
+    tmp_path, monkeypatch, kill_recorders
+):
+    """The toolbar's force kill of a native Windows shell ends it in the registry, as a
+    forced delete does, and drops the row; a shell under another name is left alone."""
+    from sshler import state
+    from tests.test_api_v1 import auth_headers, build_client, setup_config
+
+    client = build_client(setup_config(tmp_path), monkeypatch)
+    registry = client.app.state.win_terminal_registry
+    try:
+        _create_local_session(client, "proj")
+        victim = _held_shell(registry, "proj")
+        bystander = _held_shell(registry, "other")
+        resp = client.post(
+            "/api/v1/boxes/local/sessions/by-name/proj/force-kill", headers=auth_headers()
+        )
+        assert (resp.status_code, resp.json()["message"]) == (200, "force-killed")
+        assert registry.live_keys() == [("local", "other")]
+        assert (victim.terminated, bystander.terminated) == (True, False)
+        assert kill_recorders["force"] == ["proj"]
+        assert [r.session_name for r in state.list_sessions("local")] == []
+    finally:
+        client.close()
+        state.reset_state()
+
+
+def test_force_kill_by_name_of_a_shell_the_registry_does_not_hold_drops_the_row(
+    tmp_path, monkeypatch, kill_recorders
+):
+    from sshler import state
+    from tests.test_api_v1 import auth_headers, build_client, setup_config
+
+    client = build_client(setup_config(tmp_path), monkeypatch)
+    try:
+        _create_local_session(client, "proj")
+        resp = client.post(
+            "/api/v1/boxes/local/sessions/by-name/proj/force-kill", headers=auth_headers()
+        )
+        assert (resp.status_code, resp.json()["message"]) == (200, "force-killed")
+        assert client.app.state.win_terminal_registry.live_keys() == []
+        assert [r.session_name for r in state.list_sessions("local")] == []
+    finally:
+        client.close()
+        state.reset_state()
+
+
+@pytest.mark.asyncio
+async def test_a_local_force_kill_on_windows_ends_the_wsl_server_and_signals_no_process(
+    monkeypatch,
+):
+    """On Windows the local tmux runs inside WSL: its pane ids are WSL's, and Windows has
+    no ``killpg``, ``getpgid`` or ``SIGKILL``. The force kill stops the session's server
+    there and sends no signal from Windows."""
+    import signal
+
+    from sshler import tmux as tmux_module
+
+    ran: list[tuple[str, list[str]]] = []
+    signalled: list[tuple[int, int]] = []
+
+    async def fake_run_local_tmux(session_name, args, capture_output=True, timeout=None):
+        ran.append((session_name, list(args)))
+        return 0, b"", b""
+
+    async def wsl_pane_pids(session_name):
+        return [4242]
+
+    monkeypatch.setattr(tmux_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(tmux_module, "run_local_tmux", fake_run_local_tmux)
+    monkeypatch.setattr(tmux_module, "_list_local_pane_pids", wsl_pane_pids)
+    # Absent already on a Windows runner.
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.delattr(os, "getpgid", raising=False)
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append((pid, sig)))
+
+    await tmux_module.force_kill_local_session("proj")
+
+    assert ran == [("proj", ["kill-server"])]
+    assert signalled == []

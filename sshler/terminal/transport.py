@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import anyio
 
@@ -66,11 +66,17 @@ class OpenedTerminal:
     requested directory that does not exist falls back to the box's default).
     ``on_tracked``, when set, takes the id of the session row: the transport's owner
     then marks the row inactive itself, so the socket must not when it closes.
+    ``fallback`` is true when tmux was wanted and the box has none, so the transport
+    is a plain shell opened in its place. ``connection`` is the SSH connection a remote
+    terminal runs on (the transport owns and closes it; None on the local box): the
+    socket's end asks tmux on it which sessions it has, so nothing new connects.
     """
 
     transport: Transport
     directory: str
     on_tracked: Callable[[str], None] | None = None
+    fallback: bool = False
+    connection: Any = None
 
 
 class TerminalOpenError(Exception):

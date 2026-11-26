@@ -3,17 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   batchCopy,
   batchMove,
+  createArchive,
   buildHeaders as _buildHeaders,
   crossBoxTransfer,
   downloadDirectory,
   downloadFile,
   exportPdf,
+  extractArchive,
   fetchBootstrap,
   fetchBoxes,
   filenameFromContentDisposition,
   http,
   renameFile,
   sameBoxTransfer,
+  signInAfterSocketClose,
   tokenWorks,
 } from "./http";
 import { ApiError } from "./apiError";
@@ -322,6 +325,38 @@ describe("the one request: what a failure does and shows", () => {
   });
 });
 
+describe("a socket closed with 4401: its session ended, the same way as a 401", () => {
+  const signInNavigation = { name: "login", query: { redirect: "/files?box=b" } };
+
+  it("clears the signed-in user, forgets the bootstrap and goes to the sign-in page once", async () => {
+    await signInAfterSocketClose(4401);
+    expect(pushMock.mock.calls).toEqual([[signInNavigation]]);
+    expect(clearUserMock).toHaveBeenCalledTimes(1);
+    expect(forgetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("three sockets that close together navigate once", async () => {
+    pushMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      routerState.current = { name: "login", fullPath: "/login?redirect=%2Ffiles%3Fbox%3Db" };
+    });
+    await Promise.all([4401, 4401, 4401].map((code) => signInAfterSocketClose(code)));
+    expect(pushMock.mock.calls).toEqual([[signInNavigation]]);
+  });
+
+  it("on the sign-in page itself: no navigation", async () => {
+    routerState.current = { name: "login", fullPath: "/login?redirect=%2Ffiles" };
+    await signInAfterSocketClose(4401);
+    expect(pushMock).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([1000, 1006, 1011, 4403, 4404])("code %i is not the session's end: null, nothing done", (code) => {
+    expect(signInAfterSocketClose(code)).toBeNull();
+    expect(pushMock).toHaveBeenCalledTimes(0);
+    expect(clearUserMock).toHaveBeenCalledTimes(0);
+  });
+});
+
 describe("the http object's verbs go through the one request", () => {
   it("send the page's token header and the cookie", async () => {
     bootstrapState.token = "page-token";
@@ -461,6 +496,15 @@ describe("a name that is taken", () => {
     expect(sentBody(1)).toEqual({ path: "/d/a", new_name: "c", overwrite: true });
   });
 
+  // Mutation killed: always sending the flag, or never sending it, on an extract.
+  it("extract sends overwrite only when asked", async () => {
+    fetchMock.mockImplementation(async () => res(200, { status: "ok", message: "Extracted" }));
+    await extractArchive("b", "/d/in.zip", "/d", "t");
+    await extractArchive("b", "/d/in.zip", "/d", "t", { overwrite: true });
+    expect(sentBody(0)).toEqual({ archive_path: "/d/in.zip", destination: "/d" });
+    expect(sentBody(1)).toEqual({ archive_path: "/d/in.zip", destination: "/d", overwrite: true });
+  });
+
   it.each([["move", batchMove, "batch/move"], ["copy", batchCopy, "batch/copy"]] as const)(
     "batch %s sends overwrite only when asked",
     async (_mode, call, route) => {
@@ -472,6 +516,37 @@ describe("a name that is taken", () => {
       expect(sentBody(1)).toEqual({ paths: ["/s/a"], destination: "/d", overwrite: true });
     },
   );
+
+  it("keep_both is sent only when asked, alone, by rename, extract, compress and the batch calls", async () => {
+    fetchMock.mockImplementation(async () => res(200, { status: "ok", succeeded: [], failed: [] }));
+    await renameFile("b", "/d/a", "c", "t", { keepBoth: true });
+    await extractArchive("b", "/d/in.zip", "/d", "t", { keepBoth: true });
+    await createArchive("b", ["/d/a"], "/d", "a.zip", "zip", "t", { keepBoth: true });
+    await batchMove("b", ["/s/a"], "/d", "t", { keepBoth: true });
+    await batchCopy("b", ["/s/a"], "/d", "t", { keepBoth: true });
+    expect(sentBody(0)).toEqual({ path: "/d/a", new_name: "c", keep_both: true });
+    expect(sentBody(1)).toEqual({ archive_path: "/d/in.zip", destination: "/d", keep_both: true });
+    expect(sentBody(2)).toEqual({ paths: ["/d/a"], destination: "/d", archive_name: "a.zip", format: "zip", keep_both: true });
+    expect(sentBody(3)).toEqual({ paths: ["/s/a"], destination: "/d", keep_both: true });
+    expect(sentBody(4)).toEqual({ paths: ["/s/a"], destination: "/d", keep_both: true });
+  });
+
+  it("a cross-box transfer with keep_both sends it alone and hands on where each file landed", async () => {
+    const sse =
+      'event: progress\ndata: {"file":"/s/a","bytes_done":1,"bytes_total":1,"index":0,"total":2,"placed":"/d/a (2)"}\n\n' +
+      'event: progress\ndata: {"file":"/s/b","bytes_done":1,"bytes_total":1,"index":1,"total":2}\n\n' +
+      'event: done\ndata: {"succeeded":["/s/a","/s/b"],"failed":[]}\n\n';
+    fetchMock.mockImplementation(async () => new Response(sse, { status: 200 }));
+    const result = await new Promise<unknown>((resolve) => {
+      crossBoxTransfer("x", "y", ["/s/a", "/s/b"], "/d", "copy", "t", () => {}, resolve, () => {}, { keepBoth: true });
+    });
+    expect(sentBody(0)).toEqual({
+      src_box: "x", dest_box: "y", paths: ["/s/a", "/s/b"], destination: "/d", mode: "copy", keep_both: true,
+    });
+    expect(result).toEqual({
+      succeeded: ["/s/a", "/s/b"], failed: [], placed: [{ path: "/s/a", placed: "/d/a (2)" }],
+    });
+  });
 
   it("a same-box transfer passes the flag on to the batch call", async () => {
     fetchMock.mockImplementation(async () => res(200, { status: "ok", succeeded: [], failed: [] }));

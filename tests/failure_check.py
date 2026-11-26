@@ -9,8 +9,9 @@ from sshler.api import failure as api_failure
 
 def failure_body_problem(app: object, method: str, response) -> str | None:
     """What is wrong with a failure answer of an app made by ``make_app``: its body is
-    not exactly ``{"detail": text, "reason": word}`` with a word of the list. None when
-    the answer is right, or not a failure of such an app."""
+    not exactly ``{"detail": text, "reason": word}`` with a word of the list, and
+    ``taken`` (a count and a list of names) where it has one. None when the answer is
+    right, or not a failure of such an app."""
     handlers = getattr(app, "exception_handlers", {})
     if response.status_code < 400 or method.upper() == "HEAD":
         return None
@@ -20,11 +21,23 @@ def failure_body_problem(app: object, method: str, response) -> str | None:
         body = response.json()
     except ValueError:
         return f"{response.status_code} body is not JSON: {response.text[:200]!r}"
-    if not isinstance(body, dict) or set(body) != {"detail", "reason"}:
+    if not isinstance(body, dict) or set(body) - {"taken"} != {"detail", "reason"}:
         return f"{response.status_code} body is not exactly detail and reason: {body!r}"
+    if "taken" in body and not _is_taken(body["taken"]):
+        return f"{response.status_code} taken is not a count and names: {body!r}"
     if not isinstance(body["detail"], str):
         return f"{response.status_code} detail is not a text: {body!r}"
     reason = body["reason"]
     if reason not in api_failure.STATUS_OF_REASON:
         return f"{response.status_code} reason is not a word of the list: {body!r}"
     return None
+
+
+def _is_taken(taken: object) -> bool:
+    return (
+        isinstance(taken, dict)
+        and set(taken) == {"count", "names"}
+        and type(taken["count"]) is int
+        and isinstance(taken["names"], list)
+        and all(isinstance(name, str) for name in taken["names"])
+    )

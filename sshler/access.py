@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -9,7 +11,7 @@ from urllib.parse import urlparse
 
 from fastapi import WebSocket
 
-from .session import live_session
+from .session import SocketHold, hold_on_session, live_session
 from .settings import SshlerSettings
 from .settings import get_settings as get_app_settings
 
@@ -17,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 CLOSE_UNAUTHORIZED = 4401
 CLOSE_FORBIDDEN = 4403
+SESSION_ENDED = "Session ended"
+
+# Closes started by a session's end, kept until done so none is collected half-way.
+_closing: set[asyncio.Task] = set()
 
 
 def _digest(value: str) -> bytes:
@@ -64,9 +70,14 @@ def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
     ``x-sshler-token`` header) gives 4403; an Origin header that is present and
     not allowed gives 4403. A request without an Origin header is not a browser
     and passes, as for a POST. ``origin_check_enabled`` turns the Origin check off.
+
+    A socket let in by a session cookie carries that session's id in
+    ``websocket.state.session_id`` for ``hold_socket``; one let in otherwise (a good
+    Basic header, or no password set) carries None and belongs to no session.
     """
     cli_settings = websocket.app.state.settings
     app_settings = get_app_settings()
+    websocket.state.session_id = None
 
     if cli_settings.auth_manager:
         authenticated = False
@@ -77,6 +88,7 @@ def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
             cookie_sid = websocket.cookies.get(app_settings.cookie_name)
             if cookie_sid and live_session(cookie_sid):
                 authenticated = True
+                websocket.state.session_id = cookie_sid
         if not authenticated:
             logger.warning("[Connection] WebSocket refused: no valid credentials")
             return CLOSE_UNAUTHORIZED, "Unauthorized"
@@ -96,3 +108,41 @@ def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
             return CLOSE_FORBIDDEN, "Invalid origin"
 
     return None
+
+
+class _Unheld:
+    """The place of a socket that belongs to no session: nothing to release."""
+
+    def release(self) -> None:
+        return None
+
+
+async def hold_socket(websocket: WebSocket) -> SocketHold | _Unheld | None:
+    """Put an accepted socket in the record of the session it was let in on.
+
+    When that session ends (signed out, or its time is up) the socket is closed with
+    4401, and whatever runs on it ends as on any close. A socket let in without a
+    session is not held. None means the session ended between ``websocket_refusal``
+    and this call: the socket has been closed with 4401 and the caller returns. The
+    caller releases the hold when the socket closes for any other reason.
+    """
+    session_id = getattr(websocket.state, "session_id", None)
+    if session_id is None:
+        return _Unheld()
+    loop = asyncio.get_running_loop()
+
+    def end() -> None:
+        closing = loop.create_task(_close_ended(websocket))
+        _closing.add(closing)
+        closing.add_done_callback(_closing.discard)
+
+    hold = hold_on_session(session_id, end)
+    if hold is None:
+        await _close_ended(websocket)
+    return hold
+
+
+async def _close_ended(websocket: WebSocket) -> None:
+    logger.info("[Connection] WebSocket closed: its session ended")
+    with contextlib.suppress(Exception):  # the socket has already closed
+        await websocket.close(code=CLOSE_UNAUTHORIZED, reason=SESSION_ENDED)
