@@ -13,7 +13,6 @@ import {
   NSpin,
   NTag,
   NEmpty,
-  NTooltip,
   NProgress
 } from "naive-ui";
 import { useI18n } from "@/i18n";
@@ -322,92 +321,106 @@ const getServerStatus = (box: any) => {
   return 'unknown';
 };
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'online': return '#52c41a';
-    case 'unknown': return '#8c8c8c';
-    default: return '#8c8c8c';
-  }
-};
-
 const handleConnectToServer = (serverName: string) => {
   openTerminal(serverName);
 };
 
 const handleBrowseServerFiles = (serverName: string) => {
-  router.push(`/files?box=${serverName}`);
+  router.push(`/files?box=${encodeURIComponent(serverName)}`);
+};
+
+const handleMultiTerminal = (serverName: string) => {
+  router.push(`/multi-terminal?box=${encodeURIComponent(serverName)}`);
+};
+
+// Session chips on a card: four at first, the rest on request, per box.
+const CHIP_LIMIT = 4;
+const expandedBoxes = ref<Set<string>>(new Set());
+const visibleSessions = (boxName: string): ApiSession[] => {
+  const all = getBoxSessions(boxName);
+  return expandedBoxes.value.has(boxName) ? all : all.slice(0, CHIP_LIMIT);
+};
+const toggleSessions = (boxName: string) => {
+  const next = new Set(expandedBoxes.value);
+  if (next.has(boxName)) next.delete(boxName);
+  else next.add(boxName);
+  expandedBoxes.value = next;
 };
 </script>
 
 <template>
   <div class="dashboard">
-    <!-- Compact Stats Pill -->
-    <div class="stats-pill" role="status" :aria-label="t('a11y.server_stats')">
-      <NIcon size="14"><PhChartBar weight="duotone" /></NIcon>
-      <span>{{ quickStats.servers }} {{ quickStats.servers === 1 ? t('overview.server') : t('overview.servers') }}</span>
-      <span class="stats-separator">•</span>
-      <span>{{ quickStats.pinnedBoxes }} {{ t('overview.pinned') }}</span>
-      <span class="stats-separator">•</span>
-      <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
-      <template v-if="lastUpdated">
+    <!-- Overview header row -->
+    <div class="overview-header" role="status" :aria-label="t('a11y.server_stats')">
+      <h2 class="section-title">{{ t('overview.your_servers') }}</h2>
+      <div class="overview-counts">
+        <NIcon size="14"><PhChartBar weight="duotone" /></NIcon>
+        <span>{{ quickStats.servers }} {{ quickStats.servers === 1 ? t('overview.server') : t('overview.servers') }}</span>
         <span class="stats-separator">•</span>
-        <span class="stats-updated">{{ t('overview.last_updated', { time: lastUpdated.toLocaleTimeString() }) }}</span>
-      </template>
+        <span>{{ quickStats.pinnedBoxes }} {{ t('overview.pinned') }}</span>
+        <span class="stats-separator">•</span>
+        <span>{{ quickStats.favorites }} {{ quickStats.favorites === 1 ? t('overview.favorite') : t('overview.favorites') }}</span>
+        <template v-if="lastUpdated">
+          <span class="stats-separator">•</span>
+          <span class="stats-updated">{{ t('overview.last_updated', { time: lastUpdated.toLocaleTimeString() }) }}</span>
+        </template>
+      </div>
     </div>
 
     <!-- Favorites Grid (grouped by box) -->
     <section v-if="allFavorites.length > 0" class="favorites-section">
       <div class="section-header-inline">
-        <NIcon size="18" color="#faad14"><PhStar weight="fill" /></NIcon>
+        <NIcon size="18" color="var(--warning)"><PhStar weight="fill" /></NIcon>
         <h3>{{ t('overview.favorites_title') }}</h3>
       </div>
       <div v-for="group in favoritesByBox" :key="group.box" class="favorites-group">
         <span class="favorites-group-label">{{ group.box }}</span>
         <div class="favorites-grid">
+          <TransitionGroup name="list-row" tag="div" class="favorites-grid-rows">
           <div
             v-for="fav in group.items"
             :key="fav.path"
-            class="favorite-card"
+            class="favorite-tile"
           >
+            <span class="favorite-emoji">{{ getEmojiForString(fav.box + ':' + fav.path) }}</span>
+            <span class="favorite-text">
+              <span class="favorite-path">{{ fav.label }}</span>
+              <span v-if="getFavNote(fav.box, fav.path)" class="favorite-subtitle">{{ getFavNote(fav.box, fav.path) }}</span>
+            </span>
+            <a
+              :href="getFavoriteTerminalUrl(fav.box, fav.path)"
+              class="favorite-btn"
+              :title="t('overview.terminal')"
+              :aria-label="t('overview.terminal')"
+              @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
+            >
+              <NIcon size="14"><PhTerminal weight="duotone" /></NIcon>
+            </a>
+            <a
+              :href="getFavoriteFilesUrl(fav.box, fav.path)"
+              class="favorite-btn"
+              :title="t('overview.files')"
+              :aria-label="t('overview.files')"
+              @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
+            >
+              <NIcon size="14"><PhFolderOpen weight="duotone" /></NIcon>
+            </a>
             <button
               class="fav-settings-btn"
               :title="t('overview.fav_settings_title')"
+              :aria-label="t('overview.fav_settings_title')"
               @click.stop="openFavSettings(fav)"
             >
               <NIcon size="14"><PhDotsThreeVertical weight="duotone" /></NIcon>
             </button>
-            <div class="favorite-card-body">
-              <span class="favorite-emoji">{{ getEmojiForString(fav.box + ':' + fav.path) }}</span>
-              <span class="favorite-path">{{ fav.label }}</span>
-              <span class="favorite-subtitle">{{ getFavNote(fav.box, fav.path) || '&nbsp;' }}</span>
-            </div>
-            <div class="favorite-card-actions">
-              <a
-                :href="getFavoriteTerminalUrl(fav.box, fav.path)"
-                class="favorite-btn favorite-btn-terminal"
-                :title="t('overview.terminal')"
-                @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
-              >
-                <NIcon size="13"><PhTerminal weight="duotone" /></NIcon>
-              </a>
-              <a
-                :href="getFavoriteFilesUrl(fav.box, fav.path)"
-                class="favorite-btn favorite-btn-files"
-                :title="t('overview.files')"
-                @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
-              >
-                <NIcon size="13"><PhFolderOpen weight="duotone" /></NIcon>
-              </a>
-            </div>
           </div>
+          </TransitionGroup>
         </div>
       </div>
     </section>
 
     <!-- Server Grid -->
     <section class="servers-section">
-      <h2 class="section-title">{{ t('overview.your_servers') }}</h2>
-
       <div v-if="boxesStore.loading" class="loading-state">
         <NSpin size="large" />
         <p>{{ t('overview.loading_servers') }}</p>
@@ -429,11 +442,8 @@ const handleBrowseServerFiles = (serverName: string) => {
           <NCard class="server-card" hoverable>
             <div class="server-header">
               <div class="server-status">
-                <NIcon
-                  size="12"
-                  :color="getStatusColor(getServerStatus(box))"
-                >
-                  <PhCircle weight="duotone" />
+                <NIcon size="12" class="status-dot" :class="getServerStatus(box)">
+                  <PhCircle weight="fill" />
                 </NIcon>
                 <span class="server-name">{{ getEmojiForBox(box.name) }} {{ box.name }}</span>
               </div>
@@ -461,7 +471,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                     :show-indicator="false"
                     :height="6"
                     :border-radius="3"
-                    :color="(getBoxStats(box.name)?.cpu_percent ?? 0) > 80 ? '#ef4444' : '#3b82f6'"
+                    :color="(getBoxStats(box.name)?.cpu_percent ?? 0) > 80 ? 'var(--error)' : 'var(--accent)'"
                     class="stat-progress"
                   />
                   <span class="stat-value">{{ getBoxStats(box.name)?.cpu_percent?.toFixed(0) ?? '-' }}%</span>
@@ -475,7 +485,7 @@ const handleBrowseServerFiles = (serverName: string) => {
                     :show-indicator="false"
                     :height="6"
                     :border-radius="3"
-                    :color="(getBoxStats(box.name)?.memory_percent ?? 0) > 80 ? '#ef4444' : '#22c55e'"
+                    :color="(getBoxStats(box.name)?.memory_percent ?? 0) > 80 ? 'var(--error)' : 'var(--success)'"
                     class="stat-progress"
                   />
                   <span class="stat-value">{{ formatMemory(getBoxStats(box.name)?.memory_used_mb) }}</span>
@@ -489,41 +499,57 @@ const handleBrowseServerFiles = (serverName: string) => {
               </div>
 
               <p class="server-meta">
-                <NTooltip v-if="getBoxSessions(box.name).length > 0" trigger="hover">
-                  <template #trigger>
-                    <span class="session-link">
-                      {{ getBoxSessionCount(box.name) }} {{ getBoxSessionCount(box.name) === 1 ? t('overview.active_session') : t('overview.active_sessions') }}
-                    </span>
-                  </template>
-                  <div class="session-tooltip">
-                    <div
-                      v-for="session in getBoxSessions(box.name)"
-                      :key="session.id"
-                      class="session-item"
-                      :class="{ inactive: !session.active }"
-                      @click="openTerminal(box.name, { session: session.session_name })"
-                    >
-                      <span class="session-row">
-                        <span class="session-status" :class="session.active ? 'active' : 'inactive'"></span>
-                        <span class="session-name">{{ session.session_name || t('overview.unnamed') }}</span>
-                      </span>
-                      <span class="session-dir">{{ session.working_directory }}</span>
-                      <button
-                        v-if="session.restorable"
-                        type="button"
-                        class="restore-layout"
-                        @click.stop="restoreLayout(box.name, session)"
-                      >
-                        {{ t('sessions.restore_layout') }}
-                      </button>
-                      <span v-if="restoreFailure.get(session.id)" class="restore-failure">
-                        {{ restoreFailure.get(session.id) }}
-                      </span>
-                    </div>
-                  </div>
-                </NTooltip>
+                <span v-if="getBoxSessions(box.name).length > 0" class="session-link">
+                  {{ getBoxSessionCount(box.name) }} {{ getBoxSessionCount(box.name) === 1 ? t('overview.active_session') : t('overview.active_sessions') }}
+                </span>
                 <span v-else class="no-sessions">{{ t('overview.no_active_sessions') }}</span>
               </p>
+              <TransitionGroup
+                v-if="getBoxSessions(box.name).length > 0"
+                name="list-row"
+                tag="div"
+                class="session-chips"
+              >
+                <span
+                  v-for="session in visibleSessions(box.name)"
+                  :key="session.id"
+                  class="session-chip"
+                  :class="{ inactive: !session.active }"
+                  :title="session.working_directory"
+                >
+                  <button
+                    type="button"
+                    class="session-open"
+                    @click="openTerminal(box.name, { session: session.session_name })"
+                  >
+                    <span class="session-status" :class="session.active ? 'active' : 'inactive'"></span>
+                    <span class="session-name">{{ session.session_name || t('overview.unnamed') }}</span>
+                  </button>
+                  <button
+                    v-if="session.restorable"
+                    type="button"
+                    class="restore-layout"
+                    @click.stop="restoreLayout(box.name, session)"
+                  >
+                    {{ t('sessions.restore_layout') }}
+                  </button>
+                  <span v-if="restoreFailure.get(session.id)" class="restore-failure">
+                    {{ restoreFailure.get(session.id) }}
+                  </span>
+                </span>
+                <button
+                  v-if="getBoxSessions(box.name).length > CHIP_LIMIT"
+                  key="__toggle"
+                  type="button"
+                  class="sessions-toggle"
+                  data-testid="sessions-toggle"
+                  @click="toggleSessions(box.name)"
+                >
+                  {{ expandedBoxes.has(box.name)
+                    ? t('overview.show_less')
+                    : t('overview.more_sessions', { n: getBoxSessions(box.name).length - CHIP_LIMIT }) }}
+                </button>
+              </TransitionGroup>
               <p class="server-last-used">
                 {{ t('overview.last_used') }} {{ getBoxLastUsed(box.name) }}
               </p>
@@ -542,15 +568,25 @@ const handleBrowseServerFiles = (serverName: string) => {
               <NButton
                 type="primary"
                 size="small"
+                data-testid="box-terminal"
                 @click="handleConnectToServer(box.name)"
               >
-                {{ t('overview.connect') }}
+                {{ t('overview.terminal') }}
               </NButton>
               <NButton
                 size="small"
+                data-testid="box-files"
                 @click="handleBrowseServerFiles(box.name)"
               >
                 {{ t('overview.files') }}
+              </NButton>
+              <NButton
+                size="small"
+                quaternary
+                data-testid="box-multi"
+                @click="handleMultiTerminal(box.name)"
+              >
+                {{ t('boxes.multi') }}
               </NButton>
             </div>
           </NCard>
@@ -593,23 +629,27 @@ const handleBrowseServerFiles = (serverName: string) => {
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 20px;
   max-width: 1200px;
   margin: 0 auto;
 }
 
-/* Compact Stats Pill */
-.stats-pill {
+/* Overview header row */
+.overview-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.overview-counts {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
-  background: var(--hover-overlay);
-  border: 1px solid var(--stroke);
-  border-radius: 20px;
   font-size: 13px;
   color: var(--muted);
-  width: fit-content;
+  font-variant-numeric: tabular-nums;
 }
 
 .stats-separator {
@@ -661,12 +701,12 @@ const handleBrowseServerFiles = (serverName: string) => {
 /* Server Cards */
 .server-card {
   height: 100%;
-  transition: all 0.2s ease;
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
 }
 
 .server-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 24px var(--shadow-lg);
 }
 
 .server-header {
@@ -688,14 +728,15 @@ const handleBrowseServerFiles = (serverName: string) => {
 }
 
 .server-info {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .server-host {
   margin: 0 0 8px 0;
   color: var(--muted);
   font-size: 14px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Server Stats */
@@ -740,14 +781,17 @@ const handleBrowseServerFiles = (serverName: string) => {
 }
 
 .stat-value {
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--text);
   width: 42px;
   text-align: right;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-uptime {
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   color: var(--muted);
   text-align: right;
@@ -767,7 +811,7 @@ const handleBrowseServerFiles = (serverName: string) => {
 }
 
 .server-search {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 /* The card that holds the open list paints over the cards below it. */
@@ -778,6 +822,7 @@ const handleBrowseServerFiles = (serverName: string) => {
 
 .server-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -859,18 +904,13 @@ const handleBrowseServerFiles = (serverName: string) => {
 /* Responsive Design */
 @media (max-width: 768px) {
   .dashboard {
-    gap: 24px;
+    gap: 16px;
   }
 
-  .stats-pill {
+  .overview-counts {
     font-size: 12px;
     flex-wrap: wrap;
     gap: 6px;
-  }
-
-  .favorites-grid {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 8px;
   }
 
   .section-title {
@@ -878,86 +918,57 @@ const handleBrowseServerFiles = (serverName: string) => {
   }
 }
 
-@media (max-width: 480px) {
-  .stats-pill {
-    width: 100%;
-    justify-content: center;
-  }
-}
-
-/* Dark mode adjustments */
-@media (prefers-color-scheme: dark) {
-  .server-card:hover {
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  }
-}
-
-/* Session tooltip styles */
+/* Session chips */
 .session-link {
-  cursor: pointer;
-  color: var(--accent);
-  text-decoration: underline dotted;
-}
-
-.session-link:hover {
-  text-decoration: underline solid;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .no-sessions {
   color: var(--muted);
 }
 
-.session-tooltip {
+.session-chips {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 180px;
-  max-height: 280px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
-.session-tooltip::-webkit-scrollbar {
-  width: 6px;
-}
-
-.session-tooltip::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.session-tooltip::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 3px;
-}
-
-.session-tooltip::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.session-item {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 4px 8px;
+.session-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  max-width: 100%;
+  padding: 2px 4px 2px 2px;
   background: var(--hover-overlay);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.15s ease;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
-.session-item:hover {
+.session-chip:hover {
   background: var(--surface-hover);
 }
 
-.session-item.inactive {
-  opacity: 0.6;
+.session-chip.inactive {
+  opacity: 0.7;
 }
 
-.session-row {
-  display: flex;
+.session-open {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
 }
 
 .session-status {
@@ -968,131 +979,80 @@ const handleBrowseServerFiles = (serverName: string) => {
 }
 
 .session-status.active {
-  background: #22c55e;
+  background: var(--success);
 }
 
 .session-status.inactive {
-  background: #6b7280;
+  background: var(--muted);
 }
 
 .session-name {
   font-weight: 500;
   font-size: 12px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.restore-layout {
-  align-self: flex-start;
-  margin-left: 12px;
-  padding: 1px 6px;
+.restore-layout,
+.sessions-toggle {
+  min-height: 28px;
+  padding: 0 10px;
   font-size: 11px;
   color: var(--accent);
   background: transparent;
   border: 1px solid currentColor;
-  border-radius: 4px;
+  border-radius: 999px;
   cursor: pointer;
 }
 
-.restore-failure {
-  margin-left: 12px;
-  font-size: 10px;
-  color: #ef4444;
+.sessions-toggle {
+  border-style: dashed;
 }
 
-.session-dir {
+.restore-failure {
+  flex-basis: 100%;
+  padding-left: 8px;
   font-size: 10px;
-  opacity: 0.6;
-  font-family: var(--font-mono);
-  margin-left: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
+  color: var(--error);
+}
+
+.status-dot {
+  color: var(--muted);
+}
+
+.status-dot.online {
+  color: var(--success);
 }
 
 /* Favorites Section */
 .favorites-section {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .section-header-inline {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .section-header-inline h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
-}
-
-.favorites-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
-}
-
-.favorite-card {
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  padding: 10px 8px 8px;
-  background: var(--surface);
-  border: 1px solid var(--stroke);
-  border-radius: 10px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.favorite-card:hover {
-  border-color: var(--stroke-hover);
-  box-shadow: 0 2px 8px var(--shadow);
-}
-
-.favorite-card-body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 2px;
-  margin-bottom: 6px;
-}
-
-.favorite-emoji {
-  font-size: 52px;
-  line-height: 1;
-  margin-bottom: 2px;
-}
-
-.favorite-path {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.favorite-subtitle {
-  font-size: 10px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-  min-height: 14px;
 }
 
 .favorites-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .favorites-group + .favorites-group {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .favorites-group-label {
@@ -1103,32 +1063,84 @@ const handleBrowseServerFiles = (serverName: string) => {
   letter-spacing: 0.5px;
 }
 
-.fav-settings-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
+.favorites-grid-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.favorite-tile {
   display: flex;
   align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 6px 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.favorite-tile:hover {
+  border-color: var(--stroke-hover);
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.favorite-emoji {
+  flex-shrink: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.favorite-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.favorite-path {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favorite-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favorite-btn,
+.fav-settings-btn {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
+  text-decoration: none;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s ease, background 0.15s ease;
-  z-index: 1;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.favorite-card:hover .fav-settings-btn {
-  opacity: 1;
-}
-
+.favorite-btn:hover,
 .fav-settings-btn:hover {
   background: var(--hover-overlay);
   color: var(--text);
+}
+
+.favorite-btn:first-of-type {
+  color: var(--accent);
 }
 
 .fav-settings-form {
@@ -1141,7 +1153,7 @@ const handleBrowseServerFiles = (serverName: string) => {
   margin: 0;
   font-size: 12px;
   color: var(--muted);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -1155,47 +1167,6 @@ const handleBrowseServerFiles = (serverName: string) => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.favorite-card-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.favorite-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  padding: 6px 0;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  text-decoration: none;
-  transition: all 0.15s ease;
-  cursor: pointer;
-}
-
-.favorite-btn-terminal {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.2);
-}
-
-.favorite-btn-terminal:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.4);
-}
-
-.favorite-btn-files {
-  background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
-  border: 1px solid rgba(34, 197, 94, 0.2);
-}
-
-.favorite-btn-files:hover {
-  background: rgba(34, 197, 94, 0.2);
-  border-color: rgba(34, 197, 94, 0.4);
 }
 
 /* Favorites List Card */
