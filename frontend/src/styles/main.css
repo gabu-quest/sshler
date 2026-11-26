@@ -39,6 +39,20 @@
   --error-bg: rgba(220, 38, 38, 0.08);
   --error-hover-bg: rgba(220, 38, 38, 0.12);
 
+  /* Motion: one set of timings and curves for the whole app */
+  --dur-instant: 80ms;
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Shell sizes */
+  --rail-width-collapsed: 52px;
+  --rail-width-expanded: 208px;
+  --header-height-mobile-nav: 36px;
+
   --shadow: rgba(15, 23, 42, 0.08);
   --shadow-lg: rgba(15, 23, 42, 0.12);
 
@@ -411,15 +425,93 @@ input:focus, textarea:focus, select:focus {
   }
 }
 
-/* Reduced motion */
+/* Transition classes: the names Vue's <Transition> and <TransitionGroup> use.
+   Transform and opacity only, so nothing here triggers layout. */
+.route-fade-enter-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.route-fade-leave-active { transition: opacity var(--dur-instant) var(--ease-in); }
+.route-fade-enter-from { opacity: 0; transform: translateY(4px); }
+.route-fade-leave-to { opacity: 0; }
+
+/* Opacity only: a terminal never sees a transform */
+.route-fade-plain-enter-active { transition: opacity var(--dur-fast) var(--ease-out); }
+.route-fade-plain-leave-active { transition: opacity var(--dur-instant) var(--ease-in); }
+.route-fade-plain-enter-from,
+.route-fade-plain-leave-to { opacity: 0; }
+
+.menu-pop-enter-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.menu-pop-leave-active { transition: opacity var(--dur-instant) var(--ease-in), transform var(--dur-instant) var(--ease-in); }
+.menu-pop-enter-from,
+.menu-pop-leave-to { opacity: 0; transform: scale(0.96) translateY(-4px); }
+
+.slide-down-sm-enter-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.slide-down-sm-leave-active { transition: opacity var(--dur-instant) var(--ease-in), transform var(--dur-instant) var(--ease-in); }
+.slide-down-sm-enter-from,
+.slide-down-sm-leave-to { opacity: 0; transform: translateY(-8px); }
+
+.strip-slide-enter-active { transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out); }
+.strip-slide-leave-active { transition: opacity var(--dur-fast) var(--ease-in), transform var(--dur-fast) var(--ease-in); }
+.strip-slide-enter-from,
+.strip-slide-leave-to { opacity: 0; transform: translateY(-100%); }
+
+.modal-fade-enter-active { transition: opacity var(--dur-base) var(--ease-out); }
+.modal-fade-leave-active { transition: opacity var(--dur-fast) var(--ease-in); }
+.modal-fade-enter-from,
+.modal-fade-leave-to { opacity: 0; }
+.modal-fade-enter-active > *,
+.modal-fade-leave-active > * { transition: transform var(--dur-base) var(--ease-out); }
+.modal-fade-enter-from > *,
+.modal-fade-leave-to > * { transform: scale(0.96); }
+
+/* --row-index (0, 1, 2 ...) staggers the entry, capped at 8 rows */
+.list-row-enter-active {
+  transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+  transition-delay: calc(min(var(--row-index, 0), 8) * 24ms);
+}
+.list-row-leave-active { transition: opacity var(--dur-fast) var(--ease-in), transform var(--dur-fast) var(--ease-in); }
+.list-row-move { transition: transform var(--dur-base) var(--ease-out); }
+.list-row-enter-from,
+.list-row-leave-to { opacity: 0; transform: translateY(6px); }
+
+.tab-item-enter-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.tab-item-leave-active { transition: opacity var(--dur-instant) var(--ease-in), transform var(--dur-instant) var(--ease-in); }
+.tab-item-move { transition: transform var(--dur-fast) var(--ease-out); }
+.tab-item-enter-from,
+.tab-item-leave-to { opacity: 0; transform: translateX(-6px); }
+
+/* Reduced motion: the system setting, or sshler's own (the class on <html>).
+   Either one turns motion off. */
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0.01ms;
+    --dur-fast: 0.01ms;
+    --dur-base: 0.01ms;
+    --dur-slow: 0.01ms;
+  }
+
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
+}
+
+:root.reduced-motion {
+  --dur-instant: 0.01ms;
+  --dur-fast: 0.01ms;
+  --dur-base: 0.01ms;
+  --dur-slow: 0.01ms;
+}
+
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
 }
 
 /* Print styles */

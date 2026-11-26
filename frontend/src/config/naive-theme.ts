@@ -22,6 +22,9 @@ export const lightThemeOverrides: GlobalThemeOverrides = {
     fontWeight: '450',
     fontWeightStrong: '600',
     borderRadius: '6px', // --radius-md
+    cubicBezierEaseOut: 'cubic-bezier(0.16, 1, 0.3, 1)', // --ease-out
+    cubicBezierEaseInOut: 'cubic-bezier(0.4, 0, 0.2, 1)', // --ease-in-out
+    cubicBezierEaseIn: 'cubic-bezier(0.4, 0, 1, 1)', // --ease-in
     bodyColor: '#f4f5f7', // --bg
     cardColor: '#ffffff', // --surface
     tableColor: '#ffffff', // --surface
@@ -62,6 +65,9 @@ export const darkThemeOverrides: GlobalThemeOverrides = {
     fontWeight: '450',
     fontWeightStrong: '600',
     borderRadius: '6px', // --radius-md
+    cubicBezierEaseOut: 'cubic-bezier(0.16, 1, 0.3, 1)', // --ease-out
+    cubicBezierEaseInOut: 'cubic-bezier(0.4, 0, 0.2, 1)', // --ease-in-out
+    cubicBezierEaseIn: 'cubic-bezier(0.4, 0, 1, 1)', // --ease-in
     bodyColor: '#111317', // --bg
     cardColor: '#171a20', // --surface
     tableColor: '#171a20', // --surface
