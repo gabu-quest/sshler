@@ -1,4 +1,4 @@
-import { h, ref } from "vue";
+import { h, reactive, ref, shallowRef, type ShallowRef } from "vue";
 import { NButton, NCheckbox, useDialog } from "naive-ui";
 
 import { useI18n } from "@/i18n";
@@ -71,6 +71,26 @@ function baseName(path: string): string {
 }
 
 /**
+ * The question of an inline host (`useReplacePrompt({ inline: true })`): what a panel
+ * draws while it is open. The panel calls `answer` with the button pressed and sets
+ * `same` from the tick box; `answer("replace")` does nothing until `armed`.
+ */
+export interface PendingPrompt {
+  title: string;
+  content: string;
+  /** Names left to ask about, this one included: the tick box is offered above one. */
+  remaining: number;
+  armed: boolean;
+  same: boolean;
+  answer: (choice: ReplaceChoice) => void;
+}
+
+export interface ReplacePromptOptions {
+  /** Do not open a dialog: expose the open question as `pendingPrompt` for a panel to draw. */
+  inline?: boolean;
+}
+
+/**
  * The one "Replace?" prompt every view uses. `askReplace` asks about one name;
  * `askReplaceMany` asks once about many names one request would replace; `askEach`
  * asks about several, one at a time, and while more than one name is left
@@ -79,8 +99,10 @@ function baseName(path: string): string {
  * open prompt down and ends whatever was waiting on it; `leave` does that for a view
  * that is going away, and nothing is asked after it.
  */
-export function useReplacePrompt() {
-  const dialog = useDialog();
+export function useReplacePrompt(options: ReplacePromptOptions = {}) {
+  const inline = options.inline === true;
+  const dialog = inline ? (null as never) : useDialog();
+  const pendingPrompt: ShallowRef<PendingPrompt | null> = shallowRef(null);
   const { t } = useI18n();
 
   /** The prompt on screen, if any: how to answer it "no" and take it down. */
@@ -126,6 +148,7 @@ export function useReplacePrompt() {
       const armed = ref(false);
       const same = ref(false);
       let instance: ReturnType<typeof dialog.warning> | undefined;
+      let docked: PendingPrompt | null = null;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
       const finish = (choice: ReplaceChoice, all = false) => {
@@ -133,6 +156,7 @@ export function useReplacePrompt() {
         settled = true;
         clearTimeout(timer);
         if (open === current) open = null;
+        if (docked && pendingPrompt.value === docked) pendingPrompt.value = null;
         resolve({ choice, all });
       };
       const current = {
@@ -140,11 +164,30 @@ export function useReplacePrompt() {
         close: () => instance?.destroy(),
       };
       open = current;
+      const several = remaining > 1;
+      if (inline) {
+        const state: PendingPrompt = reactive({
+          title: t("files.replace_title"),
+          content,
+          remaining,
+          armed: false,
+          same: false,
+          answer: (choice: ReplaceChoice) => {
+            if (choice === "replace" && !state.armed) return;
+            finish(choice, several && state.same);
+          },
+        });
+        docked = state;
+        pendingPrompt.value = state;
+        timer = setTimeout(() => {
+          state.armed = true;
+        }, REPLACE_ARM_MS);
+        return;
+      }
       timer = setTimeout(() => {
         armed.value = true;
       }, REPLACE_ARM_MS);
 
-      const several = remaining > 1;
       const button = (label: string, choice: ReplaceChoice, type: "default" | "warning" = "default") =>
         h(
           NButton,
@@ -310,5 +353,5 @@ export function useReplacePrompt() {
     return outcome;
   }
 
-  return { askReplace, askReplaceMany, askEach, withReplace, dismiss, leave };
+  return { askReplace, askReplaceMany, askEach, withReplace, dismiss, leave, pendingPrompt };
 }

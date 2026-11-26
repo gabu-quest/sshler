@@ -409,7 +409,9 @@ async def test_enter_on_a_question_with_more_names_left_skips_that_name_only(ope
 
 
 PHONE_NARROW = {"width": 360, "height": 780}
-# locale -> (the menu's "Rename", the question's three buttons in their order)
+# locale -> (the menu's "Rename", the question's three buttons in their order); the rename dialog's
+# own placeholder is a text key too (`files.rename_placeholder`).
+NEW_NAME_PLACEHOLDER = {"en": "New name", "ja": "新しい名前"}
 NARROW_TEXTS = {
     "en": ("Rename", ["No, keep it", "Keep both", "Replace"]),
     "ja": ("名前変更", ["いいえ（残す）", "両方残す", "置き換える"]),
@@ -435,8 +437,8 @@ async def test_the_three_answers_fit_one_row_on_a_narrow_phone(open_page, app_se
     await page.goto(f"/app/files?box=local&dir={base}", wait_until="load")
     await page.get_by_text("a.txt", exact=True).click(button="right")
     await page.locator(".context-menu-item", has_text=rename).click()
-    await page.get_by_placeholder("New name").fill("b.txt")
-    await page.get_by_role("button", name="Rename", exact=True).click()
+    await page.get_by_placeholder(NEW_NAME_PLACEHOLDER[locale]).fill("b.txt")
+    await page.get_by_role("button", name=rename, exact=True).click()
 
     dialog = page.get_by_role("dialog").filter(has=page.locator(".replace-actions"))
     buttons = dialog.locator(".replace-actions button")

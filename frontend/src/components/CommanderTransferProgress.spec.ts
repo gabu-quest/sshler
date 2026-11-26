@@ -1,4 +1,5 @@
-import { render } from "@testing-library/vue";
+import { fireEvent, render } from "@testing-library/vue";
+import { nextTick, reactive } from "vue";
 import { describe, expect, it, vi } from "vitest";
 
 import CommanderTransferProgress from "./CommanderTransferProgress.vue";
@@ -10,6 +11,7 @@ const refused = `${en["error.reason.cannot_replace"]} — Only a regular file ca
 vi.mock("naive-ui", () => ({
   NModal: { props: ["show"], template: '<div v-if="show" class="stub-modal"><slot /></div>' },
   NButton: { template: "<button><slot /></button>" },
+  NCheckbox: { props: ["checked"], emits: ["update:checked"], template: '<label><input type="checkbox" :checked="checked" @change="$emit(\'update:checked\', $event.target.checked)" /><slot /></label>' },
   NProgress: { template: '<div class="stub-progress" />' },
 }));
 vi.mock("@phosphor-icons/vue", () => {
@@ -132,5 +134,109 @@ describe("CommanderTransferProgress while a transfer runs", () => {
     expect(rows(container).map((r) => [r.name, r.state[0]])).toEqual([
       ["one.txt", "done"], ["two.txt", "done"], ["three.txt", "active"],
     ]);
+  });
+});
+
+describe("CommanderTransferProgress with a question open", () => {
+  const answered: string[] = [];
+  const question = (remaining = 1, armed = true) =>
+    reactive({
+      title: "File already exists", content: "\"two.txt\" already exists here. Replace it?",
+      remaining, armed, same: false, answer: (choice: string) => void answered.push(choice),
+    });
+  const open = (prompt: ReturnType<typeof question>) =>
+    render(CommanderTransferProgress, { props: { ...base, result: null, waiting: ["/s/two.txt"], prompt: prompt as never } });
+
+  // Mutation: the question is drawn over the list (a dialog of its own) or not drawn by this component.
+  it("draws the question as a dialog under the file list, which keeps every row", () => {
+    answered.length = 0;
+    const { container } = open(question());
+    const panel = container.querySelector(".transfer-prompt")!;
+    expect(panel.getAttribute("role")).toBe("dialog");
+    expect(panel.textContent).toContain("File already exists");
+    expect(panel.textContent).toContain("\"two.txt\" already exists here. Replace it?");
+    const list = container.querySelector(".transfer-files")!;
+    expect(list.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelectorAll(".transfer-file-row")).toHaveLength(3);
+    expect([...panel.querySelectorAll(".replace-actions button")].map((b) => b.textContent!.trim())).toEqual([
+      "No, keep it", "Keep both", "Replace",
+    ]);
+    expect(panel.querySelector("input[type=checkbox]")).toBeNull();
+  });
+
+  it("each button gives its answer; Replace is disabled until armed", async () => {
+    answered.length = 0;
+    const prompt = question(1, false);
+    const { container } = open(prompt);
+    const [no, both, replace] = [...container.querySelectorAll<HTMLButtonElement>(".replace-actions button")];
+    expect(replace!.disabled).toBe(true);
+    await fireEvent.click(no!);
+    await fireEvent.click(both!);
+    prompt.armed = true;
+    await nextTick();
+    expect(replace!.disabled).toBe(false);
+    await fireEvent.click(replace!);
+    expect(answered).toEqual(["no", "keep_both", "replace"]);
+  });
+
+  it("with more names left it offers Skip and the tick box, which sets `same`", async () => {
+    const prompt = question(3);
+    const { container } = open(prompt);
+    expect(container.querySelector(".replace-actions button")!.textContent!.trim()).toBe("Skip");
+    await fireEvent.click(container.querySelector("input[type=checkbox]")!);
+    expect(prompt.same).toBe(true);
+    expect(container.querySelector(".transfer-prompt")!.textContent).toContain("Do the same for the other 2");
+  });
+
+  // Mutation: Escape closes the whole transfer instead of answering No.
+  it("Escape answers no and does not close the transfer", async () => {
+    answered.length = 0;
+    const { container, emitted } = open(question());
+    await fireEvent.keyDown(container.querySelector(".transfer-prompt")!, { key: "Escape" });
+    expect(answered).toEqual(["no"]);
+    expect(emitted().close).toBeUndefined();
+  });
+
+  it("Escape with the focus on another part of the dialog answers no once", async () => {
+    answered.length = 0;
+    const { container, emitted } = open(question());
+    await fireEvent.keyDown(container.querySelector(".transfer-files")!, { key: "Escape" });
+    expect(answered).toEqual(["no"]);
+    expect(emitted().close).toBeUndefined();
+  });
+
+  it("Escape with no question open is left to the modal", async () => {
+    answered.length = 0;
+    const { container } = open(null as never);
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    container.querySelector(".transfer-files")!.dispatchEvent(event);
+    expect(answered).toEqual([]);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("a click after the question closed does nothing and does not throw", async () => {
+    const { container, rerender } = open(question());
+    const replace = [...container.querySelectorAll<HTMLButtonElement>(".replace-actions button")][2]!;
+    await rerender({ prompt: null });
+    expect(container.querySelector(".transfer-prompt")).toBeNull();
+    expect(() => replace.click()).not.toThrow();
+  });
+
+  it("the title and the count read through the texts, in both words of a move and a copy", () => {
+    const { container } = render(CommanderTransferProgress, { props: { ...base, result: null } });
+    expect(container.querySelector(".transfer-title")!.textContent).toBe("Move 3 file(s) → b");
+    expect(container.querySelector(".overall-label")!.textContent).toBe("0 / 3 files");
+  });
+});
+
+describe("CommanderTransferProgress colours", () => {
+  // Mutation: a hard-coded dark colour comes back and the light theme is unreadable.
+  it("the style uses the theme tokens only", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(`${process.cwd()}/src/components/CommanderTransferProgress.vue`, "utf8");
+    const css = source.slice(source.indexOf("<style"));
+    expect(css.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g)).toBeNull();
+    expect(css).not.toContain("@keyframes spin");
+    expect(source).not.toMatch(/color="#/);
   });
 });

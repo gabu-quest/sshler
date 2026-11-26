@@ -400,3 +400,75 @@ describe("useReplacePrompt: withReplace", () => {
     });
   });
 });
+
+describe("useReplacePrompt: inline mode", () => {
+  function mountInline() {
+    let inline!: ReturnType<typeof useReplacePrompt>;
+    const Host = defineComponent({
+      setup() {
+        inline = useReplacePrompt({ inline: true });
+        return () => null;
+      },
+    });
+    render(Host, { global: { plugins: [i18nPlugin] } });
+    return inline;
+  }
+
+  it("opens no dialog: the question is pendingPrompt, with the title, text and an arming delay", async () => {
+    const { askReplace, pendingPrompt } = mountInline();
+    const answer = askReplace("a.txt");
+    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    expect(pendingPrompt.value).toMatchObject({
+      title: "File already exists", content: "\"a.txt\" already exists here. Replace it?", remaining: 1, armed: false,
+    });
+    // Replace is dead until the delay is over: the press changes nothing.
+    pendingPrompt.value!.answer("replace");
+    expect(pendingPrompt.value).not.toBeNull();
+    vi.advanceTimersByTime(REPLACE_ARM_MS);
+    expect(pendingPrompt.value!.armed).toBe(true);
+    pendingPrompt.value!.answer("replace");
+    expect(await answer).toBe("replace");
+    expect(pendingPrompt.value).toBeNull();
+  });
+
+  it("Keep both and No work before the delay is over", async () => {
+    const { askReplace, pendingPrompt } = mountInline();
+    const answer = askReplace("a.txt");
+    pendingPrompt.value!.answer("keep_both");
+    expect(await answer).toBe("keep_both");
+  });
+
+  it("the tick box on a press answers the rest; a question with one name left has none", async () => {
+    const { askEach, pendingPrompt } = mountInline();
+    const answers = askEach(["a", "b", "c"]);
+    expect(pendingPrompt.value!.remaining).toBe(3);
+    pendingPrompt.value!.same = true;
+    pendingPrompt.value!.answer("no");
+    expect(await answers).toEqual(["no", "no", "no"]);
+    expect(pendingPrompt.value).toBeNull();
+  });
+
+  it("without the tick box the next name is asked, and dismiss answers no for all and clears it", async () => {
+    const { askEach, pendingPrompt, dismiss } = mountInline();
+    const answers = askEach(["a", "b"]);
+    pendingPrompt.value!.answer("keep_both");
+    await vi.waitFor(() => expect(pendingPrompt.value?.content).toContain("\"b\""));
+    dismiss();
+    expect(await answers).toEqual(["keep_both", "no"]);
+    expect(pendingPrompt.value).toBeNull();
+  });
+
+  it("a view that is left asks nothing", async () => {
+    const { askReplace, pendingPrompt, leave } = mountInline();
+    leave();
+    expect(await askReplace("a.txt")).toBe("no");
+    expect(pendingPrompt.value).toBeNull();
+  });
+
+  it("the default mode still opens a dialog and has no pending question", async () => {
+    const { askReplace, pendingPrompt } = mountComposable();
+    void askReplace("a.txt");
+    await opened(1);
+    expect(pendingPrompt.value).toBeNull();
+  });
+});

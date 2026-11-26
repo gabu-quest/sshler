@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 
 import { failureText } from "@/api/apiError";
 import type { TransferProgress, TransferResult } from "@/api/http";
+import type { PendingPrompt } from "@/composables/useReplacePrompt";
 import { useI18n } from "@/i18n";
-import { NButton, NModal, NProgress } from "naive-ui";
+import { NButton, NCheckbox, NModal, NProgress } from "naive-ui";
 import { PhCheck, PhHourglass, PhMinus, PhQuestion, PhSpinner, PhWarning, PhX } from "@phosphor-icons/vue";
 
 const props = withDefaults(defineProps<{
@@ -29,7 +30,9 @@ const props = withDefaults(defineProps<{
   held?: string[];
   /** The files the call in flight carries (all of them for the first call). */
   sending?: string[] | null;
-}>(), { skipped: () => [], placed: () => [], waiting: () => [], failedSoFar: () => [], held: () => [], sending: null });
+  /** The "Replace?" question that is open, drawn under the file list; null when none is. */
+  prompt?: PendingPrompt | null;
+}>(), { prompt: null, skipped: () => [], placed: () => [], waiting: () => [], failedSoFar: () => [], held: () => [], sending: null });
 
 const emit = defineEmits<{
   cancel: [];
@@ -64,9 +67,41 @@ const overallPercent = computed(() => {
 });
 
 const title = computed(() => {
-  const verb = props.mode === "move" ? t("commander.move") : t("commander.copy");
-  return `${verb} ${props.files.length} file${props.files.length !== 1 ? "s" : ""} -> ${props.destBox}`;
+  return t(props.mode === "move" ? "commander.transfer_title_move" : "commander.transfer_title_copy", {
+    count: props.files.length,
+    box: props.destBox,
+  });
 });
+
+/** An answer for the open question; a click that lands after it closed does nothing. */
+function answer(choice: "replace" | "keep_both" | "no") {
+  props.prompt?.answer(choice);
+}
+
+/**
+ * Escape anywhere in the dialog answers an open question "no". The modal's own Escape is
+ * off while a question is open, so the press does not also close the transfer; with no
+ * question open it is left alone for the modal.
+ */
+function onEscape(event: KeyboardEvent) {
+  if (!props.prompt) return;
+  event.stopPropagation();
+  event.preventDefault();
+  answer("no");
+}
+
+const noButton = ref<{ $el?: HTMLElement } | HTMLElement | null>(null);
+
+// A new question puts the focus on "No, keep it" (or "Skip"), so Enter replaces nothing.
+watch(
+  () => props.prompt,
+  async (question) => {
+    if (!question) return;
+    await nextTick();
+    const el = noButton.value && "$el" in noButton.value ? noButton.value.$el : noButton.value;
+    (el as HTMLElement | null | undefined)?.focus?.();
+  },
+);
 
 function getFileName(path: string) {
   const parts = path.split("/");
@@ -106,8 +141,8 @@ function getFileError(filePath: string): string | null {
 </script>
 
 <template>
-  <NModal :show="show" :mask-closable="!isRunning" @update:show="(value) => !value && emit('close')">
-    <div class="transfer-modal">
+  <NModal :show="show" :mask-closable="!isRunning" :close-on-esc="!prompt" @update:show="(value) => !value && emit('close')">
+    <div class="transfer-modal" @keydown.escape="onEscape">
       <div class="transfer-header">
         <div class="transfer-heading">
           <span class="transfer-heading-icon">
@@ -153,25 +188,51 @@ function getFileError(filePath: string): string | null {
         </div>
       </div>
 
+      <div
+        v-if="prompt"
+        class="transfer-prompt"
+        role="dialog"
+        :aria-label="prompt.title"
+      >
+        <div class="prompt-title">{{ prompt.title }}</div>
+        <div class="prompt-content">{{ prompt.content }}</div>
+        <div class="replace-actions">
+          <NButton ref="noButton" size="small" @click="answer('no')">
+            {{ t(prompt.remaining > 1 ? "files.skip" : "files.replace_no") }}
+          </NButton>
+          <NButton size="small" @click="answer('keep_both')">{{ t("files.keep_both") }}</NButton>
+          <NButton size="small" type="warning" :disabled="!prompt.armed" @click="answer('replace')">
+            {{ t("files.replace_yes") }}
+          </NButton>
+        </div>
+        <NCheckbox
+          v-if="prompt.remaining > 1"
+          :checked="prompt.same"
+          @update:checked="(value: boolean) => { if (props.prompt) props.prompt.same = value }"
+        >
+          {{ t("files.replace_same_for_rest", { n: prompt.remaining - 1 }) }}
+        </NCheckbox>
+      </div>
+
       <div v-if="isRunning && progress" class="transfer-current">
         <div class="current-label">{{ activeFileName }}</div>
         <NProgress
           :percentage="filePercent"
           :show-indicator="false"
           :height="4"
-          color="#a78bfa"
-          rail-color="#1a1a24"
+          color="var(--accent)"
+          rail-color="var(--surface-variant)"
         />
       </div>
 
       <div class="transfer-overall">
-        <div class="overall-label">{{ overallDone }} / {{ files.length }} files</div>
+        <div class="overall-label">{{ t("commander.transfer_overall", { done: overallDone, total: files.length }) }}</div>
         <NProgress
           :percentage="overallPercent"
           :show-indicator="false"
           :height="6"
-          color="#a78bfa"
-          rail-color="#1a1a24"
+          color="var(--accent)"
+          rail-color="var(--surface-variant)"
         />
       </div>
 
@@ -196,12 +257,17 @@ function getFileError(filePath: string): string | null {
 .transfer-modal {
   width: 480px;
   max-width: 90vw;
-  background: #0d0d14;
-  border: 1px solid #1a1a24;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--stroke);
   border-radius: 6px;
   padding: 16px;
   font-family: var(--font-mono);
-  color: #e0e0e6;
+  color: var(--text);
 }
 
 .transfer-header {
@@ -225,16 +291,16 @@ function getFileError(filePath: string): string | null {
 }
 
 .heading-running {
-  color: #a78bfa;
+  color: var(--accent);
   animation: spin 1s linear infinite;
 }
 
 .heading-warning {
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .heading-done {
-  color: #4ade80;
+  color: var(--success);
 }
 
 .transfer-heading-text {
@@ -250,7 +316,7 @@ function getFileError(filePath: string): string | null {
 
 .transfer-dest {
   font-size: 11px;
-  color: #888;
+  color: var(--muted);
   margin-top: 2px;
   display: block;
   word-break: break-all;
@@ -258,9 +324,11 @@ function getFileError(filePath: string): string | null {
 
 .transfer-files {
   max-height: 200px;
+  min-height: 56px;
+  flex: 0 1 auto;
   overflow-y: auto;
   margin-bottom: 12px;
-  border: 1px solid #1a1a24;
+  border: 1px solid var(--stroke);
   border-radius: 4px;
 }
 
@@ -270,7 +338,7 @@ function getFileError(filePath: string): string | null {
   gap: 8px;
   padding: 4px 8px;
   font-size: 12px;
-  border-bottom: 1px solid #111118;
+  border-bottom: 1px solid var(--surface-variant);
 }
 
 .transfer-file-row:last-child {
@@ -287,38 +355,28 @@ function getFileError(filePath: string): string | null {
 }
 
 .status-done {
-  color: #4ade80;
+  color: var(--success);
 }
 
 .status-active {
-  color: #a78bfa;
+  color: var(--accent);
   animation: spin 1s linear infinite;
 }
 
 .status-pending {
-  color: #555;
+  color: var(--muted);
 }
 
 .status-failed {
-  color: #f87171;
+  color: var(--error);
 }
 
 .status-skipped {
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .status-waiting {
-  color: #fbbf24;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
+  color: var(--warning);
 }
 
 .file-name {
@@ -330,7 +388,7 @@ function getFileError(filePath: string): string | null {
 }
 
 .file-progress {
-  color: #a78bfa;
+  color: var(--accent);
   flex-shrink: 0;
   font-size: 11px;
 }
@@ -347,11 +405,11 @@ function getFileError(filePath: string): string | null {
 
 .file-skipped,
 .file-waiting {
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .file-error {
-  color: #f87171;
+  color: var(--error);
 }
 
 .transfer-current {
@@ -360,7 +418,7 @@ function getFileError(filePath: string): string | null {
 
 .current-label {
   font-size: 11px;
-  color: #888;
+  color: var(--muted);
   margin-bottom: 4px;
 }
 
@@ -370,15 +428,15 @@ function getFileError(filePath: string): string | null {
 
 .overall-label {
   font-size: 12px;
-  color: #aaa;
+  color: var(--muted);
   margin-bottom: 4px;
 }
 
 .transfer-error {
-  color: #f87171;
+  color: var(--error);
   font-size: 12px;
   padding: 8px;
-  background: rgba(248, 113, 113, 0.1);
+  background: var(--error-bg);
   border-radius: 4px;
   margin-bottom: 12px;
   display: flex;
@@ -391,7 +449,60 @@ function getFileError(filePath: string): string | null {
   margin-top: 1px;
 }
 
+.transfer-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  font-family: var(--font-sans);
+}
+
+.prompt-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Naive's unticked box is a faint outline that vanishes on the amber background. */
+.transfer-prompt :deep(.n-checkbox .n-checkbox-box .n-checkbox-box__border) {
+  border: 1.5px solid var(--text-secondary);
+}
+
+.transfer-prompt :deep(.n-checkbox.n-checkbox--checked .n-checkbox-box) {
+  background-color: var(--warning);
+}
+
+.transfer-prompt :deep(.n-checkbox.n-checkbox--checked .n-checkbox-box .n-checkbox-box__border) {
+  border-color: var(--warning);
+}
+
+.transfer-prompt :deep(.n-checkbox .n-checkbox-icon) {
+  color: var(--bg);
+}
+
+.prompt-content {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.replace-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.replace-actions > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .transfer-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
 }
