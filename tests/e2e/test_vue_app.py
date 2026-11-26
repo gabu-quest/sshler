@@ -376,3 +376,32 @@ async def test_japanese_rail_labels_fit_at_768(open_page):
         assert lines == 1, f"{text} takes {lines} lines"
         assert fits, f"{text} is cut"
         assert right <= EXPANDED, f"{text} leaves the rail ({right}px)"
+
+
+@pytest.mark.asyncio
+async def test_typing_a_custom_folder_in_the_terminal_view_opens_no_socket_until_enter(open_page):
+    """Five keys in the custom folder field open no /ws/term socket; Enter opens exactly one.
+
+    Mutation: the field bound straight to the folder (the terminal's key) -> each key
+    remounts the terminal and opens a socket, five while typing.
+    """
+    page = await open_page(DESKTOP_VIEWPORT)
+    urls: list[str] = []
+    page.on("websocket", lambda ws: urls.append(ws.url) if "/ws/term" in ws.url else None)
+    await page.goto("/app/terminal?box=local", wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    await page.wait_for_timeout(500)
+    urls.clear()
+
+    await page.locator(".header-select--dir").first.click()
+    await page.get_by_text("+ Custom path...").click()
+    field = page.locator(".header-select--dir input").first
+    await field.fill("")
+    await field.press_sequentially("/tmp1", delay=50)
+    await page.wait_for_timeout(800)
+    assert urls == [], f"typing opened {len(urls)} sockets"
+
+    await field.press("Enter")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    await page.wait_for_timeout(1000)
+    assert len(urls) == 1, f"Enter opened {len(urls)} sockets"

@@ -45,6 +45,9 @@ const selectedBox = ref<string | null>(null)
 const initialDirectory = ref<string>('~')
 const sessionName = ref<string>('main')
 const showManualDir = ref(false)
+// The custom folder field edits this draft; the folder (part of the terminal's key) is
+// applied on Enter or blur, so typing does not reconnect the terminal on each key.
+const directoryDraft = ref('')
 const showDirPicker = ref(false)
 const terminalRef = ref<InstanceType<typeof Terminal> | null>(null)
 const tabsRef = ref<InstanceType<typeof TerminalTabs> | null>(null)
@@ -337,12 +340,18 @@ const handleDirectoryChange = (value: string) => {
     return
   }
   if (value === CUSTOM_DIRECTORY) {
+    directoryDraft.value = initialDirectory.value
     showManualDir.value = true
     return
   }
   showManualDir.value = false
   initialDirectory.value = value
   sessionName.value = generateSessionName(value, selectedBox.value ?? undefined)
+}
+
+const applyDirectoryDraft = () => {
+  initialDirectory.value = directoryDraft.value
+  sessionName.value = generateSessionName(directoryDraft.value, selectedBox.value ?? undefined)
 }
 
 const handleDirPickerSelect = (path: string) => {
@@ -496,12 +505,12 @@ watch(() => boxesStore.items, () => {
         />
         <NInput
           v-if="showManualDir"
-          v-model:value="initialDirectory"
+          v-model:value="directoryDraft"
           class="header-select header-select--dir"
           :placeholder="t('terminal.dir_placeholder')"
           size="small"
-          @blur="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
-          @keyup.enter="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
+          @blur="applyDirectoryDraft"
+          @keyup.enter="applyDirectoryDraft"
         />
         <NButton v-if="showManualDir" size="small" quaternary :title="t('common.close')" :aria-label="t('common.close')" @click="showManualDir = false">
           <NIcon size="14"><PhX weight="bold" /></NIcon>
@@ -645,11 +654,11 @@ watch(() => boxesStore.items, () => {
       />
       <NInput
         v-if="showManualDir"
-        v-model:value="initialDirectory"
+        v-model:value="directoryDraft"
         :placeholder="t('terminal.dir_placeholder')"
         size="small"
-        @blur="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
-        @keyup.enter="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
+        @blur="applyDirectoryDraft"
+        @keyup.enter="applyDirectoryDraft"
       />
       <NSelect
         v-if="showShellPicker"
