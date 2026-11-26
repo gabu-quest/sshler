@@ -127,3 +127,21 @@ describe("ContextMenu hooks and closing", () => {
     expect(document.body.innerHTML).toMatch(/menu-pop/);
   });
 });
+
+describe("ContextMenu target", () => {
+  it("is drawn outside a pane by default, and inside the element it is given", async () => {
+    const pane = document.createElement("div");
+    document.body.appendChild(pane);
+
+    const view = await open(100, 100);
+    expect(pane.contains(menuElement())).toBe(false);
+    view.unmount();
+
+    const inPane = render(ContextMenu, { props: { items, x: 0, y: 0, visible: false, to: pane } });
+    await inPane.rerender({ items, x: 100, y: 100, visible: true, to: pane });
+    await nextTick();
+    expect(pane.contains(menuElement())).toBe(true);
+    inPane.unmount();
+    pane.remove();
+  });
+});

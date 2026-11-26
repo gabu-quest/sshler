@@ -533,3 +533,251 @@ async def test_rail_keys_reach_the_rail_from_inside_the_terminal(open_page, tmp_
             break
         await page.wait_for_timeout(50)
     assert keystrokes == [b"\x1b"]
+
+
+@pytest.mark.asyncio
+async def test_four_panes_have_one_row_title_bars_and_a_menu_with_every_action(open_page):
+    """Four panes at 1366 x 768: every pane's title bar is one row of at most 32 px, with
+    one "more" button whose menu holds the actions the narrow bar hides; a single terminal
+    at the same size keeps its full bar.
+
+    Mutation: the more button without stopPropagation -> the menu is gone 150 ms after it opens; no container query -> the bar wraps to three rows and the pane's bar is
+    taller than 32 px; no more button -> the menu cannot be opened.
+    """
+    import json
+
+    page = await open_page({"width": 1366, "height": 768})
+    layout = [
+        {"boxName": "local", "sessionName": f"bar-e2e-{i}", "directory": "~", "shell": "tmux"} for i in range(4)
+    ]
+    await page.add_init_script(
+        "localStorage.setItem('sshler:multi-terminal:layout', " + repr(json.dumps(layout)) + ")"
+    )
+    await page.goto("/app/multi-terminal?box=local", wait_until="load")
+    bars = page.locator(".multi-terminal-page .terminal-titlebar")
+    await expect(bars).to_have_count(4, timeout=TIMEOUT_MS)
+    for i in range(4):
+        box = await bars.nth(i).bounding_box()
+        assert box is not None and box["height"] <= 32, f"pane {i}'s title bar is {box}"
+        assert box["width"] < 700, f"pane {i} is {box['width']}px wide: not a narrow bar"
+        rows = await bars.nth(i).evaluate(
+            "el => new Set([...el.children].flatMap(c => [...c.querySelectorAll('button')]"
+            ".filter(b => b.offsetParent !== null).map(b => Math.round(b.getBoundingClientRect().top)))).size"
+        )
+        assert rows == 1, f"pane {i}'s buttons sit on {rows} rows"
+    more = page.get_by_test_id("terminal-more")
+    await expect(more).to_have_count(4)
+    await more.first.click()
+    menu_items = page.locator(".context-menu .context-menu-item")
+    await expect(menu_items.first).to_be_visible()
+    # The same click must not close it again (it bubbles to the menu's own outside-click listener).
+    await page.wait_for_timeout(500)
+    await expect(menu_items.first).to_be_visible()
+    assert await menu_items.count() >= 21
+    await menu_items.filter(has_text="Search").first.click()
+    await expect(page.locator(".multi-terminal-page .terminal-search-bar")).to_have_count(1)
+    await page.keyboard.press("Escape")
+
+
+@pytest.mark.asyncio
+async def test_a_single_terminal_at_1366_keeps_its_full_title_bar(open_page, tmp_path):
+    """A wide bar is unchanged: the tmux groups and every titlebar button show, no more button."""
+    page = await open_page({"width": 1366, "height": 768})
+    await open_terminal(page, tmp_path)
+    bar = page.locator(".terminal-titlebar")
+    await expect(bar.locator(".toolbar-group").first).to_be_visible()
+    await expect(page.locator(".titlebar-btn:visible")).not_to_have_count(0)
+    assert await page.locator(".titlebar-right .titlebar-btn:visible").count() >= 9
+    assert await page.get_by_test_id("terminal-more").is_visible() is False
+    # The box is the one commit aa3a673 drew (measured there: 32 px high, 2 px narrower than
+    # its pane, the three groups 332 / 632 / 316 px wide).
+    box = await bar.bounding_box()
+    wrapper_box = await page.locator(".terminal-wrapper").bounding_box()
+    assert box is not None and wrapper_box is not None
+    assert abs(box["height"] - 32) <= 1 and abs(box["width"] - (wrapper_box["width"] - 2)) <= 1, box
+    groups = await bar.evaluate("el => [...el.children].map(c => Math.round(c.getBoundingClientRect().width))")
+    assert all(abs(a - b) <= 1 for a, b in zip(groups, [332, 632, 316])), groups
+
+
+# ---------------------------------------------------------------------------
+# The narrow bar's "more" menu in a grid of panes (R4c.r1 .. r7, r10).
+# ---------------------------------------------------------------------------
+
+
+async def open_panes(open_page, count: int, viewport: dict[str, int] | None = None, on_websocket=None):
+    import json
+
+    page = await open_page(viewport or {"width": 1366, "height": 768})
+    if on_websocket:
+        page.on("websocket", on_websocket)
+    layout = [
+        {"boxName": "local", "sessionName": f"menu-e2e-{i}", "directory": "~", "shell": "tmux"} for i in range(count)
+    ]
+    await page.add_init_script(
+        "localStorage.setItem('sshler:multi-terminal:layout', " + repr(json.dumps(layout)) + ")"
+    )
+    await page.goto("/app/multi-terminal?box=local", wait_until="load")
+    await expect(page.locator(".multi-terminal-page .terminal-titlebar")).to_have_count(count, timeout=TIMEOUT_MS)
+    await expect(page.locator(".multi-terminal-page .xterm-screen")).to_have_count(count, timeout=TIMEOUT_MS)
+    return page
+
+
+ACTIVE_IS_XTERM = "() => document.activeElement && document.activeElement.classList.contains('xterm-helper-textarea')"
+
+
+@pytest.mark.asyncio
+async def test_fullscreen_from_pane_three_fills_pane_three_with_its_menu_and_cards(open_page):
+    """Fullscreen from the menu of the third pane makes that pane's own root the fullscreen
+    element (the first pane on the page was filled before), and the menu and the kill card
+    are inside it, so they are drawn.
+
+    Mutation: ``document.querySelector('.terminal-wrapper')`` -> pane 1 is the fullscreen
+    element; the menu or the card left under <body> -> not inside the element.
+    """
+    page = await open_panes(open_page, 4)
+    more = page.get_by_test_id("terminal-more")
+    await more.nth(2).click()
+    await page.get_by_test_id("terminal-menu-fullscreen").click()
+    # Headless Chromium grants requestFullscreen to a click; the element is then checked
+    # in the page itself.
+    await page.wait_for_function("() => !!document.fullscreenElement", timeout=TIMEOUT_MS)
+    index = await page.evaluate(
+        "() => [...document.querySelectorAll('.multi-terminal-page .terminal-wrapper')].indexOf(document.fullscreenElement)"
+    )
+    assert index == 2, f"pane {index} is fullscreen, not pane 2 (0-based)"
+
+
+@pytest.mark.asyncio
+async def test_a_narrow_pane_in_fullscreen_still_draws_its_menu_and_cards(open_page):
+    """At 390 px the bar stays narrow in fullscreen, so "more" is the way to the actions (the
+    test shows the button by style, see below): its menu and the kill card are inside the fullscreen element and are what is drawn.
+
+    Mutation: the menu or the card left under <body> -> not inside the element, and the
+    page behind them is drawn at their place.
+    """
+    page = await open_panes(open_page, 1, MOBILE)
+    await page.get_by_test_id("terminal-more").click()
+    await page.get_by_test_id("terminal-menu-fullscreen").click()
+    await page.wait_for_function("() => !!document.fullscreenElement", timeout=TIMEOUT_MS)
+    # Headless Chromium resizes the window to the screen when it goes fullscreen, so the bar
+    # turns wide and hides "more"; a phone keeps it narrow. Show the button as the phone has it.
+    await page.add_style_tag(content=".more-btn { display: flex !important; }")
+    more = page.get_by_test_id("terminal-more")
+    await more.click()
+    menu = page.get_by_test_id("terminal-more-menu")
+    await expect(menu).to_be_visible()
+    assert await page.evaluate(
+        "() => document.fullscreenElement.contains(document.querySelector('[data-testid=terminal-more-menu]'))"
+    ), "the menu is outside the fullscreen pane"
+    # The menu is drawn: the element at its centre is the menu, not the page behind it.
+    assert await page.evaluate(
+        """() => { const m = document.querySelector('[data-testid=terminal-more-menu]').getBoundingClientRect();
+          const hit = document.elementFromPoint(m.left + m.width / 2, m.top + 10);
+          return !!hit && !!hit.closest('[data-testid=terminal-more-menu]'); }"""
+    ), "the menu is not what is drawn at its own place"
+    await page.get_by_test_id("terminal-menu-kill-pane").click()
+    card = page.get_by_test_id("terminal-menu-confirm")
+    await expect(card).to_be_visible()
+    await page.wait_for_timeout(600)  # past the card's pop-in
+    assert await page.evaluate(
+        "() => document.fullscreenElement.contains(document.querySelector('[data-testid=terminal-menu-confirm]'))"
+    ), "the kill card is outside the fullscreen pane"
+    assert await page.evaluate(
+        """() => { const b = document.querySelector('[data-testid=terminal-menu-confirm]').getBoundingClientRect();
+          const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+          return hit === document.querySelector('[data-testid=terminal-menu-confirm]'); }"""
+    ), "the card is not drawn"
+
+
+@pytest.mark.asyncio
+async def test_more_is_a_toggle_and_one_pane_shows_its_menu_at_a_time(open_page):
+    """A second click on "more" closes its menu; opening pane 2's menu closes pane 1's.
+
+    Mutation: the click that only reopens -> the menu stays after the second click; the
+    document listener alone -> two menus are open together.
+    """
+    page = await open_panes(open_page, 2)
+    more = page.get_by_test_id("terminal-more")
+    menus = page.locator(".context-menu")
+    await more.nth(0).click()
+    await expect(menus).to_have_count(1)
+    await more.nth(0).click()
+    await expect(menus).to_have_count(0)
+    await more.nth(0).click()
+    await expect(menus).to_have_count(1)
+    await more.nth(1).click()
+    await page.wait_for_timeout(400)
+    await expect(menus).to_have_count(1)
+    box = await menus.first.bounding_box()
+    other = await more.nth(1).bounding_box()
+    assert box is not None and other is not None
+    assert abs(box["x"] + box["width"] - (other["x"] + other["width"])) < 40, "the open menu is pane 1's"
+
+
+@pytest.mark.asyncio
+async def test_the_keyboard_is_back_in_the_terminal_after_a_menu_action_or_a_card(open_page):
+    """After Clear from the menu, and after cancelling the kill card, a key typed goes to xterm.
+
+    Mutation: no refocus -> document.activeElement is <body> after the clicked item is gone.
+    """
+    page = await open_panes(open_page, 2)
+    await page.get_by_test_id("terminal-more").first.click()
+    await page.get_by_test_id("terminal-menu-clear").click()
+    await page.wait_for_function(ACTIVE_IS_XTERM, timeout=3000)
+    await page.get_by_test_id("terminal-more").first.click()
+    await page.get_by_test_id("terminal-menu-kill-pane").click()
+    await page.get_by_test_id("terminal-menu-confirm").wait_for(state="visible")
+    await page.locator(".confirm-btn:not(.danger)").click()
+    await page.wait_for_function(ACTIVE_IS_XTERM, timeout=3000)
+
+
+@pytest.mark.asyncio
+async def test_escape_that_closes_the_menu_sends_nothing_to_the_shell(open_page):
+    """With the keyboard in the terminal, open the menu and press Escape: the menu closes and
+    no ESC byte goes over the socket.
+
+    Mutation: the terminal's key handler seeing the Escape -> a frame holding 0x1b.
+    """
+    frames: list[bytes] = []
+
+    def on_ws(ws) -> None:
+        ws.on("framesent", lambda payload: frames.append(payload if isinstance(payload, bytes) else payload.encode()))
+
+    page = await open_panes(open_page, 2, on_websocket=on_ws)
+    await page.wait_for_timeout(2000)
+    await page.locator(".multi-terminal-page .xterm-helper-textarea").first.focus()
+    await page.get_by_test_id("terminal-more").first.click()
+    await expect(page.get_by_test_id("terminal-more-menu")).to_be_visible()
+    frames.clear()
+    await page.keyboard.press("Escape")
+    await expect(page.get_by_test_id("terminal-more-menu")).to_have_count(0)
+    await page.wait_for_timeout(500)
+    assert not any(b"\x1b" in f for f in frames), f"frames after Escape: {frames}"
+
+
+@pytest.mark.asyncio
+async def test_the_one_row_bar_keeps_the_snapshot_dot(open_page):
+    """The freshness dot is visible in every pane's one-row bar.
+
+    Mutation: ``.snapshot-indicator`` back in the narrow bar's display:none list -> not visible.
+    """
+    page = await open_panes(open_page, 4)
+    dots = page.locator(".multi-terminal-page .terminal-titlebar .snapshot-indicator")
+    await expect(dots).to_have_count(4)
+    for i in range(4):
+        await expect(dots.nth(i)).to_be_visible()
+
+
+@pytest.mark.asyncio
+async def test_sessions_from_the_menu_opens_a_switcher_that_stays_open(open_page):
+    """At 360 px the Sessions item opens the switcher, and it is still there a second later.
+
+    Mutation: the popover opened in the same click that chose the item -> its click-outside
+    closes it at once.
+    """
+    page = await open_panes(open_page, 1, {"width": 360, "height": 740})
+    await page.get_by_test_id("terminal-more").click()
+    await page.get_by_test_id("terminal-menu-sessions").click()
+    await expect(page.locator(".session-switcher")).to_be_visible(timeout=TIMEOUT_MS)
+    await page.wait_for_timeout(1000)
+    await expect(page.locator(".session-switcher")).to_be_visible()

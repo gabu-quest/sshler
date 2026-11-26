@@ -40,3 +40,30 @@ describe("the terminal page's motion", () => {
     expect(styleOf(file).match(/(?:max-width:\s*768px|min-width:\s*769px)/g) ?? []).toEqual([]);
   });
 });
+
+// The title bar is one row of at most 32 px when its own width is under 700 px, measured by
+// a container query on the bar, not by the window.
+describe("the narrow title bar", () => {
+  const css = styleOf("components/Terminal.vue");
+
+  it("is its own query container, so a pane is judged by its width", () => {
+    expect(css).toMatch(/\.terminal-titlebar\s*\{[^}]*container-type:\s*inline-size/);
+  });
+
+  it("switches to the one-row layout under 700 px of its own width", () => {
+    expect(css).toMatch(/@container\s*\(max-width:\s*699px\)/);
+  });
+
+  it("cuts the title with an ellipsis instead of wrapping it", () => {
+    const narrow = css.slice(css.indexOf("@container (max-width: 699px)"));
+    expect(narrow).toMatch(/text-overflow:\s*ellipsis/);
+    expect(narrow).toMatch(/white-space:\s*nowrap/);
+  });
+
+  // R4c.r5: the freshness dot is a state, not an action; the one-row bar keeps it.
+  it("hides no snapshot dot in the one-row bar", () => {
+    const narrow = css.slice(css.indexOf("@container (max-width: 699px)"));
+    const hide = narrow.match(/([^{}]*)\{\s*display:\s*none;?\s*\}/g) ?? [];
+    expect(hide.join("\n")).not.toContain("snapshot-indicator");
+  });
+});

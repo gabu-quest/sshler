@@ -35,6 +35,7 @@ import {
   PhClockCounterClockwise,
   PhArrowsClockwise,
   PhList,
+  PhDotsThree,
 } from '@phosphor-icons/vue'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
@@ -48,6 +49,7 @@ import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
 import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
 import type { ApiSession } from '@/api/types'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
+import ContextMenu from '@/components/ContextMenu.vue'
 import { DEFAULT_TERMINAL_THEME, type TerminalThemeName } from '@/utils/terminalThemes'
 
 interface Props {
@@ -124,6 +126,8 @@ const isNativeShell = computed(() =>
 )
 
 const terminalRef = ref<HTMLDivElement>()
+// This pane's own root: what fullscreen fills, and where the cards go while it does.
+const wrapperRef = ref<HTMLElement>()
 const connected = ref(false)
 const connecting = ref(false)
 const reconnecting = ref(false)
@@ -744,10 +748,11 @@ const triggerActivity = () => {
 
 // Toggle fullscreen mode
 const toggleFullscreen = async () => {
-  const wrapper = document.querySelector('.terminal-wrapper')
+  // This pane's own root, never the first `.terminal-wrapper` on the page (a grid has several).
+  const wrapper = wrapperRef.value
   if (!wrapper) return
 
-  if (!document.fullscreenElement) {
+  if (document.fullscreenElement !== wrapper) {
     await wrapper.requestFullscreen()
     isFullscreen.value = true
   } else {
@@ -755,6 +760,17 @@ const toggleFullscreen = async () => {
     isFullscreen.value = false
   }
   // Re-fit terminal after fullscreen change
+  nextTick(() => fitAddon?.fit())
+  terminal?.focus()
+}
+
+// Only the fullscreen element's own subtree is drawn, so while this pane is fullscreen its
+// cards and popover are put inside it; otherwise they sit under <body> as always.
+const overlayTarget = ref<HTMLElement | string>('body')
+const handleFullscreenChange = () => {
+  const mine = !!wrapperRef.value && document.fullscreenElement === wrapperRef.value
+  isFullscreen.value = mine
+  overlayTarget.value = mine && wrapperRef.value ? wrapperRef.value : 'body'
   nextTick(() => fitAddon?.fit())
 }
 
@@ -1690,6 +1706,8 @@ const handleViewportChange = () => {
 let cleanupViewport: (() => void) | undefined
 
 onMounted(async () => {
+  document.addEventListener(MORE_MENU_OPENED, closeMoreMenuOf)
+  document.addEventListener('fullscreenchange', handleFullscreenChange)
   await nextTick()
   createTerminal()
 
@@ -1760,6 +1778,8 @@ onMounted(async () => {
 
 
 onUnmounted(() => {
+  document.removeEventListener(MORE_MENU_OPENED, closeMoreMenuOf)
+  document.removeEventListener('fullscreenchange', handleFullscreenChange)
   // Cleanup snapshot polling
   if (snapshotPollInterval) clearInterval(snapshotPollInterval)
   if (snapshotTickInterval) clearInterval(snapshotTickInterval)
@@ -1856,6 +1876,125 @@ const switchSession = (name: string, dir: string) => {
   nextTick(() => connect())
 }
 
+// ---------------------------------------------------------------------------
+// The narrow title bar: one "more" button opens the shared menu with every action the
+// bar hides (the stylesheet decides when, by the bar's own width). Each item calls what
+// its button calls; a kill asks first, as its button's confirmation does.
+// ---------------------------------------------------------------------------
+const moreMenu = ref({ visible: false, x: 0, y: 0 })
+const compactSwitcher = ref(false)
+const pendingKill = ref<{ title: string; text: string; positive: string; run: () => void; needsSocket: boolean } | null>(null)
+const showHelp = ref(false)
+
+// One pane's menu at a time: the pane that opens announces itself, every other one closes.
+const MORE_MENU_OPENED = 'sshler:more-menu-opened'
+const closeMoreMenuOf = (event: Event) => {
+  if ((event as CustomEvent).detail !== wrapperRef.value) moreMenu.value.visible = false
+}
+
+const openMoreMenu = (event: MouseEvent) => {
+  // The menu closes on any click outside itself; this click is the button's own, so it must
+  // not reach that listener (it would close the menu this click opens). A second click closes.
+  event.stopPropagation()
+  if (moreMenu.value.visible) {
+    moreMenu.value.visible = false
+    return
+  }
+  document.dispatchEvent(new CustomEvent(MORE_MENU_OPENED, { detail: wrapperRef.value }))
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
+  moreMenu.value = { visible: true, x: rect ? rect.right : event.clientX, y: rect ? rect.bottom + 4 : event.clientY }
+}
+
+const moreMenuItems = computed(() => {
+  const off = !connected.value
+  const item = (id: string, label: string, icon: unknown, extra: Record<string, unknown> = {}) =>
+    ({ id, label, icon, testid: `terminal-menu-${id}`, ...extra })
+  const items: Record<string, unknown>[] = []
+  if (!isNativeShell.value) {
+    items.push(
+      item('prev-window', t('terminal.menu_prev_window'), PhCaretLeft, { disabled: off }),
+      item('new-window', t('terminal.menu_new_window'), PhPlus, { disabled: off }),
+      item('next-window', t('terminal.menu_next_window'), PhCaretRight, { disabled: off }),
+      { id: 'sep-windows', label: '', separator: true },
+      item('pane-left', t('terminal.menu_pane_left'), PhArrowLineLeft, { disabled: off }),
+      item('split-vertical', t('terminal.menu_split_vertical'), PhSplitVertical, { disabled: off }),
+      item('split-horizontal', t('terminal.menu_split_horizontal'), PhSplitHorizontal, { disabled: off }),
+      item('pane-right', t('terminal.menu_pane_right'), PhArrowLineRight, { disabled: off }),
+      item('kill-pane', t('terminal.menu_kill_pane'), PhX, { disabled: off, danger: true }),
+      { id: 'sep-panes', label: '', separator: true },
+      item('kill-window', t('terminal.menu_kill_window'), PhXCircle, { disabled: off, danger: true }),
+      item('kill-session', t('terminal.menu_kill_session'), PhPower, { disabled: off, danger: true }),
+      item('force-kill', t('terminal.menu_force_kill'), PhSkull, { danger: true }),
+      { id: 'sep-kill', label: '', separator: true },
+      item('mouse', mouseMode.value ? t('terminal.menu_mouse_on') : t('terminal.menu_mouse_off'), PhMouse, { disabled: off }),
+      item('copy-mode', t('terminal.menu_copy_mode'), PhCopy, { disabled: off }),
+    )
+  }
+  items.push(
+    item('scrollback', t('terminal.menu_scrollback'), PhListBullets),
+    item('copy-all', t('terminal.menu_copy_all'), PhCopySimple),
+    item('paste', t('terminal.menu_paste'), PhClipboard, { disabled: off }),
+    item('clear', t('terminal.menu_clear'), PhBroom, { disabled: off }),
+    item('search', t('terminal.menu_search'), PhMagnifyingGlass),
+    item('sessions', t('terminal.menu_sessions'), PhList),
+    item('fullscreen', isFullscreen.value ? t('terminal.menu_exit_fullscreen') : t('terminal.menu_fullscreen'), isFullscreen.value ? PhCornersIn : PhCornersOut),
+    item('help', t('terminal.menu_help'), PhQuestion),
+  )
+  return items as any[]
+})
+
+const askKill = (title: string, text: string, positive: string, run: () => void, needsSocket = true) => {
+  pendingKill.value = { title, text, positive, run, needsSocket }
+}
+
+// A card closing, or an action that leaves no field of its own to type in, hands the
+// keyboard back to the terminal (the clicked menu item is gone from the page by then).
+watch(() => pendingKill.value === null, (closed) => { if (closed) terminal?.focus() })
+watch(showHelp, (open) => { if (!open) terminal?.focus() })
+
+const selectMoreItem = (id: string) => {
+  const result = runMoreItem(id)
+  // These open something that takes the keyboard itself: the search field, the switcher, the
+  // scrollback viewer, a card.
+  const keepsOwnFocus = ['search', 'sessions', 'scrollback', 'help', 'kill-pane', 'kill-window', 'kill-session', 'force-kill', 'fullscreen']
+  if (!keepsOwnFocus.includes(id)) nextTick(() => terminal?.focus())
+  return result
+}
+
+const runMoreItem = (id: string) => {
+  switch (id) {
+    case 'prev-window': return tmuxPrevWindow()
+    case 'new-window': return tmuxNewWindow()
+    case 'next-window': return tmuxNextWindow()
+    case 'pane-left': return tmuxPaneLeft()
+    case 'split-vertical': return tmuxSplitVertical()
+    case 'split-horizontal': return tmuxSplitHorizontal()
+    case 'pane-right': return tmuxPaneRight()
+    case 'kill-pane': return askKill(t('terminal.kill_pane'), t('terminal.kill_pane_confirm'), t('terminal.kill_pane'), tmuxKillPaneConfirmed)
+    case 'kill-window': return askKill(t('terminal.kill_window'), t('terminal.kill_window_confirm'), t('terminal.kill_window'), tmuxKillWindowConfirmed)
+    case 'kill-session': return askKill(t('terminal.kill_session'), t('terminal.kill_session_confirm'), t('terminal.kill_session'), tmuxKillSession)
+    case 'force-kill': return askKill(t('terminal.force_kill_session'), t('terminal.force_kill_session_confirm'), t('terminal.force_kill_session'), tmuxForceKillSession, false)
+    case 'mouse': return toggleMouseMode()
+    case 'copy-mode': return enterCopyMode()
+    case 'scrollback': return openScrollbackViewer()
+    case 'copy-all': return copyAllScrollback()
+    case 'paste': return pasteFromClipboard()
+    case 'clear': return clear()
+    case 'search': return toggleSearch()
+    // After this click: a popover opened inside it would count it as a click outside.
+    case 'sessions': return void setTimeout(() => { compactSwitcher.value = true }, 0)
+    case 'fullscreen': return toggleFullscreen()
+    case 'help': showHelp.value = true
+  }
+}
+
+const confirmPendingKill = () => {
+  const pending = pendingKill.value
+  if (pending?.needsSocket && !connected.value) return
+  pendingKill.value = null
+  pending?.run()
+}
+
 defineExpose({
   connect,
   disconnect,
@@ -1893,7 +2032,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="terminal-wrapper" :class="{ 'has-activity': hasActivity, 'is-fullscreen': isFullscreen }">
+  <div ref="wrapperRef" class="terminal-wrapper" :class="{ 'has-activity': hasActivity, 'is-fullscreen': isFullscreen }">
     <!-- Title Bar with Tmux Toolbar -->
     <div v-if="showTitleBar && !titleBarCollapsed" class="terminal-titlebar">
       <div class="titlebar-left">
@@ -2013,7 +2152,7 @@ defineExpose({
       </div>
       <div class="titlebar-center">
         <span class="session-color-dot" :style="{ background: sessionColor }" />
-        <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
+        <span class="titlebar-text" :title="`${boxName} — ${sessionName}`">{{ boxName }} — {{ sessionName }}</span>
         <slot name="titlebar-meta" />
       </div>
       <div class="titlebar-right">
@@ -2126,6 +2265,26 @@ defineExpose({
             <div>4. <b>q</b> — {{ t('terminal.help_exit_copy') }}</div>
           </div>
         </NTooltip>
+        <NPopover :show="compactSwitcher" :to="overlayTarget" trigger="manual" placement="bottom-end" @clickoutside="compactSwitcher = false">
+          <template #trigger>
+            <button
+              class="titlebar-btn more-btn"
+              data-testid="terminal-more"
+              :title="t('terminal.more_actions')"
+              :aria-label="t('terminal.more_actions')"
+              @click="openMoreMenu"
+            >
+              <PhDotsThree :size="14" weight="bold" />
+            </button>
+          </template>
+          <SessionSwitcher
+            :box-name="props.boxName"
+            :token="tokenValue"
+            :current-session="sessionOverride ?? props.sessionName"
+            :home-session="spawnSession"
+            @select="(s) => { emit('session-select', s); compactSwitcher = false }"
+          />
+        </NPopover>
         <button
           v-if="closable"
           class="titlebar-btn close-btn"
@@ -2138,6 +2297,56 @@ defineExpose({
         </button>
       </div>
     </div>
+
+    <ContextMenu
+      :items="moreMenuItems"
+      :x="moreMenu.x"
+      :y="moreMenu.y"
+      :visible="moreMenu.visible"
+      testid="terminal-more-menu"
+      :to="overlayTarget"
+      @select="selectMoreItem"
+      @close="moreMenu.visible = false"
+    />
+
+    <NModal
+      :show="pendingKill !== null"
+      :to="overlayTarget"
+      @after-leave="focus"
+      preset="card"
+      :title="pendingKill?.title"
+      style="max-width: 90vw; width: 340px"
+      @update:show="(v: boolean) => { if (!v) pendingKill = null }"
+    >
+      <p class="confirm-text">{{ pendingKill?.text }}</p>
+      <div class="confirm-actions">
+        <button class="confirm-btn" @click="pendingKill = null">{{ t('common.cancel') }}</button>
+        <button class="confirm-btn danger" data-testid="terminal-menu-confirm" :disabled="!!pendingKill?.needsSocket && !connected" @click="confirmPendingKill">{{ pendingKill?.positive }}</button>
+      </div>
+    </NModal>
+
+    <NModal
+      :show="showHelp"
+      :to="overlayTarget"
+      @after-leave="focus"
+      preset="card"
+      :title="t('terminal.help_title')"
+      style="max-width: 90vw; width: 380px"
+      @update:show="(v: boolean) => { showHelp = v }"
+    >
+      <div style="font-size: 12px; line-height: 1.5">
+        <div><b>Ctrl+C</b> — {{ t('terminal.help_copy') }}</div>
+        <div><b>Ctrl+V</b> — {{ t('terminal.help_paste') }}</div>
+        <div><b>Shift+drag</b> — {{ t('terminal.help_select') }}</div>
+        <div><b>Ctrl+Shift+A</b> — {{ t('terminal.help_scrollback_viewer') }}</div>
+        <div><b>Ctrl+Shift+C</b> — {{ t('terminal.help_copy_all') }}</div>
+        <div style="margin-top: 6px; font-weight: 600">{{ t('terminal.help_copy_long_title') }}</div>
+        <div>1. {{ t('terminal.help_click_copy_btn') }}</div>
+        <div>2. {{ t('terminal.help_scroll_select') }}</div>
+        <div>3. <b>Enter</b> — {{ t('terminal.help_copy_confirm') }}</div>
+        <div>4. <b>q</b> — {{ t('terminal.help_exit_copy') }}</div>
+      </div>
+    </NModal>
 
     <!-- Collapsed Title Bar -->
     <div v-if="showTitleBar && titleBarCollapsed" class="terminal-titlebar-collapsed" @click="toggleTitleBar">
@@ -2317,6 +2526,80 @@ defineExpose({
   border-bottom: 1px solid var(--stroke);
   user-select: none;
   flex-shrink: 0;
+  /* the bar is judged by its own width (a pane in a grid is narrow in a wide window) */
+  container-type: inline-size;
+}
+
+.titlebar-btn.more-btn {
+  display: none;
+}
+
+.confirm-text {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirm-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: var(--surface-variant);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.confirm-btn.danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* One row of at most 32 px under 700 px of the bar's own width: the colour dot, the title
+   (cut with an ellipsis), the caller's chip, the connection dot, "more" and close. */
+@container (max-width: 699px) {
+  .terminal-titlebar .titlebar-center {
+    order: 0;
+    min-width: 0;
+    justify-content: flex-start;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .terminal-titlebar .titlebar-left {
+    order: 1;
+    min-width: 0;
+  }
+
+  .terminal-titlebar .titlebar-right {
+    order: 2;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+
+  .titlebar-left .toolbar-group,
+  .titlebar-right > .titlebar-btn:not(.more-btn):not(.close-btn) {
+    display: none;
+  }
+
+  .titlebar-left .connection-indicator {
+    margin-left: 0;
+  }
+
+  .titlebar-btn.more-btn {
+    display: flex;
+  }
+
+  .titlebar-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .titlebar-left,

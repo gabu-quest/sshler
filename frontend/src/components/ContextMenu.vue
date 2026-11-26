@@ -19,6 +19,8 @@ interface Props {
   y: number
   visible: boolean
   testid?: string
+  /** Where the menu is drawn: the page body, or an element that must contain it (a fullscreen pane). */
+  to?: string | HTMLElement
 }
 
 interface Emits {
@@ -26,7 +28,7 @@ interface Emits {
   (e: 'close'): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { testid: undefined, to: 'body' })
 const emit = defineEmits<Emits>()
 
 const menuRef = ref<HTMLDivElement>()
@@ -101,7 +103,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport :to="to">
     <Transition name="menu-pop">
     <div
       v-if="visible"
