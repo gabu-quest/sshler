@@ -15,6 +15,7 @@ import { errorText } from "@/api/apiError";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { mermaidConfig } from "@/utils/mermaidConfig";
+import { parentPath, resolvePathAgainst } from "@/utils/pathParts";
 
 import { fetchFilePreview } from "@/api/http";
 
@@ -81,14 +82,7 @@ function resolveImagePath(src: string, parentDir: string): string | null {
   if (!src) return null;
   if (/^(data:|https?:|\/\/|blob:|mailto:|#)/i.test(src)) return null;
   if (src.startsWith("/")) return stripQueryAndHash(src);
-  const base = parentDir.endsWith("/") ? parentDir : parentDir + "/";
-  const parts = base.split("/").filter(Boolean);
-  for (const seg of src.split("/")) {
-    if (seg === "." || seg === "") continue;
-    if (seg === "..") { parts.pop(); continue; }
-    parts.push(seg);
-  }
-  return stripQueryAndHash("/" + parts.join("/"));
+  return stripQueryAndHash(resolvePathAgainst(src, parentDir));
 }
 
 /** The part of `s` before its first `?` or `#`. */
@@ -259,7 +253,7 @@ export function usePrintableHtml() {
       const rawHtml = DOMPurify.sanitize(marked.parse(content) as string);
       const container = document.createElement("div");
       container.innerHTML = rawHtml;
-      const parentDir = payload.parent || path.split("/").slice(0, -1).join("/") || "/";
+      const parentDir = payload.parent || parentPath(path) || "/";
       // Order matters: render mermaid first (replaces code blocks with SVG
       // <foreignObject> structures); then inline images so any <img> inside
       // mermaid-rendered HTML labels or markdown body get data: URLs.

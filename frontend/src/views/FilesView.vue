@@ -32,6 +32,7 @@ import { ApiError, failureText, errorText } from "@/api/apiError";
 import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
+import { parentPath } from "@/utils/pathParts";
 
 // Persisted view state (sort order + all/files/dirs filter) — survives page reloads.
 const SORT_STATE_KEY = "sshler:files:sort";
@@ -168,10 +169,10 @@ const filteredRows = computed(() => {
 
   // Prepend parent (..) entry when not at root
   const result: any[] = [];
-  if (currentDir.value !== '/' && currentDir.value !== '~') {
-    const parentPath = currentDir.value.replace(/\/[^/]+\/?$/, '') || '/';
+  const upPath = parentPath(currentDir.value);
+  if (upPath !== null) {
     result.push({
-      name: '..', path: parentPath, is_directory: true,
+      name: '..', path: upPath, is_directory: true,
       size: null, modified: null, _isParent: true,
     });
   }
@@ -333,7 +334,7 @@ const handleSearchSelect = async (path: string, isDirectory: boolean) => {
     return;
   }
   // File hit: jump to its parent directory and open the preview
-  const parentDir = path.split('/').slice(0, -1).join('/') || '/';
+  const parentDir = parentPath(path) ?? '/';
   if (parentDir !== currentDir.value) {
     await navigateToDirectory(parentDir);
   }
@@ -342,8 +343,8 @@ const handleSearchSelect = async (path: string, isDirectory: boolean) => {
 };
 
 const navigateUp = async () => {
-  const parentDir = currentDir.value.split('/').slice(0, -1).join('/') || '/';
-  await navigateToDirectory(parentDir);
+  const parentDir = parentPath(currentDir.value);
+  if (parentDir !== null) await navigateToDirectory(parentDir);
 };
 
 const navigateHome = async () => {

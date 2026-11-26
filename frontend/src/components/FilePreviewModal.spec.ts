@@ -1,10 +1,11 @@
-import { render, fireEvent } from "@testing-library/vue";
+import { render, fireEvent, waitFor } from "@testing-library/vue";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "vue";
 
 import type { FilePreview } from "@/api/types";
 import { createI18n } from "@/i18n";
+import * as http from "@/api/http";
 import FilePreviewModal from "./FilePreviewModal.vue";
 
 vi.mock("@/api/http", () => ({
@@ -138,5 +139,103 @@ describe("FilePreviewModal — sibling navigation", () => {
     await fireEvent.keyDown(input, { key: "ArrowRight" });
     expect(emitted()["navigate"]).toBeUndefined();
     document.body.removeChild(input);
+  });
+});
+
+describe("FilePreviewModal: links and images in a markdown file on a Windows drive", () => {
+  const markdown = (path: string, parent: string | undefined, content: string): FilePreview => ({
+    box: "local", path, parent: parent as string, content, syntax_class: null,
+    image_data: null, image_mime: null, image_too_large: false, image_limit_kb: 200, is_markdown: true,
+  });
+  const png = { image_data: "AAAA", image_mime: "image/png", image_too_large: false };
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  function serve(file: FilePreview) {
+    vi.mocked(http.fetchFilePreview).mockImplementation(async (_box: string, path: string) =>
+      path === file.path ? file : ({ ...file, content: "", is_markdown: false, ...png } as FilePreview));
+  }
+
+  // The file is fetched when `show` turns true, so open it after mounting closed.
+  async function openModal(path: string) {
+    const utils = mountModal({ show: false, path, siblings: [] });
+    await utils.rerender({ show: true });
+    return utils;
+  }
+
+  const fetched = () => vi.mocked(http.fetchFilePreview).mock.calls.map((c) => c[1]);
+
+  // Mutation: put back the old resolveImagePath body (`"/" + parts.join("/")`): the image is
+  // asked for as `/C:/Users/me/pic1.png`.
+  it("an image next to the file is asked for under the drive, with no leading slash", async () => {
+    serve(markdown("C:/Users/me/a.md", "C:/Users/me", "![p](pic1.png)"));
+    await openModal("C:/Users/me/a.md");
+    await waitFor(() => expect(fetched()).toContain("C:/Users/me/pic1.png"));
+    expect(fetched()).not.toContain("/C:/Users/me/pic1.png");
+  });
+
+  // Mutation: put back `props.path.split('/').slice(0, -1).join('/') || '/'` in resolveImagePath:
+  // with no parent in the answer, `C:/a.md` has the parent `C:` and the image `/C:/pic2.png`.
+  it("with no parent in the answer the image is cut from the file's own path", async () => {
+    serve(markdown("C:/a.md", "", "![p](pic2.png)"));
+    await openModal("C:/a.md");
+    await waitFor(() => expect(fetched()).toContain("C:/pic2.png"));
+    expect(fetched()).not.toContain("/C:/pic2.png");
+  });
+
+  // Mutation: put back the old handleMarkdownClick resolution and parent cut: `../../z.md`
+  // from C:/Users/me gives `/C:/z.md` and the folder `/C:`.
+  it.each([
+    ["docs/x.md", "C:/Users/me/docs", "x.md"],
+    ["../../z.md", "C:/", "z.md"],
+    ["../w.md", "C:/Users", "w.md"],
+  ])("a link to %s opens folder %s with %s previewed", async (href, folder, name) => {
+    serve(markdown("C:/Users/me/a.md", "C:/Users/me", `[l](${href})`));
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { container } = await openModal("C:/Users/me/a.md");
+    const link = await waitFor(() => {
+      const a = container.querySelector(".markdown-rendered a");
+      expect(a).not.toBeNull();
+      return a as HTMLAnchorElement;
+    });
+    await fireEvent.click(link);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open.mock.calls[0]?.[0]).toBe(
+      `/app/files?${new URLSearchParams({ box: "local", path: folder, preview: name }).toString()}`,
+    );
+  });
+
+  it("with no parent in the answer a link is resolved against the file's own folder", async () => {
+    serve(markdown("C:/a.md", "", "[l](b.md)"));
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { container } = await openModal("C:/a.md");
+    const link = await waitFor(() => {
+      const a = container.querySelector(".markdown-rendered a");
+      expect(a).not.toBeNull();
+      return a as HTMLAnchorElement;
+    });
+    await fireEvent.click(link);
+    expect(open.mock.calls[0]?.[0]).toBe(
+      `/app/files?${new URLSearchParams({ box: "local", path: "C:/", preview: "b.md" }).toString()}`,
+    );
+  });
+
+  // Mutation: put back `props.path.split('/').slice(0, -1).join('/') || '/'` in either
+  // parent cut: a path with backslashes has no `/` to cut at, so the parent becomes `/`.
+  it("with no parent in the answer a backslash path is cut at its backslashes, for images and links", async () => {
+    serve(markdown("C:\\Users\\me\\a.md", "", "![p](pic3.png) [l](b.md)"));
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { container } = await openModal("C:\\Users\\me\\a.md");
+    await waitFor(() => expect(fetched()).toContain("C:/Users/me/pic3.png"));
+    await fireEvent.click(container.querySelector(".markdown-rendered a")!);
+    expect(open.mock.calls[0]?.[0]).toBe(
+      `/app/files?${new URLSearchParams({ box: "local", path: "C:/Users/me", preview: "b.md" }).toString()}`,
+    );
   });
 });

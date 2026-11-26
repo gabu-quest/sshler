@@ -42,6 +42,7 @@ import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake, signInAfterSocketClose } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
+import { isPathRoot, parentPath, resolvePathAgainst } from '@/utils/pathParts'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
 import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
@@ -406,44 +407,6 @@ const xtermTheme = (name: TerminalThemeName) => ({
 // where the user actually `cd`'d to, not where the tab opened.
 const currentCwd = ref<string | null>(null)
 
-/** True for POSIX (`/x`), Windows drive (`C:\x` / `C:/x`), or UNC (`\\srv`) absolutes. */
-const isAbsolutePath = (p: string): boolean =>
-  p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\')
-
-/** Collapse `.`/`..` segments, preserving a `C:` drive or `//` UNC root. Input/output
- *  use forward slashes — the backend's local-Windows file API speaks POSIX (`C:/Users/x`). */
-const normalizeAbsolute = (absPath: string): string => {
-  const p = absPath.replace(/\\/g, '/')
-  const drive = p.match(/^([A-Za-z]:)\//)?.[1] ?? ''
-  const isUnc = !drive && p.startsWith('//')
-  const body = drive ? p.slice(drive.length) : p
-  const out: string[] = []
-  for (const seg of body.split('/')) {
-    if (seg === '.' || seg === '') continue
-    if (seg === '..') { out.pop(); continue }
-    out.push(seg)
-  }
-  if (drive) return out.length ? `${drive}/${out.join('/')}` : `${drive}/`
-  if (isUnc) return `//${out.join('/')}`
-  return `/${out.join('/')}`
-}
-
-/** Resolve a (possibly relative) path against a base directory. Handles both POSIX
- *  and Windows-shaped bases, and never force-prepends `/` to a `C:`-rooted path. */
-const resolvePathAgainst = (rawPath: string, base: string): string => {
-  if (isAbsolutePath(rawPath)) return normalizeAbsolute(rawPath)
-  const b = base.replace(/\\/g, '/')
-  const drive = b.match(/^([A-Za-z]:)\//)?.[1] ?? ''
-  const baseBody = drive ? b.slice(drive.length) : b
-  const parts = baseBody.split('/').filter(Boolean)
-  for (const seg of rawPath.replace(/\\/g, '/').split('/')) {
-    if (seg === '.' || seg === '') continue
-    if (seg === '..') { parts.pop(); continue }
-    parts.push(seg)
-  }
-  return drive ? `${drive}/${parts.join('/')}` : `/${parts.join('/')}`
-}
-
 /** Extract a directory from an OSC cwd payload (OSC 7 URI or a bare path) and
  *  normalize it to the backend's POSIX form (`C:/Users/x`, no leading slash on a drive). */
 const parseOscCwd = (input: string): string | null => {
@@ -501,7 +464,7 @@ const handleFilePathClick = async (rawPath: string) => {
   }
 
   // Strip trailing slash for stat check
-  const cleanPath = resolved.replace(/\/+$/, '') || '/'
+  const cleanPath = isPathRoot(resolved) ? resolved : resolved.replace(/\/+$/, '') || '/'
 
   try {
     const info = await statPath(box, cleanPath, token)
@@ -515,7 +478,7 @@ const handleFilePathClick = async (rawPath: string) => {
     }
 
     // Build Files view URL
-    const dir = info.is_directory ? cleanPath : cleanPath.split('/').slice(0, -1).join('/') || '/'
+    const dir = info.is_directory ? cleanPath : parentPath(cleanPath) ?? '/'
     const params = new URLSearchParams({ box, path: dir })
     if (info.is_file) {
       params.set('preview', cleanPath.split('/').pop() || '')

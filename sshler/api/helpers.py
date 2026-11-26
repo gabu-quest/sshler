@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path, PureWindowsPath
@@ -111,6 +112,19 @@ def local_path_form(path: str | os.PathLike[str]) -> str:
     return os.fspath(path)
 
 
+_BARE_DRIVE = re.compile(r"[A-Za-z]:")
+
+
+def _bare_drive_as_root(directory: str) -> str:
+    """On a Windows server a bare drive (``C:``) is the drive's root (``C:/``).
+
+    Windows reads ``Path("C:")`` as the process's current folder on that drive, a
+    place no page ever means; a page that asks for ``C:`` wants the drive."""
+    if LOCAL_IS_WINDOWS and _BARE_DRIVE.fullmatch(directory):
+        return f"{directory}/"
+    return directory
+
+
 def _normalize_local_path(directory: str | None, allowed_base: str | Path | None = None) -> str:
     """Normalize and validate local path, resolving symlinks to prevent directory escape.
 
@@ -133,7 +147,7 @@ def _normalize_local_path(directory: str | None, allowed_base: str | Path | None
         - For "local" boxes, consider restricting to Path.home() or box.default_dir.
     """
     if directory:
-        base = Path(directory).expanduser()
+        base = Path(_bare_drive_as_root(directory)).expanduser()
     else:
         base = Path.home()
 

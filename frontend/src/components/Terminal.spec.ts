@@ -26,8 +26,11 @@ const stubs = vi.hoisted(() => {
   // What the page wrote into xterm, as text, in order.
   const written: string[] = [];
   const decoder = new TextDecoder();
+  // The options the page gave xterm: its OSC 8 `linkHandler` is how a file link is clicked.
+  const captured: { options: any } = { options: null };
   class RecordingTerminal {
-    constructor() {
+    constructor(options?: unknown) {
+      captured.options = options;
       const base = make();
       return new Proxy(base, {
         get: (target, prop) =>
@@ -39,7 +42,7 @@ const stubs = vi.hoisted(() => {
       });
     }
   }
-  return { Stub, RecordingTerminal, written };
+  return { Stub, RecordingTerminal, written, captured };
 });
 
 // xterm and its addons need a real canvas; replace them with a permissive
@@ -545,5 +548,48 @@ describe("Terminal.vue tmux keys", () => {
 
     expect(socket(0).send).not.toHaveBeenCalled();
     wrapper.unmount();
+  });
+});
+
+describe("Terminal: a clicked file link opens the Files view at the folder above it", () => {
+  const stat = (info: { is_directory: boolean; is_file: boolean }) =>
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes("/stat?")
+        ? new Response(JSON.stringify({ exists: true, ...info }), { status: 200 })
+        : new Response(JSON.stringify({ ws_url: "ws://127.0.0.1:8822/ws/term" }), { status: 200 }));
+
+  async function click(uri: string) {
+    const win = { location: { href: "" }, close: vi.fn() };
+    vi.spyOn(window, "open").mockReturnValue(win as unknown as Window);
+    const wrapper = await mountConnected();
+    fetchMock.mockClear();
+    stubs.captured.options.linkHandler.activate(new MouseEvent("click"), uri);
+    await flushPromises();
+    const statUrls = fetchMock.mock.calls.map((c) => decodeURIComponent(String(c[0]))).filter((u) => u.includes("/stat?"));
+    wrapper.unmount();
+    return { href: win.location.href, statUrls };
+  }
+
+  // Mutation: put back `cleanPath.split('/').slice(0, -1).join('/') || '/'` for the folder:
+  // a file at the drive root opens folder `C:`, which Windows reads as the current folder of C.
+  it.each([
+    ["file:///C:/Users/me/a.txt", "C:/Users/me", "a.txt"],
+    ["file:///C:/a.txt", "C:/", "a.txt"],
+    ["file:///C:/Users/me/../b.txt", "C:/Users", "b.txt"],
+    ["file:///home/me/a.txt", "/home/me", "a.txt"],
+    ["file:///a.txt", "/", "a.txt"],
+  ])("a file link %s opens folder %s and previews %s", async (uri, folder, name) => {
+    stat({ is_directory: false, is_file: true });
+    const { href } = await click(uri);
+    expect(href).toBe(`/app/files?${new URLSearchParams({ box: "box1", path: folder, preview: name }).toString()}`);
+  });
+
+  // Mutation: put back `resolved.replace(/\/+$/, '') || '/'` for the stat path: a drive root
+  // is asked for as `C:` and opened as `C:`.
+  it("a link to a drive root asks the box about C:/ and opens C:/", async () => {
+    stat({ is_directory: true, is_file: false });
+    const { href, statUrls } = await click("file:///C:/");
+    expect(statUrls).toEqual(["/api/v1/boxes/box1/stat?path=C:/"]);
+    expect(href).toBe(`/app/files?${new URLSearchParams({ box: "box1", path: "C:/" }).toString()}`);
   });
 });

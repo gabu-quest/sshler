@@ -9,7 +9,8 @@ import * as http from "@/api/http";
 import { useFilesStore } from "@/stores/files";
 import FilesView from "./FilesView.vue";
 
-const { routeState, messageSpy, tableMode } = vi.hoisted(() => ({
+const { routeState, messageSpy, tableMode, pick } = vi.hoisted(() => ({
+  pick: { path: "" },
   routeState: { dir: "/home/u/proj" },
   messageSpy: { success: vi.fn(), error: vi.fn() },
   // "stub" renders the hand-built table below; "real" renders Naive UI's own NDataTable.
@@ -55,7 +56,13 @@ const { passthrough } = vi.hoisted(() => ({
   passthrough: (name: string) => ({ default: { name, template: `<div class="stub-${name}"><slot /></div>` } }),
 }));
 vi.mock("@/components/FavoritesPanel.vue", () => passthrough("FavoritesPanel"));
-vi.mock("@/components/FileBreadcrumb.vue", () => passthrough("FileBreadcrumb"));
+// A breadcrumb that only emits the Up click, and a search that picks the path in `pick`.
+vi.mock("@/components/FileBreadcrumb.vue", async () => {
+  const { h } = await import("vue");
+  return { default: { name: "FileBreadcrumb", emits: ["navigate-up"], render() {
+    return h("button", { class: "stub-up", onClick: () => (this as any).$emit("navigate-up") }, "up");
+  } } };
+});
 vi.mock("@/components/FileUploadZone.vue", () => passthrough("FileUploadZone"));
 vi.mock("@/components/FilePreviewModal.vue", () => passthrough("FilePreviewModal"));
 vi.mock("@/components/FileEditorModal.vue", () => passthrough("FileEditorModal"));
@@ -63,7 +70,12 @@ vi.mock("@/components/FileDiffModal.vue", () => passthrough("FileDiffModal"));
 vi.mock("@/components/BatchMoveModal.vue", () => passthrough("BatchMoveModal"));
 vi.mock("@/components/ContentSearchInput.vue", () => passthrough("ContentSearchInput"));
 vi.mock("@/components/ContextMenu.vue", () => passthrough("ContextMenu"));
-vi.mock("@/components/DirectorySearchInput.vue", () => passthrough("DirectorySearchInput"));
+vi.mock("@/components/DirectorySearchInput.vue", async () => {
+  const { h } = await import("vue");
+  return { default: { name: "DirectorySearchInput", emits: ["select"], render() {
+    return h("button", { class: "stub-pick", onClick: () => (this as any).$emit("select", pick.path, false) }, "pick");
+  } } };
+});
 
 vi.mock("naive-ui", async () => {
   const { defineComponent, h } = await import("vue");
@@ -390,5 +402,94 @@ describe("FilesView: toolbar download at `~` and `/`", () => {
     expect(http.downloadDirectory).toHaveBeenCalledWith("local", "~", "tok");
     expect(anchors[0]?.download).toBe("gabu.zip");
     expect(messageSpy.success).toHaveBeenCalledWith("Downloaded gabu.zip (3 B)");
+  });
+});
+
+describe("FilesView: the `..` row on a Windows drive stays on the drive", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    setWidth(1400);
+    stubMatchMedia();
+  });
+  afterEach(() => {
+    routeState.dir = "/home/u/proj";
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    setWidth(1024);
+  });
+
+  // Mutation: cut the path at its last `/` (the pre-fix rule): `C:/Users` gives `C:`,
+  // which Windows reads as the current folder of drive C, not its root.
+  it.each([
+    ["C:/Users/me", "C:/Users"],
+    ["C:/Users", "C:/"],
+    ["/home/me", "/home"],
+    ["/home", "/"],
+    ["//srv/share/d", "//srv/share/"],
+  ])("from %s the `..` row opens %s", async (dir, parent) => {
+    routeState.dir = dir;
+    vi.mocked(http.fetchDirectory).mockResolvedValue({ box: "local", directory: dir, entries: [] } as any);
+    const { container } = await mountLoaded(1);
+    expect(container.querySelector(".row-parent")!.getAttribute("data-path")).toBe(parent);
+  });
+
+  // Mutation: only `/` and `~` count as a root (the pre-fix test): `..` shows at `C:/`.
+  it.each(["C:/", "//srv/share/"])("at %s there is no `..` row", async (dir) => {
+    routeState.dir = dir;
+    vi.mocked(http.fetchDirectory).mockResolvedValue({ box: "local", directory: dir, entries: ENTRIES } as any);
+    const { container } = await mountLoaded(4);
+    expect(container.querySelectorAll(".row-parent").length).toBe(0);
+  });
+});
+
+describe("FilesView: Up and a search hit cut the parent with the one owner", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    setWidth(1400);
+    stubMatchMedia();
+  });
+  afterEach(() => {
+    routeState.dir = "/home/u/proj";
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    setWidth(1024);
+  });
+
+  // Mutation: put back `currentDir.value.split('/').slice(0, -1).join('/') || '/'` in
+  // navigateUp: from `C:/Users` it asks for `C:`, from `/home` for `/` only by the `|| '/'`.
+  it.each([
+    ["C:/Users", "C:/"],
+    ["C:/Users/me", "C:/Users"],
+    ["/home", "/"],
+    ["/home/me", "/home"],
+  ])("Up from %s asks the box for %s", async (dir, parent) => {
+    routeState.dir = dir;
+    vi.mocked(http.fetchDirectory).mockResolvedValue({ box: "local", directory: dir, entries: [] } as any);
+    const { container } = await mountLoaded(1);
+    vi.mocked(http.fetchDirectory).mockClear();
+    await fireEvent.click(container.querySelector("button.stub-up")!);
+    await waitFor(() => expect(http.fetchDirectory).toHaveBeenCalled());
+    expect(vi.mocked(http.fetchDirectory).mock.calls.map((c) => c[1])).toContain(parent);
+    expect(vi.mocked(http.fetchDirectory).mock.calls.map((c) => c[1])).not.toContain("C:");
+  });
+
+  // Mutation: put back `path.split('/').slice(0, -1).join('/') || '/'` in handleSearchSelect:
+  // a hit `C:/a.txt` jumps to `C:`; with the owner it jumps to `C:/`.
+  it.each([
+    ["C:/a.txt", "C:/"],
+    ["C:/Users/me/a.txt", "C:/Users/me"],
+    ["/a.txt", "/"],
+  ])("a file hit %s opens its folder %s", async (hit, folder) => {
+    routeState.dir = "/somewhere/else";
+    vi.mocked(http.fetchDirectory).mockResolvedValue({ box: "local", directory: "/somewhere/else", entries: [] } as any);
+    const { container } = await mountLoaded(1);
+    vi.mocked(http.fetchDirectory).mockClear();
+    pick.path = hit;
+    await fireEvent.click(container.querySelector("button.stub-pick")!);
+    await waitFor(() => expect(http.fetchDirectory).toHaveBeenCalled());
+    expect(vi.mocked(http.fetchDirectory).mock.calls.map((c) => c[1])).toContain(folder);
+    expect(vi.mocked(http.fetchDirectory).mock.calls.map((c) => c[1])).not.toContain("C:");
   });
 });

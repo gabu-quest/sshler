@@ -5,6 +5,7 @@ import { PhArrowClockwise, PhArrowLeft, PhClipboard, PhHouse, PhTerminalWindow }
 import type { GitInfo } from "@/api/types";
 import GitBadge from "@/components/GitBadge.vue";
 import { useI18n } from "@/i18n";
+import { isPathRoot } from "@/utils/pathParts";
 
 const props = defineProps<{
   currentDir: string;
@@ -38,7 +39,7 @@ const copyWindowsPath = async () => {
       <NButton size="small" quaternary @click="emit('navigate-home')" :title="t('common.home')">
         <NIcon size="16"><PhHouse weight="duotone" /></NIcon>
       </NButton>
-      <NButton size="small" quaternary @click="emit('navigate-up')" :disabled="currentDir === '/' || currentDir === '~'" :title="t('common.up')">
+      <NButton size="small" quaternary @click="emit('navigate-up')" :disabled="isPathRoot(currentDir)" :title="t('common.up')">
         <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
       </NButton>
       <span class="breadcrumb-path">{{ currentDir }}</span>
