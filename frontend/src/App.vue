@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, type CSSProperties } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import {
@@ -38,6 +38,14 @@ const themeOverrides = computed(() =>
   appStore.isDark ? darkThemeOverrides : lightThemeOverrides
 );
 const isTerminalRoute = computed(() => route.path === '/terminal' || route.path === '/multi-terminal' || route.path === '/commander');
+// The main area fills what the header and the progress strip leave. A terminal route
+// sizes itself to that area and never scrolls the page; every other view scrolls in it.
+// Naive applies this to the area's own scroll container.
+const mainScrollStyle = computed<CSSProperties>(() => ({
+  minHeight: '0px',
+  overflowY: isTerminalRoute.value ? 'hidden' : 'auto',
+  overflowX: 'hidden',
+}));
 
 const showRecovery = ref(false);
 const recoverySessions = ref<LostSession[]>([]);
@@ -132,12 +140,14 @@ onUnmounted(() => {
     <NNotificationProvider placement="top-right" :max="5">
     <NMessageProvider>
       <PingNotificationHandler />
-      <NLayout class="app-layout">
-        <NLayoutHeader bordered>
+      <NLayout class="app-layout" content-class="app-frame">
+        <NLayoutHeader bordered class="app-frame-fixed">
           <AppHeader />
         </NLayoutHeader>
-        <ProgressStrip />
-        <NLayoutContent class="app-main">
+        <div class="app-frame-fixed">
+          <ProgressStrip />
+        </div>
+        <NLayoutContent class="app-main" :content-style="mainScrollStyle">
           <div class="app-content" :class="{ 'terminal-mode': isTerminalRoute }">
             <RouterView />
           </div>
@@ -158,13 +168,25 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The page frame is one column the height of the window: the header and the progress
+   strip keep their own height, the main area takes the rest. */
 .app-layout {
   height: var(--vh-full, 100vh);
 }
 
+.app-layout :deep(.app-frame) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-frame-fixed {
+  flex: 0 0 auto;
+}
+
 .app-main {
-  height: calc(var(--vh-full, 100vh) - 64px);
-  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .app-content {
@@ -180,19 +202,12 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
-  .app-main {
-    height: calc(var(--vh-full, 100vh) - 16px);
-    overflow: hidden;
-  }
-
   .app-content {
     padding: 8px;
   }
 
   .app-content.terminal-mode {
     padding: 0;
-    height: 100%;
-    overflow: hidden;
   }
 }
 

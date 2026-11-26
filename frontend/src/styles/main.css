@@ -1,45 +1,52 @@
 @import './responsive.css';
 
-/* CSS Variables */
+/* CSS Variables
+   One palette in two themes. The page is --bg; cards, panels and tables are --surface.
+   Naive UI reads the same colours from config/naive-theme.ts: keep the two in step. */
 :root {
-  /* Colors */
-  --accent: #6aa6ff;
-  --accent-hover: #5a96ef;
-  --accent-bg: rgba(106, 166, 255, 0.15);
-  --accent-rgb: 106, 166, 255;
+  /* Light theme: the defaults until the app sets data-theme */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-variant: #eef0f4;
+  --surface-hover: #e5e8ee;
+  --surface-raised: #ffffff;
+  --input-bg: #ffffff;
+  --table-stripe: #f8f9fb;
 
-  --success: #3ba86a;
-  --success-hover: #2b9860;
-  --success-bg: rgba(59, 168, 106, 0.1);
+  --stroke: #d8dde6;
+  --stroke-hover: #bcc4d2;
 
-  --warning: #f5c542;
-  --warning-hover: #e5b532;
-  --warning-bg: rgba(245, 197, 66, 0.1);
+  --text: #111827;
+  --text-secondary: #374151;
+  --muted: #64748b;
 
-  --error: #ff6a6a;
-  --error-hover: #ff5a5a;
-  --error-bg: rgba(255, 106, 106, 0.1);
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-pressed: #1e40af;
+  --accent-bg: rgba(37, 99, 235, 0.10);
+  --accent-rgb: 37, 99, 235;
 
-  --text: #1a1a1a;
-  --text-secondary: #4a4a4a;
-  --muted: #6b7280;
+  --success: #16a34a;
+  --success-hover: #15803d;
+  --success-bg: rgba(22, 163, 74, 0.10);
 
-  --surface: #f6f7f9;
-  --surface-variant: #eef0f3;
-  --surface-hover: #e8eaed;
+  --warning: #d97706;
+  --warning-hover: #b45309;
+  --warning-bg: rgba(217, 119, 6, 0.10);
 
-  --stroke: #d8dbe0;
-  --stroke-hover: #c4c8ce;
+  --error: #dc2626;
+  --error-hover: #b91c1c;
+  --error-bg: rgba(220, 38, 38, 0.08);
+  --error-hover-bg: rgba(220, 38, 38, 0.12);
 
-  --shadow: rgba(0, 0, 0, 0.08);
-  --shadow-lg: rgba(0, 0, 0, 0.12);
+  --shadow: rgba(15, 23, 42, 0.08);
+  --shadow-lg: rgba(15, 23, 42, 0.12);
 
-  /* Panel/overlay colors (theme-aware) */
-  --panel-bg: #f6f7f9;
-  --panel-bg-translucent: rgba(246, 247, 249, 0.95);
-  --panel-bg-solid: rgba(240, 242, 245, 0.98);
-  --overlay-bg: rgba(246, 247, 249, 0.92);
-  --hover-overlay: rgba(0, 0, 0, 0.05);
+  --panel-bg: #ffffff;
+  --panel-bg-translucent: rgba(255, 255, 255, 0.95);
+  --panel-bg-solid: rgba(244, 245, 247, 0.98);
+  --overlay-bg: rgba(244, 245, 247, 0.92);
+  --hover-overlay: rgba(15, 23, 42, 0.05);
   --font-weight-normal: 450;
   --font-weight-medium: 550;
   --border-width: 1.5px;
@@ -47,7 +54,7 @@
 
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
-  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  --font-mono: 'Monaspace Neon', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
 
   /* Spacing */
   --space-xs: 4px;
@@ -58,9 +65,13 @@
 
   /* Border radius */
   --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  /* App header: the desktop bar, and the thin bar on a phone's terminal */
+  --header-height: 44px;
+  --header-height-mobile: 14px;
 
   /* Terminal colors */
   --terminal-bg: #0f1115;
@@ -70,24 +81,47 @@
 /* Dark theme */
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #ffffff;
-    --text-secondary: #e5e5e5;
-    --muted: #9ca3af;
+    --bg: #111317;
+    --surface: #171a20;
+    --surface-variant: #1f242d;
+    --surface-hover: #262c37;
+    --surface-raised: #1a1e26;
+    --input-bg: #14171d;
+    --table-stripe: #1b1f27;
 
-    --surface: #1a1a1a;
-    --surface-variant: #2a2a2a;
-    --surface-hover: #333333;
+    --stroke: #2a313d;
+    --stroke-hover: #3b4454;
 
-    --stroke: #374151;
-    --stroke-hover: #4b5563;
+    --text: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --muted: #8b95a5;
+
+    --accent: #5b9dff;
+    --accent-hover: #76aeff;
+    --accent-pressed: #4084e8;
+    --accent-bg: rgba(91, 157, 255, 0.14);
+    --accent-rgb: 91, 157, 255;
+
+    --success: #22c55e;
+    --success-hover: #4ade80;
+    --success-bg: rgba(34, 197, 94, 0.14);
+
+    --warning: #f59e0b;
+    --warning-hover: #fbbf24;
+    --warning-bg: rgba(245, 158, 11, 0.14);
+
+    --error: #f87171;
+    --error-hover: #fca5a5;
+    --error-bg: rgba(248, 113, 113, 0.12);
+    --error-hover-bg: rgba(248, 113, 113, 0.16);
 
     --shadow: rgba(0, 0, 0, 0.3);
     --shadow-lg: rgba(0, 0, 0, 0.4);
 
-    --panel-bg: #1a1a1a;
-    --panel-bg-translucent: rgba(10, 14, 20, 0.95);
-    --panel-bg-solid: rgba(10, 14, 20, 0.98);
-    --overlay-bg: rgba(10, 14, 20, 0.92);
+    --panel-bg: #171a20;
+    --panel-bg-translucent: rgba(17, 19, 23, 0.95);
+    --panel-bg-solid: rgba(23, 26, 32, 0.98);
+    --overlay-bg: rgba(17, 19, 23, 0.92);
     --hover-overlay: rgba(255, 255, 255, 0.04);
     --font-weight-normal: 400;
     --font-weight-medium: 500;
@@ -98,52 +132,97 @@
 
 /* Light theme class override — MUST come after dark media query to win specificity */
 [data-theme="light"] {
-  --text: #1a1a1a;
-  --text-secondary: #4a4a4a;
-  --muted: #6b7280;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-variant: #eef0f4;
+  --surface-hover: #e5e8ee;
+  --surface-raised: #ffffff;
+  --input-bg: #ffffff;
+  --table-stripe: #f8f9fb;
 
-  --surface: #f6f7f9;
-  --surface-variant: #eef0f3;
-  --surface-hover: #e8eaed;
+  --stroke: #d8dde6;
+  --stroke-hover: #bcc4d2;
 
-  --stroke: #d8dbe0;
-  --stroke-hover: #c4c8ce;
+  --text: #111827;
+  --text-secondary: #374151;
+  --muted: #64748b;
 
-  --shadow: rgba(0, 0, 0, 0.08);
-  --shadow-lg: rgba(0, 0, 0, 0.12);
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-pressed: #1e40af;
+  --accent-bg: rgba(37, 99, 235, 0.10);
+  --accent-rgb: 37, 99, 235;
 
-  --panel-bg: #f6f7f9;
-  --panel-bg-translucent: rgba(246, 247, 249, 0.95);
-  --panel-bg-solid: rgba(240, 242, 245, 0.98);
-  --overlay-bg: rgba(246, 247, 249, 0.92);
-  --hover-overlay: rgba(0, 0, 0, 0.05);
+  --success: #16a34a;
+  --success-hover: #15803d;
+  --success-bg: rgba(22, 163, 74, 0.10);
+
+  --warning: #d97706;
+  --warning-hover: #b45309;
+  --warning-bg: rgba(217, 119, 6, 0.10);
+
+  --error: #dc2626;
+  --error-hover: #b91c1c;
+  --error-bg: rgba(220, 38, 38, 0.08);
+  --error-hover-bg: rgba(220, 38, 38, 0.12);
+
+  --shadow: rgba(15, 23, 42, 0.08);
+  --shadow-lg: rgba(15, 23, 42, 0.12);
+
+  --panel-bg: #ffffff;
+  --panel-bg-translucent: rgba(255, 255, 255, 0.95);
+  --panel-bg-solid: rgba(244, 245, 247, 0.98);
+  --overlay-bg: rgba(244, 245, 247, 0.92);
+  --hover-overlay: rgba(15, 23, 42, 0.05);
   --font-weight-normal: 450;
   --font-weight-medium: 550;
   --border-width: 1.5px;
   --icon-weight: 1.5;
-
 }
 
 /* Dark theme class override */
 .dark, [data-theme="dark"] {
-  --text: #ffffff;
-  --text-secondary: #e5e5e5;
-  --muted: #9ca3af;
+  --bg: #111317;
+  --surface: #171a20;
+  --surface-variant: #1f242d;
+  --surface-hover: #262c37;
+  --surface-raised: #1a1e26;
+  --input-bg: #14171d;
+  --table-stripe: #1b1f27;
 
-  --surface: #1a1a1a;
-  --surface-variant: #2a2a2a;
-  --surface-hover: #333333;
+  --stroke: #2a313d;
+  --stroke-hover: #3b4454;
 
-  --stroke: #374151;
-  --stroke-hover: #4b5563;
+  --text: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --muted: #8b95a5;
+
+  --accent: #5b9dff;
+  --accent-hover: #76aeff;
+  --accent-pressed: #4084e8;
+  --accent-bg: rgba(91, 157, 255, 0.14);
+  --accent-rgb: 91, 157, 255;
+
+  --success: #22c55e;
+  --success-hover: #4ade80;
+  --success-bg: rgba(34, 197, 94, 0.14);
+
+  --warning: #f59e0b;
+  --warning-hover: #fbbf24;
+  --warning-bg: rgba(245, 158, 11, 0.14);
+
+  --error: #f87171;
+  --error-hover: #fca5a5;
+  --error-bg: rgba(248, 113, 113, 0.12);
+  --error-hover-bg: rgba(248, 113, 113, 0.16);
 
   --shadow: rgba(0, 0, 0, 0.3);
   --shadow-lg: rgba(0, 0, 0, 0.4);
 
-  --panel-bg: #1a1a1a;
-  --panel-bg-translucent: rgba(10, 14, 20, 0.95);
-  --panel-bg-solid: rgba(10, 14, 20, 0.98);
-  --overlay-bg: rgba(10, 14, 20, 0.92);
+  --panel-bg: #171a20;
+  --panel-bg-translucent: rgba(17, 19, 23, 0.95);
+  --panel-bg-solid: rgba(23, 26, 32, 0.98);
+  --overlay-bg: rgba(17, 19, 23, 0.92);
   --hover-overlay: rgba(255, 255, 255, 0.04);
   --font-weight-normal: 400;
   --font-weight-medium: 500;
@@ -160,27 +239,19 @@ html {
   font-family: var(--font-sans);
   line-height: 1.6;
   color: var(--text);
-  background: var(--surface);
+  background: var(--bg);
 }
 
 body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
-  background: var(--surface);
+  background: var(--bg);
   color: var(--text);
   font-size: 14px;
   font-weight: var(--font-weight-normal);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-/* Dotted texture for light mode — visible but tasteful */
-[data-theme="light"] body {
-  background:
-    radial-gradient(circle, #b0b5bd 0.7px, transparent 0.7px),
-    var(--surface);
-  background-size: 10px 10px;
 }
 
 /* Typography */
@@ -281,6 +352,11 @@ input:focus, textarea:focus, select:focus {
 
 .mono {
   font-family: var(--font-mono);
+}
+
+/* Figures that line up: sizes, times, CPU and memory readings */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Animation utilities */
