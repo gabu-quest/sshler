@@ -301,7 +301,7 @@ describe("the one request: what a failure does and shows", () => {
     fetchMock.mockResolvedValueOnce(res(502, { detail: "build-box: connection timed out after 10 s", reason: "unreachable" }));
     expect(await failure(fetchBoxes("t"))).toEqual([
       502, "unreachable", "build-box: connection timed out after 10 s",
-      "ボックスに接続できません — build-box: connection timed out after 10 s",
+      "ホストに接続できません — build-box: connection timed out after 10 s",
     ]);
   });
 
