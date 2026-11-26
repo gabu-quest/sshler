@@ -35,7 +35,7 @@ const KNOWN_COLOR_MAP: Record<string, string> = {
 };
 
 function resolveColor(bar: ProgressBar): string {
-  if (!bar.color) return "var(--n-primary-color, #3b82f6)";
+  if (!bar.color) return "var(--n-primary-color, var(--accent))";
   if (bar.color.startsWith("#") || bar.color.startsWith("rgb")) return bar.color;
   return KNOWN_COLOR_MAP[bar.color.toLowerCase()] ?? bar.color;
 }
@@ -169,7 +169,7 @@ function close(): void {
 .picker-row__name {
   font-size: 11px;
   opacity: 0.6;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .picker-row__numbers {
@@ -179,8 +179,8 @@ function close(): void {
   opacity: 0.7;
 }
 
-.picker-row__pip--running { color: var(--n-primary-color, #3b82f6); }
-.picker-row__pip--done { color: #22c55e; }
-.picker-row__pip--failed { color: #ef4444; }
-.picker-row__pip--cancelled { color: #6b7280; }
+.picker-row__pip--running { color: var(--n-primary-color, var(--accent)); }
+.picker-row__pip--done { color: var(--success); }
+.picker-row__pip--failed { color: var(--error); }
+.picker-row__pip--cancelled { color: var(--muted); }
 </style>

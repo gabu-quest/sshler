@@ -239,7 +239,7 @@ onMounted(() => {
         <div class="progress-row__top">
           <span
             class="progress-row__stripe"
-            :style="{ background: resolveColor(bar) ?? 'var(--n-primary-color, #3b82f6)' }"
+            :style="{ background: resolveColor(bar) ?? 'var(--n-primary-color, var(--accent))' }"
             aria-hidden="true"
           />
           <div class="progress-row__name-block">
@@ -359,11 +359,11 @@ onMounted(() => {
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 12px;
-  background: rgba(107, 114, 128, 0.15);
+  background: var(--hover-overlay);
 }
-.progress-view__conn.conn--connected { color: #22c55e; }
-.progress-view__conn.conn--connecting { color: #f59e0b; }
-.progress-view__conn.conn--disconnected { color: #6b7280; }
+.progress-view__conn.conn--connected { color: var(--success); }
+.progress-view__conn.conn--connecting { color: var(--warning); }
+.progress-view__conn.conn--disconnected { color: var(--muted); }
 
 .progress-view__no-scope {
   margin-bottom: 4px;
@@ -378,7 +378,7 @@ onMounted(() => {
   background: var(--n-action-color, color-mix(in srgb, currentColor 8%, transparent));
   padding: 4px 8px;
   border-radius: 4px;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .progress-view__list {
@@ -388,7 +388,7 @@ onMounted(() => {
 }
 
 .progress-row {
-  transition: opacity 200ms ease;
+  transition: opacity var(--dur-base) var(--ease-out);
 }
 .progress-row--stale {
   opacity: 0.6;
@@ -419,7 +419,7 @@ onMounted(() => {
 .progress-row__sub {
   font-size: 11px;
   opacity: 0.6;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
 }
 .progress-row__actions {
   flex-shrink: 0;
@@ -448,7 +448,7 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .progress-row__stale-flag {
-  color: #f59e0b;
+  color: var(--warning);
   font-weight: 500;
 }
 

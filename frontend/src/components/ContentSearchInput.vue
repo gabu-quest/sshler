@@ -216,7 +216,7 @@ function escapeHtml(str: string): string {
   background: var(--surface);
   border: 1px solid var(--stroke);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 16px var(--shadow-lg);
   max-height: 400px;
   overflow-y: auto;
 }
@@ -251,7 +251,7 @@ function escapeHtml(str: string): string {
 }
 
 .grep-file-header:hover {
-  background: var(--hover);
+  background: var(--surface-hover);
 }
 
 .file-icon {
@@ -288,7 +288,7 @@ function escapeHtml(str: string): string {
 }
 
 .grep-match:hover {
-  background: var(--hover);
+  background: var(--surface-hover);
 }
 
 .line-number {
@@ -306,7 +306,7 @@ function escapeHtml(str: string): string {
 }
 
 .line-content :deep(mark) {
-  background: var(--warning-bg, rgba(255, 200, 0, 0.3));
+  background: var(--warning-bg);
   color: inherit;
   padding: 0 1px;
   border-radius: 2px;

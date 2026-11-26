@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 
-import { NAlert, NButton, NCard, NGrid, NGridItem, NIcon, NSpace, useMessage } from "naive-ui";
+import { NAlert, NButton, NCard, NIcon, NSpace, useMessage } from "naive-ui";
 import { PhFolderSimple, PhPushPinSimple, PhStar, PhTerminalWindow } from "@phosphor-icons/vue";
 
 import { useI18n } from "@/i18n";
@@ -98,8 +98,8 @@ onMounted(async () => {
       </div>
     </header>
 
-    <NGrid :x-gap="12" :y-gap="12" :cols="3">
-      <NGridItem v-for="box in boxesStore.items" :key="box.name">
+    <div class="box-grid">
+      <div v-for="box in boxesStore.items" :key="box.name" class="box-grid__item">
         <NCard class="surface-card" size="small">
           <div class="card-title">
             <NIcon size="16">
@@ -109,15 +109,15 @@ onMounted(async () => {
           </div>
           <p class="text-muted small">{{ box.host }} • {{ box.transport }}</p>
           <NSpace size="small" style="margin-bottom: 8px;">
-            <NButton size="tiny" type="primary" @click="() => $router.push(`/files?box=${box.name}`)">
+            <NButton size="tiny" type="primary" @click="() => $router.push(`/files?box=${encodeURIComponent(box.name)}`)">
               <NIcon size="14"><PhFolderSimple weight="duotone" /></NIcon>
               {{ t('boxes.files') }}
             </NButton>
-            <NButton size="tiny" type="primary" @click="() => $router.push(`/terminal?box=${box.name}`)">
+            <NButton size="tiny" type="primary" @click="() => $router.push(`/terminal?box=${encodeURIComponent(box.name)}`)">
               <NIcon size="14"><PhTerminalWindow weight="duotone" /></NIcon>
               {{ t('boxes.terminal') }}
             </NButton>
-            <NButton size="tiny" @click="() => $router.push(`/multi-terminal?box=${box.name}`)">
+            <NButton size="tiny" @click="() => $router.push(`/multi-terminal?box=${encodeURIComponent(box.name)}`)">
               {{ t('boxes.multi') }}
             </NButton>
           </NSpace>
@@ -133,8 +133,8 @@ onMounted(async () => {
             <NButton size="tiny" quaternary @click="() => checkStatus(box.name)">{{ t('common.status') }}</NButton>
           </NSpace>
         </NCard>
-      </NGridItem>
-    </NGrid>
+      </div>
+    </div>
 
     <NAlert v-if="boxesStore.error" type="error" closable>{{ boxesStore.error }}</NAlert>
     <NAlert v-else-if="favoritesStore.error" type="error" closable>{{ favoritesStore.error }}</NAlert>
@@ -159,6 +159,18 @@ onMounted(async () => {
   margin: 0;
   color: var(--muted);
 }
+.box-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 640px) {
+  .box-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 1024px) {
+  .box-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.box-grid__item { min-width: 0; }
 .small {
   font-size: 12px;
 }

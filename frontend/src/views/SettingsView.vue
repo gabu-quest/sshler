@@ -254,18 +254,21 @@ onMounted(async () => {
     <NCard :title="t('settings.appearance')" size="medium">
       <NSpace>
         <NButton
-          :type="appStore.isDark ? 'default' : 'primary'"
+          :type="appStore.colorMode === 'light' ? 'primary' : 'default'"
           @click="setTheme('light')"
         >
           {{ t('settings.theme_light') }}
         </NButton>
         <NButton
-          :type="appStore.isDark ? 'primary' : 'default'"
+          :type="appStore.colorMode === 'dark' ? 'primary' : 'default'"
           @click="setTheme('dark')"
         >
           {{ t('settings.theme_dark') }}
         </NButton>
-        <NButton @click="setTheme('system')">
+        <NButton
+          :type="appStore.colorMode === 'system' ? 'primary' : 'default'"
+          @click="setTheme('system')"
+        >
           {{ t('settings.theme_system') }}
         </NButton>
       </NSpace>
@@ -541,11 +544,10 @@ onMounted(async () => {
 }
 
 .settings-logo {
-  width: 200px;
-  height: auto;
-  max-height: 120px;
-  object-fit: contain;
-  border-radius: 12px;
+  height: 48px;
+  width: auto;
+  flex-shrink: 0;
+  border-radius: var(--radius-xl);
 }
 
 .eyebrow {
@@ -590,7 +592,7 @@ li {
 .pool-setting {
   margin-bottom: 24px;
   padding-bottom: 24px;
-  border-bottom: 1px solid var(--divider);
+  border-bottom: 1px solid var(--stroke);
 }
 
 .pool-setting:last-of-type {
@@ -619,8 +621,8 @@ li {
 
 .forever-badge {
   padding: 8px 12px;
-  background: var(--accent-bg, rgba(100, 160, 255, 0.1));
-  color: var(--accent, #6aa6ff);
+  background: var(--accent-bg);
+  color: var(--accent);
   border-radius: 4px;
   font-size: 13px;
   font-weight: 500;
@@ -631,11 +633,6 @@ li {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
-  }
-
-  .settings-logo {
-    width: 120px;
-    max-height: 80px;
   }
 
   .alert-content {
@@ -655,13 +652,6 @@ li {
 
   .pool-setting :deep(.n-input-number) {
     width: 100% !important;
-  }
-}
-
-@media (max-width: 480px) {
-  .settings-logo {
-    width: 80px;
-    max-height: 60px;
   }
 }
 </style>

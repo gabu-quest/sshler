@@ -643,7 +643,7 @@ onUnmounted(() => {
   background: var(--n-action-color, color-mix(in srgb, currentColor 8%, transparent));
   padding: 4px 8px;
   border-radius: 4px;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
 }
 
 .claude-view__toolbar {

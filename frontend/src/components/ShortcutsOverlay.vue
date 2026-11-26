@@ -56,7 +56,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
-  <NButton quaternary circle size="small" @click="show = true">
+  <NButton quaternary circle size="small" :aria-label="t('shortcuts.title')" @click="show = true">
     <NIcon size="18"><PhKeyboard weight="duotone" /></NIcon>
   </NButton>
   <NModal v-model:show="show" preset="card" style="max-width: 480px">
@@ -89,7 +89,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
   align-items: center;
 }
 .combo {
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 .label {

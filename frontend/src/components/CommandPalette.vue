@@ -540,19 +540,17 @@ watch(
   cursor: pointer;
   border-radius: 8px;
   margin: 2px 0;
-  transition: all 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
   border: 1px solid transparent;
 }
 
-.palette-item:hover,
-.palette-item-selected {
-  background: rgba(124, 93, 255, 0.1);
-  border-color: rgba(124, 93, 255, 0.2);
+.palette-item:hover {
+  background: var(--surface-hover);
 }
 
 .palette-item-selected {
-  background: rgba(124, 93, 255, 0.15);
-  border-color: rgba(124, 93, 255, 0.3);
+  background: var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .palette-item-content {
@@ -577,7 +575,7 @@ watch(
 }
 
 .palette-item-icon-favorite {
-  color: var(--warning, #e8b339);
+  color: var(--warning);
 }
 
 .palette-item-text {
@@ -601,11 +599,11 @@ watch(
 .palette-item-shortcut {
   flex-shrink: 0;
   padding: 2px 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--hover-overlay);
   border-radius: 4px;
-  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--stroke);
 }
 
 .palette-empty {
@@ -626,9 +624,9 @@ watch(
 
 .palette-help {
   padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hover-overlay);
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--stroke);
 }
 
 .palette-help-section {
@@ -673,7 +671,7 @@ watch(
 
   .palette-item-selected {
     background: var(--accent);
-    color: white;
+    color: var(--surface);
   }
 
   .palette-item-shortcut {
