@@ -2,7 +2,7 @@
 import { errorText } from '@/api/apiError'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { NSelect, NButton, NIcon, NInput, NPopover, useMessage } from 'naive-ui'
+import { NSelect, NButton, NIcon, NInput, useMessage } from 'naive-ui'
 import {
   PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen,
   PhCaretDown, PhList, PhBookmarkSimple, PhArrowsLeftRight,
@@ -17,13 +17,12 @@ import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import { WINDOWS_SHELL_KEY, normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
-import { useDirectoryOptions, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
+import { useDirectoryOptions, isImeConfirm, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
 import { answerBox, useBoxAnswer } from '@/composables/useBoxAnswer'
 import { TERMINAL_THEME_NAMES, terminalThemeOf, type TerminalThemeName } from '@/utils/terminalThemes'
 import Terminal from '@/components/Terminal.vue'
 import TerminalTabs from '@/components/TerminalTabs.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
-import SessionSwitcher from '@/components/SessionSwitcher.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import SnippetsPanel from '@/components/SnippetsPanel.vue'
 import TunnelsPanel from '@/components/TunnelsPanel.vue'
@@ -56,7 +55,6 @@ const { isMobile } = useResponsive()
 const mobileControlsExpanded = ref(false)
 const rawMode = ref(false)
 const terminalConnected = ref(false)
-const showSessionPanel = ref(false)
 const showSnippetsPanel = ref(false)
 const showTunnelsPanel = ref(false)
 
@@ -139,7 +137,6 @@ const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
   if (tabbedMode.value) {
     // Open (or re-activate) the session as a tab; header syncs via child events.
     tabsRef.value?.openSession(session)
-    showSessionPanel.value = false
     return
   }
   if (posixShell.value === 'plain') {
@@ -154,7 +151,6 @@ const handleSessionSelect = (session: import('@/api/types').ApiSession) => {
     sessionName.value = session.session_name
     initialDirectory.value = dir
   }
-  showSessionPanel.value = false
 }
 
 const handleSnippetInsert = (command: string, execute: boolean) => {
@@ -338,8 +334,20 @@ const handleDirectoryChange = (value: string) => {
 }
 
 const applyDirectoryDraft = () => {
+  if (!showManualDir.value) return
   initialDirectory.value = directoryDraft.value
   sessionName.value = generateSessionName(directoryDraft.value, selectedBox.value ?? undefined)
+}
+
+// Enter applies the typed folder, unless it only confirms an IME conversion.
+const onDirectoryEnter = (event: KeyboardEvent) => {
+  if (isImeConfirm(event)) return
+  applyDirectoryDraft()
+}
+
+// Back to the folder list; the draft is dropped, not applied.
+const closeManualDir = () => {
+  showManualDir.value = false
 }
 
 const handleDirPickerSelect = (path: string) => {
@@ -498,9 +506,9 @@ watch(() => boxesStore.items, () => {
           :placeholder="t('terminal.dir_placeholder')"
           size="small"
           @blur="applyDirectoryDraft"
-          @keyup.enter="applyDirectoryDraft"
+          @keydown.enter="onDirectoryEnter"
         />
-        <NButton v-if="showManualDir" size="small" quaternary :title="t('common.close')" :aria-label="t('common.close')" @click="showManualDir = false">
+        <NButton v-if="showManualDir" size="small" quaternary :title="t('common.close')" :aria-label="t('common.close')" @mousedown.prevent @click="closeManualDir">
           <NIcon size="14"><PhX weight="bold" /></NIcon>
         </NButton>
         <NSelect
@@ -536,22 +544,6 @@ watch(() => boxesStore.items, () => {
             <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
           </NIcon>
         </NButton>
-
-        <!-- Windows local tabs: their title bars do not pass a pick on, so the view keeps
-             the switcher that opens a session as a tab. A single terminal has its own. -->
-        <NPopover v-if="selectedBox && tabbedMode" trigger="click" placement="bottom-end" v-model:show="showSessionPanel">
-          <template #trigger>
-            <NButton size="small" quaternary :title="t('sessions.title')" :aria-label="t('sessions.title')">
-              <NIcon size="14"><PhList weight="duotone" /></NIcon>
-            </NButton>
-          </template>
-          <SessionSwitcher
-            :box-name="selectedBox"
-            :token="tokenValue"
-            :current-session="sessionName"
-            @select="handleSessionSelect"
-          />
-        </NPopover>
 
         <NButton v-if="selectedBox" size="small" quaternary :title="t('snippets.title')" :aria-label="t('snippets.title')" @click="showSnippetsPanel = true">
           <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
@@ -646,8 +638,11 @@ watch(() => boxesStore.items, () => {
         :placeholder="t('terminal.dir_placeholder')"
         size="small"
         @blur="applyDirectoryDraft"
-        @keyup.enter="applyDirectoryDraft"
+        @keydown.enter="onDirectoryEnter"
       />
+      <NButton v-if="showManualDir" size="small" quaternary :title="t('common.close')" :aria-label="t('common.close')" @mousedown.prevent @click="closeManualDir">
+        <NIcon size="14"><PhX weight="bold" /></NIcon>
+      </NButton>
       <NSelect
         v-if="showShellPicker"
         class="shell-select"

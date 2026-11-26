@@ -15,7 +15,7 @@ import { useI18n } from '@/i18n'
 import { WINDOWS_SHELL_KEY, normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
 import { terminalThemeOf } from '@/utils/terminalThemes'
-import { useDirectoryOptions, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
+import { useDirectoryOptions, isImeConfirm, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { getEmojiForBox } from '@/utils/emoji-favicon'
@@ -225,7 +225,7 @@ const nativeShellOf = (terminal: TerminalInstance): boolean | undefined =>
 
 // A key in the custom path field: Enter adds the pane, unless it confirms an IME conversion.
 const onCustomDirKeydown = (event: KeyboardEvent) => {
-  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return
+  if (event.key !== 'Enter' || isImeConfirm(event)) return
   addTerminal()
 }
 

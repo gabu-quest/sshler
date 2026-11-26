@@ -1,7 +1,8 @@
 import { flushPromises, shallowMount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NSelect } from "naive-ui";
+import { NButton, NInput, NSelect } from "naive-ui";
+import { defineComponent, h } from "vue";
 
 import Terminal from "@/components/Terminal.vue";
 import SessionSwitcher from "@/components/SessionSwitcher.vue";
@@ -106,12 +107,77 @@ describe("TerminalView: one row, one switcher, the phone's menu", () => {
     wrapper.unmount();
   });
 
-  // Mutation: the popover removed everywhere -> Windows tabs (whose title bars do not
-  // pass a pick on) lose the only switcher that opens a session as a tab.
-  it("Windows local tabs keep the view's session switcher", async () => {
+  // Mutation: the view keeps its own switcher -> two Sessions buttons stacked in Windows tabs.
+  // The tab's own title-bar button forwards a pick (TerminalTabs.spec), and the view opens it as a tab.
+  it("Windows local tabs have no second session switcher, and a forwarded pick opens as a tab", async () => {
     Object.assign(state, { platform: "windows", box: "local" });
-    const { wrapper } = await mountView();
-    expect(wrapper.findAllComponents(SessionSwitcher)).toHaveLength(1);
+    const openSession = vi.fn();
+    const TabsStub = defineComponent({
+      name: "TerminalTabs",
+      emits: ["session-select"],
+      setup(_p, { expose }) {
+        expose({ openSession });
+        return () => h("div");
+      },
+    });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1366 });
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = shallowMount(TerminalView, {
+      global: { plugins: [pinia], renderStubDefaultSlot: true, stubs: { TerminalTabs: TabsStub } },
+    });
+    await flushPromises();
+    expect(wrapper.findAllComponents(SessionSwitcher)).toHaveLength(0);
+    const pick = { session_name: "work", working_directory: "C:\\x" };
+    wrapper.findComponent(TabsStub).vm.$emit("session-select", pick);
+    expect(openSession).toHaveBeenCalledWith(pick);
+    wrapper.unmount();
+  });
+
+  const dirSelect = (w: ReturnType<typeof shallowMount>) =>
+    w.findAllComponents(NSelect).find((c) => (c.props("options") as { value: string }[] | undefined)?.some((o) => o.value === "__custom__"))!;
+  const enter = (composing: boolean, keyCode = 13) =>
+    new KeyboardEvent("keydown", { key: "Enter", isComposing: composing, keyCode });
+
+  // Mutation: no close on the phone's custom path -> the user is stuck in the field.
+  it("on the phone, the custom path field has a close button that returns to the list without applying", async () => {
+    const { wrapper } = await mountView(390);
+    await wrapper.find(".mobile-title-btn").trigger("click");
+    dirSelect(wrapper).vm.$emit("update:value", "__custom__");
+    await flushPromises();
+    const dropdown = () => wrapper.find(".mobile-controls-dropdown");
+    expect(dropdown().findComponent(NInput).exists()).toBe(true);
+    dropdown().findComponent(NInput).vm.$emit("update:value", "/half/typed");
+    const close = dropdown().findAllComponents(NButton).find((b: { attributes: (n: string) => string | undefined }) => b.attributes("aria-label") === "common.close")!;
+    expect(close).toBeTruthy();
+    close.vm.$emit("click");
+    await flushPromises();
+    expect(dropdown().findComponent(NInput).exists()).toBe(false);
+    expect(dirSelect(wrapper).exists()).toBe(true);
+    expect(dirSelect(wrapper).props("value")).toBe("/srv");
+    wrapper.unmount();
+  });
+
+  // Mutation: Enter ends an IME conversion and applies the half-typed folder.
+  it.each([
+    ["desktop", 1366, ".header-select--dir"],
+    ["phone", 390, ".mobile-controls-dropdown"],
+  ])("on the %s, the Enter that ends a Japanese conversion does not apply the folder", async (_n, width, scope) => {
+    const { wrapper } = await mountView(width);
+    if (width < 768) await wrapper.find(".mobile-title-btn").trigger("click");
+    dirSelect(wrapper).vm.$emit("update:value", "__custom__");
+    await flushPromises();
+    const input = scope === ".mobile-controls-dropdown"
+      ? wrapper.find(scope).findComponent(NInput)
+      : wrapper.findAllComponents(NInput).find((c) => c.classes().includes("header-select--dir"))!;
+    input.vm.$emit("update:value", "/にほん");
+    input.vm.$emit("keydown", enter(true, 229));
+    input.vm.$emit("keydown", enter(false, 229));
+    await flushPromises();
+    expect(wrapper.findComponent(Terminal).props("directory")).toBe("/srv");
+    input.vm.$emit("keydown", enter(false));
+    await flushPromises();
+    expect(wrapper.findComponent(Terminal).props("directory")).toBe("/にほん");
     wrapper.unmount();
   });
 

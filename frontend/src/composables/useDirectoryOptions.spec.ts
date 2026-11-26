@@ -8,7 +8,7 @@ import { createApp } from 'vue'
 import { createI18n } from '@/i18n'
 import { ja } from '@/locales/ja'
 import { useFavoritesStore } from '@/stores/favorites'
-import { BROWSE_DIRECTORY, CUSTOM_DIRECTORY, useDirectoryOptions } from './useDirectoryOptions'
+import { BROWSE_DIRECTORY, CUSTOM_DIRECTORY, isImeConfirm, useDirectoryOptions } from './useDirectoryOptions'
 
 describe('useDirectoryOptions', () => {
   beforeEach(() => setActivePinia(createPinia()))
@@ -47,5 +47,15 @@ describe('useDirectoryOptions', () => {
   it('shows no favourites of another box', () => {
     useFavoritesStore().favoritesByBox = new Map([['other', new Set(['/x'])]])
     expect(useDirectoryOptions(() => 'local').value).toHaveLength(3)
+  })
+})
+
+describe('isImeConfirm', () => {
+  it.each([
+    [{ isComposing: true, keyCode: 13 }, true],
+    [{ isComposing: false, keyCode: 229 }, true],
+    [{ isComposing: false, keyCode: 13 }, false],
+  ])('%j -> %s', (init, expected) => {
+    expect(isImeConfirm(new KeyboardEvent('keydown', { key: 'Enter', ...init }))).toBe(expected)
   })
 })

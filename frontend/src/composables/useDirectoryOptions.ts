@@ -32,3 +32,8 @@ export function useDirectoryOptions(box: () => string | null | undefined): Compu
     return options
   })
 }
+
+/** True for the Enter that ends an IME conversion (Japanese input), not a deliberate Enter. */
+export function isImeConfirm(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229
+}
