@@ -320,19 +320,8 @@ const toggleCurrentDirFavorite = async () => {
 }
 
 // The one directory list (home, favourites, Browse, custom path), its own entries named
-// in the page's language.
-const sharedDirectoryOptions = useDirectoryOptions(() => selectedBox.value)
-const OWN_ENTRY_TEXT: Record<string, string> = {
-  '~': 'terminal.dir_home_option',
-  [BROWSE_DIRECTORY]: 'terminal.dir_browse_option',
-  [CUSTOM_DIRECTORY]: 'terminal.dir_custom_option',
-}
-const directoryOptions = computed(() =>
-  sharedDirectoryOptions.value.map((option) => {
-    const key = OWN_ENTRY_TEXT[option.value]
-    return { label: key ? t(key) : option.label, value: option.value }
-  }),
-)
+// in the page's language by the composable.
+const directoryOptions = useDirectoryOptions(() => selectedBox.value)
 
 const handleDirectoryChange = (value: string) => {
   if (value === BROWSE_DIRECTORY) {
@@ -695,6 +684,7 @@ watch(() => boxesStore.items, () => {
         @update:active-session="onActiveTabSession"
         @killed="onTabKilled"
         @kill-error="onTabKillError"
+        @session-select="handleSessionSelect"
       />
 
       <!-- Remote / local-tmux boxes: single terminal (tmux handles windows) -->

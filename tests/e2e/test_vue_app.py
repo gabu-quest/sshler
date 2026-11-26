@@ -6,6 +6,7 @@ Run with:
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -376,6 +377,47 @@ async def test_japanese_rail_labels_fit_at_768(open_page):
         assert lines == 1, f"{text} takes {lines} lines"
         assert fits, f"{text} is cut"
         assert right <= EXPANDED, f"{text} leaves the rail ({right}px)"
+
+
+@pytest.mark.asyncio
+async def test_multi_terminal_four_panes_fit_the_window_with_one_title_bar_each(open_page):
+    """Four saved panes at 1366 x 768: each pane's bottom border is inside the window, each
+    has the terminal's own title bar with a close button (no second header), the toolbar is
+    one row of at most 36 px, and closing the second pane leaves three.
+
+    Mutation: the grid back at `100vh - 200px` or a 350 px floor -> the second row of panes
+    ends below 768; the outer pane header back -> `.terminal-header` is found and there are
+    two bars; no `closable` -> no close buttons.
+    """
+    viewport = {"width": 1366, "height": 768}
+    page = await open_page(viewport)
+    layout = [
+        {"boxName": "local", "sessionName": f"multi-e2e-{i}", "directory": "~", "shell": "tmux"} for i in range(4)
+    ]
+    await page.add_init_script(
+        "localStorage.setItem('sshler:multi-terminal:layout', " + repr(json.dumps(layout)) + ")"
+    )
+    await page.goto("/app/multi-terminal?box=local", wait_until="load")
+    panes = page.locator(".multi-terminal-page .multi-pane")
+    await expect(panes).to_have_count(4)
+    await expect(page.locator(".multi-terminal-page .terminal-titlebar")).to_have_count(4, timeout=15000)
+    await expect(page.locator(".multi-terminal-page .terminal-header")).to_have_count(0)
+    await expect(page.get_by_test_id("terminal-close")).to_have_count(4)
+
+    toolbar = await page.locator(".multi-terminal-page .header").bounding_box()
+    assert toolbar is not None and toolbar["height"] <= 36, f"the toolbar is {toolbar}"
+    for i in range(4):
+        box = await panes.nth(i).bounding_box()
+        assert box is not None
+        bottom = box["y"] + box["height"]
+        assert bottom <= viewport["height"], f"pane {i} ends at {bottom}px"
+
+    first, third = await panes.nth(0).bounding_box(), await panes.nth(2).bounding_box()
+    assert first is not None and third is not None
+    assert third["y"] >= first["y"] + first["height"] - 1, "four panes are a 2 x 2, the third under the first"
+
+    await page.get_by_test_id("terminal-close").nth(1).click()
+    await expect(panes).to_have_count(3)
 
 
 @pytest.mark.asyncio

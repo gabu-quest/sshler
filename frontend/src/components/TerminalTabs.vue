@@ -50,6 +50,8 @@ const emit = defineEmits<{
   (e: 'update:activeSession', session: string): void
   (e: 'killed', sessionName: string): void
   (e: 'killError', sessionName: string): void
+  /** A pane's session button picked a session: the parent opens it as a tab. */
+  (e: 'sessionSelect', session: ApiSession): void
 }>()
 
 const store = useTerminalTabsStore()
@@ -312,6 +314,7 @@ onUnmounted(() => {
         :external-input="externalInput"
         @connected="onTabConnected(tab.id)"
         @disconnected="onTabDisconnected(tab.id)"
+        @session-select="(s) => emit('sessionSelect', s)"
       />
     </div>
   </div>
