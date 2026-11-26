@@ -208,10 +208,10 @@ watch(() => props.boxName, load)
       >
         <div class="session-info">
           <div class="session-name">
-            <NIcon size="10" :color="session.active ? '#52c41a' : '#666'">
+            <NIcon size="10" :color="session.active ? 'var(--success)' : 'var(--muted)'">
               <PhCircle weight="fill" />
             </NIcon>
-            <span v-if="session.metadata?.recovered_at" class="recovered-badge" title="Recovered from crash">↺</span>
+            <span v-if="session.metadata?.recovered_at" class="recovered-badge" :title="t('sessions.recovered_tooltip')">↺</span>
             <template v-if="editingId === session.id">
               <input
                 v-model="editName"
@@ -295,7 +295,7 @@ watch(() => props.boxName, load)
   border-bottom: 1px solid var(--stroke);
   margin-bottom: 4px;
   padding-bottom: 8px;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .home-item:hover {
@@ -314,7 +314,7 @@ watch(() => props.boxName, load)
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #52c41a;
+  background: var(--success);
   flex-shrink: 0;
 }
 
@@ -358,7 +358,7 @@ watch(() => props.boxName, load)
   padding: 6px 8px 6px 6px;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
   border-left: 3px solid var(--session-color, transparent);
 }
 
@@ -367,8 +367,8 @@ watch(() => props.boxName, load)
 }
 
 .session-item.active {
-  background: rgba(136, 58, 234, 0.15);
-  border: 1px solid rgba(136, 58, 234, 0.3);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
 }
 
 .session-item.inactive {
@@ -408,7 +408,7 @@ watch(() => props.boxName, load)
 
 .recovered-badge {
   font-size: 10px;
-  color: #faad14;
+  color: var(--warning);
   margin-left: 2px;
 }
 

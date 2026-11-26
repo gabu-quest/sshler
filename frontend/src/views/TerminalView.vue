@@ -6,7 +6,7 @@ import { NSelect, NButton, NIcon, NInput, NPopover, useMessage } from 'naive-ui'
 import {
   PhTerminalWindow, PhArrowLeft, PhStar, PhFolderOpen,
   PhCaretDown, PhList, PhBookmarkSimple, PhArrowsLeftRight,
-  PhClipboard,
+  PhClipboard, PhX,
 } from '@phosphor-icons/vue'
 
 import { useBootstrapStore } from '@/stores/bootstrap'
@@ -17,6 +17,9 @@ import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import { normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
+import { useDirectoryOptions, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
+import { answerBox, useBoxAnswer } from '@/composables/useBoxAnswer'
+import { TERMINAL_THEME_NAMES, terminalThemeOf, type TerminalThemeName } from '@/utils/terminalThemes'
 import Terminal from '@/components/Terminal.vue'
 import TerminalTabs from '@/components/TerminalTabs.vue'
 import MobileInputBar from '@/components/MobileInputBar.vue'
@@ -287,18 +290,13 @@ const isCurrentDirFavorite = computed(() =>
   selectedBox.value ? favoritesStore.isFavorite(selectedBox.value, initialDirectory.value) : false
 )
 
-const VALID_THEMES = ['cyberpunk', 'default', 'solarized', 'dracula', 'nord', 'monokai', 'light'] as const
-type TerminalTheme = typeof VALID_THEMES[number]
+// A box with no saved theme (or one this page no longer knows) gets the calm theme; a
+// saved theme is kept.
+const currentBoxTheme = computed<TerminalThemeName>(() =>
+  terminalThemeOf(boxesStore.items.find(b => b.name === selectedBox.value)?.terminal_theme),
+)
 
-const currentBoxTheme = computed<TerminalTheme>(() => {
-  if (!selectedBox.value) return 'cyberpunk'
-  const box = boxesStore.items.find(b => b.name === selectedBox.value)
-  const theme = box?.terminal_theme
-  if (theme && VALID_THEMES.includes(theme as TerminalTheme)) return theme as TerminalTheme
-  return 'cyberpunk'
-})
-
-const themeOptions = VALID_THEMES.map(t => ({ label: t.charAt(0).toUpperCase() + t.slice(1), value: t }))
+const themeOptions = TERMINAL_THEME_NAMES.map(name => ({ label: name.charAt(0).toUpperCase() + name.slice(1), value: name }))
 
 const handleThemeChange = async (theme: string) => {
   if (!selectedBox.value) return
@@ -318,30 +316,27 @@ const toggleCurrentDirFavorite = async () => {
   }
 }
 
-const directoryOptions = computed(() => {
-  const options = [
-    { label: '~ (Home)', value: '~' }
-  ]
-
-  if (selectedBox.value) {
-    const favorites = Array.from(favoritesStore.favoritesForBox(selectedBox.value).values())
-    favorites.forEach(fav => {
-      const label = lastPathSegment(fav) || fav
-      options.push({ label: `★ ${label}`, value: fav })
-    })
-  }
-
-  options.push({ label: '📁 Browse...', value: '__browse__' })
-  options.push({ label: '+ Custom path...', value: '__custom__' })
-  return options
-})
+// The one directory list (home, favourites, Browse, custom path), its own entries named
+// in the page's language.
+const sharedDirectoryOptions = useDirectoryOptions(() => selectedBox.value)
+const OWN_ENTRY_TEXT: Record<string, string> = {
+  '~': 'terminal.dir_home_option',
+  [BROWSE_DIRECTORY]: 'terminal.dir_browse_option',
+  [CUSTOM_DIRECTORY]: 'terminal.dir_custom_option',
+}
+const directoryOptions = computed(() =>
+  sharedDirectoryOptions.value.map((option) => {
+    const key = OWN_ENTRY_TEXT[option.value]
+    return { label: key ? t(key) : option.label, value: option.value }
+  }),
+)
 
 const handleDirectoryChange = (value: string) => {
-  if (value === '__browse__') {
+  if (value === BROWSE_DIRECTORY) {
     showDirPicker.value = true
     return
   }
-  if (value === '__custom__') {
+  if (value === CUSTOM_DIRECTORY) {
     showManualDir.value = true
     return
   }
@@ -358,9 +353,9 @@ const handleDirPickerSelect = (path: string) => {
 // Display name for the directory (last component)
 const displayDirName = computed(() => {
   if (!initialDirectory.value || initialDirectory.value === '~') {
-    return 'Home'
+    return t('common.home')
   }
-  return lastPathSegment(initialDirectory.value) || 'Root'
+  return lastPathSegment(initialDirectory.value) || t('terminal.root_label')
 })
 
 // Update browser tab title, favicon, and git info
@@ -389,12 +384,19 @@ const ensureData = async () => {
   }
 }
 
+// A ?box= nobody has opens no terminal: the page says so and waits for a pick.
+const unknownBox = ref<string | null>(null)
+watch(selectedBox, (box) => { if (box) unknownBox.value = null })
+const { unknownText } = useBoxAnswer(() => unknownBox.value, () => boxesStore.items)
+
 const initializeFromRoute = () => {
-  const boxFromRoute = route.query.box as string
   const dirFromRoute = route.query.dir as string
 
-  if (boxFromRoute && boxesStore.items.some(box => box.name === boxFromRoute)) {
-    selectedBox.value = boxFromRoute
+  const answer = answerBox(route.query.box as string | null | undefined, boxesStore.items)
+  if (answer.kind === 'known') {
+    selectedBox.value = answer.box.name
+  } else if (answer.kind === 'unknown') {
+    unknownBox.value = answer.name
   } else if (!selectedBox.value && boxesStore.items.length > 0) {
     selectedBox.value = boxesStore.items[0]?.name || null
   }
@@ -451,7 +453,7 @@ onUnmounted(() => {
 })
 
 watch(() => boxesStore.items, () => {
-  if (boxesStore.items.length > 0 && !selectedBox.value) {
+  if (boxesStore.items.length > 0 && !selectedBox.value && !unknownBox.value) {
     initializeFromRoute()
   }
 }, { immediate: true })
@@ -459,154 +461,162 @@ watch(() => boxesStore.items, () => {
 
 <template>
   <div class="page" :class="{ 'mobile': isMobile }">
-    <!-- Desktop Header -->
+    <!-- Desktop: one slim row -->
     <header v-if="!isMobile" class="page-header">
-      <div class="header-content">
-        <div class="header-left">
-          <NButton size="small" quaternary @click="goBack" :title="t('terminal.go_back')">
-            <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
-          </NButton>
-          <h1 class="dir-title">{{ displayDirName }}</h1>
-          <NButton v-if="selectedBox" size="tiny" quaternary @click="copyDirToClipboard" :title="t('files.copy_path')" class="copy-dir-btn">
-            <NIcon size="14"><PhClipboard weight="duotone" /></NIcon>
-          </NButton>
-          <span class="box-badge">{{ selectedBox ? getEmojiForBox(selectedBox) + ' ' + selectedBox : t('terminal.no_box') }}</span>
-          <GitBadge v-if="currentGitInfo?.is_repo" :info="currentGitInfo" />
-        </div>
+      <div class="header-left">
+        <NButton size="tiny" quaternary @click="goBack" :title="t('terminal.go_back')" :aria-label="t('terminal.go_back')">
+          <NIcon size="14"><PhArrowLeft weight="duotone" /></NIcon>
+        </NButton>
+        <h1 class="dir-title" :title="initialDirectory">{{ displayDirName }}</h1>
+        <NButton v-if="selectedBox" size="tiny" quaternary @click="copyDirToClipboard" :title="t('files.copy_path')" :aria-label="t('files.copy_path')" class="copy-dir-btn">
+          <NIcon size="14"><PhClipboard weight="duotone" /></NIcon>
+        </NButton>
+        <span class="box-badge">{{ selectedBox ? getEmojiForBox(selectedBox) + ' ' + selectedBox : t('terminal.no_box') }}</span>
+        <GitBadge v-if="currentGitInfo?.is_repo" class="header-git" :info="currentGitInfo" compact />
+      </div>
 
-        <div class="header-controls">
-          <NSelect
-            v-model:value="selectedBox"
-            :options="boxOptions"
-            :placeholder="t('terminal.box')"
-            :disabled="boxesStore.loading"
-            @update:value="handleBoxChange"
-            size="small"
-            style="min-width: 140px"
+      <div class="header-controls">
+        <NSelect
+          v-model:value="selectedBox"
+          class="header-select header-select--box"
+          :options="boxOptions"
+          :placeholder="t('terminal.box')"
+          :disabled="boxesStore.loading"
+          @update:value="handleBoxChange"
+          size="small"
+        />
+        <NSelect
+          v-if="selectedBox && !showManualDir"
+          class="header-select header-select--dir"
+          :value="initialDirectory"
+          :options="directoryOptions"
+          :placeholder="t('terminal.dir')"
+          @update:value="handleDirectoryChange"
+          size="small"
+        />
+        <NInput
+          v-if="showManualDir"
+          v-model:value="initialDirectory"
+          class="header-select header-select--dir"
+          :placeholder="t('terminal.dir_placeholder')"
+          size="small"
+          @blur="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
+          @keyup.enter="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
+        />
+        <NButton v-if="showManualDir" size="small" quaternary :title="t('common.close')" :aria-label="t('common.close')" @click="showManualDir = false">
+          <NIcon size="14"><PhX weight="bold" /></NIcon>
+        </NButton>
+        <NSelect
+          v-if="showShellPicker"
+          class="shell-select header-select header-select--shell"
+          :value="pickerValue"
+          :options="shellOptions"
+          :placeholder="t('terminal.shell_label')"
+          @update:value="handleShellChange"
+          size="small"
+        />
+        <NSelect
+          v-if="selectedBox"
+          class="header-select header-select--theme"
+          :value="currentBoxTheme"
+          :options="themeOptions"
+          @update:value="handleThemeChange"
+          size="small"
+        />
+
+        <NButton
+          v-if="selectedBox"
+          size="small"
+          quaternary
+          @click="toggleCurrentDirFavorite"
+          :title="isCurrentDirFavorite ? t('terminal.remove_favorite') : t('terminal.add_favorite')"
+          :aria-label="isCurrentDirFavorite ? t('terminal.remove_favorite') : t('terminal.add_favorite')"
+          :aria-pressed="isCurrentDirFavorite"
+          class="favorite-btn"
+          :class="{ 'is-favorite': isCurrentDirFavorite }"
+        >
+          <NIcon size="14">
+            <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
+          </NIcon>
+        </NButton>
+
+        <!-- Windows local tabs: their title bars do not pass a pick on, so the view keeps
+             the switcher that opens a session as a tab. A single terminal has its own. -->
+        <NPopover v-if="selectedBox && tabbedMode" trigger="click" placement="bottom-end" v-model:show="showSessionPanel">
+          <template #trigger>
+            <NButton size="small" quaternary :title="t('sessions.title')" :aria-label="t('sessions.title')">
+              <NIcon size="14"><PhList weight="duotone" /></NIcon>
+            </NButton>
+          </template>
+          <SessionSwitcher
+            :box-name="selectedBox"
+            :token="tokenValue"
+            :current-session="sessionName"
+            @select="handleSessionSelect"
           />
-          <NSelect
-            v-if="selectedBox && !showManualDir"
-            :value="initialDirectory"
-            :options="directoryOptions"
-            :placeholder="t('terminal.dir')"
-            @update:value="handleDirectoryChange"
-            size="small"
-            style="min-width: 140px"
-          />
-          <NSelect
-            v-if="showShellPicker"
-            class="shell-select"
-            :value="pickerValue"
-            :options="shellOptions"
-            :placeholder="t('terminal.shell_label')"
-            @update:value="handleShellChange"
-            size="small"
-            style="min-width: 150px"
-          />
-          <NInput
-            v-if="showManualDir"
-            v-model:value="initialDirectory"
-            :placeholder="t('terminal.dir_placeholder')"
-            size="small"
-            @blur="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
-            @keyup.enter="sessionName = generateSessionName(initialDirectory, selectedBox ?? undefined)"
-            style="min-width: 160px"
-          />
-          <NButton v-if="showManualDir" size="small" @click="showManualDir = false">
-            ✕
-          </NButton>
+        </NPopover>
 
-          <NButton
-            v-if="selectedBox"
-            size="small"
-            :type="isCurrentDirFavorite ? 'warning' : 'default'"
-            @click="toggleCurrentDirFavorite"
-            :title="isCurrentDirFavorite ? t('terminal.remove_favorite') : t('terminal.add_favorite')"
-            class="favorite-btn"
-          >
-            <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
-              <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
-            </NIcon>
-          </NButton>
+        <NButton v-if="selectedBox" size="small" quaternary :title="t('snippets.title')" :aria-label="t('snippets.title')" @click="showSnippetsPanel = true">
+          <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
+        </NButton>
 
-          <NSelect
-            v-if="selectedBox"
-            :value="currentBoxTheme"
-            :options="themeOptions"
-            @update:value="handleThemeChange"
-            size="small"
-            style="min-width: 110px"
-          />
+        <NButton v-if="selectedBox" size="small" quaternary :title="t('tunnels.title')" :aria-label="t('tunnels.title')" @click="showTunnelsPanel = true">
+          <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
+        </NButton>
 
-          <NPopover v-if="selectedBox" trigger="click" placement="bottom-end" v-model:show="showSessionPanel">
-            <template #trigger>
-              <NButton size="small" quaternary :title="t('terminal.sessions') || 'Sessions'">
-                <NIcon size="14"><PhList weight="duotone" /></NIcon>
-              </NButton>
-            </template>
-            <SessionSwitcher
-              :box-name="selectedBox"
-              :token="tokenValue"
-              :current-session="sessionName"
-              @select="handleSessionSelect"
-            />
-          </NPopover>
-
-          <NButton v-if="selectedBox" size="small" quaternary :title="t('snippets.title')" @click="showSnippetsPanel = true">
-            <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
-          </NButton>
-
-          <NButton v-if="selectedBox" size="small" quaternary :title="t('tunnels.title')" @click="showTunnelsPanel = true">
-            <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
-          </NButton>
-
-          <a
-            v-if="selectedBox"
-            :href="filesUrl"
-            class="header-link-btn"
-            :title="t('terminal.browse_files')"
-            @click.prevent="goToFiles"
-          >
-            <NIcon size="14"><PhFolderOpen weight="duotone" /></NIcon>
-          </a>
-        </div>
+        <a
+          v-if="selectedBox"
+          :href="filesUrl"
+          class="header-link-btn"
+          :title="t('terminal.browse_files')"
+          :aria-label="t('terminal.browse_files')"
+          @click.prevent="goToFiles"
+        >
+          <NIcon size="14"><PhFolderOpen weight="duotone" /></NIcon>
+        </a>
       </div>
     </header>
 
-    <!-- Mobile Header: ultra-compact single row -->
+    <!-- Phone: one 32 px row under the 14 px bar; the menu button opens the drawer -->
     <header v-if="isMobile" class="mobile-header">
-      <button class="mobile-back-btn" @click="goBack" :title="t('common.back')">
+      <button class="mobile-action-btn" :aria-label="t('header.menu')" :title="t('header.menu')" :aria-expanded="appStore.mobileNavOpen" @click="appStore.mobileNavOpen = true">
+        <NIcon size="14"><PhList weight="bold" /></NIcon>
+      </button>
+      <button class="mobile-back-btn" @click="goBack" :title="t('common.back')" :aria-label="t('common.back')">
         <NIcon size="14"><PhArrowLeft weight="duotone" /></NIcon>
       </button>
-      <button class="mobile-title-btn" @click="toggleMobileControls">
+      <button class="mobile-title-btn" :aria-expanded="mobileControlsExpanded" @click="toggleMobileControls">
         <span class="mobile-title-text">{{ displayDirName }}</span>
         <span class="mobile-box-text">{{ selectedBox ? getEmojiForBox(selectedBox) + ' ' + selectedBox : '' }}</span>
         <NIcon size="10" class="mobile-caret" :class="{ expanded: mobileControlsExpanded }"><PhCaretDown weight="duotone" /></NIcon>
       </button>
       <div class="mobile-header-actions">
-        <button v-if="selectedBox" class="mobile-action-btn" @click="copyDirToClipboard" aria-label="Copy path">
+        <button v-if="selectedBox" class="mobile-action-btn" @click="copyDirToClipboard" :aria-label="t('files.copy_path')">
           <NIcon size="14"><PhClipboard weight="duotone" /></NIcon>
         </button>
         <button
           v-if="selectedBox"
           class="mobile-action-btn"
-          :class="{ active: isCurrentDirFavorite }"
+          :class="{ active: isCurrentDirFavorite, 'is-favorite': isCurrentDirFavorite }"
+          :aria-label="isCurrentDirFavorite ? t('terminal.remove_favorite') : t('terminal.add_favorite')"
+          :aria-pressed="isCurrentDirFavorite"
           @click="toggleCurrentDirFavorite"
         >
-          <NIcon size="14" :color="isCurrentDirFavorite ? '#faad14' : undefined">
+          <NIcon size="14">
             <PhStar :weight="isCurrentDirFavorite ? 'fill' : 'duotone'" />
           </NIcon>
         </button>
-        <button v-if="selectedBox" class="mobile-action-btn" @click="showSnippetsPanel = true" aria-label="Snippets">
+        <button v-if="selectedBox" class="mobile-action-btn" @click="showSnippetsPanel = true" :aria-label="t('snippets.title')">
           <NIcon size="14"><PhBookmarkSimple weight="duotone" /></NIcon>
         </button>
-        <button v-if="selectedBox" class="mobile-action-btn" @click="showTunnelsPanel = true" aria-label="Port Forwarding">
+        <button v-if="selectedBox" class="mobile-action-btn" @click="showTunnelsPanel = true" :aria-label="t('tunnels.title')">
           <NIcon size="14"><PhArrowsLeftRight weight="duotone" /></NIcon>
         </button>
         <a
           v-if="selectedBox"
           :href="filesUrl"
           class="mobile-action-btn"
+          :aria-label="t('terminal.browse_files')"
           @click.prevent="goToFiles"
         >
           <NIcon size="14"><PhFolderOpen /></NIcon>
@@ -615,6 +625,7 @@ watch(() => boxesStore.items, () => {
     </header>
 
     <!-- Mobile Controls Dropdown -->
+    <Transition name="slide-down-sm">
     <div v-if="isMobile && mobileControlsExpanded" class="mobile-controls-dropdown">
       <NSelect
         v-model:value="selectedBox"
@@ -651,6 +662,7 @@ watch(() => boxesStore.items, () => {
       />
       <GitBadge v-if="currentGitInfo?.is_repo" :info="currentGitInfo" compact />
     </div>
+    </Transition>
 
     <!-- Terminal Container -->
     <div class="terminal-container" @focusin="onTerminalFocus">
@@ -699,14 +711,20 @@ watch(() => boxesStore.items, () => {
       <div v-else class="no-box-selected">
         <div class="empty-state">
           <NIcon size="48" class="empty-icon"><PhTerminalWindow weight="duotone" /></NIcon>
-          <h3>{{ t('terminal.no_box') }}</h3>
-          <p class="text-muted">{{ t('terminal.no_box_hint') }}</p>
+          <template v-if="unknownBox">
+            <h3>{{ t('terminal.unknown_box_named', { box: unknownBox }) }}</h3>
+            <p class="text-muted">{{ unknownText }}</p>
+          </template>
+          <template v-else>
+            <h3>{{ t('terminal.no_box') }}</h3>
+            <p class="text-muted">{{ t('terminal.no_box_hint') }}</p>
+          </template>
           <NButton
             v-if="boxOptions.length > 0"
             type="primary"
             @click="selectedBox = boxOptions[0]?.value || null"
           >
-            Connect to {{ boxOptions[0]?.label }}
+            {{ t('terminal.connect_to') }} {{ boxOptions[0]?.label }}
           </NButton>
         </div>
       </div>
@@ -751,73 +769,102 @@ watch(() => boxesStore.items, () => {
 </template>
 
 <style scoped>
+/* The view fills the frame the app gives it: the header row, then the terminal, which
+   takes the rest of the height. */
 .page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  height: calc(var(--vh-full, 100vh) - 96px);
+  gap: 4px;
+  height: 100%;
   overflow: hidden;
   width: 100%;
   max-width: none;
   min-width: 0;
-  padding: 0 16px;
+  padding: 4px 8px 6px;
   box-sizing: border-box;
 }
 
 .page.mobile {
   gap: 0;
-  height: 100%;
   padding: 0;
 }
 
+/* One row, at most 32 px: the title shrinks (with an ellipsis) before anything wraps. */
 .page-header {
-  flex-shrink: 0;
-}
-
-.header-content {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px;
+  height: 32px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .dir-title {
   margin: 0;
-  font-size: 24px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 260px;
+  font-size: 14px;
   font-weight: 600;
+  line-height: 1;
   color: var(--text);
-  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .copy-dir-btn {
+  flex-shrink: 0;
   opacity: 0.5;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .copy-dir-btn:hover {
   opacity: 1;
 }
 
 .box-badge {
+  flex-shrink: 0;
   font-size: 12px;
-  padding: 2px 8px;
+  line-height: 18px;
+  padding: 0 8px;
+  white-space: nowrap;
   background: var(--surface-variant);
   border: 1px solid var(--stroke);
-  border-radius: 12px;
+  border-radius: 10px;
   color: var(--muted);
 }
 
+.header-git {
+  flex-shrink: 0;
+}
 
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
+
+.header-select {
+  flex: 0 1 auto;
+  min-width: 72px;
+}
+.header-select--box { width: 168px; }
+.header-select--dir { width: 150px; }
+.header-select--shell { width: 116px; }
+.header-select--theme { width: 112px; }
 
 .text-muted {
   color: var(--muted);
@@ -830,7 +877,7 @@ watch(() => boxesStore.items, () => {
   min-height: 0;
   min-width: 0;
   width: 100%;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -845,7 +892,7 @@ watch(() => boxesStore.items, () => {
   justify-content: center;
   background: var(--surface);
   border: 1px solid var(--stroke);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .empty-state {
@@ -932,7 +979,7 @@ watch(() => boxesStore.items, () => {
 
 .mobile-caret {
   color: var(--muted);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -951,6 +998,7 @@ watch(() => boxesStore.items, () => {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 32px;
   height: 32px;
   background: none;
@@ -983,24 +1031,36 @@ watch(() => boxesStore.items, () => {
 }
 
 .favorite-btn {
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-instant) var(--ease-out);
 }
 
 .favorite-btn:hover {
   transform: scale(1.1);
 }
 
+.favorite-btn:active {
+  transform: scale(0.92);
+}
+
+.is-favorite,
+.mobile-action-btn.is-favorite {
+  color: var(--warning);
+}
+
 .header-link-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 8px;
-  border-radius: 4px;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-radius: var(--radius-sm);
   color: var(--text);
   text-decoration: none;
   background: transparent;
   border: 1px solid var(--stroke);
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .header-link-btn:hover {
@@ -1008,30 +1068,23 @@ watch(() => boxesStore.items, () => {
   border-color: var(--accent);
 }
 
-/* Tablet breakpoint — keep the beauty, tighten the controls */
-@media (max-width: 1024px) and (min-width: 769px) {
-  .page {
-    padding: 0 12px;
-    gap: 8px;
+/* The box select names the box, so the badge goes first when the row is short; then the
+   git mark and the copy button, and the selects narrow. */
+@media (max-width: 1279px) {
+  .box-badge {
+    display: none;
   }
+}
 
-  .header-content {
-    flex-wrap: wrap;
-    gap: 8px;
+@media (max-width: 1023px) and (min-width: 768px) {
+  .header-git,
+  .copy-dir-btn {
+    display: none;
   }
-
-  .header-controls {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .dir-title {
-    font-size: 18px;
-  }
-
-  .terminal-container {
-    border-radius: 6px;
-  }
+  .header-select--box { width: 124px; }
+  .header-select--dir { width: 116px; }
+  .header-select--shell { width: 96px; }
+  .header-select--theme { width: 96px; }
 }
 
 @media (prefers-contrast: high) {

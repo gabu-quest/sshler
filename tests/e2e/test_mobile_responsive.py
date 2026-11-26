@@ -92,7 +92,7 @@ async def test_the_breakpoint_is_768(open_page, width, rails, bars):
     """
     page = await open_page({"width": width, "height": 700})
     await page.goto("/app/files", wait_until="load")
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
     await expect(page.locator(".app-rail")).to_have_count(rails)
     await expect(page.locator(".app-header")).to_have_count(bars)
 
@@ -141,7 +141,7 @@ async def test_mobile_file_browser_no_horizontal_scroll(open_page):
     """
     page = await open_page(MOBILE_VIEWPORT)
     await page.goto("/app/files", wait_until="load")
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
 
     await assert_no_horizontal_overflow(page, "file browser")
 
@@ -205,6 +205,9 @@ async def test_mobile_search_dropdown_opens_under_its_input(open_page, wrapper, 
     """
     page = await open_page(MOBILE_VIEWPORT)
     await page.goto("/app/files?box=local", wait_until="load")
+    if wrapper == ".content-search":
+        # The content search sits behind a toolbar button, not in a card of its own.
+        await page.get_by_role("button", name="Search contents").click()
     field = page.locator(wrapper).first
     await field.locator("input").fill(query)
     panel = page.locator(dropdown).first
@@ -216,3 +219,23 @@ async def test_mobile_search_dropdown_opens_under_its_input(open_page, wrapper, 
     assert round(panel_box["y"]) == round(field_box["y"] + field_box["height"]) + 4
     assert panel_box["x"] >= 0
     assert panel_box["x"] + panel_box["width"] <= MOBILE_VIEWPORT["width"]
+
+
+@pytest.mark.asyncio
+async def test_phone_terminal_menu_opens_the_drawer_with_progress(open_page):
+    """On the phone's terminal the 14px bar stays, and the menu button in the terminal's own
+    row opens the drawer, which reaches the progress picker.
+
+    Mutation: no menu button in the terminal's row -> nothing on the terminal opens the
+    drawer (the 14px bar has no button).
+    """
+    page = await open_page({"width": 390, "height": 844})
+    await page.goto("/app/terminal?box=local", wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    assert await page.locator(".app-header").evaluate("el => el.getBoundingClientRect().height") == 14
+
+    await page.locator(".mobile-header").get_by_role("button", name="Open menu").click()
+    drawer = page.locator(".n-drawer")
+    await expect(drawer.get_by_role("link", name="Files")).to_be_visible()
+    await drawer.get_by_role("button", name="Progress bars").click()
+    await expect(page.get_by_text("Bars for local", exact=True)).to_be_visible()

@@ -432,6 +432,8 @@ async def test_light_theme_colours_the_part_row_below_the_last_row(open_page, tm
     page = await open_page(DESKTOP)
     await page.emulate_media(color_scheme="light")
     await open_terminal(page, tmp_path)
+    # The connecting overlay now fades out (80 ms); the strip is read once it has gone.
+    await expect(page.locator(".terminal-overlay")).to_have_count(0)
     strip = await page.evaluate(
         """() => {
           const xterm = document.querySelector('.terminal .xterm');
@@ -448,4 +450,86 @@ async def test_light_theme_colours_the_part_row_below_the_last_row(open_page, tm
         }"""
     )
     assert strip["height"] > 1, "this size leaves no part-row to check; pick another viewport"
-    assert strip["colour"] == "rgb(250, 250, 250)"
+    # A box with no saved theme has the calm theme; on a light page its background is the
+    # palette's surface, #ffffff (the viewport behind it is xterm's dark default).
+    assert strip["colour"] == "rgb(255, 255, 255)"
+
+
+LAPTOP = {"width": 1366, "height": 768}
+FULL_HD = {"width": 1920, "height": 1080}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewport", [LAPTOP, FULL_HD], ids=["1366x768", "1920x1080"])
+async def test_terminal_fills_the_window_height(open_page, tmp_path, viewport):
+    """The terminal's frame ends at the bottom of the window, less the page's few px of
+    padding: its bottom border is on screen, and no empty band sits below it.
+
+    Mutation: the view's own `100vh - 96px` height back -> at 1366 x 768 the frame runs
+    past the window (bottom border cut), at 1920 x 1080 it ends well above the bottom.
+    """
+    page = await open_page(viewport)
+    await open_terminal(page, tmp_path)
+    box = await page.locator(".terminal-wrapper").bounding_box()
+    assert box is not None
+    bottom = box["y"] + box["height"]
+    assert viewport["height"] - 8 <= bottom <= viewport["height"], f"the frame ends at {bottom}px"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lang", ["en", "ja"])
+@pytest.mark.parametrize("width", [768, 1024, 1366])
+async def test_terminal_header_is_one_slim_row(open_page, tmp_path, width, lang):
+    """On a desktop the view's header is one row at most 32 px high, and nothing in it is
+    cut off, from 768 px (the narrowest desktop) up, in English and Japanese.
+
+    Mutation: the 24 px title and the wrapping controls back -> the header is two or three
+    rows high at 768 and 1024 px.
+    """
+    page = await open_page({"width": width, "height": 768})
+    if lang == "ja":
+        await page.context.add_init_script("localStorage.setItem('sshler:locale', 'ja')")
+    await open_terminal(page, tmp_path)
+    header = page.locator(".page-header")
+    box = await header.bounding_box()
+    assert box is not None
+    assert box["height"] <= 32, f"the header is {box['height']}px high"
+    overflow = await header.evaluate("el => el.scrollWidth - el.clientWidth")
+    assert overflow == 0, f"{overflow}px of the header is cut off"
+
+
+@pytest.mark.asyncio
+async def test_rail_keys_reach_the_rail_from_inside_the_terminal(open_page, tmp_path):
+    """With the keyboard in the terminal, Alt+\\ opens the rail and Escape closes it, and
+    neither key is typed into the shell.
+
+    Mutation: no rail keys in the terminal's key handler -> the rail stays closed (the
+    page's own listener skips keys typed into xterm) and Alt+\\ is sent as ESC \\.
+    """
+    page = await open_page(LAPTOP)
+    keystrokes: list[bytes] = []
+
+    def on_socket(ws) -> None:
+        if "/ws/term" in ws.url:
+            ws.on("framesent", lambda payload: keystrokes.append(payload) if isinstance(payload, bytes) else None)
+
+    page.on("websocket", on_socket)
+    await open_terminal(page, tmp_path)
+    await page.locator(".terminal .xterm").click()
+    toggle = page.get_by_test_id("rail-toggle")
+    await expect(toggle).to_have_attribute("aria-expanded", "false")
+    keystrokes.clear()
+
+    await page.keyboard.press("Alt+Backslash")
+    await expect(toggle).to_have_attribute("aria-expanded", "true")
+    await page.keyboard.press("Escape")
+    await expect(toggle).to_have_attribute("aria-expanded", "false")
+    assert keystrokes == []
+
+    # With the rail closed, Escape is the shell's again.
+    await page.keyboard.press("Escape")
+    for _ in range(50):
+        if keystrokes:
+            break
+        await page.wait_for_timeout(50)
+    assert keystrokes == [b"\x1b"]

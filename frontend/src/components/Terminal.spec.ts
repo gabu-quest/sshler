@@ -2,7 +2,11 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { en } from "@/locales/en";
+import { useAppStore } from "@/stores/app";
 
 // Imported statically (vi.mock calls are hoisted above it) so the slow first
 // transform of Terminal.vue happens at collection, not inside a timed test.
@@ -27,7 +31,11 @@ const stubs = vi.hoisted(() => {
   const written: string[] = [];
   const decoder = new TextDecoder();
   // The options the page gave xterm: its OSC 8 `linkHandler` is how a file link is clicked.
-  const captured: { options: any } = { options: null };
+  // The key handler the page gave xterm: a key pressed inside the terminal goes through it.
+  const captured: { options: any; keyHandler: ((e: KeyboardEvent) => boolean) | null } = {
+    options: null,
+    keyHandler: null,
+  };
   class RecordingTerminal {
     constructor(options?: unknown) {
       captured.options = options;
@@ -38,7 +46,11 @@ const stubs = vi.hoisted(() => {
             ? (data: Uint8Array | string) => {
                 written.push(typeof data === "string" ? data : decoder.decode(data));
               }
-            : target[prop],
+            : prop === "attachCustomKeyEventHandler"
+              ? (handler: (e: KeyboardEvent) => boolean) => {
+                  captured.keyHandler = handler;
+                }
+              : target[prop],
       });
     }
   }
@@ -240,6 +252,16 @@ describe("Terminal.vue close codes", () => {
     socket(1).onclose!({ code: 1006 });
     await advance(1000);
     expect(FakeWebSocket.instances).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  // Mutation killed: a first connect toasts "Connected to {box}" (the terminal showing is the sign).
+  it("the first connect shows no toast", async () => {
+    const wrapper = await mountConnected();
+    socket(0).onopen!();
+    await flushPromises();
+    expect(messageMock.success).not.toHaveBeenCalled();
+    expect(messageMock.info).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -865,6 +887,129 @@ describe("Terminal.vue a phone that sleeps", () => {
     wake();
     await advance(0);
     expect(FakeWebSocket.instances).toHaveLength(n + 1);
+    wrapper.unmount();
+  });
+});
+
+// The palette in main.css: a theme block's own value of a token.
+const paletteToken = (block: '[data-theme="light"] {' | '.dark, [data-theme="dark"] {', token: string): string => {
+  const css = readFileSync(resolve(__dirname, "../styles/main.css"), "utf8");
+  const start = css.indexOf(block);
+  const body = css.slice(start, css.indexOf("\n}", start));
+  const value = body.match(new RegExp(`^\\s*${token}:\\s*([^;]+);`, "m"))?.[1];
+  if (!value) throw new Error(`${token} is not in ${block}`);
+  return value.trim();
+};
+
+async function mountOn(pinia: ReturnType<typeof createPinia>, extra: Record<string, unknown> = {}, slots = {}) {
+  const wrapper = mount(Terminal, {
+    props: { boxName: "box1", sessionName: "main", directory: "/tmp", ...extra },
+    slots,
+    global: { plugins: [pinia], stubs: { SessionSwitcher: true } },
+  });
+  await vi.advanceTimersByTimeAsync(100);
+  await flushPromises();
+  return wrapper;
+}
+
+const key = (init: KeyboardEventInit) => new KeyboardEvent("keydown", { cancelable: true, ...init });
+
+describe("Terminal.vue: the rail's keys from inside the terminal", () => {
+  // Mutation: no rail branch in the key handler -> Alt+\ goes to the shell as ESC \ and the
+  // rail stays closed (the window listener skips keys typed into xterm's textarea).
+  it("Alt+\\ toggles the rail, and the shell is not sent the key", async () => {
+    const pinia = createPinia();
+    const wrapper = await mountOn(pinia);
+    const app = useAppStore(pinia);
+    expect(app.railCollapsed).toBe(true);
+
+    const first = key({ key: "\\", code: "Backslash", altKey: true });
+    expect(stubs.captured.keyHandler!(first)).toBe(false);
+    expect(first.defaultPrevented).toBe(true);
+    expect(app.railCollapsed).toBe(false);
+    expect(stubs.captured.keyHandler!(key({ key: "\\", code: "Backslash", altKey: true }))).toBe(false);
+    expect(app.railCollapsed).toBe(true);
+    wrapper.unmount();
+  });
+
+  // Mutation: Escape left to the shell while the rail is open -> the rail stays open.
+  it("Escape closes an open rail and is not sent to the shell", async () => {
+    const pinia = createPinia();
+    const wrapper = await mountOn(pinia);
+    const app = useAppStore(pinia);
+    app.toggleRailCollapsed();
+
+    expect(stubs.captured.keyHandler!(key({ key: "Escape", code: "Escape" }))).toBe(false);
+    expect(app.railCollapsed).toBe(true);
+    wrapper.unmount();
+  });
+
+  // Mutation: Escape always eaten by the rail branch -> vim never sees Escape.
+  it("Escape with the rail closed goes to the shell, and the rail stays closed", async () => {
+    const pinia = createPinia();
+    const wrapper = await mountOn(pinia);
+    const app = useAppStore(pinia);
+
+    expect(stubs.captured.keyHandler!(key({ key: "Escape", code: "Escape" }))).toBe(true);
+    expect(app.railCollapsed).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe("Terminal.vue: the calm look", () => {
+  // Mutation: the default theme left at cyberpunk -> the background is #0a0e14 (or One
+  // Light's #fafafa in light mode), not the palette's surface.
+  it.each([
+    ["light", '[data-theme="light"] {'],
+    ["dark", '.dark, [data-theme="dark"] {'],
+  ] as const)("with no saved theme, the %s page's terminal takes the palette's surface, text and accent", async (mode, block) => {
+    localStorage.setItem("sshler:ui:color-mode", mode);
+    const wrapper = await mountOn(createPinia(), { theme: undefined });
+    const theme = stubs.captured.options.theme;
+
+    expect(theme.background).toBe(paletteToken(block, "--surface"));
+    expect(theme.foreground).toBe(paletteToken(block, "--text-secondary"));
+    expect(theme.cursor).toBe(paletteToken(block, "--accent"));
+    wrapper.unmount();
+  });
+
+  // Mutation: a saved theme replaced by the new default -> nord's #2e3440 is lost.
+  it("a saved theme is kept: nord stays nord", async () => {
+    localStorage.setItem("sshler:ui:color-mode", "dark");
+    const wrapper = await mountOn(createPinia(), { theme: "nord" });
+    expect(stubs.captured.options.theme.background).toBe("#2e3440");
+    wrapper.unmount();
+  });
+
+  // Mutation: the scanline overlay kept -> one `.scanlines` element over the terminal.
+  it("draws no scanline overlay", async () => {
+    const wrapper = await mountOn(createPinia());
+    expect(wrapper.findAll(".scanlines")).toHaveLength(0);
+    wrapper.unmount();
+  });
+});
+
+describe("Terminal.vue: a title bar that can close its pane", () => {
+  // Mutation: no `closable` prop -> no close button, no `close` event.
+  it("closable shows one close button, and a click emits close once", async () => {
+    const wrapper = await mountOn(createPinia(), { closable: true });
+    const buttons = wrapper.findAll('[data-testid="terminal-close"]');
+    expect(buttons).toHaveLength(1);
+    await buttons[0]!.trigger("click");
+    expect(wrapper.emitted("close")).toEqual([[]]);
+    wrapper.unmount();
+  });
+
+  it("a single terminal has no close button", async () => {
+    const wrapper = await mountOn(createPinia());
+    expect(wrapper.findAll('[data-testid="terminal-close"]')).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // Mutation: no `titlebar-meta` slot -> the caller's chip is not drawn in the title bar.
+  it("the titlebar-meta slot is drawn in the title bar's centre", async () => {
+    const wrapper = await mountOn(createPinia(), {}, { "titlebar-meta": '<span class="meta-chip">srv/app</span>' });
+    expect(wrapper.find(".titlebar-center .meta-chip").text()).toBe("srv/app");
     wrapper.unmount();
   });
 });

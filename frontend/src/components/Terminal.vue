@@ -48,6 +48,7 @@ import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
 import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
 import type { ApiSession } from '@/api/types'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
+import { DEFAULT_TERMINAL_THEME, type TerminalThemeName } from '@/utils/terminalThemes'
 
 interface Props {
   boxName: string
@@ -64,12 +65,14 @@ interface Props {
    * frame overrides it once it has come.
    */
   nativeShell?: boolean
-  theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai' | 'light'
+  theme?: TerminalThemeName
   fontSize?: number
   fontFamily?: string
   showTitleBar?: boolean
   /** When true, suppress xterm.js keyboard capture — external input handles it */
   externalInput?: boolean
+  /** A close button at the end of the title bar, which emits `close` (a pane in a grid). */
+  closable?: boolean
 }
 
 interface Emits {
@@ -81,6 +84,7 @@ interface Emits {
   (e: 'session-select', session: ApiSession): void
   /** What the server opened, told once per socket; `fallback` is a plain shell opened where tmux is missing. */
   (e: 'shell', data: { kind: 'tmux' | 'plain'; fallback: boolean }): void
+  (e: 'close'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -88,12 +92,13 @@ const props = withDefaults(defineProps<Props>(), {
   directory: '~',
   // Absent means "go by `shell`": without this default Vue casts an absent Boolean to false.
   nativeShell: undefined,
-  theme: 'cyberpunk',
+  theme: DEFAULT_TERMINAL_THEME,
   fontSize: 14,
   // Monaspace Neon for text, Nerd Fonts for Starship symbols
   fontFamily: '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace',
   showTitleBar: true,
-  externalInput: false
+  externalInput: false,
+  closable: false,
 })
 
 const emit = defineEmits<Emits>()
@@ -224,7 +229,34 @@ const queueWrite = (data: Uint8Array | string) => {
 let reconnectTimeout: number | null = null
 let intentionalDisconnect = false
 
+// The calm theme is the app's palette (main.css): the page's surface behind the text, its
+// secondary text colour, the accent for the cursor, and the status colours for the ANSI
+// ones. Magenta and cyan have no token; theirs are working values. A light page gets the
+// light palette's twin, CALM_LIGHT.
 const TERMINAL_THEMES = {
+  calm: {
+    background: '#171a20',      // --surface
+    foreground: '#cbd5e1',      // --text-secondary
+    cursor: '#5b9dff',          // --accent
+    cursorAccent: '#171a20',
+    selectionBackground: '#5b9dff40',
+    black: '#2a313d',           // --stroke
+    red: '#f87171',             // --error
+    green: '#22c55e',           // --success
+    yellow: '#f59e0b',          // --warning
+    blue: '#5b9dff',            // --accent
+    magenta: '#c4a7f5',
+    cyan: '#67c7d4',
+    white: '#cbd5e1',           // --text-secondary
+    brightBlack: '#8b95a5',     // --muted
+    brightRed: '#fca5a5',       // --error-hover
+    brightGreen: '#4ade80',     // --success-hover
+    brightYellow: '#fbbf24',    // --warning-hover
+    brightBlue: '#76aeff',      // --accent-hover
+    brightMagenta: '#d8c4fa',
+    brightCyan: '#8ad8e2',
+    brightWhite: '#f1f5f9',     // --text
+  },
   cyberpunk: {
     background: '#0a0e14',      // Deep near-black
     foreground: '#b3b1ad',      // Muted warm gray
@@ -391,12 +423,44 @@ const TERMINAL_THEMES = {
   }
 }
 
+const CALM_LIGHT = {
+  background: '#ffffff',        // --surface
+  foreground: '#374151',        // --text-secondary
+  cursor: '#2563eb',            // --accent
+  cursorAccent: '#ffffff',
+  selectionBackground: '#2563eb33',
+  black: '#111827',             // --text
+  red: '#dc2626',               // --error
+  green: '#16a34a',             // --success
+  yellow: '#d97706',            // --warning
+  blue: '#2563eb',              // --accent
+  magenta: '#9333ea',
+  cyan: '#0e7490',
+  white: '#8b95a5',
+  brightBlack: '#64748b',       // --muted
+  brightRed: '#b91c1c',         // --error-hover
+  brightGreen: '#15803d',       // --success-hover
+  brightYellow: '#b45309',      // --warning-hover
+  brightBlue: '#1d4ed8',        // --accent-hover
+  brightMagenta: '#7e22ce',
+  brightCyan: '#155e75',
+  brightWhite: '#bcc4d2',       // --stroke-hover
+}
+
+// The colours a theme name means on a light or a dark page: the calm theme follows the
+// page, and so does cyberpunk (a light page shows One Light for it, as before); every
+// other theme is the same on both.
+const themeColours = (name: TerminalThemeName, dark: boolean) => {
+  if (name === 'calm') return dark ? TERMINAL_THEMES.calm : CALM_LIGHT
+  if (name === 'cyberpunk' && !dark) return TERMINAL_THEMES.light
+  return TERMINAL_THEMES[name]
+}
+
 // overviewRuler.width (set for the scroll bar's width) also makes xterm draw an overview
 // ruler. This terminal adds no decorations, so the ruler's only paint is a 1 px left
 // border, which would show as a line beside the scroll bar: make it transparent.
-type TerminalThemeName = keyof typeof TERMINAL_THEMES
-const xtermTheme = (name: TerminalThemeName) => ({
-  ...TERMINAL_THEMES[name],
+const xtermTheme = (name: TerminalThemeName, dark: boolean) => ({
+  ...themeColours(name, dark),
   overviewRulerBorder: 'rgba(0, 0, 0, 0)',
 })
 
@@ -470,10 +534,7 @@ const handleFilePathClick = async (rawPath: string) => {
     const info = await statPath(box, cleanPath, token)
     if (!info.exists) {
       win?.close()
-      message.warning(
-        `Path not found: ${rawPath}. You may have cd'd since opening this terminal.`,
-        { duration: 5000 }
-      )
+      message.warning(t('terminal.path_not_found', { path: rawPath }), { duration: 5000 })
       return
     }
 
@@ -492,7 +553,7 @@ const handleFilePathClick = async (rawPath: string) => {
     }
   } catch (err) {
     win?.close()
-    message.error(`Failed to check path: ${errorText(err)}`)
+    message.error(t('terminal.path_check_failed', { err: errorText(err) }))
   }
 }
 
@@ -820,10 +881,8 @@ const loadWebglRenderer = () => {
 const createTerminal = () => {
   if (!terminalRef.value) return
 
-  // Auto-select light theme when app is in light mode (unless explicitly overridden)
-  const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-  const theme = xtermTheme(effectiveTheme)
-  const isCyberpunk = effectiveTheme === 'cyberpunk'
+  const theme = xtermTheme(props.theme, appStore.isDark)
+  const isCyberpunk = props.theme === 'cyberpunk' && appStore.isDark
 
   terminal = new Terminal({
     theme,
@@ -1036,6 +1095,21 @@ const createTerminal = () => {
       return false
     }
 
+    // The side rail's keys. The page's own listener skips keys typed into xterm's textarea,
+    // so they reach the rail from here: Alt+\ toggles it, and Escape closes it while it is
+    // open. A closed rail leaves Escape to the shell. The phone has no rail.
+    if (!isMobile.value) {
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'Backslash' || event.key === '\\')) {
+        event.preventDefault()
+        appStore.toggleRailCollapsed()
+        return false
+      }
+      if (event.key === 'Escape' && !appStore.railCollapsed) {
+        appStore.toggleRailCollapsed()
+        return false
+      }
+    }
+
     return true
   })
 
@@ -1151,8 +1225,8 @@ const handleBell = () => {
 
     // Show notification if permission granted
     if (Notification.permission === 'granted') {
-      new Notification('Terminal Bell', {
-        body: `Activity in ${props.boxName}`,
+      new Notification(t('terminal.bell'), {
+        body: `${t('terminal.activity_in')} ${props.boxName}`,
         icon: '/favicon.svg',
         tag: 'terminal-bell'
       })
@@ -1364,15 +1438,10 @@ const connect = async () => {
         }
       })
 
-      // Show success message - more prominent if recovering from reconnect
+      // Only a reconnect says so: on a first connect the terminal showing is the sign.
       if (reconnectAttempts.value > 0) {
         message.success(t('terminal.reconnected_to', { box: props.boxName }), {
           duration: 3000,
-          closable: false
-        })
-      } else {
-        message.success(t('terminal.connected_to', { box: props.boxName }), {
-          duration: 2000,
           closable: false
         })
       }
@@ -1747,8 +1816,7 @@ watch(() => props.boxName, () => {
 
 watch([() => props.theme, () => appStore.isDark], () => {
   if (terminal) {
-    const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-    terminal.options.theme = xtermTheme(effectiveTheme)
+    terminal.options.theme = xtermTheme(props.theme, appStore.isDark)
   }
 })
 
@@ -1941,11 +2009,12 @@ defineExpose({
           </NPopconfirm>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />
-        <span v-if="!isNativeShell" class="snapshot-indicator" :style="snapshotDotStyle" :title="`Snapshot: ${lastSnapshotAt ? Math.floor(snapshotNow / 1000 - lastSnapshotAt) + 's ago' : 'none'}`" />
+        <span v-if="!isNativeShell" class="snapshot-indicator" :style="snapshotDotStyle" :title="lastSnapshotAt ? t('terminal.snapshot_ago', { seconds: Math.floor(snapshotNow / 1000 - lastSnapshotAt) }) : t('terminal.snapshot_none')" />
       </div>
       <div class="titlebar-center">
         <span class="session-color-dot" :style="{ background: sessionColor }" />
         <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
+        <slot name="titlebar-meta" />
       </div>
       <div class="titlebar-right">
         <NTooltip v-if="!isNativeShell" :delay="300">
@@ -2018,7 +2087,7 @@ defineExpose({
                   <PhList :size="14" weight="duotone" />
                 </button>
               </template>
-              {{ t('terminal.sessions') || 'Sessions' }}
+              {{ t('sessions.title') }}
             </NTooltip>
           </template>
           <SessionSwitcher
@@ -2057,6 +2126,16 @@ defineExpose({
             <div>4. <b>q</b> — {{ t('terminal.help_exit_copy') }}</div>
           </div>
         </NTooltip>
+        <button
+          v-if="closable"
+          class="titlebar-btn close-btn"
+          data-testid="terminal-close"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >
+          <PhX :size="14" weight="bold" />
+        </button>
       </div>
     </div>
 
@@ -2071,6 +2150,7 @@ defineExpose({
     <!-- Terminal Container with Effects -->
     <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar || titleBarCollapsed }">
       <!-- Search Bar (floating overlay) -->
+      <Transition name="slide-down-sm">
       <div v-if="showSearch" class="terminal-search-bar">
         <input
           ref="searchInputRef"
@@ -2092,9 +2172,7 @@ defineExpose({
           <PhX :size="14" weight="bold" />
         </button>
       </div>
-
-      <!-- CRT Scanlines Overlay -->
-      <div class="scanlines" />
+      </Transition>
 
       <div
         ref="terminalRef"
@@ -2106,12 +2184,13 @@ defineExpose({
       />
 
       <!-- Connection Overlays -->
+      <Transition name="route-fade-plain">
       <div v-if="connecting || reconnecting" class="terminal-overlay">
         <div class="connecting-indicator">
           <div class="spinner" />
           <span v-if="reconnecting">
             {{ t('terminal.reconnecting_to', { box: boxName }) }}
-            <small v-if="reconnectAttempts > 0">(attempt {{ reconnectAttempts }}/{{ maxReconnectAttempts }})</small>
+            <small v-if="reconnectAttempts > 0">{{ t('terminal.attempt_of', { n: reconnectAttempts, max: maxReconnectAttempts }) }}</small>
           </span>
           <span v-else>{{ t('terminal.connecting_to', { box: boxName }) }}</span>
         </div>
@@ -2122,6 +2201,7 @@ defineExpose({
           <button @click="connect" class="reconnect-btn">{{ t('terminal.reconnect') }}</button>
         </div>
       </div>
+      </Transition>
 
       <!-- Activity Accent Line -->
       <div class="activity-line" :class="{ active: hasActivity }" />
@@ -2204,12 +2284,12 @@ defineExpose({
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--stroke);
-  box-shadow: 0 2px 12px var(--shadow), 0 1px 4px var(--shadow);
-  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  box-shadow: 0 1px 3px var(--shadow);
+  transition: box-shadow var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
 }
 
 /* Focus state */
@@ -2231,8 +2311,8 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 36px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 8px;
   background: var(--surface-variant);
   border-bottom: 1px solid var(--stroke);
   user-select: none;
@@ -2306,8 +2386,12 @@ defineExpose({
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
   color: inherit;
+}
+
+.toolbar-btn:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 .toolbar-yellow .toolbar-btn {
@@ -2359,7 +2443,7 @@ defineExpose({
   border-radius: 50%;
   background: #ff5f56;
   margin-left: 8px;
-  transition: all 0.3s ease;
+  transition: background-color var(--dur-base) var(--ease-out);
 }
 
 .connection-indicator.connected {
@@ -2378,7 +2462,7 @@ defineExpose({
   height: 6px;
   border-radius: 50%;
   margin-left: 4px;
-  transition: background 1s ease, box-shadow 1s ease;
+  transition: background var(--dur-slow) var(--ease-out), box-shadow var(--dur-slow) var(--ease-out);
 }
 
 /* Collapsed title bar */
@@ -2392,7 +2476,7 @@ defineExpose({
   border-bottom: 1px solid var(--stroke);
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .terminal-titlebar-collapsed:hover {
@@ -2454,7 +2538,16 @@ defineExpose({
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+}
+
+.titlebar-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.close-btn:hover {
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .titlebar-btn:hover {
@@ -2492,7 +2585,7 @@ defineExpose({
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  transition: background 0.2s ease;
+  transition: background var(--dur-base) var(--ease-out);
 }
 
 .mouse-btn.mouse-on .mouse-status-dot {
@@ -2531,35 +2624,12 @@ defineExpose({
   flex: 1;
   min-width: 0;
   min-height: 0;
-  padding: 8px 12px 12px;
+  padding: 6px 8px 6px;
   overflow: hidden;
 }
 
 .terminal-container.no-titlebar {
-  border-radius: 14px 14px 0 0;
-}
-
-/* =============================================================================
-   CRT SCANLINES - Subtle retro effect
-   ============================================================================= */
-.scanlines {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: 10;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.02) 0px,
-    rgba(0, 0, 0, 0.02) 1px,
-    transparent 1px,
-    transparent 2px
-  );
-  /* Subtle vignette */
-  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 60%, transparent 100%);
-  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 60%, transparent 100%);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 
 /* =============================================================================
@@ -2590,11 +2660,6 @@ defineExpose({
    with it keeps the part-row below the last full row in the theme colour. */
 .terminal :deep(.xterm-scrollable-element) {
   height: 100%;
-}
-
-/* Phosphor text glow - subtle CRT effect */
-.terminal :deep(.xterm-rows) {
-  text-shadow: 0 0 1px currentColor;
 }
 
 /* Make selection more visible and persistent */
@@ -2634,7 +2699,7 @@ defineExpose({
   height: 2px;
   background: linear-gradient(90deg, transparent, rgba(230, 180, 80, 0.3), transparent);
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .activity-line.active {
@@ -2703,7 +2768,11 @@ defineExpose({
   cursor: pointer;
   font-size: 14px;
   font-family: inherit;
-  transition: all 0.2s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+}
+
+.reconnect-btn:active {
+  transform: scale(0.96);
 }
 
 .reconnect-btn:hover {
@@ -2712,15 +2781,10 @@ defineExpose({
   box-shadow: 0 0 20px rgba(83, 189, 250, 0.15);
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
 /* =============================================================================
    RESPONSIVE & ACCESSIBILITY
    ============================================================================= */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .terminal-wrapper {
     border-radius: 0;
     border: none;
@@ -2761,15 +2825,6 @@ defineExpose({
     padding: 2px 2px 0;
   }
 
-  /* Remove text glow on mobile for perf */
-  .terminal :deep(.xterm-rows) {
-    text-shadow: none;
-  }
-
-  .scanlines {
-    display: none;
-  }
-
   .terminal :deep(.xterm-viewport) {
     touch-action: pan-y pinch-zoom;
   }
@@ -2787,34 +2842,6 @@ defineExpose({
 @media (prefers-contrast: high) {
   .terminal-wrapper {
     border: 2px solid var(--stroke);
-  }
-
-  .scanlines {
-    display: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
-
-  .connection-indicator.connected {
-    animation: none;
-  }
-
-  .connection-indicator.connecting {
-    animation: none;
-  }
-
-  .activity-line.active {
-    animation: none;
-  }
-
-  .terminal-wrapper,
-  .terminal-wrapper:focus-within,
-  .terminal-wrapper.has-activity {
-    transition: none;
   }
 }
 
@@ -2914,7 +2941,7 @@ defineExpose({
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .scrollback-btn:hover {
@@ -2996,18 +3023,6 @@ defineExpose({
      Vite/Vue drops the descendant selector in production builds, causing
      bare [data-theme=light]{display:none} on <html> -->
 <style>
-[data-theme="light"] .scanlines {
-  display: none;
-}
-
-[data-theme="light"] .terminal .xterm-rows {
-  text-shadow: none;
-}
-
-[data-theme="light"] .terminal-wrapper {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-
 [data-theme="light"] .terminal {
   --terminal-scrollbar-thumb: rgba(0, 0, 0, 0.15);
 }

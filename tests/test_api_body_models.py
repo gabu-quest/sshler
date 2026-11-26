@@ -52,6 +52,28 @@ def test_a_known_theme_is_stored_and_echoed(client):
     assert resp.json() == {"status": "ok", "terminal_theme": "dracula"}
 
 
+def _frontend_theme_ids() -> list[str]:
+    """The ids the frontend theme select offers, read from its one list."""
+    import re
+
+    src = (Path(__file__).parent.parent / "frontend/src/utils/terminalThemes.ts").read_text(
+        encoding="utf-8"
+    )
+    block = re.search(r"TERMINAL_THEME_NAMES = \[(.*?)\] as const", src, re.S)
+    assert block, "terminalThemes.ts no longer defines TERMINAL_THEME_NAMES"
+    ids = re.findall(r"'([a-z]+)'", block.group(1))
+    assert len(ids) >= 8
+    return ids
+
+
+@pytest.mark.parametrize("theme", _frontend_theme_ids())
+def test_every_theme_the_select_offers_is_saved(client, theme):
+    resp = _put_theme(client, {"terminal_theme": theme})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "ok", "terminal_theme": theme}
+
+
 @pytest.mark.parametrize("body", [{}, {"terminal_theme": ""}, {"terminal_theme": None}])
 def test_a_missing_empty_or_null_theme_clears_it(client, body):
     assert _put_theme(client, {"terminal_theme": "dracula"}).status_code == 200
