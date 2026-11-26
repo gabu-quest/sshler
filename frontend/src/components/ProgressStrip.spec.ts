@@ -100,13 +100,32 @@ describe("ProgressStrip", () => {
     expect(container.querySelector(".progress-strip")).toBeNull();
   });
 
-  it("renders the strip (with + button) when a box is active even with no subscriptions", () => {
+  it("takes no room when a box is active but no bar is subscribed, and shows once one is", async () => {
     const app = useAppStore();
     app.activeBox = "sshler";
+    const progress = useProgressStore();
+    progress._injectEventForTest({ type: "snapshot", bars: [makeBar("a")] });
     const { container } = mountStrip();
-    expect(container.querySelector(".progress-strip")).not.toBeNull();
-    expect(container.querySelector(".strip-add")).not.toBeNull();
-    expect(container.querySelectorAll(".strip-bar")).toHaveLength(0);
+    expect(container.querySelector(".progress-strip")).toBeNull();
+
+    progress.subscribe("a");
+    await nextTick();
+    expect(container.querySelectorAll(".progress-strip")).toHaveLength(1);
+    expect(container.querySelectorAll(".strip-bar")).toHaveLength(1);
+    expect(container.querySelectorAll(".strip-add")).toHaveLength(1);
+  });
+
+  it("a bar's fill is scaled, never sized: 4 of 10 is scaleX(0.4) on a full-width fill", async () => {
+    const app = useAppStore();
+    app.activeBox = "sshler";
+    const progress = useProgressStore();
+    progress._injectEventForTest({ type: "snapshot", bars: [makeBar("a", { current: 4, total: 10 })] });
+    progress.subscribe("a");
+    const { container } = mountStrip();
+    await nextTick();
+    const fill = container.querySelector(".strip-bar__fill") as HTMLElement;
+    expect(fill.style.transform).toBe("scaleX(0.4)");
+    expect(fill.style.width).toBe("");
   });
 
   it("renders one strip-bar per subscribed bar in the active scope", async () => {
@@ -157,6 +176,7 @@ describe("ProgressStrip", () => {
     app.activeBox = "sshler";
     const progress = useProgressStore();
     progress._injectEventForTest({ type: "snapshot", bars: [makeBar("a")] });
+    progress.subscribe("a");
 
     const { container } = mountStrip();
     // Picker modal (NModal stub) hidden initially because show=false.

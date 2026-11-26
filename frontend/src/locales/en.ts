@@ -983,4 +983,10 @@ export const en: Record<string, string> = {
   "notfound.title": "Page not found",
   "notfound.body": "This page does not exist.",
   "notfound.back": "Back to Overview",
+
+  // Side rail
+  "rail.expand": "Expand sidebar",
+  "rail.collapse": "Collapse sidebar",
+  "rail.progress": "Progress bars",
+  "palette.toggle_rail": "Toggle sidebar",
 };

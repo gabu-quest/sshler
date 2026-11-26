@@ -66,10 +66,12 @@ vi.mock("vue-router", () => ({
 // Mock app store
 const mockToggleTheme = vi.fn();
 const mockCycleTheme = vi.fn();
+const mockToggleRail = vi.fn();
 vi.mock("@/stores/app", () => ({
   useAppStore: () => ({
     toggleTheme: mockToggleTheme,
     cycleTheme: mockCycleTheme,
+    toggleRailCollapsed: mockToggleRail,
     isDark: false,
   }),
 }));
@@ -234,6 +236,17 @@ describe("CommandPalette Properties", () => {
         await fireEvent.click(button);
         await nextTick();
       }
+    });
+
+    it("toggles the side rail, with its shortcut shown", async () => {
+      const wrapper = render(CommandPalette);
+      await fireEvent.click(wrapper.getByRole('button'));
+      await nextTick();
+
+      const item = wrapper.getByText("Toggle sidebar");
+      expect(item.closest(".palette-item, li")?.textContent).toContain("Alt+\\");
+      await fireEvent.click(item);
+      expect(mockToggleRail).toHaveBeenCalledTimes(1);
     });
 
     it("should execute theme actions correctly", async () => {

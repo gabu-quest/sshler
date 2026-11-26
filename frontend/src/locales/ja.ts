@@ -983,4 +983,10 @@ export const ja: Record<string, string> = {
   "notfound.title": "ページが見つかりません",
   "notfound.body": "このページは存在しません。",
   "notfound.back": "概要へ戻る",
+
+  // Side rail
+  "rail.expand": "サイドバーを展開",
+  "rail.collapse": "サイドバーを折りたたむ",
+  "rail.progress": "進捗バー",
+  "palette.toggle_rail": "サイドバーを切り替え",
 };

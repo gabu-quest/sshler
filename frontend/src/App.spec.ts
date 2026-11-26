@@ -10,8 +10,11 @@ import { flushPromises, mount } from "@vue/test-utils";
 import type { GlobalThemeOverrides } from "naive-ui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { bootstrap, progress, ping, fetchRecoveryMock, currentRoute } = vi.hoisted(() => ({
-  currentRoute: { path: "/login" },
+const { bootstrap, progress, ping, fetchRecoveryMock, currentRoute, routing } = vi.hoisted(() => ({
+  currentRoute: { path: "/login", query: {} as Record<string, string>, matched: [{}] as object[] },
+  // The reactive face of `currentRoute` the router mock hands out, and how often the
+  // routed view was mounted.
+  routing: { route: null as null | { path: string; query: Record<string, string> }, mounts: 0 },
   bootstrap: {
     payload: {} as object | null,
     token: "t" as string | null,
@@ -30,11 +33,23 @@ vi.mock("@/stores/progress", () => ({ useProgressStore: () => progress }));
 vi.mock("@/stores/ping", () => ({ usePingStore: () => ping }));
 vi.mock("@/stores/app", () => ({ useAppStore: () => ({ isDark: false }) }));
 vi.mock("@/api/http", () => ({ fetchRecovery: fetchRecoveryMock }));
-vi.mock("vue-router", () => ({
-  RouterView: { template: "<div />" },
-  useRoute: () => currentRoute,
-}));
-vi.mock("@/components/AppHeader.vue", () => ({ default: { template: "<div />" } }));
+vi.mock("vue-router", async () => {
+  const { defineComponent, reactive } = await import("vue");
+  routing.route = reactive(currentRoute);
+  const View = defineComponent({
+    mounted() { routing.mounts += 1; },
+    template: '<div data-testid="view" />',
+  });
+  return {
+    RouterView: defineComponent({
+      setup(_, { slots }) {
+        return () => slots.default?.({ Component: View, route: routing.route });
+      },
+    }),
+    useRoute: () => routing.route,
+  };
+});
+vi.mock("@/components/AppHeader.vue", () => ({ default: { template: '<div data-testid="shell-nav" />' } }));
 vi.mock("@/components/PingNotificationHandler.vue", () => ({ default: { template: "<div />" } }));
 vi.mock("@/components/ProgressStrip.vue", () => ({ default: { template: "<div />" } }));
 vi.mock("@/components/RecoveryModal.vue", () => ({ default: { template: "<div />" } }));
@@ -45,7 +60,7 @@ vi.mock("naive-ui", () => {
     NConfigProvider: wrap,
     NDialogProvider: wrap,
     NGlobalStyle: { template: "<div />" },
-    NLayout: wrap,
+    NLayout: { props: ["contentClass"], template: '<div data-testid="frame" :class="contentClass"><slot /></div>' },
     // The main area's scroll container is the element Naive styles with `content-style`.
     NLayoutContent: {
       props: ["contentStyle"],
@@ -70,6 +85,15 @@ async function mountApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1366 });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+  });
+  routing.mounts = 0;
+  currentRoute.query = {};
+  currentRoute.matched = [{}];
   currentRoute.path = "/login";
   bootstrap.token = "t";
   bootstrap.authRequired = true;
@@ -132,6 +156,68 @@ describe("the main area", () => {
     const style = source.slice(source.indexOf("<style"));
     expect(style.match(/calc\([^)]*-\s*\d+px\)/g)).toBeNull();
     expect(style.match(/overflow\s*:\s*hidden/g)).toBeNull();
+  });
+});
+
+describe("the shell", () => {
+  it.each([
+    ["/terminal", "route-fade-plain"],
+    ["/multi-terminal", "route-fade-plain"],
+    ["/commander", "route-fade-plain"],
+    ["/", "route-fade"],
+    ["/files", "route-fade"],
+    ["/settings", "route-fade"],
+  ])("the view on %s fades with %s", async (path, name) => {
+    currentRoute.path = path;
+    const wrapper = await mountApp();
+    expect(wrapper.get("transition-stub").attributes("name")).toBe(name);
+    wrapper.unmount();
+  });
+
+  it("the view is kept across a change of ?box= or ?dir=, and replaced on a change of page", async () => {
+    currentRoute.path = "/files";
+    const wrapper = await mountApp();
+    expect(routing.mounts).toBe(1);
+    routing.route!.query = { box: "local", dir: "/tmp" };
+    await flushPromises();
+    routing.route!.query = { box: "other" };
+    await flushPromises();
+    expect(routing.mounts).toBe(1);
+    routing.route!.path = "/terminal";
+    await flushPromises();
+    expect(routing.mounts).toBe(2);
+    wrapper.unmount();
+  });
+
+  it.each([
+    [1366, "/", "app-frame--rail", 1],
+    [768, "/files", "app-frame--rail", 1],
+    [767, "/files", "app-frame--bar", 1],
+    [390, "/terminal", "app-frame--bar", 1],
+    [1366, "/login", "app-frame--bar", 0],
+    [390, "/login", "app-frame--bar", 0],
+  ])("at %i px on %s the frame is %s with %i navigation", async (width, path, frame, navs) => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+    currentRoute.path = path;
+    const wrapper = await mountApp();
+    expect(wrapper.get('[data-testid="frame"]').classes()).toContain(frame);
+    expect(wrapper.findAll('[data-testid="shell-nav"]')).toHaveLength(navs);
+    wrapper.unmount();
+  });
+
+  it("before the router has read the address, no navigation is drawn", async () => {
+    currentRoute.path = "/";
+    currentRoute.matched = [];
+    const wrapper = await mountApp();
+    expect(wrapper.findAll('[data-testid="shell-nav"]')).toHaveLength(0);
+    expect(wrapper.get('[data-testid="frame"]').classes()).toContain("app-frame--bar");
+    wrapper.unmount();
+  });
+
+  it("the frame's media queries break where the page's breakpoint does (below 768 px)", () => {
+    const style = readFileSync(resolve(__dirname, "App.vue"), "utf-8");
+    expect(style.match(/max-width:\s*768px/g)).toBeNull();
+    expect(style.match(/max-width:\s*767px/g)).toHaveLength(1);
   });
 });
 
@@ -238,8 +324,12 @@ describe("the Naive UI theme and the CSS tokens", () => {
   });
 
   it("the shell files use no undefined variable names", () => {
-    const files = ["App.vue", "styles/main.css", "styles/responsive.css", "config/naive-theme.ts"];
-    const banned = /var\(--(hover|divider|text-color|body-color|font-family-mono)\b/g;
+    const files = [
+      "App.vue", "styles/main.css", "styles/responsive.css", "config/naive-theme.ts",
+      "components/AppHeader.vue", "components/ProgressStrip.vue",
+    ];
+    // `--n-*` are Naive's own variables, set only inside its components.
+    const banned = /var\(--(hover|divider|text-color|body-color|font-family-mono|success-color|divider-color|n-[\w-]+)(?![\w-])/g;
     const found = files.flatMap((file) =>
       (readFileSync(resolve(__dirname, file), "utf-8").match(banned) ?? []).map((m) => `${file}: ${m}`),
     );

@@ -22,9 +22,10 @@ const pickerOpen = ref(false);
 
 const scope = computed(() => progressStore.currentScope);
 const bars = computed<ProgressBar[]>(() => progressStore.subscribedBars);
-// The strip only exists when a box is active. The + button stays available
-// even with no subscriptions so the user can open the picker to add some.
-const visible = computed(() => scope.value !== null);
+// The strip takes room only while it has a bar to show: with a box active and
+// nothing subscribed it is gone, and the side rail's progress button (or the phone
+// menu's) opens the picker instead.
+const visible = computed(() => scope.value !== null && bars.value.length > 0);
 
 // --- finish blink: flash a bar once when it transitions into `done` ---
 const flashing = ref<Set<string>>(new Set());
@@ -65,9 +66,14 @@ const KNOWN_COLOR_MAP: Record<string, string> = {
 };
 
 function resolveColor(bar: ProgressBar): string {
-  if (!bar.color) return "var(--n-primary-color, #3b82f6)";
+  if (!bar.color) return "var(--accent)";
   if (bar.color.startsWith("#") || bar.color.startsWith("rgb")) return bar.color;
   return KNOWN_COLOR_MAP[bar.color.toLowerCase()] ?? bar.color;
+}
+
+// The fill is always full width and scaled, so a moving bar repaints without layout.
+function fillStyle(bar: ProgressBar): Record<string, string> {
+  return { transform: `scaleX(${percent(bar) / 100})`, background: resolveColor(bar) };
 }
 
 function percent(bar: ProgressBar): number {
@@ -109,6 +115,7 @@ function statusIcon(status: ProgressStatus) {
 </script>
 
 <template>
+  <Transition name="strip-slide">
   <div v-if="visible" class="progress-strip">
     <div class="progress-strip__bars">
       <NTooltip
@@ -136,7 +143,7 @@ function statusIcon(status: ProgressStatus) {
             <span class="strip-bar__track">
               <span
                 class="strip-bar__fill"
-                :style="{ width: percent(bar) + '%', background: resolveColor(bar) }"
+                :style="fillStyle(bar)"
               />
             </span>
             <span class="strip-bar__numbers">{{ percentLabel(bar) }}%</span>
@@ -183,6 +190,7 @@ function statusIcon(status: ProgressStatus) {
 
     <ProgressPicker v-model:show="pickerOpen" />
   </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -192,8 +200,8 @@ function statusIcon(status: ProgressStatus) {
   gap: 8px;
   height: 22px;
   padding: 0 10px;
-  background: var(--n-card-color, color-mix(in srgb, currentColor 5%, transparent));
-  border-bottom: 1px solid var(--n-divider-color, color-mix(in srgb, currentColor 10%, transparent));
+  background: var(--surface-variant);
+  border-bottom: 1px solid var(--stroke);
   font-size: 11px;
   overflow: hidden;
 }
@@ -226,7 +234,7 @@ function statusIcon(status: ProgressStatus) {
 
 /* One bright-white pulse when a bar transitions into `done`. */
 .strip-bar--flash {
-  animation: strip-flash 550ms ease-out 1;
+  animation: strip-flash var(--dur-slow) var(--ease-out) 1;
 }
 @keyframes strip-flash {
   0% {
@@ -256,15 +264,17 @@ function statusIcon(status: ProgressStatus) {
   width: 64px;
   height: 3px;
   border-radius: 2px;
-  background: var(--n-action-color, color-mix(in srgb, currentColor 14%, transparent));
+  background: var(--hover-overlay);
   overflow: hidden;
   flex-shrink: 0;
 }
 .strip-bar__fill {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: 2px;
-  transition: width 200ms ease;
+  transform-origin: left center;
+  transition: transform var(--dur-base) var(--ease-in-out);
 }
 
 .strip-bar__numbers {
@@ -275,7 +285,7 @@ function statusIcon(status: ProgressStatus) {
   text-align: right;
 }
 
-.strip-bar__pip--running { color: var(--n-primary-color, #3b82f6); }
+.strip-bar__pip--running { color: var(--accent); }
 .strip-bar__pip--done { color: #22c55e; }
 .strip-bar__pip--failed { color: #ef4444; }
 .strip-bar__pip--cancelled { color: #6b7280; }
@@ -297,7 +307,7 @@ function statusIcon(status: ProgressStatus) {
 }
 .strip-add:hover {
   opacity: 1;
-  background: var(--n-action-color, color-mix(in srgb, currentColor 12%, transparent));
+  background: var(--hover-overlay);
 }
 
 /* Rich tooltip content */
@@ -314,7 +324,7 @@ function statusIcon(status: ProgressStatus) {
   font-size: 13px;
 }
 .strip-tip__name {
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   opacity: 0.7;
 }

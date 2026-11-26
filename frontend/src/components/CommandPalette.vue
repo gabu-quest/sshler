@@ -19,6 +19,7 @@ import {
   PhRobot,
   PhGitDiff,
   PhGlobe,
+  PhSidebarSimple,
 } from "@phosphor-icons/vue";
 
 import { useRouter } from "vue-router";
@@ -165,6 +166,15 @@ const actions = computed((): CommandAction[] => [
     category: t('nav.navigation'),
     action: () => router.push({ path: "/files", hash: "#favorites" }),
     keywords: ["bookmarks", "starred", "saved", "file"],
+  },
+  {
+    id: "rail-toggle",
+    label: t('palette.toggle_rail'),
+    icon: PhSidebarSimple,
+    shortcut: "Alt+\\",
+    category: t('nav.navigation'),
+    action: () => appStore.toggleRailCollapsed(),
+    keywords: ["sidebar", "rail", "navigation", "collapse", "expand"],
   },
   {
     id: "theme-toggle",
