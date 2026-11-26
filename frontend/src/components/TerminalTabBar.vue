@@ -170,7 +170,7 @@ function onCloseClick(event: MouseEvent, tabId: string) {
 </script>
 
 <template>
-  <div class="tab-bar">
+  <TransitionGroup name="tab-item" tag="div" class="tab-bar">
     <div
       v-for="tab in tabs"
       :key="tab.id"
@@ -224,6 +224,7 @@ function onCloseClick(event: MouseEvent, tabId: string) {
     </div>
 
     <button
+      key="tab-add"
       class="tab-add"
       data-testid="tab-add"
       :title="t('terminal.tabs.new')"
@@ -232,7 +233,7 @@ function onCloseClick(event: MouseEvent, tabId: string) {
     >
       <NIcon size="13"><PhPlus weight="bold" /></NIcon>
     </button>
-  </div>
+  </TransitionGroup>
 
   <!--
     Tab context menu (right-click): the shared menu, so it stays on screen and closes on an
@@ -367,7 +368,22 @@ function onCloseClick(event: MouseEvent, tabId: string) {
   white-space: nowrap;
   min-width: 0;
   flex-shrink: 0;
+  position: relative;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+/* The active marker: a 2px layer scaled in from the left edge, so it moves by transform only. */
+.tab-item::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .tab-item:hover {
@@ -378,7 +394,10 @@ function onCloseClick(event: MouseEvent, tabId: string) {
 .tab-item.active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text);
-  border-bottom: 2px solid var(--accent);
+}
+
+.tab-item.active::after {
+  transform: scaleX(1);
 }
 
 .tab-dot {

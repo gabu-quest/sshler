@@ -233,6 +233,7 @@ watch(() => props.rawMode, (raw) => {
 
     <!-- Legend overlay -->
     <Teleport to="body">
+      <Transition name="modal-fade">
       <div v-if="showLegend" class="legend-overlay" @click="showLegend = false">
         <div class="legend-card" @click.stop>
           <div class="legend-header">
@@ -254,6 +255,7 @@ watch(() => props.rawMode, (raw) => {
           </div>
         </div>
       </div>
+      </Transition>
     </Teleport>
 
     <!-- Input row -->
@@ -337,10 +339,11 @@ watch(() => props.rawMode, (raw) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background var(--dur-instant) var(--ease-out), border-color var(--dur-instant) var(--ease-out);
+  transition: background var(--dur-instant) var(--ease-out), border-color var(--dur-instant) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
 
 .quick-key:active {
+  transform: scale(0.94);
   background: rgba(255, 255, 255, 0.15);
   border-color: rgba(255, 255, 255, 0.25);
 }
@@ -450,7 +453,7 @@ watch(() => props.rawMode, (raw) => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
 
 .mode-toggle.active {
@@ -460,6 +463,7 @@ watch(() => props.rawMode, (raw) => {
 }
 
 .mode-toggle:active {
+  transform: scale(0.94);
   background: rgba(255, 255, 255, 0.1);
 }
 

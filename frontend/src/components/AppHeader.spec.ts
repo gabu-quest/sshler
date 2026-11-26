@@ -271,4 +271,24 @@ describe("AppHeader", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(router.currentRoute.value.path).toBe("/diff");
   });
+
+  describe("expanded rail utility rows", () => {
+    it("pressing the label of Command Palette or Keyboard Shortcuts presses the row's own button, once", async () => {
+      const { container } = await mountHeader("/");
+      useAppStore().toggleRailCollapsed();
+      await nextTick();
+      const rows = Array.from(container.querySelectorAll<HTMLElement>(".rail-utility"));
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        const button = row.querySelector<HTMLButtonElement>(".rail-icon button")!;
+        const onClick = vi.fn();
+        button.addEventListener("click", onClick);
+        await fireEvent.click(row.querySelector(".rail-label")!);
+        expect(onClick).toHaveBeenCalledTimes(1);
+        // A click on the button itself is not doubled by the row.
+        await fireEvent.click(button);
+        expect(onClick).toHaveBeenCalledTimes(2);
+      }
+    });
+  });
 });

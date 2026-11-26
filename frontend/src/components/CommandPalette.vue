@@ -26,6 +26,7 @@ import { useRouter } from "vue-router";
 import { useAppStore } from "@/stores/app";
 import { useBoxesStore } from "@/stores/boxes";
 import { useI18n } from "@/i18n";
+import { useResponsive } from "@/composables/useResponsive";
 import { getEmojiForString } from "@/utils/emoji-favicon";
 
 interface CommandAction {
@@ -43,6 +44,9 @@ const router = useRouter();
 const appStore = useAppStore();
 const boxesStore = useBoxesStore();
 const { t } = useI18n();
+// One breakpoint, owned by useResponsive: the sidebar exists only from it on.
+const { width, breakpoints } = useResponsive();
+const hasSidebar = computed(() => width.value >= breakpoints.tablet);
 const show = ref(false);
 const query = ref("");
 const selectedIndex = ref(0);
@@ -226,7 +230,9 @@ const favoriteActions = computed((): CommandAction[] => {
   return result;
 });
 
-const allActions = computed(() => [...actions.value, ...favoriteActions.value]);
+const allActions = computed(() =>
+  [...actions.value, ...favoriteActions.value].filter((a) => a.id !== "rail-toggle" || hasSidebar.value),
+);
 
 // Fuzzy search implementation
 const fuzzyMatch = (text: string, query: string): { score: number; matches: number[] } => {

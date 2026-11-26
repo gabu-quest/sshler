@@ -54,6 +54,15 @@ const { t, locale, setLocale } = useI18n();
 // the first paint already has the right shell.
 const { width, breakpoints } = useResponsive();
 const isPhone = computed(() => width.value < breakpoints.tablet);
+
+// The palette and shortcuts rows hold their own button in the icon cell. A click on
+// the rest of the row (the label) presses that button, so the whole row opens it.
+function openRailUtility(event: MouseEvent) {
+  const row = event.currentTarget as HTMLElement;
+  const button = row.querySelector<HTMLElement>(".rail-icon button");
+  if (!button || button.contains(event.target as Node)) return;
+  button.click();
+}
 // On a phone only the terminal keeps the 14 px bar; every other view has the 36 px
 // bar with the menu button.
 const thinBar = computed(() => route.path === "/terminal");
@@ -441,11 +450,11 @@ onUnmounted(() => {
             <span class="rail-label">{{ authStore.displayUsername }}</span>
           </div>
 
-          <div class="rail-item rail-utility">
+          <div class="rail-item rail-utility" @click="openRailUtility">
             <span class="rail-icon"><CommandPalette /></span>
             <span class="rail-label">{{ t('palette.title') }}</span>
           </div>
-          <div class="rail-item rail-utility">
+          <div class="rail-item rail-utility" @click="openRailUtility">
             <span class="rail-icon"><ShortcutsOverlay :links="allLinks" /></span>
             <span class="rail-label">{{ t('shortcuts.title') }}</span>
           </div>
@@ -859,7 +868,7 @@ onUnmounted(() => {
 }
 
 .rail-utility {
-  cursor: default;
+  cursor: pointer;
 }
 
 .rail-locale-code {

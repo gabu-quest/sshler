@@ -199,14 +199,14 @@ watch(() => props.boxName, load)
 
     <NEmpty v-else-if="sortedSessions.length === 0" :description="loadError ?? t('sessions.empty')" size="small" />
 
-    <div v-else class="session-list">
-      <div v-if="loadError" class="load-error" data-testid="load-error">{{ loadError }}</div>
+    <TransitionGroup v-else name="list-row" tag="div" class="session-list">
+      <div v-if="loadError" key="load-error" class="load-error" data-testid="load-error">{{ loadError }}</div>
       <div
-        v-for="session in sortedSessions"
+        v-for="(session, index) in sortedSessions"
         :key="session.id"
         class="session-item"
         :class="{ active: session.session_name === currentSession, inactive: !session.active }"
-        :style="{ '--session-color': getColorForSession(session.session_name) }"
+        :style="{ '--session-color': getColorForSession(session.session_name), '--row-index': index }"
         @click="emit('select', session)"
       >
         <div class="session-info">
@@ -275,7 +275,7 @@ watch(() => props.boxName, load)
           </template>
         </div>
       </div>
-    </div>
+    </TransitionGroup>
   </div>
 </template>
 

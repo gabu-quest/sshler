@@ -89,6 +89,9 @@ describe("CommandPalette Properties", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    // useResponsive reads the pointer type; jsdom has no matchMedia.
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as typeof window.matchMedia;
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1366 });
   });
 
   afterEach(() => {
@@ -509,6 +512,26 @@ describe("CommandPalette Properties", () => {
 
       expect(wasDefaultPrevented).toBe(false);
       expect(wrapper.queryByText("Command Palette")).toBeNull();
+    });
+  });
+
+  describe("Toggle sidebar", () => {
+    async function openAt(width: number) {
+      Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+      const wrapper = render(CommandPalette);
+      await fireEvent.click(wrapper.getByRole("button"));
+      await nextTick();
+      return wrapper;
+    }
+
+    it("is offered on a desktop", async () => {
+      const wrapper = await openAt(1366);
+      expect(wrapper.queryByText("Toggle sidebar")).toBeTruthy();
+    });
+
+    it("is not offered on a phone, where there is no sidebar", async () => {
+      const wrapper = await openAt(390);
+      expect(wrapper.queryByText("Toggle sidebar")).toBeNull();
     });
   });
 });
