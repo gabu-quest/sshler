@@ -82,6 +82,12 @@ describe("CommanderPane parent and breadcrumbs", () => {
     expect(asked(wrapper)).toEqual(["C:/", "C:/Users"]);
   });
 
+  // Mutation: a separator after the root crumb -> the bar reads `//tmp/x`.
+  it("the path bar draws /tmp/x, not //tmp/x", async () => {
+    const wrapper = await mountAt("/tmp/x");
+    expect(wrapper.find(".breadcrumb").text().replace(/\s+/g, "")).toBe("/tmp/x");
+  });
+
   it("a share path has crumbs from the share", async () => {
     const wrapper = await mountAt("//srv/sh/d");
     expect(wrapper.findAll(".crumb-text").map((c) => c.text())).toEqual(["//srv/sh", "d"]);

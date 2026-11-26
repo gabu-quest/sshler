@@ -287,7 +287,7 @@ function onKeydown(event: KeyboardEvent) {
   padding: 16px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .search-dropdown {
     max-height: 50vh;
   }

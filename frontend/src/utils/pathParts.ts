@@ -82,6 +82,10 @@ export const pathSegments = (path: string): PathSegment[] => {
   return out
 }
 
+/** Whether a `/` is drawn after this crumb: not when its label already ends in one (`/`, `C:/`),
+ *  so a path bar reads `/tmp/x`, not `//tmp/x`. The one rule for every path bar. */
+export const separatorAfter = (segment: PathSegment): boolean => !segment.label.endsWith('/')
+
 /** True for POSIX (`/x`), Windows drive (`C:\x` / `C:/x`), or UNC (`\\srv`) absolutes. */
 export const isAbsolutePath = (p: string): boolean => p.startsWith('/') || isWindowsPath(p)
 

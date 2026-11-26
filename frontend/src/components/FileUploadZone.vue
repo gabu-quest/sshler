@@ -66,7 +66,7 @@ const handleDrop = (e: DragEvent) => {
   position: relative;
   border-radius: 8px;
   overflow: hidden;
-  transition: all 0.2s ease;
+  transition: all var(--dur-base) ease;
 }
 
 .file-browser.drag-over {

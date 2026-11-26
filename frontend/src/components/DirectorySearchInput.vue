@@ -157,7 +157,7 @@ function formatPath(path: string): string {
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--dur-fast) ease;
 }
 
 .search-result:hover {
@@ -183,7 +183,7 @@ function formatPath(path: string): string {
 }
 
 /* Mobile optimizations */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .directory-search {
     max-width: 100%;
   }

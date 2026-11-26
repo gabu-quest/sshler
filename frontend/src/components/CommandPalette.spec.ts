@@ -7,7 +7,7 @@
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/vue";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { defineComponent, nextTick } from "vue";
+import { defineComponent, nextTick, ref } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
 // Mock Naive UI components
@@ -15,7 +15,14 @@ vi.mock("naive-ui", () => {
   const StubInput = defineComponent({
     props: ['value', 'placeholder', 'autofocus', 'clearable', 'size'],
     emits: ["update:value"],
+    // Like NInputInstance: the parent's template ref calls focus() on it.
+    setup(_props, { expose }) {
+      const el = ref<HTMLInputElement | null>(null);
+      expose({ focus: () => el.value?.focus() });
+      return { el };
+    },
     template: `<input
+      ref="el"
       :value="value"
       :placeholder="placeholder"
       @input="$emit('update:value', $event.target.value)"
@@ -398,8 +405,8 @@ describe("CommandPalette Properties", () => {
       const input = wrapper.getByRole('textbox');
       expect(input).toBeTruthy();
 
-      // Verify autofocus attribute is set
-      expect(input.getAttribute('autofocus')).toBeDefined();
+      // The palette focused its own input through its template ref
+      await waitFor(() => expect(document.activeElement).toBe(input));
     });
   });
 

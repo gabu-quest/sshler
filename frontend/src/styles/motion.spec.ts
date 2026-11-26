@@ -1,7 +1,7 @@
 // The motion tokens, the transition classes, and the reduced-motion switch in main.css,
 // and the Naive UI curves that must equal the --ease-* tokens.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -75,6 +75,44 @@ describe("motion tokens", () => {
 
   it("has one spin keyframes", () => {
     expect(mainCss.match(/@keyframes spin\b/g)).toHaveLength(1);
+  });
+});
+
+/** Every .vue and .css file under src, with the CSS it holds (a .vue file's style blocks). */
+const styleSources = (dir: string): Array<[string, string]> => {
+  const out: Array<[string, string]> = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = resolve(dir, entry.name);
+    if (entry.isDirectory()) out.push(...styleSources(path));
+    else if (entry.name.endsWith(".css")) out.push([path, readFileSync(path, "utf8")]);
+    else if (entry.name.endsWith(".vue")) {
+      const blocks = [...readFileSync(path, "utf8").matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)];
+      out.push([path, blocks.map((b) => b[1]).join("\n")]);
+    }
+  }
+  return out;
+};
+
+/** The transition and animation declarations whose duration is a literal time. */
+const literalDurations = (css: string): string[] =>
+  [...css.matchAll(/\b(?:transition|animation)(?:-duration)?\s*:\s*([^;}]+)/g)]
+    .map((m) => m[0].trim())
+    .filter((decl) => /(?<![\w.-])\d*\.?\d+m?s\b/.test(decl.replace(/var\([^)]*\)/g, "").replace(/0\.01ms/g, "")));
+
+describe("durations", () => {
+  it("no transition or animation writes its duration as a literal; each uses a --dur-* token", () => {
+    const srcDir = resolve(__dirname, "..");
+    const found = styleSources(srcDir).flatMap(([path, css]) => literalDurations(css).map((d) => `${path.slice(srcDir.length + 1)}: ${d}`));
+    expect(found).toEqual([]);
+  });
+
+  it("sees a literal in a shorthand, a duration property and a multi-value list", () => {
+    expect(literalDurations(".a { transition: color 0.2s ease; }")).toHaveLength(1);
+    expect(literalDurations(".a { animation: spin 1s linear infinite; }")).toHaveLength(1);
+    expect(literalDurations(".a { transition-duration: 150ms; }")).toHaveLength(1);
+    expect(literalDurations(".a { transition: a var(--dur-fast) ease, b 300ms ease; }")).toHaveLength(1);
+    expect(literalDurations(".a { transition: color var(--dur-fast) ease; animation: x var(--dur-loop) linear infinite; }")).toEqual([]);
+    expect(literalDurations(".a { transition-duration: 0.01ms !important; transition-delay: 24ms; }")).toEqual([]);
   });
 });
 

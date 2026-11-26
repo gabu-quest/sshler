@@ -600,7 +600,7 @@ onMounted(async () => {
 .scope-note { margin-top: 14px; }
 .modal-actions { justify-content: flex-end; margin-top: 18px; }
 .artifact-frame { width: 100%; height: min(75vh, 820px); border: 0; border-radius: 8px; background: white; }
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .page-header, .artifact-row { align-items: stretch; flex-direction: column; }
   .form-grid { grid-template-columns: 1fr; }
   .catalog-filters { grid-template-columns: 1fr; }

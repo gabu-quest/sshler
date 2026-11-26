@@ -628,7 +628,7 @@ li {
   font-weight: 500;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .header-content {
     flex-direction: column;
     align-items: flex-start;

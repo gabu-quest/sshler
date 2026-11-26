@@ -1,5 +1,6 @@
 import { ref, readonly, onMounted, onUnmounted } from 'vue'
 
+// CSS media queries use 767 (max-width: 767px) so they break where `width < tablet` (768) does.
 const BREAKPOINTS = {
   mobile: 480,
   tablet: 768,

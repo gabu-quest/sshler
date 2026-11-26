@@ -902,7 +902,7 @@ const toggleSessions = (boxName: string) => {
 }
 
 /* Responsive Design */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .dashboard {
     gap: 16px;
   }

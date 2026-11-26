@@ -292,7 +292,7 @@ function getFileError(filePath: string): string | null {
 
 .heading-running {
   color: var(--accent);
-  animation: spin 1s linear infinite;
+  animation: spin var(--dur-loop) linear infinite;
 }
 
 .heading-warning {
@@ -360,7 +360,7 @@ function getFileError(filePath: string): string | null {
 
 .status-active {
   color: var(--accent);
-  animation: spin 1s linear infinite;
+  animation: spin var(--dur-loop) linear infinite;
 }
 
 .status-pending {

@@ -310,7 +310,7 @@ const handleDelete = async (id: string) => {
   border-radius: 6px;
   border: 1px solid var(--stroke);
   margin-bottom: 6px;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--dur-fast) ease;
 }
 
 .snippet-item:hover {

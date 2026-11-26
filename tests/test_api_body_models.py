@@ -59,9 +59,9 @@ def _frontend_theme_ids() -> list[str]:
     src = (Path(__file__).parent.parent / "frontend/src/utils/terminalThemes.ts").read_text(
         encoding="utf-8"
     )
-    block = re.search(r"TERMINAL_THEME_NAMES = \[(.*?)\] as const", src, re.S)
-    assert block, "terminalThemes.ts no longer defines TERMINAL_THEME_NAMES"
-    ids = re.findall(r"'([a-z]+)'", block.group(1))
+    block = re.search(r"TERMINAL_THEMES = \{\n(.*?)\n\} satisfies", src, re.S)
+    assert block, "terminalThemes.ts no longer defines the TERMINAL_THEMES table"
+    ids = re.findall(r"^  ([a-z]+): \{", block.group(1), re.M)
     assert len(ids) >= 8
     return ids
 

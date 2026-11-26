@@ -15,7 +15,7 @@ import { useFavoritesStore } from '@/stores/favorites'
 import { useAppStore } from '@/stores/app'
 import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
-import { normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
+import { WINDOWS_SHELL_KEY, normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
 import { useDirectoryOptions, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
 import { answerBox, useBoxAnswer } from '@/composables/useBoxAnswer'
@@ -201,7 +201,6 @@ const tokenValue = computed(() =>
 // --- The Shell choice ------------------------------------------------------
 // A Windows local box picks one of its native shells (kept across visits). Every other
 // box picks "tmux" or "Plain shell" for this terminal only: each new terminal starts as tmux.
-const SHELL_STORAGE_KEY = 'sshler.windows_shell'
 
 const { isWindowsLocalBox, optionsOf } = useShellOptions()
 const windowsLocal = computed(() => isWindowsLocalBox(selectedBox.value))
@@ -233,7 +232,7 @@ const onTabKillError = (session: string) =>
 const shellOptions = optionsOf(() => selectedBox.value)
 
 const selectedShell = ref<string>(
-  (typeof localStorage !== 'undefined' && localStorage.getItem(SHELL_STORAGE_KEY)) || ''
+  (typeof localStorage !== 'undefined' && localStorage.getItem(WINDOWS_SHELL_KEY)) || ''
 )
 // The kind of the terminal on a tmux-or-plain box; nothing is stored or put in the address.
 const posixShell = ref<PosixShell>('tmux')
@@ -285,7 +284,7 @@ function handleShellChange(value: string) {
   }
   selectedShell.value = value
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(SHELL_STORAGE_KEY, value)
+    localStorage.setItem(WINDOWS_SHELL_KEY, value)
   }
 }
 

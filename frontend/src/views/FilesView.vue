@@ -1760,7 +1760,7 @@ const columns = computed(() => {
   border: 2px solid rgba(var(--accent-rgb), 0.3);
   border-top: 2px solid var(--accent);
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spin var(--dur-loop) linear infinite;
 }
 
 .small {

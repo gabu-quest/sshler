@@ -366,6 +366,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeydown);
 });
 
+const cmdInput = ref<{ focus: () => void } | null>(null);
+
 watch(
   () => show.value,
   (open) => {
@@ -373,8 +375,7 @@ watch(
       // Trap focus in modal
       document.body.style.overflow = "hidden";
       nextTick(() => {
-        const input = document.querySelector<HTMLInputElement>("#cmd-input");
-        input?.focus();
+        cmdInput.value?.focus();
       });
     } else {
       document.body.style.overflow = "";
@@ -423,6 +424,7 @@ watch(
       <div class="palette-search">
         <NInput
           id="cmd-input"
+          ref="cmdInput"
           v-model:value="query"
           :placeholder="t('palette.placeholder')"
           autofocus
@@ -680,7 +682,7 @@ watch(
 }
 
 /* Mobile optimizations */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .palette {
     max-height: 70vh;
   }

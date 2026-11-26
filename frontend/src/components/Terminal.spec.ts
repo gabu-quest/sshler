@@ -1296,3 +1296,39 @@ describe("Terminal.vue: the narrow title bar's menu", () => {
     wrapper.unmount();
   });
 });
+
+describe("Terminal.vue: the phone keyboard resizes its own pane", () => {
+  // Mutation: the handler looks up the first `.terminal-wrapper` on the page -> the second
+  // pane measures (and is sized by) the first.
+  it("with two terminals mounted, the second measures its own wrapper", async () => {
+    const viewport = Object.assign(new EventTarget(), { height: 500 });
+    vi.stubGlobal("visualViewport", viewport);
+    vi.stubGlobal("innerWidth", 390);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const mountPane = () => mount(Terminal, {
+      props: { boxName: "box1", sessionName: "main", directory: "/tmp" },
+      global: { plugins: [createPinia()], stubs: { SessionSwitcher: true } },
+      attachTo: host,
+    });
+    const first = mountPane();
+    const second = mountPane();
+    await vi.advanceTimersByTimeAsync(100);
+    await flushPromises();
+    const firstEl = first.get(".terminal-wrapper").element as HTMLElement;
+    const secondEl = second.get(".terminal-wrapper").element as HTMLElement;
+    expect(firstEl).not.toBe(secondEl);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return { top: this === secondEl ? 100 : 0 } as DOMRect;
+    });
+
+    viewport.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(secondEl.style.height).toBe("400px");
+    expect(firstEl.style.height).toBe("500px");
+    first.unmount();
+    second.unmount();
+    host.remove();
+  });
+});

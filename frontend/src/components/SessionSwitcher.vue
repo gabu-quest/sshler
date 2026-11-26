@@ -122,13 +122,16 @@ async function restore(session: ApiSession) {
   await sync()
 }
 
+// The one rename field on screen (only the edited row draws it).
+let renameInput: HTMLInputElement | null = null
+const setRenameInput = (el: unknown) => { renameInput = el as HTMLInputElement | null }
+
 function startRename(session: ApiSession) {
   editingId.value = session.id
   editName.value = session.session_name
   nextTick(() => {
-    const input = document.querySelector('.rename-input') as HTMLInputElement
-    input?.focus()
-    input?.select()
+    renameInput?.focus()
+    renameInput?.select()
   })
 }
 
@@ -215,6 +218,7 @@ watch(() => props.boxName, load)
             <template v-if="editingId === session.id">
               <input
                 v-model="editName"
+                :ref="setRenameInput"
                 class="rename-input"
                 @click.stop
                 @keyup.enter.stop="confirmRename(session)"

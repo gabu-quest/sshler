@@ -8,7 +8,7 @@ import {
 import type { GitInfo } from "@/api/types";
 import GitBadge from "@/components/GitBadge.vue";
 import { useI18n } from "@/i18n";
-import { isPathRoot, pathSegments } from "@/utils/pathParts";
+import { isPathRoot, pathSegments, separatorAfter } from "@/utils/pathParts";
 
 const props = defineProps<{
   currentDir: string;
@@ -117,7 +117,7 @@ const copyWindowsPath = async () => {
       />
       <nav v-else class="crumbs" data-testid="path-crumbs">
         <template v-for="(segment, index) in segments" :key="segment.path">
-          <span v-if="index > 0 && !segments[index - 1]?.label.endsWith('/')" class="crumb-sep" aria-hidden="true">/</span>
+          <span v-if="index > 0 && separatorAfter(segments[index - 1]!)" class="crumb-sep" aria-hidden="true">/</span>
           <button
             type="button"
             class="crumb"

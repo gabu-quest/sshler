@@ -5,6 +5,9 @@ import { useBoxesStore } from '@/stores/boxes'
 import { useI18n } from '@/i18n'
 
 /** The two shells a POSIX local box and a remote box offer. */
+/** localStorage key of the Windows shell the user last picked; read by both terminal views. */
+export const WINDOWS_SHELL_KEY = 'sshler.windows_shell'
+
 export type PosixShell = 'tmux' | 'plain'
 
 /** Any stored or received value that is not exactly `plain` is tmux, the default. */

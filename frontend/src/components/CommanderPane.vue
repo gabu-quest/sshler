@@ -8,7 +8,7 @@ import GitBadge from "@/components/GitBadge.vue";
 import { useGitInfo } from "@/composables/useGitInfo";
 import { useI18n } from "@/i18n";
 import { getEmojiForBox } from "@/utils/emoji-favicon";
-import { parentPath, pathSegments } from "@/utils/pathParts";
+import { parentPath, pathSegments, separatorAfter } from "@/utils/pathParts";
 import { PhArrowBendUpLeft, PhFile, PhFolderSimple } from "@phosphor-icons/vue";
 import { NIcon, NSelect } from "naive-ui";
 
@@ -474,7 +474,7 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
           @click="onBreadcrumbClick(segment.path)"
         >
           <span class="crumb-text">{{ segment.label }}</span>
-          <span v-if="index < crumbSegments.length - 1" class="crumb-separator">/</span>
+          <span v-if="index < crumbSegments.length - 1 && separatorAfter(segment)" class="crumb-separator">/</span>
         </span>
       </div>
 
@@ -833,7 +833,7 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .file-list {
-  animation: fadeIn 0.15s ease-out;
+  animation: fadeIn var(--dur-fast) ease-out;
 }
 
 @keyframes fadeIn {

@@ -44,6 +44,10 @@
   --dur-fast: 140ms;
   --dur-base: 220ms;
   --dur-slow: 320ms;
+  /* Long ones: a looping spinner or pulse, a slow scroll-bar fade */
+  --dur-linger: 800ms;
+  --dur-loop: 1s;
+  --dur-ambient: 2s;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
@@ -285,7 +289,7 @@ p {
 a {
   color: var(--accent);
   text-decoration: none;
-  transition: color 0.2s ease;
+  transition: color var(--dur-base) ease;
 }
 
 a:hover {
@@ -311,7 +315,7 @@ input, textarea, select {
   border: 1px solid var(--stroke);
   border-radius: var(--radius-md);
   padding: 8px 12px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color var(--dur-base) ease, box-shadow var(--dur-base) ease;
 }
 
 input:focus, textarea:focus, select:focus {
@@ -396,15 +400,15 @@ input:focus, textarea:focus, select:focus {
 }
 
 .fade-in {
-  animation: fadeIn 0.2s ease-out;
+  animation: fadeIn var(--dur-base) ease-out;
 }
 
 .slide-up {
-  animation: slideUp 0.3s ease-out;
+  animation: slideUp var(--dur-slow) ease-out;
 }
 
 /* Responsive utilities */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   body {
     font-size: 16px; /* Prevent zoom on iOS */
   }
@@ -486,6 +490,9 @@ input:focus, textarea:focus, select:focus {
     --dur-fast: 0.01ms;
     --dur-base: 0.01ms;
     --dur-slow: 0.01ms;
+    --dur-linger: 0.01ms;
+    --dur-loop: 0.01ms;
+    --dur-ambient: 0.01ms;
   }
 
   *,
@@ -503,6 +510,9 @@ input:focus, textarea:focus, select:focus {
   --dur-fast: 0.01ms;
   --dur-base: 0.01ms;
   --dur-slow: 0.01ms;
+  --dur-linger: 0.01ms;
+  --dur-loop: 0.01ms;
+  --dur-ambient: 0.01ms;
 }
 
 .reduced-motion *,
@@ -737,7 +747,7 @@ input:focus, textarea:focus, select:focus {
 .xterm .xterm-scrollable-element > .visible {
   opacity: 1;
   background: rgba(0, 0, 0, 0);
-  transition: opacity 100ms linear;
+  transition: opacity var(--dur-instant) linear;
   z-index: 11;
 }
 
@@ -747,7 +757,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .xterm .xterm-scrollable-element > .invisible.fade {
-  transition: opacity 800ms linear;
+  transition: opacity var(--dur-linger) linear;
 }
 
 .xterm .xterm-scrollable-element > .shadow {

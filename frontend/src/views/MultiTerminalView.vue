@@ -12,7 +12,7 @@ import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import { normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
+import { WINDOWS_SHELL_KEY, normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
 import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
 import { terminalThemeOf } from '@/utils/terminalThemes'
 import { useDirectoryOptions, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
@@ -216,8 +216,6 @@ const handleSessionSelect = (id: string, session: ApiSession) => {
 
 // A Windows local box opens a native shell, as the single view's tabs do: the stored shell
 // id (empty is the default) and native-shell. Any other box passes "plain" or nothing (tmux).
-// Same key as TerminalView.vue SHELL_STORAGE_KEY.
-const WINDOWS_SHELL_KEY = 'sshler.windows_shell'
 const shellOf = (terminal: TerminalInstance): string =>
   isWindowsLocalBox(terminal.boxName)
     ? localStorage.getItem(WINDOWS_SHELL_KEY) || ''

@@ -324,7 +324,7 @@ function escapeHtml(str: string): string {
   padding: 16px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .grep-dropdown {
     max-height: 50vh;
   }
