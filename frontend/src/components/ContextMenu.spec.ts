@@ -1,4 +1,4 @@
-import { render } from "@testing-library/vue";
+import { fireEvent, render } from "@testing-library/vue";
 import { nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,9 +39,14 @@ async function open(x: number, y: number) {
 }
 
 beforeEach(() => {
+  // The pop-in transform makes the painted rectangle smaller than the layout box; the menu
+  // must be placed by the layout box (offsetWidth and offsetHeight).
+  const painted = { width: MENU.width * 0.96, height: MENU.height * 0.96 };
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    () => ({ ...MENU, x: 0, y: 0, top: 0, left: 0, right: MENU.width, bottom: MENU.height, toJSON: () => ({}) }),
+    () => ({ ...painted, x: 0, y: 0, top: 0, left: 0, right: painted.width, bottom: painted.height, toJSON: () => ({}) }),
   );
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(MENU.width);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(MENU.height);
   Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: WINDOW.width });
   Object.defineProperty(document.documentElement, "clientHeight", { configurable: true, value: WINDOW.height });
 });
@@ -95,5 +100,30 @@ describe("ContextMenu placement", () => {
       left: `${600 - MENU.width - MARGIN}px`,
       top: `${450 - MENU.height - MARGIN}px`,
     });
+  });
+});
+
+describe("ContextMenu hooks and closing", () => {
+  it("puts the given test ids on the menu and its items", async () => {
+    const view = render(ContextMenu, {
+      props: { items: [{ id: "a", label: "Alpha", testid: "item-a" }], x: 10, y: 10, visible: true, testid: "the-menu" },
+    });
+    await nextTick();
+    expect(document.body.querySelector('[data-testid="the-menu"]')).not.toBeNull();
+    expect(document.body.querySelector('[data-testid="item-a"]')).not.toBeNull();
+    view.unmount();
+  });
+
+  it("closes on a right-click outside and stays open on one inside", async () => {
+    const view = await open(100, 100);
+    await fireEvent.contextMenu(menuElement().querySelector(".context-menu-item")!);
+    expect(view.emitted().close).toBeUndefined();
+    await fireEvent.contextMenu(document.body);
+    expect(view.emitted().close).toHaveLength(1);
+  });
+
+  it("is wrapped in the menu-pop transition", async () => {
+    await open(100, 100);
+    expect(document.body.innerHTML).toMatch(/menu-pop/);
   });
 });

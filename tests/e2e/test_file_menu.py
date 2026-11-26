@@ -146,6 +146,7 @@ async def test_a_second_open_is_placed_for_its_own_point(open_page, app_server):
     page = await open_files(open_page, app_server, viewport)
 
     await right_click_at(page, 100, 100)
+    await page.wait_for_timeout(400)  # the pop-in moves the painted box until it ends
     first = await box_of(page, MENU)
     assert (first["x"], first["y"]) == (100, 100)
 
@@ -153,6 +154,7 @@ async def test_a_second_open_is_placed_for_its_own_point(open_page, app_server):
     await expect(page.locator(MENU)).to_have_count(0)
 
     await right_click_at(page, 300, 200)
+    await page.wait_for_timeout(400)
     second = await box_of(page, MENU)
     assert (second["x"], second["y"]) == (300, 200)
 
@@ -188,3 +190,16 @@ async def test_a_resize_while_open_keeps_the_menu_inside(open_page, app_server):
     )
     menu = await box_of(page, MENU)
     assert inside(menu, smaller), menu
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewport", [{"width": 760, "height": 700}, {"width": 390, "height": 844}])
+async def test_menu_at_the_corner_of_a_narrow_window_is_on_the_screen(open_page, app_server, viewport):
+    """A right-click in the bottom-right corner at 760 by 700 and at 390 by 844 keeps the menu inside."""
+    page = await open_files(open_page, app_server, viewport)
+    await right_click_at(page, viewport["width"] - 1, viewport["height"] - 1)
+    await expect(page.locator(MENU)).to_be_visible()
+    await page.wait_for_timeout(400)  # let the pop-in finish before measuring
+
+    menu = await box_of(page, MENU)
+    assert inside(menu, viewport), menu

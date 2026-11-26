@@ -4,6 +4,7 @@ import { NIcon } from 'naive-ui'
 import { PhX, PhPlus } from '@phosphor-icons/vue'
 import type { TerminalTab } from '@/stores/terminalTabs'
 import { useI18n } from '@/i18n'
+import ContextMenu from '@/components/ContextMenu.vue'
 
 const props = defineProps<{
   tabs: TerminalTab[]
@@ -41,6 +42,21 @@ function openMenu(event: MouseEvent, tabId: string) {
   menuTabId.value = tabId
   menuX.value = event.clientX
   menuY.value = event.clientY
+}
+
+const menuItems = computed(() => [
+  { id: 'rename', label: t('terminal.tabs.rename'), testid: 'tab-menu-rename' },
+  { id: 'close', label: t('terminal.tabs.close_keep'), testid: 'tab-menu-close' },
+  { id: 'kill', label: t('terminal.tabs.kill'), danger: true, testid: 'tab-menu-kill' },
+])
+
+// The menu emits `select` and then `close`, so the tab id is read before the close clears it.
+function onMenuSelect(itemId: string) {
+  const id = menuTabId.value
+  if (!id) return
+  if (itemId === 'rename') openRenameModal(id)
+  else if (itemId === 'close') onMenuClose(id)
+  else if (itemId === 'kill') requestKill(id)
 }
 
 function closeMenu() {
@@ -219,48 +235,19 @@ function onCloseClick(event: MouseEvent, tabId: string) {
   </div>
 
   <!--
-    Tab context menu (right-click). Full-viewport backdrop closes it on any
-    outside click. "Kill terminal" is the deliberate, danger-styled action that
+    Tab context menu (right-click): the shared menu, so it stays on screen and closes on an
+    outside click or Escape. "Kill terminal" is the deliberate, danger-styled action that
     terminates the server-side shell so reopening spawns a fresh one.
   -->
-  <Teleport to="body">
-    <div
-      v-if="menuTabId"
-      class="tab-menu-backdrop"
-      data-testid="tab-menu-backdrop"
-      @click="closeMenu"
-      @contextmenu.prevent="closeMenu"
-    >
-      <div
-        class="tab-menu"
-        data-testid="tab-context-menu"
-        :style="{ left: `${menuX}px`, top: `${menuY}px` }"
-        @click.stop
-      >
-        <button
-          class="tab-menu-item"
-          data-testid="tab-menu-rename"
-          @click="openRenameModal(menuTabId!)"
-        >
-          {{ t('terminal.tabs.rename') }}
-        </button>
-        <button
-          class="tab-menu-item"
-          data-testid="tab-menu-close"
-          @click="onMenuClose(menuTabId!)"
-        >
-          {{ t('terminal.tabs.close_keep') }}
-        </button>
-        <button
-          class="tab-menu-item tab-menu-item--danger"
-          data-testid="tab-menu-kill"
-          @click="requestKill(menuTabId!)"
-        >
-          {{ t('terminal.tabs.kill') }}
-        </button>
-      </div>
-    </div>
-  </Teleport>
+  <ContextMenu
+    :visible="menuTabId !== null"
+    :x="menuX"
+    :y="menuY"
+    :items="menuItems"
+    testid="tab-context-menu"
+    @select="onMenuSelect"
+    @close="closeMenu"
+  />
 
   <!-- Rename modal (opened from the context menu's "Rename" item). -->
   <Teleport to="body">
@@ -380,7 +367,7 @@ function onCloseClick(event: MouseEvent, tabId: string) {
   white-space: nowrap;
   min-width: 0;
   flex-shrink: 0;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .tab-item:hover {
@@ -461,59 +448,12 @@ function onCloseClick(event: MouseEvent, tabId: string) {
   border-radius: 6px;
   flex-shrink: 0;
   margin-left: 2px;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 .tab-add:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--text);
-}
-
-.tab-menu-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 4000;
-}
-
-.tab-menu {
-  position: fixed;
-  min-width: 200px;
-  padding: 4px;
-  background: var(--surface);
-  border: 1px solid var(--stroke);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.tab-menu-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 7px 10px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  font-family: inherit;
-  border-radius: 5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.tab-menu-item:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.tab-menu-item--danger {
-  color: #ef4444;
-}
-
-.tab-menu-item--danger:hover {
-  background: color-mix(in srgb, #ef4444 16%, transparent);
-  color: #ef4444;
 }
 
 /* --- Rename / Kill-confirm modals --------------------------------------- */
@@ -580,7 +520,7 @@ function onCloseClick(event: MouseEvent, tabId: string) {
   color: var(--text);
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .tab-modal-btn:hover {

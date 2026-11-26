@@ -327,19 +327,34 @@ describe('TerminalTabBar', () => {
     expect(emitted('kill')).toBeUndefined()
   })
 
-  it('clicking the backdrop closes the menu without emitting kill or close', async () => {
+  it('clicking outside the menu closes the menu without emitting kill or close', async () => {
     const { container, emitted } = mountBar()
     const items = container.querySelectorAll('[data-testid="tab-item"]')
     await fireEvent.contextMenu(items[0]!)
     await nextTick()
     expect(document.querySelector('[data-testid="tab-context-menu"]')).not.toBeNull()
 
-    const backdrop = document.querySelector('[data-testid="tab-menu-backdrop"]') as HTMLElement
-    await fireEvent.click(backdrop)
+    await fireEvent.click(document.body)
     await nextTick()
 
     expect(document.querySelector('[data-testid="tab-context-menu"]')).toBeNull()
     expect(emitted('kill')).toBeUndefined()
     expect(emitted('close')).toBeUndefined()
+  })
+
+  it('the tab menu opens inside the window when the right-click is at the bottom-right corner', async () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 760 })
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 700 })
+    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(200)
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(120)
+    const { container } = mountBar()
+    const items = container.querySelectorAll('[data-testid="tab-item"]')
+    await fireEvent.contextMenu(items[0]!, { clientX: 759, clientY: 699 })
+    await nextTick()
+    const menu = document.querySelector('[data-testid="tab-context-menu"]') as HTMLElement
+    expect(menu.style.left).toBe('552px')
+    expect(menu.style.top).toBe('572px')
+    width.mockRestore()
+    height.mockRestore()
   })
 })
