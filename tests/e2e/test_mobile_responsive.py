@@ -74,7 +74,8 @@ async def test_mobile_nav_bar_and_drawer(open_page, path):
     settings = drawer.get_by_role("link", name="Settings")
     await expect(settings).to_be_visible()
     await page.wait_for_function(
-        "() => { const d = document.querySelector('.n-drawer'); return d && Math.round(d.getBoundingClientRect().left) === 0; }"
+        "() => { const d = document.querySelector('.n-drawer'); "
+        "return d && Math.round(d.getBoundingClientRect().left) === 0; }"
     )
     await settings.click()
     await expect(page).to_have_url(re.compile(r"/app/settings$"))
@@ -98,7 +99,9 @@ async def test_the_breakpoint_is_768(open_page, width, rails, bars):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("viewport", [MOBILE_VIEWPORT, {"width": 1366, "height": 768}], ids=["phone", "desktop"])
+@pytest.mark.parametrize(
+    "viewport", [MOBILE_VIEWPORT, {"width": 1366, "height": 768}], ids=["phone", "desktop"]
+)
 async def test_sign_in_page_has_no_navigation(open_page, viewport):
     """The sign-in page shows the form alone: no rail, no bar.
 
@@ -232,7 +235,9 @@ async def test_phone_terminal_menu_opens_the_drawer_with_progress(open_page):
     page = await open_page({"width": 390, "height": 844})
     await page.goto("/app/terminal?box=local", wait_until="load")
     await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
-    assert await page.locator(".app-header").evaluate("el => el.getBoundingClientRect().height") == 14
+    assert (
+        await page.locator(".app-header").evaluate("el => el.getBoundingClientRect().height") == 14
+    )
 
     await page.locator(".mobile-header").get_by_role("button", name="Open menu").click()
     drawer = page.locator(".n-drawer")

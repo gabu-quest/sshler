@@ -166,7 +166,9 @@ async def test_terminal_via_files_view(open_page):
 
     # The collapsed rail shows only each link's icon; the rest of the link is clipped
     # under the page, so click the icon, as a person does.
-    await nav.get_by_role("link", name=re.compile(r"^Terminal \(")).click(position={"x": 20, "y": 20})
+    await nav.get_by_role("link", name=re.compile(r"^Terminal \(")).click(
+        position={"x": 20, "y": 20}
+    )
     await expect(page).to_have_url(re.compile(r"/app/terminal(\?.*)?$"))
 
     await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)

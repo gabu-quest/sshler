@@ -511,7 +511,10 @@ async def test_rail_keys_reach_the_rail_from_inside_the_terminal(open_page, tmp_
 
     def on_socket(ws) -> None:
         if "/ws/term" in ws.url:
-            ws.on("framesent", lambda payload: keystrokes.append(payload) if isinstance(payload, bytes) else None)
+            ws.on(
+                "framesent",
+                lambda payload: keystrokes.append(payload) if isinstance(payload, bytes) else None,
+            )
 
     page.on("websocket", on_socket)
     await open_terminal(page, tmp_path)
@@ -541,14 +544,16 @@ async def test_four_panes_have_one_row_title_bars_and_a_menu_with_every_action(o
     one "more" button whose menu holds the actions the narrow bar hides; a single terminal
     at the same size keeps its full bar.
 
-    Mutation: the more button without stopPropagation -> the menu is gone 150 ms after it opens; no container query -> the bar wraps to three rows and the pane's bar is
+    Mutation: the more button without stopPropagation -> the menu is gone 150 ms after it opens;
+    no container query -> the bar wraps to three rows and the pane's bar is
     taller than 32 px; no more button -> the menu cannot be opened.
     """
     import json
 
     page = await open_page({"width": 1366, "height": 768})
     layout = [
-        {"boxName": "local", "sessionName": f"bar-e2e-{i}", "directory": "~", "shell": "tmux"} for i in range(4)
+        {"boxName": "local", "sessionName": f"bar-e2e-{i}", "directory": "~", "shell": "tmux"}
+        for i in range(4)
     ]
     await page.add_init_script(
         "localStorage.setItem('sshler:multi-terminal:layout', " + repr(json.dumps(layout)) + ")"
@@ -562,7 +567,8 @@ async def test_four_panes_have_one_row_title_bars_and_a_menu_with_every_action(o
         assert box["width"] < 700, f"pane {i} is {box['width']}px wide: not a narrow bar"
         rows = await bars.nth(i).evaluate(
             "el => new Set([...el.children].flatMap(c => [...c.querySelectorAll('button')]"
-            ".filter(b => b.offsetParent !== null).map(b => Math.round(b.getBoundingClientRect().top)))).size"
+            ".filter(b => b.offsetParent !== null)"
+            ".map(b => Math.round(b.getBoundingClientRect().top)))).size"
         )
         assert rows == 1, f"pane {i}'s buttons sit on {rows} rows"
     more = page.get_by_test_id("terminal-more")
@@ -595,8 +601,10 @@ async def test_a_single_terminal_at_1366_keeps_its_full_title_bar(open_page, tmp
     wrapper_box = await page.locator(".terminal-wrapper").bounding_box()
     assert box is not None and wrapper_box is not None
     assert abs(box["height"] - 32) <= 1 and abs(box["width"] - (wrapper_box["width"] - 2)) <= 1, box
-    groups = await bar.evaluate("el => [...el.children].map(c => Math.round(c.getBoundingClientRect().width))")
-    assert all(abs(a - b) <= 1 for a, b in zip(groups, [332, 632, 316])), groups
+    groups = await bar.evaluate(
+        "el => [...el.children].map(c => Math.round(c.getBoundingClientRect().width))"
+    )
+    assert all(abs(a - b) <= 1 for a, b in zip(groups, [332, 632, 316], strict=True)), groups
 
 
 # ---------------------------------------------------------------------------
@@ -604,25 +612,35 @@ async def test_a_single_terminal_at_1366_keeps_its_full_title_bar(open_page, tmp
 # ---------------------------------------------------------------------------
 
 
-async def open_panes(open_page, count: int, viewport: dict[str, int] | None = None, on_websocket=None):
+async def open_panes(
+    open_page, count: int, viewport: dict[str, int] | None = None, on_websocket=None
+):
     import json
 
     page = await open_page(viewport or {"width": 1366, "height": 768})
     if on_websocket:
         page.on("websocket", on_websocket)
     layout = [
-        {"boxName": "local", "sessionName": f"menu-e2e-{i}", "directory": "~", "shell": "tmux"} for i in range(count)
+        {"boxName": "local", "sessionName": f"menu-e2e-{i}", "directory": "~", "shell": "tmux"}
+        for i in range(count)
     ]
     await page.add_init_script(
         "localStorage.setItem('sshler:multi-terminal:layout', " + repr(json.dumps(layout)) + ")"
     )
     await page.goto("/app/multi-terminal?box=local", wait_until="load")
-    await expect(page.locator(".multi-terminal-page .terminal-titlebar")).to_have_count(count, timeout=TIMEOUT_MS)
-    await expect(page.locator(".multi-terminal-page .xterm-screen")).to_have_count(count, timeout=TIMEOUT_MS)
+    await expect(page.locator(".multi-terminal-page .terminal-titlebar")).to_have_count(
+        count, timeout=TIMEOUT_MS
+    )
+    await expect(page.locator(".multi-terminal-page .xterm-screen")).to_have_count(
+        count, timeout=TIMEOUT_MS
+    )
     return page
 
 
-ACTIVE_IS_XTERM = "() => document.activeElement && document.activeElement.classList.contains('xterm-helper-textarea')"
+ACTIVE_IS_XTERM = (
+    "() => document.activeElement && "
+    "document.activeElement.classList.contains('xterm-helper-textarea')"
+)
 
 
 @pytest.mark.asyncio
@@ -642,7 +660,8 @@ async def test_fullscreen_from_pane_three_fills_pane_three_with_its_menu_and_car
     # in the page itself.
     await page.wait_for_function("() => !!document.fullscreenElement", timeout=TIMEOUT_MS)
     index = await page.evaluate(
-        "() => [...document.querySelectorAll('.multi-terminal-page .terminal-wrapper')].indexOf(document.fullscreenElement)"
+        "() => [...document.querySelectorAll('.multi-terminal-page .terminal-wrapper')]"
+        ".indexOf(document.fullscreenElement)"
     )
     assert index == 2, f"pane {index} is fullscreen, not pane 2 (0-based)"
 
@@ -650,7 +669,8 @@ async def test_fullscreen_from_pane_three_fills_pane_three_with_its_menu_and_car
 @pytest.mark.asyncio
 async def test_a_narrow_pane_in_fullscreen_still_draws_its_menu_and_cards(open_page):
     """At 390 px the bar stays narrow in fullscreen, so "more" is the way to the actions (the
-    test shows the button by style, see below): its menu and the kill card are inside the fullscreen element and are what is drawn.
+    test shows the button by style, see below): its menu and the kill card are inside the
+    fullscreen element and are what is drawn.
 
     Mutation: the menu or the card left under <body> -> not inside the element, and the
     page behind them is drawn at their place.
@@ -667,11 +687,13 @@ async def test_a_narrow_pane_in_fullscreen_still_draws_its_menu_and_cards(open_p
     menu = page.get_by_test_id("terminal-more-menu")
     await expect(menu).to_be_visible()
     assert await page.evaluate(
-        "() => document.fullscreenElement.contains(document.querySelector('[data-testid=terminal-more-menu]'))"
+        "() => document.fullscreenElement.contains("
+        "document.querySelector('[data-testid=terminal-more-menu]'))"
     ), "the menu is outside the fullscreen pane"
     # The menu is drawn: the element at its centre is the menu, not the page behind it.
     assert await page.evaluate(
-        """() => { const m = document.querySelector('[data-testid=terminal-more-menu]').getBoundingClientRect();
+        """() => { const m = document.querySelector('[data-testid=terminal-more-menu]')
+              .getBoundingClientRect();
           const hit = document.elementFromPoint(m.left + m.width / 2, m.top + 10);
           return !!hit && !!hit.closest('[data-testid=terminal-more-menu]'); }"""
     ), "the menu is not what is drawn at its own place"
@@ -680,10 +702,12 @@ async def test_a_narrow_pane_in_fullscreen_still_draws_its_menu_and_cards(open_p
     await expect(card).to_be_visible()
     await page.wait_for_timeout(600)  # past the card's pop-in
     assert await page.evaluate(
-        "() => document.fullscreenElement.contains(document.querySelector('[data-testid=terminal-menu-confirm]'))"
+        "() => document.fullscreenElement.contains("
+        "document.querySelector('[data-testid=terminal-menu-confirm]'))"
     ), "the kill card is outside the fullscreen pane"
     assert await page.evaluate(
-        """() => { const b = document.querySelector('[data-testid=terminal-menu-confirm]').getBoundingClientRect();
+        """() => { const b = document.querySelector('[data-testid=terminal-menu-confirm]')
+              .getBoundingClientRect();
           const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
           return hit === document.querySelector('[data-testid=terminal-menu-confirm]'); }"""
     ), "the card is not drawn"
@@ -711,7 +735,9 @@ async def test_more_is_a_toggle_and_one_pane_shows_its_menu_at_a_time(open_page)
     box = await menus.first.bounding_box()
     other = await more.nth(1).bounding_box()
     assert box is not None and other is not None
-    assert abs(box["x"] + box["width"] - (other["x"] + other["width"])) < 40, "the open menu is pane 1's"
+    assert abs(box["x"] + box["width"] - (other["x"] + other["width"])) < 40, (
+        "the open menu is pane 1's"
+    )
 
 
 @pytest.mark.asyncio
@@ -741,7 +767,12 @@ async def test_escape_that_closes_the_menu_sends_nothing_to_the_shell(open_page)
     frames: list[bytes] = []
 
     def on_ws(ws) -> None:
-        ws.on("framesent", lambda payload: frames.append(payload if isinstance(payload, bytes) else payload.encode()))
+        ws.on(
+            "framesent",
+            lambda payload: frames.append(
+                payload if isinstance(payload, bytes) else payload.encode()
+            ),
+        )
 
     page = await open_panes(open_page, 2, on_websocket=on_ws)
     await page.wait_for_timeout(2000)

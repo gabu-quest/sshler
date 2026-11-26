@@ -30,7 +30,9 @@ def nav_link(page, label: str):
 async def tool_link(page, label: str):
     """The link for *label* in the rail's Tools flyout, opened first."""
     await page.get_by_test_id("rail-tools").click(position=ICON)
-    return page.locator(".rail-tools-menu").get_by_role("menuitem", name=re.compile(rf"^{label} \("))
+    return page.locator(".rail-tools-menu").get_by_role(
+        "menuitem", name=re.compile(rf"^{label} \(")
+    )
 
 
 @pytest.mark.asyncio
@@ -115,7 +117,8 @@ async def wait_panel_at(page, x: int) -> None:
     await page.wait_for_function(
         """x => {
           const panel = document.querySelector('.rail-panel');
-          return panel !== null && Math.round(new DOMMatrix(getComputedStyle(panel).transform).m41) === x;
+          if (panel === null) return false;
+          return Math.round(new DOMMatrix(getComputedStyle(panel).transform).m41) === x;
         }""",
         arg=x,
     )
@@ -136,7 +139,10 @@ async def test_terminal_page_has_no_top_bar_only_the_rail(open_page):
     assert await box_of(page, ".app-rail") == {"x": 0, "y": 0, "width": COLLAPSED, "height": 768}
     await expect(page.locator(".app-header")).to_have_count(0)
     assert await box_of(page, ".app-main") == {
-        "x": COLLAPSED, "y": 0, "width": 1366 - COLLAPSED, "height": 768,
+        "x": COLLAPSED,
+        "y": 0,
+        "width": 1366 - COLLAPSED,
+        "height": 768,
     }
 
 
@@ -189,9 +195,12 @@ async def test_expanded_rail_floats_and_closes(open_page):
     assert await box_of(page, ".app-rail") == {"x": 0, "y": 0, "width": COLLAPSED, "height": 768}
     assert await box_of(page, ".rail-panel") == {"x": 0, "y": 0, "width": EXPANDED, "height": 768}
     assert await box_of(page, ".app-main") == main_before
-    assert await page.evaluate(
-        "getComputedStyle(document.querySelector('.rail-panel')).transitionProperty"
-    ) == "transform"
+    assert (
+        await page.evaluate(
+            "getComputedStyle(document.querySelector('.rail-panel')).transitionProperty"
+        )
+        == "transform"
+    )
     await expect(page.get_by_test_id("rail-toggle")).to_have_attribute("aria-expanded", "true")
 
     await page.keyboard.press("Escape")
@@ -228,7 +237,10 @@ async def test_rail_toggle_sends_no_resize_to_the_terminal(open_page):
 
     def on_socket(ws) -> None:
         if "/ws/term" in ws.url:
-            ws.on("framesent", lambda payload: sent.append(payload if isinstance(payload, str) else ""))
+            ws.on(
+                "framesent",
+                lambda payload: sent.append(payload if isinstance(payload, str) else ""),
+            )
 
     page.on("websocket", on_socket)
     await page.goto("/app/terminal?box=local", wait_until="load")
@@ -308,7 +320,9 @@ async def test_files_table_fills_the_window_in_a_full_folder(open_page, tmp_path
     assert box is not None
     bottom = box["y"] + box["height"]
     assert viewport["height"] - 24 <= bottom <= viewport["height"], f"the table ends at {bottom}px"
-    assert box["height"] >= 0.6 * viewport["height"] - strip_px, f"the table is {box['height']}px high"
+    assert box["height"] >= 0.6 * viewport["height"] - strip_px, (
+        f"the table is {box['height']}px high"
+    )
     scroll = await page.evaluate(
         "() => { const s = document.querySelector('.app-main .n-layout-scroll-container');"
         " return s ? s.scrollHeight - s.clientHeight : -1 }"
@@ -368,7 +382,8 @@ async def test_japanese_rail_labels_fit_at_768(open_page):
             const range = document.createRange();
             range.selectNodeContents(el);
             const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
-            return [el.textContent.trim(), lines, el.scrollWidth <= el.clientWidth, Math.round(box.right)];
+            const fits = el.scrollWidth <= el.clientWidth;
+            return [el.textContent.trim(), lines, fits, Math.round(box.right)];
           })"""
     )
     texts = [label for label, *_ in labels]
@@ -392,7 +407,8 @@ async def test_multi_terminal_four_panes_fit_the_window_with_one_title_bar_each(
     viewport = {"width": 1366, "height": 768}
     page = await open_page(viewport)
     layout = [
-        {"boxName": "local", "sessionName": f"multi-e2e-{i}", "directory": "~", "shell": "tmux"} for i in range(4)
+        {"boxName": "local", "sessionName": f"multi-e2e-{i}", "directory": "~", "shell": "tmux"}
+        for i in range(4)
     ]
     await page.add_init_script(
         "localStorage.setItem('sshler:multi-terminal:layout', " + repr(json.dumps(layout)) + ")"
@@ -400,7 +416,9 @@ async def test_multi_terminal_four_panes_fit_the_window_with_one_title_bar_each(
     await page.goto("/app/multi-terminal?box=local", wait_until="load")
     panes = page.locator(".multi-terminal-page .multi-pane")
     await expect(panes).to_have_count(4)
-    await expect(page.locator(".multi-terminal-page .terminal-titlebar")).to_have_count(4, timeout=15000)
+    await expect(page.locator(".multi-terminal-page .terminal-titlebar")).to_have_count(
+        4, timeout=15000
+    )
     await expect(page.locator(".multi-terminal-page .terminal-header")).to_have_count(0)
     await expect(page.get_by_test_id("terminal-close")).to_have_count(4)
 
@@ -414,7 +432,9 @@ async def test_multi_terminal_four_panes_fit_the_window_with_one_title_bar_each(
 
     first, third = await panes.nth(0).bounding_box(), await panes.nth(2).bounding_box()
     assert first is not None and third is not None
-    assert third["y"] >= first["y"] + first["height"] - 1, "four panes are a 2 x 2, the third under the first"
+    assert third["y"] >= first["y"] + first["height"] - 1, (
+        "four panes are a 2 x 2, the third under the first"
+    )
 
     await page.get_by_test_id("terminal-close").nth(1).click()
     await expect(panes).to_have_count(3)
