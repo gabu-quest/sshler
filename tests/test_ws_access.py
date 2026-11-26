@@ -43,6 +43,8 @@ CLI_ORIGIN = "https://cli.example.test:9443"
 HOSTILE = "http://evil.example"
 
 SOCKETS = ["term", "progress", "ping"]
+# A remote box the tests only name: its address is a documentation one, never dialled.
+REMOTE_BOX = {"name": "far", "host": "203.0.113.1", "user": "u"}
 
 
 def _url(socket: str, *, token: str | None = TOKEN, session: str = "s1") -> str:
@@ -91,7 +93,7 @@ def _state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "boxes.yaml").write_text(
-        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+        yaml.safe_dump({"boxes": [REMOTE_BOX]}, sort_keys=False), encoding="utf-8"
     )
     monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("SSHLER_PUBLIC_URL", PUBLIC_URL)
@@ -230,15 +232,10 @@ async def _refused_over_asgi(app, socket: str, query: str) -> tuple[list[dict], 
     [
         ("term", "host=local&dir=/tmp&session=s1&token=wrong", (4403, "Invalid token")),
         ("term", f"host=local&dir=/tmp&session=&token={TOKEN}", (4400, "Invalid session name")),
-        (
-            "term",
-            f"host=local&dir=/tmp&session=s1&shell=bash&token={TOKEN}",
-            (4400, "Invalid shell"),
-        ),
         ("progress", "token=wrong", (4403, "Invalid token")),
         ("ping", "token=wrong", (4403, "Invalid token")),
     ],
-    ids=["term-token", "term-session-name", "term-shell", "progress-token", "ping-token"],
+    ids=["term-token", "term-session-name", "progress-token", "ping-token"],
 )
 async def test_a_refused_socket_is_accepted_closed_and_never_read(
     client: TestClient, fake_tmux, socket: str, query: str, closed: tuple[int, str]
@@ -250,6 +247,26 @@ async def test_a_refused_socket_is_accepted_closed_and_never_read(
     assert sent == [
         {"type": "websocket.accept", "subprotocol": None, "headers": []},
         {"type": "websocket.close", "code": closed[0], "reason": closed[1]},
+    ]
+    assert unread == 2
+    assert fake_tmux.calls() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_is_windows", [False, True], ids=["posix-server", "windows-server"])
+async def test_an_unknown_shell_for_a_remote_box_is_refused_by_either_server(
+    client: TestClient, fake_tmux, monkeypatch: pytest.MonkeyPatch, local_is_windows: bool
+):
+    """A Windows server opens its default shell for a shell id it does not know on its
+    own box, so the refusal is asked of a remote box, which both servers refuse. Kills:
+    the shell case asking the local box, which opened a real shell on Windows; the test
+    timed out and the left shell kept pytest from exiting."""
+    monkeypatch.setattr(webapp, "LOCAL_IS_WINDOWS", local_is_windows)
+    query = f"host={REMOTE_BOX['name']}&dir=/tmp&session=s1&shell=bash&token={TOKEN}"
+    sent, unread = await _refused_over_asgi(client.app, "term", query)
+    assert sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 4400, "reason": "Invalid shell"},
     ]
     assert unread == 2
     assert fake_tmux.calls() == []
