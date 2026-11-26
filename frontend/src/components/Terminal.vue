@@ -679,7 +679,7 @@ const createTerminal = () => {
     fontFamily: props.fontFamily,
     lineHeight: isCyberpunk ? 1.25 : 1.2,
     letterSpacing: 0,
-    cursorBlink: true,
+    cursorBlink: !appStore.reducedMotion,
     cursorStyle: isCyberpunk ? 'bar' : 'block',
     cursorInactiveStyle: 'outline',
     allowTransparency: false,
@@ -687,7 +687,7 @@ const createTerminal = () => {
     // xterm draws its own scroll bar this many px wide, and FitAddon reserves the same
     // width; 10 px is the width of the thin native scroll bar this terminal had before.
     overviewRuler: { width: SCROLL_BAR_WIDTH },
-    smoothScrollDuration: isCyberpunk ? 150 : 100,
+    smoothScrollDuration: appStore.reducedMotion ? 0 : isCyberpunk ? 150 : 100,
     rightClickSelectsWord: false,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: false,
@@ -1614,6 +1614,14 @@ watch([() => props.theme, () => appStore.isDark], () => {
   }
 })
 
+// Reduce motion stops xterm's own cursor blink and smooth scroll, and back again, live
+watch(() => appStore.reducedMotion, (reduced) => {
+  if (terminal) {
+    terminal.options.cursorBlink = !reduced
+    terminal.options.smoothScrollDuration = reduced ? 0 : (props.theme === 'cyberpunk' && appStore.isDark ? 150 : 100)
+  }
+})
+
 // Refit when responsive font size changes
 watch(effectiveFontSize, (newSize) => {
   if (terminal) {
@@ -1812,19 +1820,19 @@ defineExpose({
       <div class="titlebar-left">
         <!-- Yellow group: Windows (tmux-only) -->
         <div v-if="!isNativeShell" class="toolbar-group toolbar-yellow">
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxPrevWindow"><PhCaretLeft :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.prev_window') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxNewWindow"><PhPlus :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.new_window') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxNextWindow"><PhCaretRight :size="14" weight="bold" /></button>
             </template>
@@ -1833,37 +1841,38 @@ defineExpose({
         </div>
         <!-- Purple group: Panes (tmux-only) -->
         <div v-if="!isNativeShell" class="toolbar-group toolbar-purple">
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxPaneLeft"><PhArrowLineLeft :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.pane_left') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxSplitVertical"><PhSplitVertical :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.split_vertical') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxSplitHorizontal"><PhSplitHorizontal :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.split_horizontal') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxPaneRight"><PhArrowLineRight :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.pane_right') }}
           </NTooltip>
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.kill_pane')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxKillPaneConfirmed"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhX :size="14" weight="bold" /></button>
                 </template>
@@ -1876,12 +1885,13 @@ defineExpose({
         <!-- Red group: Destructive (tmux-only; native shells kill via SessionSwitcher) -->
         <div v-if="!isNativeShell" class="toolbar-group toolbar-red">
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.kill_window')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxKillWindowConfirmed"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhXCircle :size="14" weight="bold" /></button>
                 </template>
@@ -1891,12 +1901,13 @@ defineExpose({
             {{ t('terminal.kill_window_confirm') }}
           </NPopconfirm>
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.kill_session')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxKillSession"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhPower :size="14" weight="bold" /></button>
                 </template>
@@ -1906,12 +1917,13 @@ defineExpose({
             {{ t('terminal.kill_session_confirm') }}
           </NPopconfirm>
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.force_kill_session')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxForceKillSession"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger"><PhSkull :size="14" weight="bold" /></button>
                 </template>
@@ -1930,7 +1942,7 @@ defineExpose({
         <slot name="titlebar-meta" />
       </div>
       <div class="titlebar-right">
-        <NTooltip v-if="!isNativeShell" :delay="300">
+        <NTooltip v-if="!isNativeShell" :to="overlayTarget" :delay="300">
           <template #trigger>
             <button
               class="titlebar-btn mouse-btn"
@@ -1944,7 +1956,7 @@ defineExpose({
           </template>
           {{ mouseMode ? t('terminal.mouse_on') : t('terminal.mouse_off') }}
         </NTooltip>
-        <NTooltip v-if="!isNativeShell" :delay="400">
+        <NTooltip v-if="!isNativeShell" :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :disabled="!connected" @click="enterCopyMode">
               <PhCopy :size="14" weight="duotone" />
@@ -1952,7 +1964,7 @@ defineExpose({
           </template>
           {{ t('terminal.copy_mode') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" @click="openScrollbackViewer">
               <PhListBullets :size="14" weight="duotone" />
@@ -1960,7 +1972,7 @@ defineExpose({
           </template>
           {{ t('terminal.scrollback_viewer_tip') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" @click="copyAllScrollback">
               <PhCopySimple :size="14" weight="duotone" />
@@ -1968,7 +1980,7 @@ defineExpose({
           </template>
           {{ t('terminal.copy_all_tip') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :disabled="!connected" @click="pasteFromClipboard">
               <PhClipboard :size="14" weight="duotone" />
@@ -1976,7 +1988,7 @@ defineExpose({
           </template>
           {{ t('terminal.paste') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :disabled="!connected" @click="clear">
               <PhBroom :size="14" weight="duotone" />
@@ -1984,7 +1996,7 @@ defineExpose({
           </template>
           {{ t('terminal.clear') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :class="{ 'active': showSearch }" @click="toggleSearch">
               <PhMagnifyingGlass :size="14" weight="duotone" />
@@ -1992,9 +2004,9 @@ defineExpose({
           </template>
           {{ t('terminal.search') }}
         </NTooltip>
-        <NPopover v-model:show="showSessionSwitcher" trigger="click" placement="bottom-end">
+        <NPopover v-model:show="showSessionSwitcher" :to="overlayTarget" trigger="click" placement="bottom-end">
           <template #trigger>
-            <NTooltip :delay="400">
+            <NTooltip :to="overlayTarget" :delay="400">
               <template #trigger>
                 <button class="titlebar-btn" :class="{ active: showSessionSwitcher }">
                   <PhList :size="14" weight="duotone" />
@@ -2011,7 +2023,7 @@ defineExpose({
             @select="(s) => { emit('session-select', s); showSessionSwitcher = false }"
           />
         </NPopover>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" @click="toggleFullscreen">
               <component :is="isFullscreen ? PhCornersIn : PhCornersOut" :size="14" weight="duotone" />
@@ -2019,7 +2031,7 @@ defineExpose({
           </template>
           {{ isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen') }}
         </NTooltip>
-        <NTooltip :delay="200" :style="{ maxWidth: '320px' }">
+        <NTooltip :to="overlayTarget" :delay="200" :style="{ maxWidth: '320px' }">
           <template #trigger>
             <button class="titlebar-btn help-btn">
               <PhQuestion :size="14" weight="duotone" />
@@ -2193,6 +2205,7 @@ defineExpose({
     <!-- Scrollback Viewer Modal: native textarea so OS scroll+select works perfectly -->
     <NModal
       :show="showScrollback"
+      :to="overlayTarget"
       preset="card"
       :title="t('terminal.scrollback_viewer_title')"
       style="max-width: 95vw; width: 95vw; max-height: 92vh"
@@ -2995,7 +3008,7 @@ defineExpose({
   border-radius: 6px;
   border: 1px solid var(--stroke);
   background: var(--surface-variant);
-  color: var(--text-primary);
+  color: var(--text);
   font-size: 13px;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
@@ -3049,14 +3062,14 @@ defineExpose({
   flex: 1 1 auto;
   width: 100%;
   resize: none;
-  font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.45;
   padding: 12px;
   border-radius: 8px;
   border: 1px solid var(--stroke);
   background: var(--bg-elevated, var(--surface));
-  color: var(--text-primary);
+  color: var(--text);
   white-space: pre;
   overflow: auto;
   tab-size: 4;

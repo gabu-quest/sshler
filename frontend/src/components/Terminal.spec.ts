@@ -37,17 +37,21 @@ const stubs = vi.hoisted(() => {
   const decoder = new TextDecoder();
   // The options the page gave xterm: its OSC 8 `linkHandler` is how a file link is clicked.
   // The key handler the page gave xterm: a key pressed inside the terminal goes through it.
-  const captured: { options: any; keyHandler: ((e: KeyboardEvent) => boolean) | null } = {
+  const captured: { options: any; live: Record<string, unknown>; keyHandler: ((e: KeyboardEvent) => boolean) | null } = {
     options: null,
+    live: {},
     keyHandler: null,
   };
   class RecordingTerminal {
     constructor(options?: unknown) {
       captured.options = options;
+      captured.live = {};
       const base = make();
       return new Proxy(base, {
         get: (target, prop) =>
-          prop === "clear"
+          prop === "options"
+            ? captured.live
+            : prop === "clear"
             ? () => { cleared.count++; }
             : prop === "focus"
             ? () => { focused.count++; }
@@ -1330,5 +1334,55 @@ describe("Terminal.vue: the phone keyboard resizes its own pane", () => {
     first.unmount();
     second.unmount();
     host.remove();
+  });
+});
+
+
+// N.D13: reduce motion covers xterm's own cursor blink and smooth scroll, live.
+describe("Terminal.vue: reduce motion reaches xterm", () => {
+  beforeEach(() => { localStorage.clear(); });
+
+  it("with reduce motion on, the cursor does not blink and scrolling is not smoothed", async () => {
+    localStorage.setItem("sshler:ui:reduced-motion", "true");
+    const wrapper = await mountOn(createPinia());
+    expect(stubs.captured.options.cursorBlink).toBe(false);
+    expect(stubs.captured.options.smoothScrollDuration).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("turning it on and off while connected changes xterm without a reload", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const wrapper = await mountOn(pinia);
+    expect(stubs.captured.options.cursorBlink).toBe(true);
+    const app = useAppStore();
+    app.setReducedMotion(true);
+    await flushPromises();
+    expect(stubs.captured.live.cursorBlink).toBe(false);
+    expect(stubs.captured.live.smoothScrollDuration).toBe(0);
+    app.setReducedMotion(false);
+    await flushPromises();
+    expect(stubs.captured.live.cursorBlink).toBe(true);
+    expect(stubs.captured.live.smoothScrollDuration).toBeGreaterThan(0);
+    wrapper.unmount();
+  });
+});
+
+// N.D1 / N.D4: what a fullscreen pane opens is drawn inside it; the scrollback uses page tokens.
+describe("Terminal.vue: overlays and tokens (source)", () => {
+  const vue = readFileSync(resolve(__dirname, "Terminal.vue"), "utf8");
+  const template = vue.slice(0, vue.indexOf("<style"));
+  const css = vue.slice(vue.indexOf("<style"));
+
+  it("every tooltip, popconfirm, popover and modal opens in the overlay target", () => {
+    const tags = [...template.matchAll(/<(NTooltip|NPopconfirm|NPopover|NModal)\b[^>]*>/g)].map((m) => m[0]);
+    expect(tags.length).toBeGreaterThan(20);
+    expect(tags.filter((t) => !/:to="overlayTarget"/.test(t))).toEqual([]);
+  });
+
+  it("the scrollback viewer uses --text and --font-mono, no undefined or literal ones", () => {
+    expect(css).not.toMatch(/--text-primary/);
+    expect(css.slice(css.indexOf(".scrollback-textarea"))).not.toMatch(/JetBrains Mono/);
+    expect(css).toMatch(/\.scrollback-textarea\s*\{[^}]*font-family:\s*var\(--font-mono\)/);
   });
 });
