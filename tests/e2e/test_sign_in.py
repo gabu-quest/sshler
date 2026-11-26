@@ -7,6 +7,7 @@ TMUX_TMPDIR, with a made-up password from the environment.
 
 from __future__ import annotations
 
+import base64
 import os
 import socket
 import subprocess
@@ -204,3 +205,97 @@ async def test_deep_link_signed_out_at_phone_width_keeps_its_address(password_se
     finally:
         await browser.close()
         await playwright.stop()
+
+
+# --- a socket without a session -------------------------------------------------------
+
+
+def _raw_upgrade(base_url: str, path: str, headers: dict[str, str]) -> tuple[str, int, str]:
+    """One WebSocket upgrade sent by hand: the status line, and the close frame's code
+    and reason when the server upgraded and closed at once (0 and "" when it did not)."""
+    parts = urlsplit(base_url)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = [
+        f"GET {path} HTTP/1.1",
+        f"Host: {parts.netloc}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+        *(f"{name}: {value}" for name, value in headers.items()),
+        "",
+        "",
+    ]
+    with socket.create_connection((parts.hostname, parts.port), timeout=10) as conn:
+        conn.sendall("\r\n".join(request).encode("ascii"))
+        reader = conn.makefile("rb")
+        status = reader.readline().decode("ascii").strip()
+        while reader.readline() not in (b"\r\n", b""):
+            pass
+        if not status.startswith("HTTP/1.1 101"):
+            return status, 0, ""
+        opcode, length = reader.read(2)
+        assert (opcode, length < 126) == (0x88, True), (opcode, length)
+        payload = reader.read(length)
+    return status, int.from_bytes(payload[:2], "big"), payload[2:].decode("utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("socket_name", ["progress", "ping"])
+async def test_a_socket_opened_signed_out_is_told_4401(password_server: str, socket_name: str):
+    """A page with the token but no session opens the progress and ping sockets: the
+    browser sees 4401, the code the page sends to the sign-in form on.
+
+    Mutation: the refusal closed before the accept -> the browser sees 1006, and the
+    page would retry for ever instead of signing in.
+    """
+    playwright = await playwright_async.async_playwright().start()
+    browser = await playwright.chromium.launch(headless=True)
+    try:
+        context = await browser.new_context(base_url=password_server, viewport=VIEWPORT)
+        page = await context.new_page()
+        await page.goto("/app/login", wait_until="load")
+        result = await page.evaluate(
+            """(path) => new Promise((resolve) => {
+                const ws = new WebSocket(location.origin.replace(/^http/, 'ws') + path);
+                let opened = false;
+                const timer = setTimeout(() => resolve({ error: 'timeout' }), 10000);
+                ws.onopen = () => { opened = true; };
+                ws.onclose = (event) => {
+                    clearTimeout(timer);
+                    resolve({ opened, code: event.code, reason: event.reason });
+                };
+            })""",
+            f"/ws/{socket_name}?token={TOKEN}",
+        )
+        assert result == {"opened": True, "code": 4401, "reason": "Unauthorized"}
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.parametrize("origin", ["http://evil.example", "null"])
+@pytest.mark.parametrize("socket_name", ["term", "progress", "ping"])
+def test_a_foreign_origin_without_a_session_is_answered_403(
+    password_server: str, origin: str, socket_name: str
+):
+    """No session and a foreign Origin: HTTP 403, never upgraded to be told 4401; the same
+    request from the server's own origin is upgraded and told 4401.
+
+    Mutation: the credential refusal accepted before the Origin is judged -> a 101 and
+    a 4401 close frame for the foreign page.
+    """
+    query = f"token={TOKEN}"
+    if socket_name == "term":
+        query = f"host=local&dir=/tmp&session=refused&{query}"
+    path = f"/ws/{socket_name}?{query}"
+    assert _raw_upgrade(password_server, path, {"Origin": origin}) == (
+        "HTTP/1.1 403 Forbidden",
+        0,
+        "",
+    )
+    assert _raw_upgrade(password_server, path, {"Origin": password_server}) == (
+        "HTTP/1.1 101 Switching Protocols",
+        4401,
+        "Unauthorized",
+    )

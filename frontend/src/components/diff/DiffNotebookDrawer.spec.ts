@@ -35,7 +35,12 @@ vi.mock("naive-ui", () => {
     NSpace: stub('<div class="stub-space"><slot /></div>'),
     NSpin: stub('<span class="stub-spin" data-testid="spin" />'),
     NTag: stub('<span class="stub-tag"><slot /></span>', ["type", "size"]),
-    NPopconfirm: stub('<span class="stub-popconfirm" @click="$emit(\'positive-click\')"><slot name="trigger" /></span>'),
+    // The confirm is its own button, as in the real popconfirm. A click that only
+    // bubbles up to a listener mounted in the same millisecond is dropped by Vue's
+    // event guard (runtime-dom createInvoker: e._vts <= invoker.attached).
+    NPopconfirm: stub(
+      '<span class="stub-popconfirm"><slot name="trigger" /><button class="stub-popconfirm-yes" @click="$emit(\'positive-click\')">yes</button></span>',
+    ),
     NEmpty: stub('<div class="stub-empty" data-testid="empty">{{ description }}</div>', ["description", "size"]),
     useMessage: () => ({ success: vi.fn(), error: vi.fn() }),
   };
@@ -124,17 +129,21 @@ describe("DiffNotebookDrawer", () => {
       notebooks: [makeMeta("abc12345", "ssh refactor")],
     });
     mockedDelete.mockResolvedValueOnce({ ok: true, removed: true });
-    const { findByTestId } = render(DiffNotebookDrawer, {
-      props: { modelValue: true },
-    });
-    // The popconfirm stub forwards click → positive-click; clicking the wrapped
-    // trigger button triggers the delete handler.
-    const delBtn = await findByTestId("diff-saved-delete-abc12345");
-    await fireEvent.click(delBtn);
-    await waitFor(() => {
-      expect(mockedDelete).toHaveBeenCalledTimes(1);
-    });
-    // First arg is the id; second is the token from the mocked bootstrap store.
-    expect(mockedDelete.mock.calls[0]![0]).toBe("abc12345");
+    // A frozen clock puts the list's mount and the click in one millisecond,
+    // the case that made this test fail on fast CI runners.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      const { findByTestId } = render(DiffNotebookDrawer, {
+        props: { modelValue: true },
+      });
+      const row = await findByTestId("diff-saved-server-abc12345");
+      expect(mockedDelete).not.toHaveBeenCalled();
+      await fireEvent.click(row.querySelector(".stub-popconfirm-yes")!);
+      // The handler calls the API before its first await, so no waiting is needed.
+      // The id, then the token from the mocked bootstrap store.
+      expect(mockedDelete.mock.calls).toEqual([["abc12345", "test-token"]]);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

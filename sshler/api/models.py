@@ -129,6 +129,8 @@ class APITerminalHandshake(BaseModel):
     ws_url: str
     token_header: str
     token: str | None = None
+    # Seconds between the server's ping frames: the page's silence limit is a multiple of it.
+    ping_interval: float
 
 
 class APIPinToggle(BaseModel):

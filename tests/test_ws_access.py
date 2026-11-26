@@ -1,13 +1,16 @@
 """Who may open `/ws/term`, `/ws/progress` and `/ws/ping`.
 
 One function (`sshler.access.websocket_refusal`) decides for all three sockets, so
-each test here drives the real socket route and checks the exact close code. A
-refused socket is closed before it is accepted: `websocket_connect` itself raises.
-A socket let in on a session cookie closes with 4401 when that session ends.
+each test here drives the real socket route and checks the exact close code. A socket
+whose Origin is present and not allowed is closed before it is accepted (a real server
+answers HTTP 403): `websocket_connect` itself raises. Every other refusal is accepted
+and closed at once with its code, before anything is sent or read, so a browser sees
+the code. A socket let in on a session cookie closes with 4401 when that session ends.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import os
@@ -40,6 +43,8 @@ CLI_ORIGIN = "https://cli.example.test:9443"
 HOSTILE = "http://evil.example"
 
 SOCKETS = ["term", "progress", "ping"]
+# A remote box the tests only name: its address is a documentation one, never dialled.
+REMOTE_BOX = {"name": "far", "host": "203.0.113.1", "user": "u"}
 
 
 def _url(socket: str, *, token: str | None = TOKEN, session: str = "s1") -> str:
@@ -60,6 +65,20 @@ def _closed_before_accept(client: TestClient, url: str, **kwargs) -> tuple[int, 
     return excinfo.value.code, excinfo.value.reason
 
 
+def _closed_after_accept(client: TestClient, url: str, **kwargs) -> tuple:
+    """The code and reason of a socket accepted and closed with nothing sent first.
+
+    A socket closed before its accept comes back as ``("before accept", code, reason)``,
+    so a comparison with ``(code, reason)`` fails and shows which it was."""
+    try:
+        with client.websocket_connect(url, **kwargs) as ws:
+            message = ws.receive()
+    except WebSocketDisconnect as refused:
+        return ("before accept", refused.code, refused.reason)
+    assert message["type"] == "websocket.close", message
+    return message["code"], message["reason"]
+
+
 def _is_accepted(client: TestClient, url: str, **kwargs) -> bool:
     """True when the handshake completed (the socket was accepted)."""
     try:
@@ -74,7 +93,7 @@ def _state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "boxes.yaml").write_text(
-        yaml.safe_dump({"boxes": []}, sort_keys=False), encoding="utf-8"
+        yaml.safe_dump({"boxes": [REMOTE_BOX]}, sort_keys=False), encoding="utf-8"
     )
     monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("SSHLER_PUBLIC_URL", PUBLIC_URL)
@@ -105,9 +124,17 @@ def auth_client() -> TestClient:
 def test_socket_asks_the_one_owner(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, socket: str
 ):
-    """Kills: a socket that stops calling `websocket_refusal` (it would accept)."""
-    monkeypatch.setattr("sshler.webapp.websocket_refusal", lambda ws: (4499, "owner said no"))
-    assert _closed_before_accept(client, _url(socket)) == (4499, "owner said no")
+    """Kills: a socket that stops calling `websocket_refusal` (it would accept), or one
+    that decides by itself whether to accept before it closes."""
+    monkeypatch.setattr(
+        "sshler.webapp.websocket_refusal", lambda ws: access.Refusal(4499, "owner said no")
+    )
+    assert _closed_after_accept(client, _url(socket)) == (4499, "owner said no")
+    monkeypatch.setattr(
+        "sshler.webapp.websocket_refusal",
+        lambda ws: access.Refusal(4498, "owner said never", before_handshake=True),
+    )
+    assert _closed_before_accept(client, _url(socket)) == (4498, "owner said never")
 
 
 # --- token ---------------------------------------------------------------------------
@@ -116,8 +143,9 @@ def test_socket_asks_the_one_owner(
 @pytest.mark.parametrize("socket", SOCKETS)
 @pytest.mark.parametrize("token", [None, "", "wrong", "t%C3%B6k%C3%A9n%E2%98%83", "a" * 4000])
 def test_missing_empty_or_wrong_token_closes_4403(client: TestClient, socket: str, token):
-    """Kills: comparing loosely, raising on non-ASCII, or accepting an empty token."""
-    assert _closed_before_accept(client, _url(socket, token=token)) == (4403, "Invalid token")
+    """Kills: comparing loosely, raising on non-ASCII, or accepting an empty token; and a
+    refusal closed before the accept, which a browser sees as 1006 with no reason."""
+    assert _closed_after_accept(client, _url(socket, token=token)) == (4403, "Invalid token")
 
 
 @pytest.mark.parametrize("socket", SOCKETS)
@@ -165,6 +193,85 @@ def test_token_matches_compares_equal_length_values_in_constant_time(
     assert seen[0][0] == seen[0][1]
 
 
+async def _refused_over_asgi(app, socket: str, query: str) -> tuple[list[dict], int]:
+    """Drive one socket by hand: the client connects and at once sends a frame of each
+    kind. What the server sent, and how many of the client's messages it never read."""
+    incoming: asyncio.Queue[dict] = asyncio.Queue()
+    for message in (
+        {"type": "websocket.connect"},
+        {"type": "websocket.receive", "bytes": b"typed-before-the-close\n"},
+        {"type": "websocket.receive", "text": '{"op": "resize", "cols": 1, "rows": 1}'},
+    ):
+        incoming.put_nowait(message)
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0"},
+        "scheme": "ws",
+        "http_version": "1.1",
+        "path": f"/ws/{socket}",
+        "raw_path": f"/ws/{socket}".encode(),
+        "root_path": "",
+        "query_string": query.encode(),
+        "headers": [(b"host", b"testserver")],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+        "subprotocols": [],
+    }
+    await asyncio.wait_for(app(scope, incoming.get, send), 5.0)
+    return sent, incoming.qsize()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("socket", "query", "closed"),
+    [
+        ("term", "host=local&dir=/tmp&session=s1&token=wrong", (4403, "Invalid token")),
+        ("term", f"host=local&dir=/tmp&session=&token={TOKEN}", (4400, "Invalid session name")),
+        ("progress", "token=wrong", (4403, "Invalid token")),
+        ("ping", "token=wrong", (4403, "Invalid token")),
+    ],
+    ids=["term-token", "term-session-name", "progress-token", "ping-token"],
+)
+async def test_a_refused_socket_is_accepted_closed_and_never_read(
+    client: TestClient, fake_tmux, socket: str, query: str, closed: tuple[int, str]
+):
+    """The server accepts, closes with the code, and returns: the two frames the client
+    sent after its connect are still unread, and nothing reached tmux. Kills: a refusal
+    that reads from the socket, or one that starts the terminal before it closes."""
+    sent, unread = await _refused_over_asgi(client.app, socket, query)
+    assert sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": closed[0], "reason": closed[1]},
+    ]
+    assert unread == 2
+    assert fake_tmux.calls() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_is_windows", [False, True], ids=["posix-server", "windows-server"])
+async def test_an_unknown_shell_for_a_remote_box_is_refused_by_either_server(
+    client: TestClient, fake_tmux, monkeypatch: pytest.MonkeyPatch, local_is_windows: bool
+):
+    """A Windows server opens its default shell for a shell id it does not know on its
+    own box, so the refusal is asked of a remote box, which both servers refuse. Kills:
+    the shell case asking the local box, which opened a real shell on Windows; the test
+    timed out and the left shell kept pytest from exiting."""
+    monkeypatch.setattr(webapp, "LOCAL_IS_WINDOWS", local_is_windows)
+    query = f"host={REMOTE_BOX['name']}&dir=/tmp&session=s1&shell=bash&token={TOKEN}"
+    sent, unread = await _refused_over_asgi(client.app, "term", query)
+    assert sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 4400, "reason": "Invalid shell"},
+    ]
+    assert unread == 2
+    assert fake_tmux.calls() == []
+
+
 # --- origin --------------------------------------------------------------------------
 
 
@@ -175,11 +282,72 @@ def test_token_matches_compares_equal_length_values_in_constant_time(
 def test_foreign_origin_with_the_right_token_closes_4403_before_accept(
     client: TestClient, socket: str, origin: str
 ):
-    """Kills: a socket that never checks the Origin header."""
+    """Kills: a socket that never checks the Origin header, or one that upgrades a
+    cross-site request to tell it why it is refused."""
     assert _closed_before_accept(client, _url(socket), headers={"Origin": origin}) == (
         4403,
         "Invalid origin",
     )
+
+
+@pytest.mark.parametrize("socket", SOCKETS)
+@pytest.mark.parametrize("origin", ["http://[", "http://[::1", "https://[bad]:x"])
+def test_malformed_origin_is_foreign_not_an_error(
+    client: TestClient, caplog: pytest.LogCaptureFixture, socket: str, origin: str
+):
+    """Kills: an Origin `urlparse` rejects raising out of the check, which let anyone
+    write a traceback to the log; it is refused before the handshake like any other."""
+    assert _closed_before_accept(client, _url(socket), headers={"Origin": origin}) == (
+        4403,
+        "Invalid origin",
+    )
+    assert not [r for r in caplog.records if r.exc_info]
+
+
+@pytest.mark.parametrize("socket", SOCKETS)
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://sshler.example.test:8443",
+        "http://sshler.example.test",
+        "https://www.sshler.example.test",
+        "https://sshler.example.test@evil.example",
+        "https://sshler.example.test:443@evil.example",
+        "https://SSHLER.EXAMPLE.TEST",
+    ],
+)
+def test_origin_differing_from_the_allowed_one_is_refused(
+    client: TestClient, socket: str, origin: str
+):
+    """Pins the comparison: another port, scheme, subdomain, userinfo trick, or (as the
+    code stands) an upper-case host, is refused before the handshake with a good token."""
+    assert _closed_before_accept(client, _url(socket), headers={"Origin": origin}) == (
+        4403,
+        "Invalid origin",
+    )
+
+
+@pytest.mark.parametrize("socket", SOCKETS)
+@pytest.mark.parametrize("origin", [HOSTILE, "null"])
+def test_foreign_origin_with_a_wrong_token_is_never_accepted(
+    client: TestClient, socket: str, origin: str
+):
+    """The token is checked first, so the code is the token's; the Origin still decides
+    that the socket is not upgraded. Kills: a token refusal accepted for any Origin."""
+    assert _closed_before_accept(
+        client, _url(socket, token="wrong"), headers={"Origin": origin}
+    ) == (4403, "Invalid token")
+
+
+@pytest.mark.parametrize("socket", SOCKETS)
+@pytest.mark.parametrize("origin", [PUBLIC_URL, CLI_ORIGIN])
+def test_allowed_origin_with_a_wrong_token_is_told_4403(
+    client: TestClient, socket: str, origin: str
+):
+    """Kills: an allowed page refused before the accept (its browser would see 1006)."""
+    assert _closed_after_accept(
+        client, _url(socket, token="wrong"), headers={"Origin": origin}
+    ) == (4403, "Invalid token")
 
 
 @pytest.mark.parametrize("socket", SOCKETS)
@@ -247,7 +415,7 @@ def test_session_cookie_without_the_token_closes_4403(auth_client: TestClient):
     """Kills: a cookie that stands in for the token."""
     sid = get_session_store().create_session(username=USER, user_id=USER, ttl_seconds=3600)
     auth_client.cookies.set(get_app_settings().cookie_name, sid.session_id)
-    assert _closed_before_accept(auth_client, _url("ping", token=None)) == (4403, "Invalid token")
+    assert _closed_after_accept(auth_client, _url("ping", token=None)) == (4403, "Invalid token")
 
 
 def test_session_cookie_with_the_token_opens_the_socket(auth_client: TestClient):
@@ -261,7 +429,7 @@ def test_expired_session_cookie_closes_4401(auth_client: TestClient, socket: str
     """Kills: accepting a cookie without asking the store whether it is still valid."""
     sid = get_session_store().create_session(username=USER, user_id=USER, ttl_seconds=-10)
     auth_client.cookies.set(get_app_settings().cookie_name, sid.session_id)
-    assert _closed_before_accept(auth_client, _url(socket)) == (4401, "Unauthorized")
+    assert _closed_after_accept(auth_client, _url(socket)) == (4401, "Unauthorized")
 
 
 @pytest.mark.parametrize("socket", SOCKETS)
@@ -274,48 +442,59 @@ def test_basic_auth_and_token_open_the_socket(auth_client: TestClient, socket: s
 def test_bad_session_name_without_a_token_closes_4403_not_4400(client: TestClient):
     """Kills: validating the session name before the caller is known (it would tell a
     caller without a token which names are valid)."""
-    assert _closed_before_accept(client, _url("term", token=None, session="bad;name")) == (
+    assert _closed_after_accept(client, _url("term", token=None, session="bad;name")) == (
         4403,
         "Invalid token",
     )
-    assert _closed_before_accept(client, _url("term", token="wrong", session="")) == (
+    assert _closed_after_accept(client, _url("term", token="wrong", session="")) == (
         4403,
         "Invalid token",
     )
 
 
 def test_bad_session_name_without_credentials_closes_4401_not_4400(auth_client: TestClient):
-    assert _closed_before_accept(auth_client, _url("term", session="")) == (
+    assert _closed_after_accept(auth_client, _url("term", session="")) == (
         4401,
         "Unauthorized",
     )
 
 
 def test_bad_session_name_with_the_right_token_closes_4400(client: TestClient):
-    """Validation still runs, after auth."""
-    assert _closed_before_accept(client, _url("term", session="")) == (
+    """Validation still runs, after auth, and the page is told why."""
+    assert _closed_after_accept(client, _url("term", session="")) == (
         4400,
         "Invalid session name",
     )
 
 
-def test_foreign_origin_does_not_change_the_code_of_a_caller_without_credentials(
-    auth_client: TestClient,
+@pytest.mark.parametrize("socket", SOCKETS)
+@pytest.mark.parametrize("origin", [HOSTILE, "null"])
+def test_foreign_origin_without_credentials_is_never_accepted(
+    auth_client: TestClient, socket: str, origin: str
 ):
-    """A caller without credentials gets 4401 whatever Origin it sends."""
-    for headers in ({}, {"Origin": HOSTILE}):
-        assert _closed_before_accept(auth_client, _url("ping", token=None), headers=headers) == (
-            4401,
-            "Unauthorized",
-        )
+    """A caller without credentials gets 4401 whatever Origin it sends, but a foreign one
+    is refused before the accept. Kills: the credential refusal accepted first, which
+    would upgrade a cross-site socket to tell it 4401."""
+    assert _closed_before_accept(
+        auth_client, _url(socket, token=None), headers={"Origin": origin}
+    ) == (4401, "Unauthorized")
+
+
+@pytest.mark.parametrize("socket", SOCKETS)
+def test_no_origin_and_no_credentials_is_told_4401(auth_client: TestClient, socket: str):
+    """Kills: a credential refusal closed before the accept (a browser sees 1006 and
+    never goes to the sign-in form)."""
+    assert _closed_after_accept(auth_client, _url(socket, token=None)) == (4401, "Unauthorized")
 
 
 def test_the_token_is_not_in_a_log_line_or_a_close_reason(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ):
     caplog.set_level("DEBUG")
-    code, reason = _closed_before_accept(client, _url("term", token="secret-wrong-token"))
-    assert (code, reason) == (4403, "Invalid token")
+    assert _closed_after_accept(client, _url("term", token="secret-wrong-token")) == (
+        4403,
+        "Invalid token",
+    )
     assert "secret-wrong-token" not in caplog.text
     assert "refused: invalid token" in caplog.text
     # An accepted socket and a refusal for its Origin both had the right token in hand.
@@ -341,7 +520,7 @@ def test_idle_session_cookie_closes_4401(
         sid = get_session_store().create_session(username=USER, user_id=USER, ttl_seconds=28800)
         auth_client.cookies.set(get_app_settings().cookie_name, sid.session_id)
         now[0] += 1200
-        assert _closed_before_accept(auth_client, _url(socket)) == (4401, "Unauthorized")
+        assert _closed_after_accept(auth_client, _url(socket)) == (4401, "Unauthorized")
     finally:
         reset_settings()
 
@@ -587,7 +766,7 @@ def test_nothing_typed_after_the_end_reaches_the_terminal(
 def test_a_cookie_of_a_session_that_ended_is_refused_4401_at_connect(auth_client: TestClient):
     session_id = _sign_in(auth_client)
     _sign_out(auth_client, session_id)
-    assert _closed_before_accept(auth_client, _url("ping")) == (4401, "Unauthorized")
+    assert _closed_after_accept(auth_client, _url("ping")) == (4401, "Unauthorized")
 
 
 def test_a_sign_out_between_the_check_and_the_record_closes_the_socket_4401(

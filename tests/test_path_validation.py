@@ -203,3 +203,42 @@ class TestNormalizeLocalPathSymlinkSecurity:
         normalized = _normalize_local_path(str(nonexistent), allowed_base=allowed)
         assert "subdir" in normalized
         assert "file.txt" in normalized
+
+
+@pytest.mark.parametrize(
+    ("windows", "asked", "used"),
+    [
+        (True, "C:", "C:/"),
+        (True, "c:", "c:/"),
+        (True, "C:/", "C:/"),
+        (True, "C:/Users", "C:/Users"),
+        (True, "C:Users", "C:Users"),
+        (True, "\\\\?\\C:", "\\\\?\\C:"),
+        (True, "\\\\.\\C:", "\\\\.\\C:"),
+        (True, "//?/C:", "//?/C:"),
+        (True, "C:.", "C:."),
+        (True, "C:\n", "C:\n"),
+        (False, "C:", "C:"),
+    ],
+)
+def test_a_bare_drive_is_the_drive_root_on_a_windows_server(monkeypatch, windows, asked, used):
+    from sshler.api import helpers
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", windows)
+    assert helpers._bare_drive_as_root(asked) == used
+
+
+def test_the_server_asks_for_the_drive_root_when_a_page_asks_for_a_bare_drive(monkeypatch):
+    from sshler.api import helpers
+
+    asked: list[str] = []
+    real_path = helpers.Path
+
+    def spy(*parts):
+        asked.extend(str(part) for part in parts)
+        return real_path(*parts)
+
+    monkeypatch.setattr(helpers, "LOCAL_IS_WINDOWS", True)
+    monkeypatch.setattr(helpers, "Path", spy)
+    _normalize_local_path("C:")
+    assert asked == ["C:/"]

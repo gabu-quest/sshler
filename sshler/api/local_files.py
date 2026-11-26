@@ -1138,7 +1138,12 @@ class LocalFiles:
 
     async def stat(self, path: str) -> PathKind:
         p = Path(path)
-        if not p.exists():
+        # Not `p.exists()`: from Python 3.14 it answers False for a path it may not
+        # look at, so a folder sshler cannot read would read as "does not exist".
+        # `stat()` raises PermissionError there on every version.
+        try:
+            p.stat()
+        except (FileNotFoundError, NotADirectoryError):
             return PathKind(exists=False, is_directory=False, is_file=False)
         return PathKind(exists=True, is_directory=p.is_dir(), is_file=p.is_file())
 

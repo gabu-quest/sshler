@@ -7,6 +7,7 @@ import { http, buildHeaders } from '@/api/http'
 import { useFavoritesStore } from '@/stores/favorites'
 import type { DirectoryEntry } from '@/api/types'
 import { useI18n } from '@/i18n'
+import { isPathRoot, parentPath } from '@/utils/pathParts'
 
 const props = defineProps<{
   show: boolean
@@ -64,9 +65,8 @@ const navigateTo = (path: string) => {
 }
 
 const navigateUp = () => {
-  if (currentPath.value === '/' || currentPath.value === '~') return
-  const parent = currentPath.value.split('/').slice(0, -1).join('/') || '/'
-  loadDirectory(parent)
+  const parent = parentPath(currentPath.value)
+  if (parent !== null) loadDirectory(parent)
 }
 
 const navigateHome = () => {
@@ -116,7 +116,7 @@ watch(() => props.show, (show) => {
       <!-- Navigation bar -->
       <div class="nav-bar">
         <NSpace>
-          <NButton size="small" quaternary @click="navigateUp" :disabled="currentPath === '/' || currentPath === '~'">
+          <NButton size="small" quaternary @click="navigateUp" :disabled="isPathRoot(currentPath)">
             <NIcon><PhArrowLeft weight="duotone" /></NIcon>
           </NButton>
           <NButton size="small" quaternary @click="navigateHome">

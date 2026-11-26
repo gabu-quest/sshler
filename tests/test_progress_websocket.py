@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from fastapi.websockets import WebSocketDisconnect
 
 from sshler import state
 from sshler.webapp import Broadcaster, ServerSettings, make_app
@@ -142,12 +141,12 @@ def test_two_clients_both_receive_broadcast(tmp_path, monkeypatch):
 
 
 def test_bad_token_closes_connection(tmp_path, monkeypatch):
+    """Accepted, then closed with 4403 before any snapshot, so the page is told why."""
     client = build_client(setup_config(tmp_path), monkeypatch)
     try:
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with client.websocket_connect("/ws/progress?token=wrong") as ws:
-                ws.receive_json()
-        assert exc_info.value.code == 4403
+        with client.websocket_connect("/ws/progress?token=wrong") as ws:
+            message = ws.receive()
+        assert message == {"type": "websocket.close", "code": 4403, "reason": "Invalid token"}
     finally:
         client.close()
 

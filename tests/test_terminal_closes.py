@@ -1,8 +1,10 @@
 """Every way ``/ws/term`` closes without a terminal: the exact close code, close reason
 and the text sent before the close.
 
-A row is one scene. A socket refused before it is accepted sends nothing; a terminal
-that cannot open sends one line, then closes. The remote box is a fake connection
+A row is one scene. Every row but a foreign Origin's is accepted first, so a browser
+sees the code; a foreign Origin is refused before the accept (a real server answers
+HTTP 403). A refused socket sends nothing; a terminal that cannot open sends one line,
+then closes. The remote box is a fake connection
 that runs nothing: the tmux check line is compared with ``remote.require``'s, and its
 exit status is the scene's.
 """
@@ -111,8 +113,11 @@ def _remote(monkeypatch: pytest.MonkeyPatch, scene: Scene, status: int) -> None:
     monkeypatch.setattr("sshler.webapp.open_tmux", open_tmux)
 
 
-def _closes(client: TestClient, url: str, headers: dict[str, str]) -> tuple[int, str, list[str]]:
-    """The close code, the close reason and the texts sent before the close."""
+def _closes(
+    client: TestClient, url: str, headers: dict[str, str]
+) -> tuple[bool, int, str, list[str]]:
+    """Whether the socket was accepted, the close code, the close reason and the texts
+    sent before the close."""
     try:
         with client.websocket_connect(url, headers=headers) as websocket:
             texts: list[str] = []
@@ -121,9 +126,9 @@ def _closes(client: TestClient, url: str, headers: dict[str, str]) -> tuple[int,
                 if message["type"] == "websocket.send":
                     texts.append(message.get("text") or "")
                 elif message["type"] == "websocket.close":
-                    return message.get("code", 1000), message.get("reason") or "", texts
+                    return True, message.get("code", 1000), message.get("reason") or "", texts
     except WebSocketDisconnect as refused:
-        return refused.code, refused.reason, []
+        return False, refused.code, refused.reason, []
 
 
 Setup = Callable[[pytest.MonkeyPatch, Path, Any, Scene], tuple[str, dict[str, str]]]
@@ -180,13 +185,14 @@ class Row:
     sent: list[str]
     basic_auth: bool = False
     opens_tmux: bool = False
+    accepted: bool = True
 
 
 ROWS = {
     "4400-session-name": Row(_bad_session, 4400, "Invalid session name", []),
     "4401-credentials": Row(_no_credentials, 4401, "Unauthorized", [], basic_auth=True),
     "4403-token": Row(_bad_token, 4403, "Invalid token", []),
-    "4403-origin": Row(_foreign_origin, 4403, "Invalid origin", []),
+    "4403-origin": Row(_foreign_origin, 4403, "Invalid origin", [], accepted=False),
     "4404-unknown-box": Row(_unknown_box, 4404, "Unknown box", ["Unknown box: no-such-box\r\n"]),
     "4404-hostile-name": Row(
         _hostile_unknown_box,
@@ -225,7 +231,7 @@ def test_a_socket_closes_with_its_code_reason_and_text(
     url, headers = row.setup(monkeypatch, tmp_path, app, scene)
     client = TestClient(app)
     try:
-        assert _closes(client, url, headers) == (row.code, row.reason, row.sent)
+        assert _closes(client, url, headers) == (row.accepted, row.code, row.reason, row.sent)
     finally:
         client.close()
     assert len(row.reason.encode()) <= 123

@@ -42,6 +42,7 @@ import { useResponsive } from '@/composables/useResponsive'
 import { useI18n } from '@/i18n'
 import { statPath, fetchSnapshotStatus, captureTmuxPane, forceKillSessionByName, fetchTerminalHandshake, signInAfterSocketClose } from '@/api/http'
 import { getColorForSession } from '@/utils/sessionName'
+import { isPathRoot, parentPath, resolvePathAgainst } from '@/utils/pathParts'
 import { shiftEnterSequence, classifyOscLink, TerminalClipboardProvider } from '@/utils/terminalInput'
 import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
 import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
@@ -406,44 +407,6 @@ const xtermTheme = (name: TerminalThemeName) => ({
 // where the user actually `cd`'d to, not where the tab opened.
 const currentCwd = ref<string | null>(null)
 
-/** True for POSIX (`/x`), Windows drive (`C:\x` / `C:/x`), or UNC (`\\srv`) absolutes. */
-const isAbsolutePath = (p: string): boolean =>
-  p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\')
-
-/** Collapse `.`/`..` segments, preserving a `C:` drive or `//` UNC root. Input/output
- *  use forward slashes — the backend's local-Windows file API speaks POSIX (`C:/Users/x`). */
-const normalizeAbsolute = (absPath: string): string => {
-  const p = absPath.replace(/\\/g, '/')
-  const drive = p.match(/^([A-Za-z]:)\//)?.[1] ?? ''
-  const isUnc = !drive && p.startsWith('//')
-  const body = drive ? p.slice(drive.length) : p
-  const out: string[] = []
-  for (const seg of body.split('/')) {
-    if (seg === '.' || seg === '') continue
-    if (seg === '..') { out.pop(); continue }
-    out.push(seg)
-  }
-  if (drive) return out.length ? `${drive}/${out.join('/')}` : `${drive}/`
-  if (isUnc) return `//${out.join('/')}`
-  return `/${out.join('/')}`
-}
-
-/** Resolve a (possibly relative) path against a base directory. Handles both POSIX
- *  and Windows-shaped bases, and never force-prepends `/` to a `C:`-rooted path. */
-const resolvePathAgainst = (rawPath: string, base: string): string => {
-  if (isAbsolutePath(rawPath)) return normalizeAbsolute(rawPath)
-  const b = base.replace(/\\/g, '/')
-  const drive = b.match(/^([A-Za-z]:)\//)?.[1] ?? ''
-  const baseBody = drive ? b.slice(drive.length) : b
-  const parts = baseBody.split('/').filter(Boolean)
-  for (const seg of rawPath.replace(/\\/g, '/').split('/')) {
-    if (seg === '.' || seg === '') continue
-    if (seg === '..') { parts.pop(); continue }
-    parts.push(seg)
-  }
-  return drive ? `${drive}/${parts.join('/')}` : `/${parts.join('/')}`
-}
-
 /** Extract a directory from an OSC cwd payload (OSC 7 URI or a bare path) and
  *  normalize it to the backend's POSIX form (`C:/Users/x`, no leading slash on a drive). */
 const parseOscCwd = (input: string): string | null => {
@@ -501,7 +464,7 @@ const handleFilePathClick = async (rawPath: string) => {
   }
 
   // Strip trailing slash for stat check
-  const cleanPath = resolved.replace(/\/+$/, '') || '/'
+  const cleanPath = isPathRoot(resolved) ? resolved : resolved.replace(/\/+$/, '') || '/'
 
   try {
     const info = await statPath(box, cleanPath, token)
@@ -515,7 +478,7 @@ const handleFilePathClick = async (rawPath: string) => {
     }
 
     // Build Files view URL
-    const dir = info.is_directory ? cleanPath : cleanPath.split('/').slice(0, -1).join('/') || '/'
+    const dir = info.is_directory ? cleanPath : parentPath(cleanPath) ?? '/'
     const params = new URLSearchParams({ box, path: dir })
     if (info.is_file) {
       params.set('preview', cleanPath.split('/').pop() || '')
@@ -1235,6 +1198,83 @@ const scheduleReconnect = () => {
   }, delay)
 }
 
+// A connected socket that has received no frame (output, ping or windows) for this many
+// ping intervals is lost. The interval itself is the server's, sent with the handshake.
+const SILENT_PING_INTERVALS = 2.5
+// The close policy ended the last socket for good (not a reconnect, not a drop): waking up
+// does not bring it back. Cleared when the next connect starts.
+let closedForGood = false
+let silenceLimitMs: number | null = null
+let lastFrameAt = 0
+let silenceTimer: number | null = null
+
+const stopSilenceWatch = () => {
+  if (silenceTimer !== null) {
+    clearTimeout(silenceTimer)
+    silenceTimer = null
+  }
+}
+
+// A timer that fires much later than it was due means the page was frozen (a phone locked,
+// a laptop asleep): frames queued during the freeze may still be on their way. Grace is one
+// ping interval; only silence through the grace drops the socket.
+const armSilenceWatch = (waitMs: number, graceFrom: number | null = null) => {
+  stopSilenceWatch()
+  const dueAt = Date.now() + waitMs
+  silenceTimer = window.setTimeout(() => {
+    silenceTimer = null
+    if (!connected.value || silenceLimitMs === null) return
+    const now = Date.now()
+    if (graceFrom !== null && lastFrameAt === graceFrom) {
+      dropDeadSocket()
+      return
+    }
+    const quiet = now - lastFrameAt
+    if (quiet >= silenceLimitMs) {
+      const graceMs = silenceLimitMs / SILENT_PING_INTERVALS
+      if (graceFrom === null && now - dueAt > graceMs) {
+        armSilenceWatch(graceMs, lastFrameAt)
+      } else {
+        dropDeadSocket()
+      }
+    } else {
+      armSilenceWatch(silenceLimitMs - quiet)
+    }
+  }, waitMs)
+}
+
+// The socket is silent past the limit: let go of it and reconnect through the normal policy.
+const dropDeadSocket = () => {
+  const ws = websocket
+  websocket = null
+  if (ws) {
+    // Its own late close must not schedule a second reconnect.
+    ws.onopen = null
+    ws.onmessage = null
+    ws.onclose = null
+    ws.onerror = null
+    try { ws.close() } catch { /* already gone */ }
+  }
+  connected.value = false
+  connecting.value = false
+  emit('disconnected')
+  socketLost = true
+  scheduleReconnect()
+}
+
+// The page woke up or the browser came back online: a terminal that gave up or is waiting
+// out a backoff connects now. A connected or connecting one, and one closed on purpose, stay.
+const wakeUp = () => {
+  if (document.hidden) return
+  if (connected.value || connecting.value || intentionalDisconnect || closedForGood) return
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout)
+    reconnectTimeout = null
+  }
+  reconnectAttempts.value = 0
+  connect()
+}
+
 let shellFrameSeen = false
 // The previous socket of this terminal ended in a close the policy reconnects on (not a
 // close the user or the page made). Cleared when the next shell frame has been handled.
@@ -1266,11 +1306,16 @@ const connect = async () => {
 
   connecting.value = true
   intentionalDisconnect = false
+  closedForGood = false
 
   try {
     // Get WebSocket URL from backend handshake to ensure proper host resolution
     const handshake = await fetchTerminalHandshake(tokenValue.value || null)
     let wsUrl = handshake.ws_url
+    silenceLimitMs =
+      typeof handshake.ping_interval === 'number' && handshake.ping_interval > 0
+        ? handshake.ping_interval * SILENT_PING_INTERVALS * 1000
+        : null
 
     // Add required query parameters
     const params = new URLSearchParams({
@@ -1303,6 +1348,8 @@ const connect = async () => {
       connecting.value = false
       connected.value = true
       reconnecting.value = false
+      lastFrameAt = Date.now()
+      if (silenceLimitMs !== null) armSilenceWatch(silenceLimitMs)
       emit('connected')
 
       // Re-fit after connection and ALWAYS send resize to backend
@@ -1340,6 +1387,7 @@ const connect = async () => {
     }
 
     websocket.onmessage = async (event) => {
+      lastFrameAt = Date.now()
       // Handle binary data (actual terminal output)
       if (event.data instanceof ArrayBuffer) {
         queueWrite(new Uint8Array(event.data))
@@ -1375,8 +1423,13 @@ const connect = async () => {
     }
 
     websocket.onclose = (event) => {
-      connected.value = false
-      connecting.value = false
+      // A replaced socket's late close must not touch the one that took its place.
+      const current = websocket === ws
+      if (current) {
+        stopSilenceWatch()
+        connected.value = false
+        connecting.value = false
+      }
       emit('disconnected')
 
       // A session that ended goes to the sign-in form, as a failed request does.
@@ -1387,18 +1440,19 @@ const connect = async () => {
       }
       if (policy.reconnect) {
         // Lost means this socket dropped on its own: disconnect() has let go of it otherwise.
-        socketLost = websocket === ws
+        socketLost = current
         // Unexpected disconnect - attempt reconnect with backoff
-        scheduleReconnect()
-      } else {
+        if (current) scheduleReconnect()
+      } else if (current) {
+        closedForGood = true
         reconnecting.value = false
       }
     }
 
     websocket.onerror = (error) => {
       console.error('[Connection] WebSocket error:', error)
-      connected.value = false
-      connecting.value = false
+      // The close that follows clears connected and connecting: clearing them here would let a
+      // wake in the gap open a second socket.
 
       // Only show error message if not already reconnecting
       if (!reconnecting.value && reconnectAttempts.value === 0) {
@@ -1422,6 +1476,7 @@ const connect = async () => {
 
 const disconnect = () => {
   intentionalDisconnect = true
+  stopSilenceWatch()
   socketLost = false
   reconnecting.value = false
   reconnectAttempts.value = 0
@@ -1623,6 +1678,8 @@ onMounted(async () => {
     }
   }
   document.addEventListener('visibilitychange', snapshotVisHandler)
+  document.addEventListener('visibilitychange', wakeUp)
+  window.addEventListener('online', wakeUp)
   if (!document.hidden) startSnapshotPolling()
   // The poll follows what the terminal is: it stops for a plain shell and starts for tmux.
   watch(isNativeShell, (native) => {
@@ -1638,6 +1695,8 @@ onUnmounted(() => {
   if (snapshotPollInterval) clearInterval(snapshotPollInterval)
   if (snapshotTickInterval) clearInterval(snapshotTickInterval)
   if (snapshotVisHandler) document.removeEventListener('visibilitychange', snapshotVisHandler)
+  document.removeEventListener('visibilitychange', wakeUp)
+  window.removeEventListener('online', wakeUp)
 
   // Cleanup viewport handler
   cleanupViewport?.()

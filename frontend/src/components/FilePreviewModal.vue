@@ -13,6 +13,7 @@ import { usePdfExport } from "@/composables/usePdfExport";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { mermaidConfig } from "@/utils/mermaidConfig";
+import { parentPath, resolvePathAgainst } from "@/utils/pathParts";
 
 const props = defineProps<{
   show: boolean;
@@ -178,16 +179,9 @@ let imageInlineToken = 0;
 function resolveImagePath(src: string): string | null {
   if (!src) return null;
   if (/^(data:|https?:|\/\/|blob:|mailto:|#)/i.test(src)) return null;
-  const parentDir = meta.value?.parent || props.path.split('/').slice(0, -1).join('/') || '/';
+  const parentDir = meta.value?.parent || parentPath(props.path) || '/';
   if (src.startsWith('/')) return stripQueryAndHash(src);
-  const base = parentDir.endsWith('/') ? parentDir : parentDir + '/';
-  const parts = base.split('/').filter(Boolean);
-  for (const seg of src.split('/')) {
-    if (seg === '.' || seg === '') continue;
-    if (seg === '..') { parts.pop(); continue; }
-    parts.push(seg);
-  }
-  return stripQueryAndHash('/' + parts.join('/'));
+  return stripQueryAndHash(resolvePathAgainst(src, parentDir));
 }
 
 /** The part of `s` before its first `?` or `#`. */
@@ -687,22 +681,10 @@ function handleMarkdownClick(event: MouseEvent) {
   event.preventDefault();
   event.stopPropagation();
 
-  const parentDir = meta.value?.parent || props.path.split('/').slice(0, -1).join('/') || '/';
+  const parentDir = meta.value?.parent || parentPath(props.path) || '/';
 
-  let resolved: string;
-  if (href.startsWith('/')) {
-    resolved = href;
-  } else {
-    // Resolve relative path against parent directory
-    const base = parentDir.endsWith('/') ? parentDir : parentDir + '/';
-    const parts = base.split('/').filter(Boolean);
-    for (const seg of href.split('/')) {
-      if (seg === '.' || seg === '') continue;
-      if (seg === '..') { parts.pop(); continue; }
-      parts.push(seg);
-    }
-    resolved = '/' + parts.join('/');
-  }
+  // Resolve a relative path against the parent directory
+  const resolved = href.startsWith('/') ? href : resolvePathAgainst(href, parentDir);
 
   // Strip fragment/anchor from path
   const cleanPath = resolved.replace(/#[\s\S]*$/, '');
@@ -710,7 +692,7 @@ function handleMarkdownClick(event: MouseEvent) {
   if (!props.box) return;
 
   // Open in Files view in a new tab
-  const dir = cleanPath.split('/').slice(0, -1).join('/') || '/';
+  const dir = parentPath(cleanPath) ?? '/';
   const filename = cleanPath.split('/').pop() || '';
   const params = new URLSearchParams({ box: props.box, path: dir });
   if (filename) params.set('preview', filename);

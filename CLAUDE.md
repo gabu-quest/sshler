@@ -51,8 +51,8 @@ FastAPI + uvicorn (Python 3.12+, async) · asyncssh · SQLite via sqler · Vue 3
 
 **Security layers:**
 - `X-SSHLER-TOKEN` header or `token` query param, compared in constant time by `access.token_matches` (REST and sockets share it)
-- Origin validation (CSRF): `access.allowed_origins` is the one list; the HTTP middleware applies it to POST/PUT/PATCH/DELETE and every socket to its upgrade (a present, unlisted Origin, including `null`, is refused; no Origin is allowed; `SSHLER_ORIGIN_CHECK_ENABLED=false` turns both off)
-- `/ws/term`, `/ws/progress` and `/ws/ping` call `access.websocket_refusal` before accepting: credentials (close 4401), token (4403), Origin (4403); `/ws/term` then validates the session name (4400)
+- Origin validation (CSRF): `access.allowed_origins` is the one list; the HTTP middleware applies it to POST/PUT/PATCH/DELETE and every socket to its upgrade (a present, unlisted Origin, including `null`, is refused; no Origin is allowed; `SSHLER_ORIGIN_CHECK_ENABLED=false` turns both off, and then a page from another site can read the close code of a refused socket, 4401 or 4403)
+- `/ws/term`, `/ws/progress` and `/ws/ping` call `access.websocket_refusal` and pass a refusal to `access.refuse`: credentials (close 4401), token (4403), Origin (4403); `/ws/term` then validates the session name and `shell` (4400). A present, unlisted Origin is never upgraded (HTTP 403); every other refusal is accepted and closed at once with its code, so the browser sees it (a close before the accept reaches it as 1006)
 - Rate limiting on auth endpoints
 
 ### Frontend

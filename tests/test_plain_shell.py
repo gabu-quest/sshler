@@ -199,7 +199,10 @@ async def test_a_shell_value_that_is_not_known_is_refused_before_anything_opens(
 
     await sock.finished()
 
-    assert sock.sent == [{"type": "websocket.close", "code": 4400, "reason": "Invalid shell"}]
+    assert sock.sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 4400, "reason": "Invalid shell"},
+    ]
     assert (fake_tmux.calls(), connects) == ([], [])
 
 
@@ -213,7 +216,8 @@ async def test_a_plain_shell_still_needs_a_session_name_that_passes(
     await sock.finished()
 
     assert sock.sent == [
-        {"type": "websocket.close", "code": 4400, "reason": "Invalid session name"}
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 4400, "reason": "Invalid session name"},
     ]
 
 

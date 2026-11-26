@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from ..terminal import pump
 from .dependencies import APIDependencies
 from .models import APITerminalHandshake
 
@@ -21,6 +22,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             ws_url=ws_url,
             token_header="X-SSHLER-TOKEN",
             token=deps.settings.csrf_token,
+            ping_interval=pump.PING_INTERVAL,
         )
 
     return router

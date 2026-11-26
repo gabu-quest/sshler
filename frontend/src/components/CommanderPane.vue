@@ -7,6 +7,7 @@ import type { DirectoryEntry, DirectoryListing, GitInfo } from "@/api/types";
 import GitBadge from "@/components/GitBadge.vue";
 import { useI18n } from "@/i18n";
 import { getEmojiForBox } from "@/utils/emoji-favicon";
+import { parentPath, pathSegments } from "@/utils/pathParts";
 import { PhArrowBendUpLeft, PhFile, PhFolderSimple } from "@phosphor-icons/vue";
 import { NIcon, NSelect } from "naive-ui";
 
@@ -101,11 +102,11 @@ const selectOptions = computed(() => {
 });
 
 const rows = computed<PaneRow[]>(() => {
-  const parentPath = getParentDirectory(props.directory);
+  const parentDirectory = getParentDirectory(props.directory);
   const parent: PaneRow = {
     key: "__parent__",
     name: "..",
-    path: parentPath,
+    path: parentDirectory,
     is_directory: true,
     size: null,
     modified: null,
@@ -142,47 +143,12 @@ function normalizeDirectory(directory: string) {
 }
 
 function getParentDirectory(directory: string) {
-  const normalized = normalizeDirectory(directory).replace(/\/+$/, "");
-  if (!normalized || normalized === "/" || normalized === "~") return normalized || "~";
-  if (normalized.startsWith("~/")) {
-    const parent = normalized.replace(/\/[^/]+$/, "");
-    return parent || "~";
-  }
-  const index = normalized.lastIndexOf("/");
-  if (index <= 0) return "/";
-  return normalized.slice(0, index) || "/";
+  const normalized = normalizeDirectory(directory);
+  return parentPath(normalized) ?? normalized;
 }
 
 function buildBreadcrumbs(directory: string) {
-  const normalized = normalizeDirectory(directory);
-
-  if (normalized === "~") {
-    return [{ label: "~", path: "~" }];
-  }
-
-  if (normalized === "/") {
-    return [{ label: "/", path: "/" }];
-  }
-
-  if (normalized.startsWith("~/")) {
-    const parts = normalized.slice(2).split("/").filter(Boolean);
-    const segments = [{ label: "~", path: "~" }];
-    let current = "~";
-    for (const part of parts) {
-      current = `${current}/${part}`;
-      segments.push({ label: part, path: current });
-    }
-    return segments;
-  }
-
-  const parts = normalized.split("/").filter(Boolean);
-  const segments = [{ label: "/", path: "/" }];
-  let current = "";
-  for (const part of parts) {
-    current = `${current}/${part}`;
-    segments.push({ label: part, path: current });
-  }
-  return segments;
+  return pathSegments(normalizeDirectory(directory));
 }
 
 function formatSize(bytes: number | null | undefined) {

@@ -15,9 +15,8 @@
  * `ts` after a normal `ssh host` attaches to the exact same session.
  */
 import { fnv1aHash } from './emoji-favicon'
+import { isWindowsPath } from './pathParts'
 
-/** A drive-letter (`C:\`, `C:/`) or UNC (`\\server\`) path. */
-const WINDOWS_PATH = /^(?:[A-Za-z]:[/\\]|\\\\)/
 
 /**
  * Deterministic tmux session name for a directory.
@@ -30,7 +29,7 @@ export function generateSessionName(directory: string, _boxName?: string): strin
   const dir = directory && directory !== '~' ? directory : '~'
   // `\` separates segments only in a Windows-looking path; in a POSIX path it
   // is an ordinary character, as in ts_session_name.
-  const pathParts = dir.split(WINDOWS_PATH.test(dir) ? /[/\\]/ : '/').filter(Boolean)
+  const pathParts = dir.split(isWindowsPath(dir) ? /[/\\]/ : '/').filter(Boolean)
 
   // ts rule: `.`/`:` -> `_`. Then the same tmux-safe filter the backend's
   // /ws/term applies (PathValidator.sanitize_session_name) so the name we
