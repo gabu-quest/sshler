@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import hmac
 import logging
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from fastapi import WebSocket
@@ -61,15 +62,54 @@ def origin_base(origin: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
+@dataclass(frozen=True)
+class Refusal:
+    """Why a socket is refused, and how.
+
+    ``before_handshake`` is True only for a request whose Origin is present and not
+    allowed: such a socket is never upgraded (the server answers HTTP 403, and the
+    code and reason go no further than the log). Every other refusal is accepted and
+    closed at once, so the client receives ``code`` and ``reason``; nothing is read
+    from it first.
+    """
+
+    code: int
+    reason: str
+    before_handshake: bool = False
+
+
+def _foreign_origin(websocket: WebSocket, cli_settings, app_settings: SshlerSettings) -> bool:
+    """True when the request carries an Origin header that is not allowed (``null`` too)."""
+    if not app_settings.origin_check_enabled:
+        return False
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return False
+    try:
+        listed = origin_base(origin) in allowed_origins(cli_settings, app_settings)
+    except ValueError:
+        # An Origin `urlparse` rejects (``http://[``) is not any listed origin.
+        listed = False
+    if listed:
+        return False
+    logger.warning("[Security] WebSocket refused: origin %r is not allowed", origin)
+    return True
+
+
+def websocket_refusal(websocket: WebSocket) -> Refusal | None:
     """Decide whether a socket may be opened; None means it may.
 
-    Checked in this order, and the caller closes the socket before accepting it
-    when a refusal comes back: credentials (Basic header, else a live session
+    The code is chosen in this order: credentials (Basic header, else a live session
     cookie) give 4401; the token (``token`` query parameter, else the
-    ``x-sshler-token`` header) gives 4403; an Origin header that is present and
-    not allowed gives 4403. A request without an Origin header is not a browser
-    and passes, as for a POST. ``origin_check_enabled`` turns the Origin check off.
+    ``x-sshler-token`` header) gives 4403 "Invalid token"; an Origin header that is
+    present and not allowed gives 4403 "Invalid origin". A request without an Origin
+    header is not a browser and passes, as for a POST. ``origin_check_enabled`` turns
+    the Origin check off.
+
+    How the socket is refused depends on the Origin alone: a present Origin that is not
+    allowed makes every refusal ``before_handshake``, whatever else is wrong with the
+    request, so a cross-site page never gets an upgraded socket. Pass the refusal to
+    ``refuse``.
 
     A socket let in by a session cookie carries that session's id in
     ``websocket.state.session_id`` for ``hold_socket``; one let in otherwise (a good
@@ -78,6 +118,7 @@ def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
     cli_settings = websocket.app.state.settings
     app_settings = get_app_settings()
     websocket.state.session_id = None
+    foreign = _foreign_origin(websocket, cli_settings, app_settings)
 
     if cli_settings.auth_manager:
         authenticated = False
@@ -91,23 +132,31 @@ def websocket_refusal(websocket: WebSocket) -> tuple[int, str] | None:
                 websocket.state.session_id = cookie_sid
         if not authenticated:
             logger.warning("[Connection] WebSocket refused: no valid credentials")
-            return CLOSE_UNAUTHORIZED, "Unauthorized"
+            return Refusal(CLOSE_UNAUTHORIZED, "Unauthorized", before_handshake=foreign)
 
     if cli_settings.csrf_token:
         supplied = websocket.query_params.get("token") or websocket.headers.get("x-sshler-token")
         if not token_matches(supplied, cli_settings.csrf_token):
             logger.warning("[Connection] WebSocket refused: invalid token")
-            return CLOSE_FORBIDDEN, "Invalid token"
+            return Refusal(CLOSE_FORBIDDEN, "Invalid token", before_handshake=foreign)
 
-    if app_settings.origin_check_enabled:
-        origin = websocket.headers.get("origin")
-        if origin is not None and origin_base(origin) not in allowed_origins(
-            cli_settings, app_settings
-        ):
-            logger.warning("[Security] WebSocket refused: origin %r is not allowed", origin)
-            return CLOSE_FORBIDDEN, "Invalid origin"
+    if foreign:
+        return Refusal(CLOSE_FORBIDDEN, "Invalid origin", before_handshake=True)
 
     return None
+
+
+async def refuse(websocket: WebSocket, refusal: Refusal) -> None:
+    """Close a socket that is not yet accepted, as *refusal* says.
+
+    Before the handshake: closed unaccepted (the server answers HTTP 403). Otherwise
+    accepted and closed at once with the code and reason, so a browser sees them (a
+    close before the accept reaches it as 1006 with no reason). Nothing is read from
+    the socket, and no task or state is started for it.
+    """
+    if not refusal.before_handshake:
+        await websocket.accept()
+    await websocket.close(code=refusal.code, reason=refusal.reason)
 
 
 class _Unheld:

@@ -49,11 +49,16 @@ def _term_url(
     return url
 
 
-def _close_of(client: TestClient, url: str, **kwargs) -> tuple[int, str]:
-    with pytest.raises(WebSocketDisconnect) as excinfo:
-        with client.websocket_connect(url, **kwargs):
-            pass
-    return excinfo.value.code, excinfo.value.reason
+def _close_of(client: TestClient, url: str, **kwargs) -> tuple:
+    """The code and reason of a socket accepted and closed with nothing sent first; a
+    socket closed before its accept (a browser sees 1006) comes back marked as such."""
+    try:
+        with client.websocket_connect(url, **kwargs) as websocket:
+            message = websocket.receive()
+    except WebSocketDisconnect as refused:
+        return ("before accept", refused.code, refused.reason)
+    assert message["type"] == "websocket.close", message
+    return message["code"], message["reason"]
 
 
 @pytest.fixture
@@ -109,6 +114,49 @@ def test_auth_enabled_with_valid_basic_but_bad_token_closes_4403(auth_client: Te
 def test_empty_session_name_closes_4400(client: TestClient):
     """Kills: swallowing the `ValidationError` from `sanitize_session_name`."""
     assert _close_of(client, _term_url(session="")) == (4400, "Invalid session name")
+
+
+@pytest.mark.parametrize(
+    "session",
+    ["x" * 256, "x" * 10_000, "\u3042" * 5_000],
+    ids=["256-chars", "10000-chars", "5000-japanese-chars"],
+)
+def test_a_session_name_too_long_for_a_folder_closes_4400_at_once(
+    client: TestClient, fake_tmux, tmux_tripwire: Path, tmp_path: Path, session: str
+):
+    """A name longer than any folder name (255 bytes) cannot come from the page: it is
+    refused before anything starts, in well under a second. Kills: a long name passed
+    on to tmux, or a check that grows with the name."""
+    started = time.monotonic()
+    closed = _close_of(client, _term_url(session=session, host="local", directory=str(tmp_path)))
+    elapsed = time.monotonic() - started
+    assert closed == (4400, "Invalid session name")
+    assert elapsed < 1.0
+    assert fake_tmux.calls() == []
+    assert not tmux_tripwire.exists()
+
+
+@pytest.mark.posix_only("a PTY running the sh fake tmux behind /ws/term")
+def test_a_session_name_as_long_as_a_folder_name_is_let_in(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, fake_tmux, tmp_path: Path
+):
+    """The cap's other side: a 255-character name, the longest a folder name gives,
+    opens the terminal. Kills: a cap that refuses names the page makes."""
+
+    async def no_history(_session: str, _directory: str) -> None:
+        return None
+
+    monkeypatch.setattr("sshler.webapp.record_ts_history", no_history)
+    name = "y" * 255
+    with client.websocket_connect(
+        _term_url(session=name, host="local", directory=str(tmp_path))
+    ) as websocket:
+        websocket.send_bytes(b"long-name-ready\n")
+        echoed = _receive_until(websocket, b"long-name-ready", count=2)
+    assert echoed.count(b"long-name-ready") == 2
+    assert [call for call in fake_tmux.calls() if call.startswith("new ")] == [
+        f"new -As {name} -c {tmp_path}"
+    ]
 
 
 def _receive_until(websocket, marker: bytes, count: int, seconds: float = 5.0) -> bytes:

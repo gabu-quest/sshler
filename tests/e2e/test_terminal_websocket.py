@@ -16,8 +16,12 @@ a timer.
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
 import re
+import socket
 import uuid
+from urllib.parse import urlencode, urlsplit
 
 import pytest
 
@@ -27,6 +31,9 @@ playwright_async = pytest.importorskip(
 expect = playwright_async.expect
 
 FRAME_TIMEOUT = 15.0
+HOSTILE = "http://evil.example"
+# Longer than any folder name, so the server refuses it as a session name.
+TOO_LONG_SESSION = "x" * 300
 
 
 def shell_probe(marker: str) -> tuple[str, str]:
@@ -249,3 +256,139 @@ async def test_terminal_websocket_api_direct(open_page, app_server):
 
     assert result["connected"], f"WebSocket did not connect: {result}"
     assert result["echoReceived"], f"{expected!r} never came back: {result}"
+
+
+# --- a refused socket tells the page why ----------------------------------------------
+#
+# A close before the accept is answered by uvicorn with HTTP 403, which a browser reports
+# as close 1006 with no reason. A page on an allowed origin must instead see the code.
+
+
+def raw_upgrade(base_url: str, path: str, headers: dict[str, str]) -> tuple[str, int, str]:
+    """Send one WebSocket upgrade by hand: the status line, and the close frame's code
+    and reason when the server upgraded and closed at once (0 and "" when it did not)."""
+    parts = urlsplit(base_url)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = [
+        f"GET {path} HTTP/1.1",
+        f"Host: {parts.netloc}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+        *(f"{name}: {value}" for name, value in headers.items()),
+        "",
+        "",
+    ]
+    with socket.create_connection((parts.hostname, parts.port), timeout=10) as conn:
+        conn.sendall("\r\n".join(request).encode("ascii"))
+        reader = conn.makefile("rb")
+        status = reader.readline().decode("ascii").strip()
+        while reader.readline() not in (b"\r\n", b""):
+            pass
+        if not status.startswith("HTTP/1.1 101"):
+            return status, 0, ""
+        opcode, length = reader.read(2)
+        assert (opcode, length < 126) == (0x88, True), (opcode, length)
+        payload = reader.read(length)
+    return status, int.from_bytes(payload[:2], "big"), payload[2:].decode("utf-8")
+
+
+def _term_path(token: str, **extra: str) -> str:
+    query = {"host": "local", "dir": "/tmp", "session": "refused", "token": token, **extra}
+    return "/ws/term?" + urlencode(query)
+
+
+async def _browser_close(page, path: str) -> dict:
+    """Open *path* as a WebSocket from the page; how it ended, as the browser saw it."""
+    return await page.evaluate(
+        """(path) => new Promise((resolve) => {
+            const url = location.origin.replace(/^http/, 'ws') + path;
+            const ws = new WebSocket(url);
+            let opened = false;
+            const timer = setTimeout(() => resolve({ error: 'timeout' }), 10000);
+            ws.onopen = () => { opened = true; };
+            ws.onclose = (event) => {
+                clearTimeout(timer);
+                resolve({ opened, code: event.code, reason: event.reason });
+            };
+        })""",
+        path,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("socket_path", "closed"),
+    [
+        (lambda token: _term_path("wrong"), (4403, "Invalid token")),
+        (lambda token: _term_path(token, session=TOO_LONG_SESSION), (4400, "Invalid session name")),
+        (lambda token: _term_path(token, shell="bash"), (4400, "Invalid shell")),
+        (lambda token: "/ws/progress?token=wrong", (4403, "Invalid token")),
+        (lambda token: "/ws/ping?token=wrong", (4403, "Invalid token")),
+    ],
+    ids=["term-token", "term-session-name", "term-shell", "progress-token", "ping-token"],
+)
+async def test_a_refused_socket_reaches_the_browser_with_its_code(
+    open_page, app_server, socket_path, closed
+):
+    """A page on the server's own origin is told the code and reason of a refusal.
+
+    Mutation: closing before the accept -> the browser sees 1006 and an empty reason.
+    """
+    _, token = app_server
+    page = await open_page()
+    await page.goto("/app/", wait_until="load")
+    result = await _browser_close(page, socket_path(token))
+    assert result == {"opened": True, "code": closed[0], "reason": closed[1]}
+
+
+@pytest.mark.parametrize(
+    ("origin", "token"),
+    [(HOSTILE, "right"), (HOSTILE, "wrong"), ("null", "right"), ("null", "wrong")],
+)
+@pytest.mark.parametrize("socket_name", ["term", "progress", "ping"])
+def test_a_foreign_origin_is_answered_403_and_never_upgraded(
+    app_server, origin: str, token: str, socket_name: str
+):
+    """A cross-site page gets HTTP 403, whatever else is right or wrong with its request.
+
+    Mutation: accepting before the Origin is judged -> a 101 and a close frame.
+    """
+    base_url, server_token = app_server
+    supplied = server_token if token == "right" else "wrong"
+    path = _term_path(supplied) if socket_name == "term" else f"/ws/{socket_name}?token={supplied}"
+    assert raw_upgrade(base_url, path, {"Origin": origin}) == ("HTTP/1.1 403 Forbidden", 0, "")
+
+
+def test_an_allowed_origin_with_a_wrong_token_is_upgraded_and_told_4403(app_server):
+    """The other side of the 403: the server's own origin is upgraded, then closed 4403.
+
+    Mutation: refusing every wrong token before the accept -> a 403 here too.
+    """
+    base_url, _ = app_server
+    assert raw_upgrade(base_url, "/ws/ping?token=wrong", {"Origin": base_url}) == (
+        "HTTP/1.1 101 Switching Protocols",
+        4403,
+        "Invalid token",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_session_name_is_shown_and_not_retried(open_page):
+    """The terminal page with a session name the server refuses shows the refusal and opens
+    no second socket in the time its first retry would take (one second).
+
+    Mutation: the refusal closed before the accept -> the page sees 1006, shows nothing
+    and retries after a second (a second socket).
+    """
+    page = await open_page()
+    ws = WsOutput(page)
+    await page.goto(f"/app/terminal?box=local&session={TOO_LONG_SESSION}", wait_until="load")
+    await expect(
+        page.get_by_text(
+            "The server refused this session name. Open the terminal with another name."
+        )
+    ).to_be_visible(timeout=15000)
+    await page.wait_for_timeout(2500)
+    assert len(ws.urls) == 1

@@ -33,7 +33,14 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 
 from . import state
-from .access import allowed_origins, hold_socket, origin_base, websocket_refusal
+from .access import (
+    Refusal,
+    allowed_origins,
+    hold_socket,
+    origin_base,
+    refuse,
+    websocket_refusal,
+)
 from .api import APIDependencies, create_api_router, failure
 from .api.auth import create_auth_router, get_client_ip
 from .api.failure import Failure
@@ -1123,22 +1130,29 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             None: The coroutine completes when the websocket terminates.
         """
         # Who may open the socket is decided before anything about the request is
-        # validated, so a caller without credentials learns nothing else.
+        # validated here. FastAPI checks the query parameters first and closes with 1008
+        # on a bad one, so a caller without credentials learns only the parameter list.
         refusal = websocket_refusal(websocket)
         if refusal is not None:
-            await websocket.close(code=refusal[0], reason=refusal[1])
+            await refuse(websocket, refusal)
             return
 
-        # Session names reach tmux command lines, so only safe characters pass.
+        # Session names reach tmux command lines, so only safe characters pass, and no
+        # name longer than a folder name (the page names a session after its folder).
+        # The Origin passed above, so these refusals are accepted and closed with 4400.
+        if len(session) > MAX_SESSION_NAME:
+            logger.warning("[Security] Session name of %d characters rejected", len(session))
+            await refuse(websocket, Refusal(4400, "Invalid session name"))
+            return
         try:
             session = PathValidator.sanitize_session_name(session)
         except ValidationError as exc:
             logger.warning(f"[Security] Invalid session name rejected: {exc}")
-            await websocket.close(code=4400, reason="Invalid session name")
+            await refuse(websocket, Refusal(4400, "Invalid session name"))
             return
         if _shell_refused(host, shell):
             logger.warning("[Security] Invalid shell value rejected")
-            await websocket.close(code=4400, reason="Invalid shell")
+            await refuse(websocket, Refusal(4400, "Invalid shell"))
             return
 
         await websocket.accept()
@@ -1165,7 +1179,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 
         refusal = websocket_refusal(websocket)
         if refusal is not None:
-            await websocket.close(code=refusal[0], reason=refusal[1])
+            await refuse(websocket, refusal)
             return
 
         await websocket.accept()
@@ -1214,7 +1228,7 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
         """
         refusal = websocket_refusal(websocket)
         if refusal is not None:
-            await websocket.close(code=refusal[0], reason=refusal[1])
+            await refuse(websocket, refusal)
             return
 
         await websocket.accept()
@@ -1252,6 +1266,9 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
 # ``"tmux"``, the default) or a plain shell.
 PLAIN_SHELL = "plain"
 TERMINAL_SHELLS = frozenset({"", "tmux", PLAIN_SHELL})
+# The longest session name ``/ws/term`` takes: a folder name's limit (255 bytes on the
+# common file systems), so every name the page derives from a folder fits.
+MAX_SESSION_NAME = 255
 
 
 def _shell_refused(host: str, shell: str) -> bool:
