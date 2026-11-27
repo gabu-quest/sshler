@@ -13,8 +13,10 @@ export function filesUrl(box: string, path: string): string {
   return `/app/files?box=${encodeURIComponent(box)}&path=${encodeURIComponent(path)}`;
 }
 
-/** Left click: open in a background tab (keep focus here). Middle click stays native via href. */
+/** A plain left click opens a background tab (focus stays here). Any other button or a
+ *  click with Ctrl, Meta, Shift or Alt is the browser's own (new tab, window, download). */
 export function openInBackgroundTab(event: MouseEvent, url: string): void {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
   event.preventDefault();
   window.open(url, "_blank");
   // Try to keep focus on current tab (not always reliable)

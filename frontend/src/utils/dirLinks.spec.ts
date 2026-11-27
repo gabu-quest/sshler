@@ -33,4 +33,17 @@ describe("dirLinks", () => {
     expect(open).toHaveBeenCalledWith("/app/files?box=local&path=%2Fx", "_blank");
     expect(focus).toHaveBeenCalled();
   });
+
+  it.each([
+    ["Ctrl", { ctrlKey: true }],
+    ["Meta", { metaKey: true }],
+    ["Shift", { shiftKey: true }],
+    ["Alt", { altKey: true }],
+    ["the middle button", { button: 1 }],
+  ])("leaves a click with %s to the browser", (_name, init) => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const event = new MouseEvent("click", { cancelable: true, ...init });
+    openInBackgroundTab(event, "/app/files?box=local&path=%2Fx");
+    expect([event.defaultPrevented, open.mock.calls.length]).toEqual([false, 0]);
+  });
 });

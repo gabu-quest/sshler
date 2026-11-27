@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from "vue";
+import { computed, nextTick, ref, onMounted, onUnmounted, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { NIcon, NDrawer, NDrawerContent, NTooltip, NPopover } from "naive-ui";
@@ -195,6 +195,37 @@ function toggleTools() {
   flyoutX.value = panel.getBoundingClientRect().right + FLYOUT_GAP;
   flyoutY.value = button.getBoundingClientRect().top;
   toolsOpen.value = true;
+  // The keys follow the menu: its first tool takes the focus once it is drawn.
+  void nextTick(() => toolItems()[0]?.focus());
+}
+
+function toolItems(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('[data-testid="rail-tools-menu"] .rail-tools-item'),
+  );
+}
+
+// The menu's x/y are measured when it opens; a resize or a scroll of the rail moves the
+// button from under it, so either closes it.
+function closeTools() {
+  toolsOpen.value = false;
+}
+
+const TOOLS_KEY_STEP: Record<string, (index: number, count: number) => number> = {
+  ArrowDown: (index, count) => (index + 1) % count,
+  ArrowUp: (index, count) => (index - 1 + count) % count,
+  Home: () => 0,
+  End: (_index, count) => count - 1,
+};
+
+function onToolsMenuKeydown(event: KeyboardEvent) {
+  const step = TOOLS_KEY_STEP[event.key];
+  if (!step) return;
+  const items = toolItems();
+  if (!items.length) return;
+  event.preventDefault();
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  items[step(Math.max(index, 0), items.length)]?.focus();
 }
 
 function onToolsClickOutside(event: MouseEvent) {
@@ -252,6 +283,7 @@ const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
     if (toolsOpen.value) {
       toolsOpen.value = false;
+      toolsButton.value?.focus();
       return;
     }
     if (!isPhone.value && !appStore.railCollapsed) closeRail();
@@ -307,6 +339,7 @@ watch(() => bootstrapStore.signedIn, (signedIn) => {
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('resize', closeTools);
   document.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   if (!document.hidden) {
@@ -316,6 +349,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('resize', closeTools);
   document.removeEventListener('pointerdown', onPointerDown, true);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   stopStatsPolling();
@@ -334,7 +368,7 @@ onUnmounted(() => {
   >
     <div class="rail-shadow" aria-hidden="true" />
     <div class="rail-panel">
-      <div class="rail-inner">
+      <div class="rail-inner" @scroll="closeTools">
         <div class="rail-top">
           <RouterLink class="rail-item rail-brand" to="/" :aria-label="t('nav.overview')" @click="onPick">
             <span class="rail-icon"><img src="/logo.png" alt="" class="brand-logo" /></span>
@@ -405,7 +439,7 @@ onUnmounted(() => {
             class="rail-flyout"
             @clickoutside="onToolsClickOutside"
           >
-            <div class="rail-tools-menu" data-testid="rail-tools-menu" role="menu">
+            <div class="rail-tools-menu" data-testid="rail-tools-menu" role="menu" @keydown="onToolsMenuKeydown">
               <RouterLink
                 v-for="link in toolLinks"
                 :key="link.to"

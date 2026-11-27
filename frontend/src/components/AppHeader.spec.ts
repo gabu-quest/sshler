@@ -134,6 +134,37 @@ describe("AppHeader", () => {
       expect(tools.getAttribute("aria-expanded")).toBe("false");
     });
 
+    it("moves the keys into the Tools menu: focus on its first tool, arrows between them, Escape back", async () => {
+      const { getByTestId } = await mountHeader("/");
+      const tools = getByTestId("rail-tools");
+      await fireEvent.click(tools);
+      await nextTick();
+      const focused = () => document.activeElement?.querySelector(".rail-label")?.textContent?.trim();
+      expect(focused()).toBe("Commander");
+      await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      expect(focused()).toBe("Boxes");
+      await fireEvent.keyDown(document.activeElement!, { key: "End" });
+      expect(focused()).toBe("Artifacts");
+      await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+      expect(focused()).toBe("Commander");
+      await fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+      expect(focused()).toBe("Artifacts");
+      await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect([tools.getAttribute("aria-expanded"), document.activeElement]).toEqual(["false", tools]);
+    });
+
+    it("closes the Tools menu when the window resizes or the rail scrolls, as it would be left behind", async () => {
+      const { getByTestId, container } = await mountHeader("/");
+      const tools = getByTestId("rail-tools");
+      await fireEvent.click(tools);
+      window.dispatchEvent(new Event("resize"));
+      await nextTick();
+      expect(tools.getAttribute("aria-expanded")).toBe("false");
+      await fireEvent.click(tools);
+      await fireEvent.scroll(container.querySelector(".rail-inner")!);
+      expect(tools.getAttribute("aria-expanded")).toBe("false");
+    });
+
     it("marks Tools active on a tool's page", async () => {
       const { getByTestId } = await mountHeader("/diff");
       expect(getByTestId("rail-tools").classList.contains("active")).toBe(true);
