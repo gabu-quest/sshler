@@ -1121,9 +1121,16 @@ async def test_restore_layout_brings_back_the_windows_and_runs_no_pane_command_a
 
     status, _body = await _recreate(app, row.id)
     servers.record(name)
+    assert status == 200
 
-    panes = _tmux(name, "list-panes", "-s", "-F", "#{window_index} #{pane_current_command}")
-    assert (status, panes.stdout.split("\n")[:-1]) == (200, ["0 sh", "1 sh"])
+    # A new window's shell runs its start-up (on some hosts `locale`) before it idles, so wait for
+    # both panes to show the bare shell. A restore that typed the old command again would show
+    # `sleep` instead, and this wait would fail.
+    def panes() -> list[str]:
+        out = _tmux(name, "list-panes", "-s", "-F", "#{window_index} #{pane_current_command}")
+        return out.stdout.split("\n")[:-1]
+
+    await _until(lambda: panes() == ["0 sh", "1 sh"], "both panes to idle in sh")
     assert await _restorable(app) == [(name, True, False)]
 
 
