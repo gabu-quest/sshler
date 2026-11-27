@@ -216,7 +216,9 @@ CLI usage of ping, progress, artifacts, diff notebook and markdown preview is in
 ### Local HTML artifacts (`/app/artifacts`)
 - `ArtifactProject`/`ArtifactRegistration` in `state.py`; modes `file`/`site`/`collection`. `ArtifactSidecar` (`sshler/artifacts.py`) binds only `127.0.0.1`, GET/HEAD only, no CORS, strict resolved-path containment, rejects hidden/traversal/symlink paths.
 - **Deletion invariant:** removal deletes registrations only; never unlink the source path.
-- New discovery rules go in `sshler/artifacts.py` with pure tests plus sidecar containment tests. Design: `ROADMAP-ARTIFACTS.md`.
+- New discovery rules go in `sshler/artifacts.py` with pure tests plus sidecar containment tests.
+- The FastAPI app is the catalog and control plane. Its lifespan starts the sidecar, a `ThreadingHTTPServer` on `127.0.0.1`; the authenticated bootstrap reports its port, and the browser builds viewing URLs only when the UI itself is reached through `localhost`, `127.0.0.1` or `::1`. The database holds pointers and presentation metadata only; the source bytes stay on the file system.
+- Security invariants of the sidecar: IPv4 loopback only; no CORS headers; `GET` and `HEAD` only; traversal, hidden components, NULs, backslashes, non-regular files and resolved paths outside the registration root are refused; `file` mode never exposes siblings; collection discovery skips hidden and symlinked folders and stops at 1,000 pages (`MAX_COLLECTION_PAGES`), with title reads capped at 256 KiB (`MAX_TITLE_BYTES`); every answer sends `no-store`, `nosniff`, `no-referrer` and `Cross-Origin-Opener-Policy: same-origin`.
 
 ### Diff notebook (`/app/diff`)
 - No dedicated diff backend: each side composes `GET /api/v1/boxes/{name}/git/show`; keep blob-based composition the default.

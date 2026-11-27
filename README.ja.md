@@ -263,7 +263,7 @@ sshler artifact remove <id>
 
 `/app/artifacts` では検索と絞り込みができ、成果物の行全体をクリックしてページ一覧を開閉できます。固定リンクは `/r/<project-slug>/<artifact-slug>/` を使用し、既存のルート相対リンクは `artifact add --mount <path>` で維持できます。HTML を開く・プレビューするにはループバックアドレスが必要です。`remove` は必ず元のファイルを残します。
 
-設計とセキュリティモデルは [`ROADMAP-ARTIFACTS.md`](ROADMAP-ARTIFACTS.md) を参照してください。
+設計とセキュリティモデルは [`docs/architecture.md`](docs/architecture.md)（Local HTML artifacts）を参照してください。
 
 ### キーショートカット
 

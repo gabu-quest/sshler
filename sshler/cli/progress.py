@@ -221,7 +221,7 @@ def add_progress_parsers(
     # Progress-bar pusher CLI
     progress_parser = subcommands.add_parser(
         "progress",
-        help="Push or query global progress bars (see ROADMAP-PROGRESS.md)",
+        help="Push or query global progress bars (see docs/skills/progress-bars/SKILL.md)",
     )
     progress_sub = progress_parser.add_subparsers(dest="progress_command")
 

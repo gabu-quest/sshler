@@ -287,7 +287,7 @@ artifact row, preview pages, and unregister with the trash action. Stable cross-
 root-relative links. Opening and previewing require a loopback address. `remove` always leaves
 source files unchanged.
 
-See [`ROADMAP-ARTIFACTS.md`](ROADMAP-ARTIFACTS.md) for the architecture and security model.
+See [`docs/architecture.md`](docs/architecture.md) (Local HTML artifacts) for the architecture and security model.
 
 ### Key Shortcuts
 
@@ -1013,7 +1013,7 @@ sshler artifact open <id>
 sshler artifact remove <id>
 ```
 
-`/app/artifacts` でプロジェクト、登録、ページ検出、プレビュー、ゴミ箱操作を管理できます。開く・プレビューする機能はループバックアドレス経由で利用でき、`remove` は元のファイルを残します。設計とセキュリティモデルは [`ROADMAP-ARTIFACTS.md`](ROADMAP-ARTIFACTS.md) を参照してください。
+`/app/artifacts` でプロジェクト、登録、ページ検出、プレビュー、ゴミ箱操作を管理できます。開く・プレビューする機能はループバックアドレス経由で利用でき、`remove` は元のファイルを残します。設計とセキュリティモデルは [`docs/architecture.md`](docs/architecture.md)（Local HTML artifacts）を参照してください。
 
 ### キーショートカット
 
