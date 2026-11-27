@@ -75,6 +75,10 @@ class PathValidator:
                 if value.startswith("//?/"):
                     value = value[4:]
                 value = value.casefold()
+            elif value.startswith("//"):
+                # POSIX keeps a leading `//` as its own root, but Linux reads
+                # `//home/me` as `/home/me`, so it must compare as that.
+                value = "/" + value.lstrip("/")
             return posixpath.normpath(value).rstrip("/")
 
         here, base = form(path), form(home)

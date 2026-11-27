@@ -74,6 +74,11 @@ class FakeSFTP:
         self.calls.append(("stat", path))
         return SimpleNamespace(permissions=0o100644)
 
+    async def realpath(self, path: str) -> str:
+        """No links on this box: every path is its own real path."""
+        self.calls.append(("realpath", path))
+        return path
+
     async def lstat(self, path: str):
         """A folder of ``folders`` and the temp file of an archive are there; every other
         name is free."""
@@ -254,9 +259,11 @@ def test_batch_delete_resolves_tilde_paths(remote):
         200,
         {"status": "ok", "succeeded": ["~/f"], "failed": []},
     )
-    # A path is looked at without following a link (the home guard, then the delete).
+    # The home guard asks the real paths of the home and the path, then the delete
+    # looks at the path without following a link.
     assert remote.sftp.calls == [
-        ("lstat", f"{HOME}/f"),
+        ("realpath", HOME),
+        ("realpath", f"{HOME}/f"),
         ("lstat", f"{HOME}/f"),
         ("remove", f"{HOME}/f"),
     ]

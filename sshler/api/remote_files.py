@@ -489,18 +489,23 @@ async def _remote_own_name_by_case(sftp_client, source: str, target: str) -> boo
 
 async def _remote_refuse_home_or_above(connection, sftp_client, paths: Sequence[str]) -> None:
     """Refuse the whole batch (400, nothing touched) when a resolved path is the home
-    folder or above it, or is a link to either."""
+    folder or above it, or is a link to either. Both the paths and the home are
+    compared as spelled and as the server's real path, so a link anywhere along
+    either (`/home -> /export/home`, `/srv/h -> /home`) cannot hide the home."""
     home = await remote_home(connection)
+    homes = [home]
+    with contextlib.suppress(asyncssh.SFTPError):
+        homes.append(str(await sftp_client.realpath(home)))
     for path in paths:
         names = [path]
         with contextlib.suppress(asyncssh.SFTPError):  # a missing path fails on its own later
-            if stat_mod.S_ISLNK((await sftp_client.lstat(path)).permissions or 0):
-                names.append(str(await sftp_client.realpath(path)))
+            names.append(str(await sftp_client.realpath(path)))
         for name in names:
-            try:
-                PathValidator.refuse_home_or_ancestor(name, home)
-            except ValidationError as exc:
-                raise Failure(REASON_INVALID, str(exc)) from exc
+            for base in homes:
+                try:
+                    PathValidator.refuse_home_or_ancestor(name, base)
+                except ValidationError as exc:
+                    raise Failure(REASON_INVALID, str(exc)) from exc
 
 
 async def _remote_realpath_of_missing(sftp_client, folder: str) -> str:
