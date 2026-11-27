@@ -44,6 +44,10 @@ class PathValidator:
         if not allow_absolute and normalized.startswith("/"):
             raise ValidationError("Absolute paths not allowed")
 
+        # A relative path that starts by going up leaves the folder it is relative to.
+        if normalized == ".." or normalized.startswith("../"):
+            raise ValidationError("Path traversal detected")
+
         # Check for suspicious patterns that survived normalization
         if "/../" in normalized or normalized.endswith("/.."):
             raise ValidationError("Path traversal detected")
@@ -53,6 +57,32 @@ class PathValidator:
             raise ValidationError("Path traversal above root detected")
 
         return normalized
+
+    @staticmethod
+    def refuse_home_or_ancestor(path: str, home: str, *, windows: bool = False) -> None:
+        """Refuse ``path`` when it is the ``home`` folder or a folder above it (up to
+        the root), for a delete, a move or a rename. Both are resolved paths. On
+        Windows the compare folds case, takes both separators and drops a ``\\\\?\\``
+        prefix, so ``C:\\Users`` and ``C:\\`` are above ``C:\\Users\\me``.
+
+        Raises:
+            ValidationError: If ``path`` is ``home`` or above it
+        """
+
+        def form(value: str) -> str:
+            if windows:
+                value = value.replace("\\", "/")
+                if value.startswith("//?/"):
+                    value = value[4:]
+                value = value.casefold()
+            return posixpath.normpath(value).rstrip("/")
+
+        here, base = form(path), form(home)
+        if here == base or base.startswith(here + "/"):
+            raise ValidationError(
+                f"Refusing to delete, move or rename {path}: it is the home folder "
+                "or a folder above it"
+            )
 
     @staticmethod
     def validate_local_path(path: str, allow_absolute: bool = True) -> str:

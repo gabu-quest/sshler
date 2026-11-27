@@ -9,6 +9,7 @@ import pytest
 from platform_support import make_symlink
 
 from sshler.api.helpers import _normalize_local_path
+from sshler.validation import PathValidator, ValidationError
 
 
 class TestNormalizeLocalPathSymlinkSecurity:
@@ -242,3 +243,54 @@ def test_the_server_asks_for_the_drive_root_when_a_page_asks_for_a_bare_drive(mo
     monkeypatch.setattr(helpers, "Path", spy)
     _normalize_local_path("C:")
     assert asked == ["C:/"]
+
+
+# --- the home folder and the folders above it ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "home", "windows"),
+    [
+        ("/home/gabu", "/home/gabu", False),
+        ("/home/gabu/", "/home/gabu", False),
+        ("/home", "/home/gabu", False),
+        ("/", "/home/gabu", False),
+        ("/home/gabu/x/..", "/home/gabu", False),
+        ("C:\\Users\\me", "C:\\Users\\me", True),
+        ("c:/users/ME", "C:\\Users\\me", True),
+        ("C:\\Users", "C:\\Users\\me", True),
+        ("C:\\", "C:\\Users\\me", True),
+        ("c:", "C:\\Users\\me", True),
+        ("\\\\?\\C:\\Users\\me", "C:\\Users\\me", True),
+        ("C:/Users//me/", "C:\\Users\\me", True),
+    ],
+)
+def test_the_home_folder_and_every_folder_above_it_is_refused(path, home, windows):
+    with pytest.raises(ValidationError):
+        PathValidator.refuse_home_or_ancestor(path, home, windows=windows)
+
+
+@pytest.mark.parametrize(
+    ("path", "home", "windows"),
+    [
+        ("/home/gabu/x", "/home/gabu", False),
+        ("/home/gabu2", "/home/gabu", False),
+        ("/srv", "/home/gabu", False),
+        ("C:\\Users\\me\\x", "C:\\Users\\me", True),
+        ("C:\\Users\\me2", "C:\\Users\\me", True),
+        ("D:\\", "C:\\Users\\me", True),
+    ],
+)
+def test_a_folder_below_or_beside_home_is_not_refused(path, home, windows):
+    PathValidator.refuse_home_or_ancestor(path, home, windows=windows)
+
+
+@pytest.mark.parametrize("path", ["..", "../x", "../../x", "./../x"])
+def test_a_remote_path_that_starts_by_going_up_is_refused(path):
+    with pytest.raises(ValidationError):
+        PathValidator.validate_remote_path(path)
+
+
+@pytest.mark.parametrize(("path", "kept"), [("a/../b", "b"), ("a/b", "a/b"), ("/a/b", "/a/b")])
+def test_a_remote_path_that_stays_inside_is_kept(path, kept):
+    assert PathValidator.validate_remote_path(path) == kept

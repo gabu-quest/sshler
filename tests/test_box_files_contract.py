@@ -1414,6 +1414,8 @@ class _FolderSFTP:
     async def stat(self, path: str) -> SimpleNamespace:
         return SimpleNamespace(permissions=0o040755)
 
+    lstat = stat
+
     def exit(self) -> None:
         pass
 
@@ -1422,13 +1424,19 @@ class _FolderSFTP:
 async def test_a_remote_batch_delete_removes_a_folder_with_rm_on_the_quoted_path(monkeypatch):
     path = f"/srv/{ODD_NAME}"
     rm = shlex.join(["rm", "-rf", path])
-    connection = RecordingConnection({rm: _Result(stdout="", exit_status=0)}, _FolderSFTP())
+    replies = {
+        rm: _Result(stdout="", exit_status=0),
+        HOME_CMD: _Result(stdout="/home/me", stderr="", exit_status=0),
+    }
+    connection = RecordingConnection(replies, _FolderSFTP())
     deps = _recording(monkeypatch, connection)
     async with box_files(deps, _remote_box(), CONFIG, answers=None) as files:
         outcome = await files.delete_many([path])
     assert (outcome.succeeded, outcome.failed) == ([path], [])
-    assert shlex.split(connection.commands[0]) == ["rm", "-rf", path]
-    assert connection.commands[1:] == [HEALTH_CMD]
+    # The home lookup first (the home guard), then the delete.
+    assert connection.commands[0] == HOME_CMD
+    assert shlex.split(connection.commands[1]) == ["rm", "-rf", path]
+    assert connection.commands[2:] == [HEALTH_CMD]
 
 
 def _local_box() -> Box:

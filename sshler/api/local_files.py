@@ -695,7 +695,9 @@ async def _local_read_bytes(path: str, limit: int) -> tuple[bytes, bool]:
 async def _local_batch_delete(path: str) -> None:
     def _worker() -> None:
         target = Path(path)
-        if target.is_dir():
+        if target.is_symlink():
+            target.unlink()  # the link itself, never what it points to
+        elif target.is_dir():
             shutil.rmtree(target)
         else:
             target.unlink()
@@ -1051,6 +1053,35 @@ def _local_path(path: str) -> str:
     return _normalize_local_path(path)
 
 
+def _local_link_itself(sent: str, resolved: str) -> str:
+    """The link ``sent`` names when its last part is a link (worker thread), else
+    ``resolved``. ``_local_path`` follows every link, so a delete or a move of a link
+    would act on what it points to; the link's folder is resolved, its name is not."""
+    try:
+        base = os.path.abspath(os.path.expanduser(sent))
+        name = os.path.basename(base)
+        if name not in ("", ".", ".."):
+            candidate = os.path.join(os.path.realpath(os.path.dirname(base)), name)
+            if os.path.islink(candidate):
+                return local_path_form(candidate)
+    except (OSError, ValueError):
+        pass
+    return resolved
+
+
+def _local_refuse_home_or_above(resolved: Sequence[str]) -> None:
+    """Refuse the whole batch when one path is the home folder or above it."""
+    try:
+        home = local_path_form(Path.home().resolve())
+    except (OSError, RuntimeError):
+        return
+    for path in resolved:
+        try:
+            PathValidator.refuse_home_or_ancestor(path, home, windows=LOCAL_IS_WINDOWS)
+        except ValidationError as exc:
+            raise Failure(REASON_INVALID, str(exc)) from exc
+
+
 def _local_folder_size(base: Path) -> int:
     """The bytes of the files under ``base`` (worker thread). A missing or unreadable
     ``base`` fails as the system says; an unreadable entry under it is left out."""
@@ -1095,6 +1126,16 @@ class LocalFiles:
 
     def _resolve(self, path: str) -> str:
         return self._spelled.note(_local_path(path), path)
+
+    def _refuse_home_in(self, paths: Sequence[str]) -> None:
+        """Worker thread: a path that cannot be resolved fails on its own later."""
+        resolved: list[str] = []
+        for path in paths:
+            try:
+                resolved.append(self._resolve(path))
+            except Exception:
+                continue
+        _local_refuse_home_or_above(resolved)
 
     # --- paths -----------------------------------------------------------------------
 
@@ -1289,7 +1330,9 @@ class LocalFiles:
         new_name = PathValidator.validate_filename(new_name)
 
         def _rename() -> str:
-            source = Path(self._resolve(path))
+            resolved = self._resolve(path)
+            _local_refuse_home_or_above([resolved])
+            source = Path(_local_link_itself(path, resolved))
             target = str(source.parent / new_name)
             landed = _local_place(
                 str(source), target, move=True, overwrite=overwrite, keep_both=keep_both
@@ -1312,6 +1355,9 @@ class LocalFiles:
         if new_name:
             PathValidator.validate_filename(new_name)
         resolved = await asyncio.to_thread(self._resolve, source)
+        if move:
+            _local_refuse_home_or_above([resolved])
+            resolved = await asyncio.to_thread(_local_link_itself, source, resolved)
         dest_dir = Path(await asyncio.to_thread(self._resolve, destination))
         landed = await asyncio.to_thread(
             _local_place_into,
@@ -1371,9 +1417,11 @@ class LocalFiles:
 
     async def delete_many(self, paths: Sequence[str]) -> BatchOutcome:
         outcome = BatchOutcome()
+        await asyncio.to_thread(self._refuse_home_in, paths)
         for path in paths:
             try:
                 normalized = await asyncio.to_thread(self._resolve, path)
+                normalized = await asyncio.to_thread(_local_link_itself, path, normalized)
                 await _local_batch_delete(normalized)
                 outcome.succeeded.append(path)
             except Exception as exc:
@@ -1394,9 +1442,13 @@ class LocalFiles:
         outcome = BatchOutcome()
         landed: set[str] = set()
         dest_dir = Path(await asyncio.to_thread(self._resolve, destination))
+        if move:
+            await asyncio.to_thread(self._refuse_home_in, paths)
         for path in paths:
             try:
                 source = await asyncio.to_thread(self._resolve, path)
+                if move:
+                    source = await asyncio.to_thread(_local_link_itself, path, source)
                 target, at = await asyncio.to_thread(
                     partial(
                         _local_batch_item,

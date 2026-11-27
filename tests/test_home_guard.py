@@ -1,0 +1,189 @@
+"""Deleting, moving or renaming the home folder or a folder above it is refused, and
+deleting a link removes the link, never what it points to.
+
+Run on the contract's two kinds of box (a temp folder, and the same tree through a
+loopback SFTP server whose home is ``/home``)."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+import test_box_files_contract as contract
+from platform_support import make_symlink
+from test_box_files_contract import Kind, _outcome
+
+kind = contract.kind  # the fixture: a temp folder, and the same tree over loopback SFTP
+
+pytestmark = pytest.mark.asyncio
+
+REFUSED = "the home folder or a folder above it"
+
+
+def _home_for(kind: Kind, monkeypatch) -> str:
+    """The path the box calls home: on the local box it is moved into the tree."""
+    if kind.name == "local":
+        monkeypatch.setenv("HOME", str(kind.root / "sub"))
+        monkeypatch.setenv("USERPROFILE", str(kind.root / "sub"))
+        return kind.at("sub")
+    return kind.home
+
+
+def _refused(result) -> bool:
+    return (
+        isinstance(result, tuple) and result[:2] == ("answered", 400) and REFUSED in str(result[2])
+    )
+
+
+async def test_a_batch_delete_holding_home_is_refused_whole(kind, monkeypatch):
+    home = _home_for(kind, monkeypatch)
+
+    async def op(files, kind):
+        return await files.delete_many([kind.at("a.txt"), home])
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "a.txt").exists() and (kind.root / "sub" / "inner.txt").exists()
+
+
+async def test_a_batch_delete_of_a_folder_above_home_is_refused(kind, monkeypatch):
+    _home_for(kind, monkeypatch)
+    above = kind.at("") if kind.name == "local" else "/"
+
+    async def op(files, kind):
+        return await files.delete_many([above, kind.at("a.txt")])
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "a.txt").exists()
+
+
+async def test_a_batch_move_of_home_is_refused_whole(kind, monkeypatch):
+    home = _home_for(kind, monkeypatch)
+    (kind.root / "dest").mkdir()
+
+    async def op(files, kind):
+        return await files.place_many(
+            [kind.at("a.txt"), home], kind.at("dest"), move=True, overwrite=False
+        )
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "a.txt").exists() and not (kind.root / "dest" / "a.txt").exists()
+
+
+async def test_a_move_of_home_into_a_folder_is_refused(kind, monkeypatch):
+    home = _home_for(kind, monkeypatch)
+    (kind.root / "dest").mkdir()
+
+    async def op(files, kind):
+        return await files.place_into(
+            home, kind.at("dest"), None, move=True, overwrite=False, allow_dirs=True
+        )
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "sub" / "inner.txt").exists()
+
+
+async def test_a_rename_of_home_is_refused(kind, monkeypatch):
+    home = _home_for(kind, monkeypatch)
+
+    async def op(files, kind):
+        return await files.rename(home, "elsewhere", overwrite=False)
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "sub" / "inner.txt").exists()
+
+
+async def test_a_batch_copy_from_home_is_not_refused(kind, monkeypatch):
+    home = _home_for(kind, monkeypatch)
+    (kind.root / "dest").mkdir()
+
+    async def op(files, kind):
+        outcome = await files.place_many([home], kind.at("dest"), move=False, overwrite=False)
+        return outcome.failed
+
+    if kind.name == "remote":
+        pytest.skip("the remote home has no folder in the tree to copy")
+    assert await _outcome(kind, op) == []
+    assert (kind.root / "dest" / "sub" / "inner.txt").exists()
+
+
+async def test_a_batch_delete_of_a_link_to_home_is_refused(kind, monkeypatch):
+    if kind.name != "local":
+        pytest.skip("a remote link to home needs a real remote home folder")
+    _home_for(kind, monkeypatch)
+    make_symlink(kind.root / "home_link", kind.root / "sub", target_is_directory=True)
+
+    async def op(files, kind):
+        return await files.delete_many([kind.at("home_link")])
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "sub" / "inner.txt").exists()
+
+
+# --- a link is removed, not what it points to -----------------------------------------
+
+
+async def test_a_batch_delete_of_a_link_to_a_file_keeps_the_file(kind):
+    async def op(files, kind):
+        return await files.delete_many([kind.at("link_out")])
+
+    outcome = await _outcome(kind, op)
+    assert (outcome.succeeded, outcome.failed) == ([kind.at("link_out")], [])
+    assert not os.path.lexists(kind.root / "link_out")
+    assert (kind.outside / "secret.txt").read_bytes() == b"secret\n"
+
+
+async def test_a_batch_delete_of_a_link_to_a_folder_keeps_the_folder(kind):
+    if kind.name != "local":
+        pytest.skip("a remote folder delete runs rm, which the loopback server refuses")
+    make_symlink(kind.root / "link_dir", kind.outside, target_is_directory=True)
+
+    async def op(files, kind):
+        return await files.delete_many([kind.at("link_dir")])
+
+    outcome = await _outcome(kind, op)
+    assert (outcome.succeeded, outcome.failed) == ([kind.at("link_dir")], [])
+    assert not os.path.lexists(kind.root / "link_dir")
+    assert (kind.outside / "secret.txt").read_bytes() == b"secret\n"
+
+
+async def test_a_batch_delete_of_a_dangling_link_removes_it(kind):
+    make_symlink(kind.root / "dangling", "no-such-target")
+
+    async def op(files, kind):
+        return await files.delete_many([kind.at("dangling")])
+
+    outcome = await _outcome(kind, op)
+    assert (outcome.succeeded, outcome.failed) == ([kind.at("dangling")], [])
+    assert not os.path.lexists(kind.root / "dangling")
+
+
+async def test_a_batch_move_of_a_link_moves_the_link(kind):
+    if kind.name != "local":
+        pytest.skip("the loopback server's chroot cannot read a link (readlink: not found)")
+    (kind.root / "dest").mkdir()
+    make_symlink(kind.root / "link_a", "a.txt")  # inside the tree, so the server holds it
+
+    async def op(files, kind):
+        outcome = await files.place_many(
+            [kind.at("link_a")], kind.at("dest"), move=True, overwrite=False
+        )
+        return outcome.failed
+
+    assert await _outcome(kind, op) == []
+    assert os.path.islink(kind.root / "dest" / "link_a")
+    assert not os.path.lexists(kind.root / "link_a")
+    assert (kind.root / "a.txt").read_bytes() == b"hello\n"
+
+
+async def test_a_rename_of_a_link_renames_the_link(kind):
+    if kind.name != "local":
+        pytest.skip("the loopback server's chroot cannot read a link (readlink: not found)")
+    make_symlink(kind.root / "link_a", "a.txt")
+
+    async def op(files, kind):
+        return await files.rename(kind.at("link_a"), "link_new", overwrite=False)
+
+    await _outcome(kind, op)
+    assert os.path.islink(kind.root / "link_new")
+    assert not os.path.lexists(kind.root / "link_a")
+    assert (kind.root / "a.txt").read_bytes() == b"hello\n"
