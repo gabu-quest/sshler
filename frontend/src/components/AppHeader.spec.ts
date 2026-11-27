@@ -118,6 +118,22 @@ describe("AppHeader", () => {
       expect(hrefs(container.querySelector(".rail-dock"), "a.rail-item")).toEqual([["Settings", "/settings"]]);
     });
 
+    it("toggles the Tools flyout on a click, and closes it on Escape or when the rail moves", async () => {
+      const { getByTestId } = await mountHeader("/");
+      const tools = getByTestId("rail-tools");
+      expect(tools.getAttribute("aria-expanded")).toBe("false");
+      await fireEvent.click(tools);
+      expect(tools.getAttribute("aria-expanded")).toBe("true");
+      await fireEvent.click(tools);
+      expect(tools.getAttribute("aria-expanded")).toBe("false");
+      await fireEvent.click(tools);
+      await fireEvent.keyDown(window, { key: "Escape" });
+      expect(tools.getAttribute("aria-expanded")).toBe("false");
+      await fireEvent.click(tools);
+      await fireEvent.click(getByTestId("rail-toggle"));
+      expect(tools.getAttribute("aria-expanded")).toBe("false");
+    });
+
     it("marks Tools active on a tool's page", async () => {
       const { getByTestId } = await mountHeader("/diff");
       expect(getByTestId("rail-tools").classList.contains("active")).toBe(true);

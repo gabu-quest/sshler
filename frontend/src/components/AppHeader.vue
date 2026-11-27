@@ -174,6 +174,38 @@ const toolsActive = computed(() => toolLinks.value.some((link) => isActive(link.
 const railEl = ref<HTMLElement | null>(null);
 const toolsOpen = ref(false);
 const progressPickerOpen = ref(false);
+const toolsButton = ref<HTMLElement | null>(null);
+// Where the tools flyout opens: against the rail's visible right edge (the panel is
+// slid left under its clip when collapsed, so the button's own box reaches past it),
+// level with the Tools button. The popover adds a 6 px offset of its own to the point it
+// is given, so the point sits 3 px inside the edge and the menu opens 3 px outside it
+// (expanded: 211, where the trigger-anchored menu opened at 213).
+const FLYOUT_GAP = -3;
+const flyoutX = ref(0);
+const flyoutY = ref(0);
+
+function toggleTools() {
+  if (toolsOpen.value) {
+    toolsOpen.value = false;
+    return;
+  }
+  const panel = railEl.value?.querySelector(".rail-panel");
+  const button = toolsButton.value;
+  if (!panel || !button) return;
+  flyoutX.value = panel.getBoundingClientRect().right + FLYOUT_GAP;
+  flyoutY.value = button.getBoundingClientRect().top;
+  toolsOpen.value = true;
+}
+
+function onToolsClickOutside(event: MouseEvent) {
+  if (event.target instanceof Node && toolsButton.value?.contains(event.target)) return;
+  toolsOpen.value = false;
+}
+
+// The rail moving under an open flyout would leave it at the old place: close it.
+watch(() => appStore.railCollapsed, () => {
+  toolsOpen.value = false;
+});
 const toggleLabel = computed(() => (appStore.railCollapsed ? t("rail.expand") : t("rail.collapse")));
 
 function closeRail() {
@@ -218,6 +250,10 @@ function isTypingTarget(el: EventTarget | null): boolean {
 const handleKeydown = (event: KeyboardEvent) => {
   if (isTypingTarget(event.target)) return;
   if (event.key === "Escape") {
+    if (toolsOpen.value) {
+      toolsOpen.value = false;
+      return;
+    }
     if (!isPhone.value && !appStore.railCollapsed) closeRail();
     return;
   }
@@ -338,34 +374,37 @@ onUnmounted(() => {
             <span class="rail-hint">{{ link.shortcut }}</span>
           </RouterLink>
 
+          <button
+            ref="toolsButton"
+            type="button"
+            class="rail-item"
+            :class="{ active: toolsActive }"
+            data-testid="rail-tools"
+            aria-haspopup="menu"
+            :aria-expanded="toolsOpen"
+            :aria-label="t('nav.tools')"
+            :title="t('nav.tools')"
+            @click="toggleTools"
+          >
+            <span class="rail-icon">
+              <NIcon size="18" aria-hidden="true"><PhToolbox weight="duotone" /></NIcon>
+            </span>
+            <span class="rail-label">{{ t('nav.tools') }}</span>
+            <span class="rail-hint">
+              <NIcon size="12" aria-hidden="true"><PhCaretRight weight="bold" /></NIcon>
+            </span>
+          </button>
+
           <NPopover
-            trigger="click"
+            trigger="manual"
             placement="right-start"
             :show="toolsOpen"
+            :x="flyoutX"
+            :y="flyoutY"
             :show-arrow="false"
             class="rail-flyout"
-            @update:show="(value: boolean) => (toolsOpen = value)"
+            @clickoutside="onToolsClickOutside"
           >
-            <template #trigger>
-              <button
-                type="button"
-                class="rail-item"
-                :class="{ active: toolsActive }"
-                data-testid="rail-tools"
-                aria-haspopup="menu"
-                :aria-expanded="toolsOpen"
-                :aria-label="t('nav.tools')"
-                :title="t('nav.tools')"
-              >
-                <span class="rail-icon">
-                  <NIcon size="18" aria-hidden="true"><PhToolbox weight="duotone" /></NIcon>
-                </span>
-                <span class="rail-label">{{ t('nav.tools') }}</span>
-                <span class="rail-hint">
-                  <NIcon size="12" aria-hidden="true"><PhCaretRight weight="bold" /></NIcon>
-                </span>
-              </button>
-            </template>
             <div class="rail-tools-menu" data-testid="rail-tools-menu" role="menu">
               <RouterLink
                 v-for="link in toolLinks"
