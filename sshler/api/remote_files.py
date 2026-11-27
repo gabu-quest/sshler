@@ -80,6 +80,7 @@ from .remote import (
     remote_directory,
     remote_home,
     remote_path,
+    remote_real_home,
 )
 
 logger = logging.getLogger(__name__)
@@ -492,10 +493,10 @@ async def _remote_refuse_home_or_above(connection, sftp_client, paths: Sequence[
     folder or above it, or is a link to either. Both the paths and the home are
     compared as spelled and as the server's real path, so a link anywhere along
     either (`/home -> /export/home`, `/srv/h -> /home`) cannot hide the home."""
-    home = await remote_home(connection)
-    homes = [home]
-    with contextlib.suppress(asyncssh.SFTPError):
-        homes.append(str(await sftp_client.realpath(home)))
+    homes = [await remote_home(connection)]
+    real_home = await remote_real_home(connection, sftp_client)
+    if real_home is not None and real_home not in homes:
+        homes.append(real_home)
     for path in paths:
         names = [path]
         with contextlib.suppress(asyncssh.SFTPError):  # a missing path fails on its own later

@@ -702,10 +702,12 @@ def _on_loop() -> bool:
 @pytest.mark.parametrize(
     ("route", "calls"),
     [
-        ("rename", ["resolve", "link", "unlink"]),
-        ("move", ["resolve", "resolve", "link", "unlink"]),
+        # A rename or a move also resolves the home folder for the home guard; a batch
+        # move resolves each path for it first.
+        ("rename", ["resolve", "resolve", "link", "unlink"]),
+        ("move", ["resolve", "resolve", "resolve", "link", "unlink"]),
         ("copy", ["resolve", "resolve", "copyfileobj"]),
-        ("batch/move", ["resolve", "resolve", "link", "unlink"]),
+        ("batch/move", ["resolve", "resolve", "resolve", "resolve", "link", "unlink"]),
         ("batch/copy", ["resolve", "resolve", "copyfileobj"]),
     ],
 )
@@ -742,7 +744,8 @@ def test_local_file_work_runs_off_the_event_loop(local_env, monkeypatch, route, 
     resp = s.post(route, body)
 
     assert resp.status_code == 200, resp.text
-    assert seen == [(name, False) for name in calls]
+    assert [on_loop for _, on_loop in seen] == [False] * len(seen)
+    assert [name for name, _ in seen] == calls
 
 
 @pytest.mark.parametrize("box", BOXES)
@@ -1571,8 +1574,9 @@ def test_a_transfer_replace_never_carries_setuid_to_the_new_file(env, server, sr
 
 
 @pytest.mark.parametrize("box", ["lb-counting"])
-def test_a_remote_file_rename_in_its_own_folder_is_four_requests(env, box):
-    """Before: the move by hard link ended in one more `lstat` of the source."""
+def test_a_remote_file_rename_in_its_own_folder_is_four_requests_after_the_home_guard(env, box):
+    """Before: the move by hard link ended in one more `lstat` of the source. The home
+    guard first asks the real path of the home (once per connection) and of the source."""
     s = side(env, box)
     s.disk("a.txt").write_bytes(b"source")
     COUNTED_REQUESTS.clear()
@@ -1580,12 +1584,12 @@ def test_a_remote_file_rename_in_its_own_folder_is_four_requests(env, box):
     resp = single(s, "rename", "a.txt", "b.txt")
 
     assert (resp.status_code, resp.json()["path"]) == (200, "/b.txt")
-    assert COUNTED_REQUESTS == ["lstat", "lstat", "link", "remove"]
+    assert COUNTED_REQUESTS == ["realpath", "realpath", "lstat", "lstat", "link", "remove"]
     assert files_under(s.base) == {"b.txt": b"source", "home": "dir"}
 
 
 @pytest.mark.parametrize("box", ["lb-counting"])
-def test_a_remote_folder_rename_in_its_own_folder_sends_no_realpath(env, box):
+def test_a_remote_folder_rename_in_its_own_folder_asks_realpath_only_for_the_home_guard(env, box):
     s = side(env, box)
     s.disk("a").mkdir()
     s.disk("a/f.txt").write_bytes(b"f")
@@ -1594,7 +1598,7 @@ def test_a_remote_folder_rename_in_its_own_folder_sends_no_realpath(env, box):
     resp = single(s, "rename", "a", "b")
 
     assert (resp.status_code, resp.json()["path"]) == (200, "/b")
-    assert COUNTED_REQUESTS == ["lstat", "lstat", "mkdir", "posix_rename"]
+    assert COUNTED_REQUESTS == ["realpath", "realpath", "lstat", "lstat", "mkdir", "posix_rename"]
     assert files_under(s.base) == {"b": "dir", "b/f.txt": b"f", "home": "dir"}
 
 

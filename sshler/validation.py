@@ -45,7 +45,9 @@ class PathValidator:
             raise ValidationError("Absolute paths not allowed")
 
         # A relative path that starts by going up leaves the folder it is relative to.
-        if normalized == ".." or normalized.startswith("../"):
+        # A `~` path is not relative: it is resolved against the home folder, as an
+        # absolute path, before it is used (normpath turns `~/../..` into `..`).
+        if not path.startswith("~") and (normalized == ".." or normalized.startswith("../")):
             raise ValidationError("Path traversal detected")
 
         # Check for suspicious patterns that survived normalization

@@ -1775,10 +1775,14 @@ async def test_a_local_archive_that_does_not_exist_is_404(tmp_path):
 
 
 class _DroppingSFTP:
-    """An SFTP client whose connection drops at the first request."""
+    """An SFTP client whose connection drops at the first request (the home guard's
+    real path of the home, before the delete)."""
 
     def __init__(self) -> None:
         self.exits = 0
+
+    async def realpath(self, path: str) -> str:
+        raise SSHError("connection lost")
 
     async def remove(self, path: str) -> None:
         raise SSHError("connection lost")
@@ -1792,7 +1796,7 @@ async def test_a_connection_that_drops_in_the_block_is_502_and_the_session_close
     monkeypatch,
 ):
     sftp = _DroppingSFTP()
-    connection = RecordingConnection({}, sftp)
+    connection = RecordingConnection({HOME_CMD: _Result(stdout="/home/me", exit_status=0)}, sftp)
     deps = _recording(monkeypatch, connection)
     with pytest.raises(HTTPException) as answered:
         async with box_files(deps, _remote_box(), CONFIG) as files:

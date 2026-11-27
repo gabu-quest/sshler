@@ -1365,7 +1365,7 @@ class LocalFiles:
             PathValidator.validate_filename(new_name)
         resolved = await asyncio.to_thread(self._resolve, source)
         if move:
-            _local_refuse_home_or_above([resolved])
+            await asyncio.to_thread(_local_refuse_home_or_above, [resolved])
             resolved = await asyncio.to_thread(_local_link_itself, source, resolved)
         dest_dir = Path(await asyncio.to_thread(self._resolve, destination))
         landed = await asyncio.to_thread(

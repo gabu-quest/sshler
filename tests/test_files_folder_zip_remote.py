@@ -136,6 +136,10 @@ class FakeSFTP:
             raise FileNotFoundError(path)
         return SimpleNamespace(permissions=0o100644)
 
+    async def realpath(self, path: str) -> str:
+        self.calls.append(("realpath", path))
+        return self.symlinks.get(path, path)
+
     async def lstat(self, path: str):
         self.calls.append(("lstat", path))
         if path in self.denied:
@@ -859,7 +863,8 @@ def test_upload_at_tilde_writes_into_the_remote_home(remote):
         (
             "delete",
             {"path": "~/a.txt"},
-            [("remove", f"{HOME}/a.txt")],
+            # The home guard asks the real paths of the home and the file first.
+            [("realpath", HOME), ("realpath", f"{HOME}/a.txt"), ("remove", f"{HOME}/a.txt")],
             f"{HOME}/a.txt",
         ),
         (

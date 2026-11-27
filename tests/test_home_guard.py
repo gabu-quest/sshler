@@ -315,22 +315,24 @@ class _RealpathSFTP:
     ],
 )
 async def test_the_remote_rule_refuses_home_however_it_is_reached(monkeypatch, path, real):
-    from sshler.api import failure, remote_files
+    from sshler.api import failure, remote, remote_files
 
     async def home(_connection):
         return "/home/me"
 
     monkeypatch.setattr(remote_files, "remote_home", home)
+    monkeypatch.setattr(remote, "remote_home", home)
     with pytest.raises(failure.Failure, match=REFUSED):
         await remote_files._remote_refuse_home_or_above(object(), _RealpathSFTP(real), [path])
 
 
 @pytest.mark.parametrize("path", ["/home/me/projects/app", "/home/mean", "/srv/data"])
 async def test_the_remote_rule_lets_a_folder_below_or_beside_home_through(monkeypatch, path):
-    from sshler.api import remote_files
+    from sshler.api import remote, remote_files
 
     async def home(_connection):
         return "/home/me"
 
     monkeypatch.setattr(remote_files, "remote_home", home)
+    monkeypatch.setattr(remote, "remote_home", home)
     await remote_files._remote_refuse_home_or_above(object(), _RealpathSFTP({}), [path])
