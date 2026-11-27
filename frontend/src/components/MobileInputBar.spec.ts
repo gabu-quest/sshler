@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -63,5 +66,30 @@ describe("MobileInputBar tmux keys", () => {
       "Prev window", "New window", "Next window", "Split vertical", "Split horizontal",
     ]);
     wrapper.unmount();
+  });
+
+  it("the legend fades in and out with modal-fade", async () => {
+    const wrapper = mount(MobileInputBar, {
+      props: { connected: true },
+      global: { stubs: { transition: false } },
+    });
+    await wrapper.find(`button[title='${LEGEND_BUTTON}']`).trigger("click");
+    const overlay = document.body.querySelector(".legend-overlay")!;
+    expect(overlay.classList.contains("modal-fade-enter-active")).toBe(true);
+
+    await wrapper.vm.$nextTick();
+    (document.body.querySelector(".legend-close") as HTMLElement).click();
+    await wrapper.vm.$nextTick();
+    expect(document.body.querySelector(".legend-overlay")!.classList.contains("modal-fade-leave-active")).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("quick keys and the mode toggle scale a little while pressed, with a transform transition", () => {
+    const css = readFileSync(resolve(__dirname, "MobileInputBar.vue"), "utf8");
+    for (const selector of [".quick-key", ".mode-toggle"]) {
+      const rule = (suffix: string) => css.match(new RegExp(`^${selector.replace(".", "\\.")}${suffix} \\{([^}]*)\\}`, "m"))![1];
+      expect(rule(":active"), selector).toMatch(/transform:\s*scale\(0\.9\d*\)/);
+      expect(rule(""), selector).toMatch(/transition:[^;]*transform var\(--dur-instant\)/);
+    }
   });
 });

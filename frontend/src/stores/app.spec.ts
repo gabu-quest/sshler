@@ -275,6 +275,46 @@ describe('App Store Theme Properties', () => {
         });
     });
 
+    describe('The side rail', () => {
+        const storedRail = (value: string | null) => {
+            mockLocalStorage.getItem.mockImplementation((key: string) =>
+                key === 'sshler:ui:rail-collapsed' ? value : null,
+            );
+        };
+
+        it.each([
+            [null, true],
+            ['true', true],
+            ['false', false],
+            ['yes', true],
+            ['', true],
+            ['FALSE', true],
+        ])('a stored value of %j opens it collapsed: %s', (stored, collapsed) => {
+            storedRail(stored);
+            const store = useAppStore();
+            expect(store.railCollapsed).toBe(collapsed);
+        });
+
+        it('a toggle flips it and remembers the new state', () => {
+            storedRail(null);
+            const store = useAppStore();
+            store.toggleRailCollapsed();
+            expect(store.railCollapsed).toBe(false);
+            expect(mockLocalStorage.setItem).toHaveBeenLastCalledWith('sshler:ui:rail-collapsed', 'false');
+            store.toggleRailCollapsed();
+            expect(store.railCollapsed).toBe(true);
+            expect(mockLocalStorage.setItem).toHaveBeenLastCalledWith('sshler:ui:rail-collapsed', 'true');
+        });
+
+        it('the phone menu starts closed and is not remembered', () => {
+            const store = useAppStore();
+            expect(store.mobileNavOpen).toBe(false);
+            store.mobileNavOpen = true;
+            expect(store.mobileNavOpen).toBe(true);
+            expect(mockLocalStorage.setItem).toHaveBeenCalledTimes(0);
+        });
+    });
+
     describe('Cleanup', () => {
         it('should properly cleanup event listeners', () => {
             const store = useAppStore();

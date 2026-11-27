@@ -2,12 +2,13 @@
 import { errorText } from "@/api/apiError";
 import { computed, nextTick, ref, watch } from "vue";
 
-import { fetchDirectory, gitInfo } from "@/api/http";
-import type { DirectoryEntry, DirectoryListing, GitInfo } from "@/api/types";
+import { fetchDirectory } from "@/api/http";
+import type { DirectoryEntry, DirectoryListing } from "@/api/types";
 import GitBadge from "@/components/GitBadge.vue";
+import { useGitInfo } from "@/composables/useGitInfo";
 import { useI18n } from "@/i18n";
 import { getEmojiForBox } from "@/utils/emoji-favicon";
-import { parentPath, pathSegments } from "@/utils/pathParts";
+import { parentPath, pathSegments, separatorAfter } from "@/utils/pathParts";
 import { PhArrowBendUpLeft, PhFile, PhFolderSimple } from "@phosphor-icons/vue";
 import { NIcon, NSelect } from "naive-ui";
 
@@ -55,16 +56,20 @@ const { t } = useI18n();
 const loading = ref(false);
 const error = ref<string | null>(null);
 const listing = ref<DirectoryListing | null>(null);
-const currentGitInfo = ref<GitInfo | null>(null);
 const cursorIndex = ref(0);
 const lastClickIndex = ref<number | null>(null);
 const listRef = ref<HTMLDivElement | null>(null);
+// The git badge: silent on error, and an answer for a folder the pane has left is dropped.
+const { info: currentGitInfo, reload: reloadGit } = useGitInfo(
+  () => props.box,
+  () => normalizeDirectory(props.directory),
+  () => props.token,
+);
 const filterQuery = ref("");
 const showFilter = ref(false);
 const filterInputRef = ref<HTMLInputElement | null>(null);
 
 let listingRequestId = 0;
-let gitRequestId = 0;
 
 const selectOptions = computed(() => {
   const options: Array<BoxSelectOption | BoxSelectGroupOption> = [];
@@ -341,23 +346,9 @@ async function loadListing() {
   }
 }
 
-async function loadGitInfo() {
-  const requestId = ++gitRequestId;
-
-  try {
-    const result = await gitInfo(props.box, normalizeDirectory(props.directory), props.token);
-    if (requestId !== gitRequestId) return;
-    currentGitInfo.value = result;
-  } catch {
-    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
-    if (requestId !== gitRequestId) return;
-    currentGitInfo.value = null;
-  }
-}
-
 async function reload() {
   await loadListing();
-  loadGitInfo();
+  void reloadGit();
 }
 
 function clickRow(row: PaneRow, index: number, event: MouseEvent) {
@@ -441,7 +432,7 @@ watch(
   async () => {
     emit("update:selected", []);
     lastClickIndex.value = null;
-    await Promise.all([loadListing(), loadGitInfo()]);
+    await loadListing();
   },
   { immediate: true },
 );
@@ -483,20 +474,20 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
           @click="onBreadcrumbClick(segment.path)"
         >
           <span class="crumb-text">{{ segment.label }}</span>
-          <span v-if="index < crumbSegments.length - 1" class="crumb-separator">/</span>
+          <span v-if="index < crumbSegments.length - 1 && separatorAfter(segment)" class="crumb-separator">/</span>
         </span>
       </div>
 
       <div class="git-wrap" @click.stop="onGitBadgeClick">
-        <GitBadge v-if="currentGitInfo?.is_repo" :info="currentGitInfo" compact />
+        <GitBadge v-if="currentGitInfo" :info="currentGitInfo" compact />
       </div>
     </div>
 
     <div class="column-header">
-      <span class="name">Name</span>
-      <span class="size">Size</span>
-      <span class="date">Modified</span>
-      <span class="perms">Perms</span>
+      <span class="name">{{ t("files.col_name") }}</span>
+      <span class="size">{{ t("files.col_size") }}</span>
+      <span class="date">{{ t("files.col_modified") }}</span>
+      <span class="perms">{{ t("files.col_perms") }}</span>
     </div>
 
     <div v-if="showFilter" class="filter-bar">
@@ -530,8 +521,8 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
             <component :is="rowIcon(row)" weight="duotone" />
           </NIcon>
           <span class="name" :class="{ 'dir-name': row.is_directory || row.isParent }">{{ row.name }}</span>
-          <span v-if="matchedFiles?.has(row.name)" class="match-indicator" title="Has match in other pane">≡</span>
-          <span v-if="branchChangedFiles?.has(row.name)" class="branch-changed-indicator" title="Changed between branches">~</span>
+          <span v-if="matchedFiles?.has(row.name)" class="match-indicator" :title="t('commander.matched_tooltip')">≡</span>
+          <span v-if="branchChangedFiles?.has(row.name)" class="branch-changed-indicator" :title="t('commander.branch_changed_tooltip')">~</span>
           <span class="size">
             {{ rowSize(row) }}
             <span v-if="!row.isParent && !row.is_directory && matchedSizes?.has(row.name)" class="size-delta" :class="sizeDeltaClass(row)">
@@ -550,8 +541,8 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 
     <div class="pane-footer">
       <span>{{ fileCountLabel }}</span>
-      <span>Total {{ totalSizeLabel }}</span>
-      <span>Free --</span>
+      <span>{{ t("commander.footer_total", { size: totalSizeLabel }) }}</span>
+      <span>{{ t("commander.footer_free") }}</span>
     </div>
   </section>
 </template>
@@ -562,15 +553,15 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
   flex-direction: column;
   min-width: 0;
   height: 100%;
-  background: #0d0d14;
-  border: 1px solid #2a2a3a;
-  color: #e0e0e6;
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  color: var(--text);
   font-family: var(--font-mono);
   outline: none;
 }
 
 .commander-pane.active {
-  border-color: #a78bfa;
+  border-color: var(--accent);
 }
 
 .pane-header {
@@ -580,8 +571,8 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
   gap: 8px;
   min-height: 28px;
   padding: 4px 6px;
-  border-bottom: 1px solid #1a1a24;
-  background: #11111a;
+  border-bottom: 1px solid var(--stroke);
+  background: var(--surface-variant);
 }
 
 .box-select {
@@ -589,15 +580,15 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .pane-header :deep(.n-base-selection) {
-  background: #0a0a0f;
-  border: 1px solid #2a2a3a;
+  background: var(--input-bg);
+  border: 1px solid var(--stroke);
   border-radius: 0;
   box-shadow: none;
   min-height: 20px;
 }
 
 .pane-header :deep(.n-base-selection-label) {
-  color: #e0e0e6;
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -620,7 +611,7 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .crumb:hover .crumb-text {
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .crumb-text {
@@ -629,7 +620,7 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .crumb-separator {
-  color: #54546b;
+  color: var(--muted);
   margin: 0 2px;
 }
 
@@ -645,20 +636,20 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .git-wrap :deep(.git-badge) {
-  background: rgba(74, 222, 128, 0.08);
-  border-color: rgba(74, 222, 128, 0.35);
+  background: var(--success-bg);
+  border-color: var(--success);
   border-radius: 0;
-  color: #4ade80;
+  color: var(--success);
 }
 
 .git-wrap :deep(.git-badge.dirty) {
-  background: rgba(248, 113, 113, 0.08);
-  border-color: rgba(248, 113, 113, 0.35);
-  color: #f87171;
+  background: var(--error-bg);
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .git-wrap :deep(.dirty-indicator) {
-  color: #f87171;
+  color: var(--error);
 }
 
 .column-header,
@@ -667,17 +658,17 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
   align-items: center;
   height: 22px;
   padding: 0 8px;
-  border-bottom: 1px solid #171721;
-  color: #76768a;
+  border-bottom: 1px solid var(--stroke);
+  color: var(--muted);
   font-size: 11px;
   text-transform: uppercase;
 }
 
 .pane-footer {
   justify-content: space-between;
-  border-top: 1px solid #171721;
+  border-top: 1px solid var(--stroke);
   border-bottom: 0;
-  color: #88889b;
+  color: var(--muted);
   text-transform: none;
 }
 
@@ -692,12 +683,12 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
   align-items: center;
   justify-content: center;
   min-height: 100%;
-  color: #77778d;
+  color: var(--muted);
   font-size: 12px;
 }
 
 .error-state {
-  color: #f87171;
+  color: var(--error);
   padding: 12px;
   text-align: center;
 }
@@ -716,16 +707,16 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .file-row:hover {
-  background: #111118;
+  background: var(--surface-hover);
 }
 
 .file-row.cursor {
-  background: #1a1a2e;
+  background: var(--accent-bg);
 }
 
 .file-row.selected {
-  background: rgba(136, 58, 234, 0.25);
-  border-left: 2px solid #a78bfa;
+  background: rgba(var(--accent-rgb), 0.22);
+  border-left: 2px solid var(--accent);
 }
 
 .file-row .name,
@@ -740,11 +731,11 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 .column-header .size {
   width: 80px;
   text-align: right;
-  color: #888;
+  color: var(--muted);
 }
 
 .match-indicator {
-  color: #fbbf24;
+  color: var(--warning);
   font-weight: bold;
   margin-left: 4px;
   font-size: 11px;
@@ -752,7 +743,7 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .branch-changed-indicator {
-  color: #fbbf24;
+  color: var(--warning);
   font-weight: bold;
   margin-left: 4px;
   font-size: 11px;
@@ -763,26 +754,26 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 .column-header .date {
   width: 90px;
   text-align: right;
-  color: #666;
+  color: var(--muted);
 }
 
 .file-row .perms,
 .column-header .perms {
   width: 80px;
   text-align: right;
-  color: #555;
+  color: var(--muted);
   font-size: 11px;
 }
 
 .row-icon {
   margin-right: 6px;
-  color: #9ca3af;
+  color: var(--muted);
   flex-shrink: 0;
 }
 
 .dir-name,
 .dir-icon {
-  color: #67e8f9;
+  color: var(--accent);
 }
 
 .filter-bar {
@@ -790,16 +781,16 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  background: #111118;
-  border-bottom: 1px solid #1a1a24;
+  background: var(--surface-variant);
+  border-bottom: 1px solid var(--stroke);
 }
 
 .filter-input {
   flex: 1;
-  background: #0a0a0f;
-  border: 1px solid #2a2a3a;
+  background: var(--input-bg);
+  border: 1px solid var(--stroke);
   border-radius: 3px;
-  color: #e0e0e6;
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
   padding: 3px 8px;
@@ -807,13 +798,13 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .filter-input:focus {
-  border-color: #a78bfa;
+  border-color: var(--accent);
 }
 
 .filter-close {
   background: none;
   border: none;
-  color: #888;
+  color: var(--muted);
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: 14px;
@@ -821,7 +812,7 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .filter-close:hover {
-  color: #f87171;
+  color: var(--error);
 }
 
 .size-delta {
@@ -830,19 +821,19 @@ defineExpose({ moveCursor, activateCurrent, goUp, goHome, toggleSelectCurrent, r
 }
 
 .size-smaller {
-  color: #4ade80;
+  color: var(--success);
 }
 
 .size-larger {
-  color: #f87171;
+  color: var(--error);
 }
 
 .size-equal {
-  color: #555;
+  color: var(--muted);
 }
 
 .file-list {
-  animation: fadeIn 0.15s ease-out;
+  animation: fadeIn var(--dur-fast) ease-out;
 }
 
 @keyframes fadeIn {

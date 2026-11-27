@@ -9,6 +9,8 @@ interface MenuItem {
   disabled?: boolean
   separator?: boolean
   danger?: boolean
+  /** Stable hook for tests and for callers that style one item. */
+  testid?: string
 }
 
 interface Props {
@@ -16,6 +18,9 @@ interface Props {
   x: number
   y: number
   visible: boolean
+  testid?: string
+  /** Where the menu is drawn: the page body, or an element that must contain it (a fullscreen pane). */
+  to?: string | HTMLElement
 }
 
 interface Emits {
@@ -23,7 +28,7 @@ interface Emits {
   (e: 'close'): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { testid: undefined, to: 'body' })
 const emit = defineEmits<Emits>()
 
 const menuRef = ref<HTMLDivElement>()
@@ -46,6 +51,13 @@ const handleClickOutside = (event: MouseEvent) => {
   }
 }
 
+// A right-click elsewhere closes the menu first, so the page can open its own at the new point.
+const handleContextMenuOutside = (event: MouseEvent) => {
+  if (menuRef.value && !menuRef.value.contains(event.target as Node)) {
+    emit('close')
+  }
+}
+
 const handleKeyDown = (event: KeyboardEvent) => {
   if (event.key === 'Escape') {
     emit('close')
@@ -61,7 +73,9 @@ const fit = (wanted: number, size: number, limit: number) =>
 const place = () => {
   const el = menuRef.value
   if (!props.visible || !el) return
-  const { width, height } = el.getBoundingClientRect()
+  // The layout size, not getBoundingClientRect: the pop-in transform shrinks the latter.
+  const width = el.offsetWidth
+  const height = el.offsetHeight
   const left = fit(props.x, width, document.documentElement.clientWidth)
   const top = fit(props.y, height, document.documentElement.clientHeight)
   if (left !== position.value.left || top !== position.value.top) {
@@ -75,23 +89,27 @@ watch(() => [props.visible, props.x, props.y, props.items], place, { flush: 'pos
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  document.addEventListener('contextmenu', handleContextMenuOutside, true)
   document.addEventListener('keydown', handleKeyDown)
   window.addEventListener('resize', place)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  document.removeEventListener('contextmenu', handleContextMenuOutside, true)
   document.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('resize', place)
 })
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport :to="to">
+    <Transition name="menu-pop">
     <div
       v-if="visible"
       ref="menuRef"
       class="context-menu"
+      :data-testid="testid"
       :style="{ left: `${position.left}px`, top: `${position.top}px`, '--menu-margin': `${MARGIN}px` }"
     >
       <template v-for="(item, index) in items" :key="index">
@@ -106,6 +124,7 @@ onUnmounted(() => {
             disabled: item.disabled,
             danger: item.danger
           }"
+          :data-testid="item.testid"
           @click="handleItemClick(item)"
         >
           <NIcon v-if="item.icon" size="16" class="menu-icon">
@@ -115,6 +134,7 @@ onUnmounted(() => {
         </div>
       </template>
     </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -145,12 +165,12 @@ onUnmounted(() => {
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out);
   user-select: none;
 }
 
 .context-menu-item:hover:not(.disabled) {
-  background: var(--hover);
+  background: var(--surface-hover);
 }
 
 .context-menu-item.disabled {
@@ -163,7 +183,9 @@ onUnmounted(() => {
 }
 
 .context-menu-item.danger:hover:not(.disabled) {
-  background: var(--error-hover);
+  /* a tint keeps the red text readable; a red fill would hide it */
+  background: var(--error-hover-bg);
+  color: var(--error);
 }
 
 .context-menu-separator {

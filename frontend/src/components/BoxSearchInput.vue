@@ -218,7 +218,7 @@ function onKeydown(event: KeyboardEvent) {
   background: var(--surface);
   border: 1px solid var(--stroke);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 16px var(--shadow-lg);
   max-height: 300px;
   overflow-y: auto;
 }
@@ -242,7 +242,7 @@ function onKeydown(event: KeyboardEvent) {
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .search-result.highlighted {
@@ -260,7 +260,7 @@ function onKeydown(event: KeyboardEvent) {
   margin: 0 3px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #22c55e;
+  background: var(--success);
 }
 
 .result-name {
@@ -287,7 +287,7 @@ function onKeydown(event: KeyboardEvent) {
   padding: 16px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .search-dropdown {
     max-height: 50vh;
   }

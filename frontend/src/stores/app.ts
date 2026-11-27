@@ -10,6 +10,7 @@ const TERMINAL_FONT_SIZE_KEY = "sshler:terminal:font-size";
 const TERMINAL_FONT_FAMILY_KEY = "sshler:terminal:font-family";
 const TERMINAL_SCROLLBACK_KEY = "sshler:terminal:scrollback";
 const PING_DEFAULT_DURATION_KEY = "sshler:ping:default-duration";
+const RAIL_COLLAPSED_KEY = "sshler:ui:rail-collapsed";
 
 const prefersDark = () => {
   if (typeof window === "undefined") {
@@ -45,6 +46,13 @@ const readReducedMotionPreference = (): boolean => {
     return stored === "true";
   }
   return prefersReducedMotion();
+};
+
+// The side rail opens collapsed unless the user left it open: only the exact text
+// "false" reads as open, so a missing or damaged value gives the terminal its width.
+const readRailCollapsed = (): boolean => {
+  if (typeof localStorage === "undefined") return true;
+  return localStorage.getItem(RAIL_COLLAPSED_KEY) !== "false";
 };
 
 const DEFAULT_FONT_FAMILY = '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace';
@@ -103,6 +111,22 @@ export const useAppStore = defineStore("app", () => {
   // Active box tracking (which box the user is currently viewing)
   const activeBox = ref<string | null>(null);
   const activeDir = ref<string | null>(null);
+
+  // The desktop side rail (collapsed = icons only) and the phone menu drawer. The
+  // drawer is not remembered: a page always opens with it closed.
+  const railCollapsed = ref(readRailCollapsed());
+  const mobileNavOpen = ref(false);
+
+  const setRailCollapsed = (collapsed: boolean) => {
+    railCollapsed.value = collapsed;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed.toString());
+    }
+  };
+
+  const toggleRailCollapsed = () => {
+    setRailCollapsed(!railCollapsed.value);
+  };
 
   // Computed properties
   const isDark = computed(() => {
@@ -269,6 +293,11 @@ export const useAppStore = defineStore("app", () => {
     // Active box
     activeBox,
     activeDir,
+
+    // Shell
+    railCollapsed,
+    mobileNavOpen,
+    toggleRailCollapsed,
 
     // Terminal settings
     terminalFontSize,

@@ -221,3 +221,231 @@ describe("MultiTerminalView: the Shell choice in Add Terminal", () => {
     wrapper.unmount();
   });
 });
+
+// A Terminal stand-in that draws its title-bar slot and a close button, as the real one does.
+async function mountWithPanes(layout: object[]) {
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+  const { defineComponent, h } = await import("vue");
+  const TerminalStub = defineComponent({
+    name: "Terminal",
+    props: { boxName: String, sessionName: String, directory: String, shell: String, nativeShell: { type: Boolean, default: undefined }, fontSize: Number, theme: String, closable: Boolean, showTitleBar: { type: Boolean, default: true } },
+    emits: ["close", "session-select"],
+    setup: (_p, { slots, emit }) => () =>
+      h("div", { class: "pane-stub" }, [
+        h("span", { class: "meta" }, slots["titlebar-meta"]?.()),
+        h("button", { class: "pane-session", onClick: () => emit("session-select", { session_name: "picked", working_directory: "/picked/dir" }) }, "s"),
+        h("button", { class: "pane-close", onClick: () => emit("close") }, "x"),
+      ]),
+  });
+  const wrapper = mount(MultiTerminalView, {
+    global: { stubs: { Terminal: TerminalStub, DirectoryPickerModal: true } },
+  });
+  await flushPromises();
+  return wrapper;
+}
+
+const pane = (box: string, dir: string, session = dir) => ({ boxName: box, sessionName: session, directory: dir, shell: "tmux" });
+
+describe("MultiTerminalView: one title bar per pane", () => {
+  it("has no outer pane header: the pane's own title bar closes it, and shows the box and folder", async () => {
+    const wrapper = await mountWithPanes([pane("local", "/srv/app")]);
+
+    expect(wrapper.find(".terminal-header").exists()).toBe(false);
+    const terminal = wrapper.findComponent(Terminal);
+    expect(terminal.props("closable")).toBe(true);
+    expect(terminal.props("showTitleBar")).not.toBe(false);
+    expect(wrapper.find(".meta").text()).toContain("app");
+    wrapper.unmount();
+  });
+
+  it("closing the middle of three panes leaves the other two, in order", async () => {
+    const wrapper = await mountWithPanes([pane("local", "/a"), pane("build", "/b"), pane("local", "/c")]);
+    await wrapper.findAll(".pane-close")[1]!.trigger("click");
+
+    expect(wrapper.findAllComponents(Terminal).map((c) => c.props("directory"))).toEqual(["/a", "/c"]);
+    expect(JSON.parse(localStorage.getItem(LAYOUT_KEY)!).map((p: { directory: string }) => p.directory)).toEqual(["/a", "/c"]);
+    wrapper.unmount();
+  });
+
+  // Mutation: no theme passed -> every pane turns calm and the box's saved choice is lost.
+  it("each pane takes its box's saved theme, an unknown box the calm one", async () => {
+    const wrapper = await mountWithPanes([pane("local", "/a"), pane("nope", "/b")]);
+
+    expect(wrapper.findAllComponents(Terminal).map((c) => c.props("theme"))).toEqual(["nord", "calm"]);
+    wrapper.unmount();
+  });
+
+  it("the toolbar is one row: no subtitle line, the count beside the title", async () => {
+    const wrapper = await mountWithPanes([pane("local", "/a"), pane("local", "/b")]);
+
+    expect(wrapper.find(".header p").exists()).toBe(false);
+    expect(wrapper.find(".header").text()).toContain("2");
+    expect(wrapper.find(".header").text()).toContain("Add Terminal");
+    wrapper.unmount();
+  });
+});
+
+describe("MultiTerminalView: the directory list", () => {
+  it("offers the shared list with a custom path, named through the keys", async () => {
+    const wrapper = await mountView();
+    await buttonLabelled(wrapper, "Add Terminal").trigger("click");
+    boxSelect(wrapper).vm.$emit("update:value", "local");
+    await flushPromises();
+    const dir = wrapper.findAllComponents(NSelect).find((c) => c.props("placeholder") === "~ or select from favorites")!;
+
+    expect((dir.props("options") as { label: string }[]).map((o) => o.label)).toEqual([
+      "~ (Home)", "Browse...", "+ Custom path...",
+    ]);
+    wrapper.unmount();
+  });
+
+  it("a custom path typed in the dialog is the pane's directory", async () => {
+    const wrapper = await mountView();
+    await buttonLabelled(wrapper, "Add Terminal").trigger("click");
+    boxSelect(wrapper).vm.$emit("update:value", "local");
+    await flushPromises();
+    const dir = wrapper.findAllComponents(NSelect).find((c) => c.props("placeholder") === "~ or select from favorites")!;
+    dir.vm.$emit("update:value", "__custom__");
+    await flushPromises();
+    await wrapper.find("input.custom-dir").setValue("/opt/thing");
+    await wrapper.find(".modal").findAll("button").find((b) => b.text() === "Add Terminal")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findAllComponents(Terminal).map((c) => c.props("directory"))).toEqual(["/opt/thing"]);
+    wrapper.unmount();
+  });
+  const openCustom = async () => {
+    const wrapper = await mountView();
+    await buttonLabelled(wrapper, "Add Terminal").trigger("click");
+    boxSelect(wrapper).vm.$emit("update:value", "local");
+    await flushPromises();
+    const find = () => wrapper.findAllComponents(NSelect).find((c) => c.props("placeholder") === "~ or select from favorites");
+    const home = (find()!.props("options") as { value: string }[])[0].value;
+    find()!.vm.$emit("update:value", home);
+    await flushPromises();
+    find()!.vm.$emit("update:value", "__custom__");
+    await flushPromises();
+    return { wrapper, find, home };
+  };
+
+  it("Back beside the custom path returns to the list with its previous choice", async () => {
+    const { wrapper, find, home } = await openCustom();
+    expect(find()).toBeUndefined();
+    await wrapper.find(".modal").findAll("button").find((b) => b.text() === "Back")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("input.custom-dir").exists()).toBe(false);
+    expect(find()!.props("value")).toBe(home);
+    wrapper.unmount();
+  });
+
+  it("Escape in the custom path field does the same as Back", async () => {
+    const { wrapper, find, home } = await openCustom();
+    await wrapper.find("input.custom-dir").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+
+    expect(wrapper.find("input.custom-dir").exists()).toBe(false);
+    expect(find()!.props("value")).toBe(home);
+    wrapper.unmount();
+  });
+});
+
+describe("MultiTerminalView: a pane's session pick", () => {
+  it("the title bar's pick switches that pane to the picked session in the same box", async () => {
+    const wrapper = await mountWithPanes([pane("local", "/a", "one"), pane("build", "/b", "two")]);
+    await wrapper.findAll(".pane-session")[1]!.trigger("click");
+    await flushPromises();
+
+    const panes = wrapper.findAllComponents(Terminal);
+    expect(panes.map((c) => c.props("sessionName"))).toEqual(["one", "picked"]);
+    expect(panes.map((c) => c.props("boxName"))).toEqual(["local", "build"]);
+    expect(JSON.parse(localStorage.getItem(LAYOUT_KEY)!).map((p: { sessionName: string }) => p.sessionName)).toEqual(["one", "picked"]);
+    wrapper.unmount();
+  });
+
+  it("a plain pane that picks a session becomes tmux", async () => {
+    const wrapper = await mountWithPanes([{ ...pane("local", "/a", "one"), shell: "plain" }]);
+    await wrapper.find(".pane-session").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findComponent(Terminal).props("shell")).toBe("");
+    wrapper.unmount();
+  });
+});
+
+describe("MultiTerminalView: the custom path field and the box", () => {
+  const openCustomPath = async () => {
+    const wrapper = await mountView();
+    await buttonLabelled(wrapper, "Add Terminal").trigger("click");
+    boxSelect(wrapper).vm.$emit("update:value", "local");
+    await flushPromises();
+    const dir = () => wrapper.findAllComponents(NSelect).find((c) => c.props("placeholder") === "~ or select from favorites");
+    dir()!.vm.$emit("update:value", "__custom__");
+    await flushPromises();
+    return { wrapper, dir };
+  };
+  const addButton = (w: Wrapper) => w.find(".modal").findAll("button").find((b) => b.text() === "Add Terminal")!;
+
+  it("an Enter that confirms an IME conversion does not add the pane", async () => {
+    const { wrapper } = await openCustomPath();
+    const input = wrapper.find("input.custom-dir");
+    await input.setValue("/opt/日本");
+    await input.trigger("keydown", { key: "Enter", isComposing: true });
+    await input.trigger("keydown", { key: "Enter", keyCode: 229 });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents(Terminal)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("a plain Enter adds the pane", async () => {
+    const { wrapper } = await openCustomPath();
+    const input = wrapper.find("input.custom-dir");
+    await input.setValue("/opt/thing");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents(Terminal).map((c) => c.props("directory"))).toEqual(["/opt/thing"]);
+    wrapper.unmount();
+  });
+
+  it("changing the box resets the folder to home and leaves custom path", async () => {
+    const { wrapper, dir } = await openCustomPath();
+    await wrapper.find("input.custom-dir").setValue("/opt/thing");
+    boxSelect(wrapper).vm.$emit("update:value", "build");
+    await flushPromises();
+
+    expect(wrapper.find("input.custom-dir").exists()).toBe(false);
+    expect(dir()!.props("value")).toBe("~");
+    await addButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(wrapper.findAllComponents(Terminal).map((c) => [c.props("boxName"), c.props("directory")])).toEqual([["build", "~"]]);
+    wrapper.unmount();
+  });
+});
+
+describe("MultiTerminalView: a Windows local box's pane asks what the single view asks", () => {
+  // The single view opens a Windows local box in TerminalTabs, whose Terminal gets the stored
+  // shell id (empty for the default) and native-shell = true; a pane asks the same.
+  it("is a native shell with the stored shell id, never tmux", async () => {
+    state.platform = "windows";
+    localStorage.setItem("sshler.windows_shell", "cmd");
+    const wrapper = await mountView();
+    await addTerminal(wrapper, "local");
+    await addTerminal(wrapper, "build");
+
+    const panes = wrapper.findAllComponents(Terminal);
+    expect(panes.map((c) => [c.props("shell"), c.props("nativeShell")])).toEqual([["cmd", true], ["", undefined]]);
+    wrapper.unmount();
+  });
+
+  it("with no stored choice asks the default shell, still native", async () => {
+    state.platform = "windows";
+    const wrapper = await mountView();
+    await addTerminal(wrapper, "local");
+
+    const pane = wrapper.findComponent(Terminal);
+    expect([pane.props("shell"), pane.props("nativeShell")]).toEqual(["", true]);
+    wrapper.unmount();
+  });
+});

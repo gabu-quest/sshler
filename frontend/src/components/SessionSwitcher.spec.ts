@@ -173,3 +173,14 @@ describe("SessionSwitcher: Restore layout", () => {
     expect(restoreButtons(container)).toEqual(["web"]);
   });
 });
+
+describe("SessionSwitcher: motion", () => {
+  it("the session rows are a list-row group", async () => {
+    vi.mocked(syncBoxSessions).mockResolvedValue([session]);
+    const { container, findByText } = mountSwitcher();
+    await findByText("api");
+    const group = container.querySelector(".session-list")!;
+    expect(group.tagName.toLowerCase()).toBe("transition-group-stub");
+    expect(group.getAttribute("name")).toBe("list-row");
+  });
+});

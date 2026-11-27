@@ -7,7 +7,7 @@
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/vue";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { defineComponent, nextTick } from "vue";
+import { defineComponent, nextTick, ref } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
 // Mock Naive UI components
@@ -15,7 +15,14 @@ vi.mock("naive-ui", () => {
   const StubInput = defineComponent({
     props: ['value', 'placeholder', 'autofocus', 'clearable', 'size'],
     emits: ["update:value"],
+    // Like NInputInstance: the parent's template ref calls focus() on it.
+    setup(_props, { expose }) {
+      const el = ref<HTMLInputElement | null>(null);
+      expose({ focus: () => el.value?.focus() });
+      return { el };
+    },
     template: `<input
+      ref="el"
       :value="value"
       :placeholder="placeholder"
       @input="$emit('update:value', $event.target.value)"
@@ -66,10 +73,12 @@ vi.mock("vue-router", () => ({
 // Mock app store
 const mockToggleTheme = vi.fn();
 const mockCycleTheme = vi.fn();
+const mockToggleRail = vi.fn();
 vi.mock("@/stores/app", () => ({
   useAppStore: () => ({
     toggleTheme: mockToggleTheme,
     cycleTheme: mockCycleTheme,
+    toggleRailCollapsed: mockToggleRail,
     isDark: false,
   }),
 }));
@@ -80,6 +89,9 @@ describe("CommandPalette Properties", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    // useResponsive reads the pointer type; jsdom has no matchMedia.
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as typeof window.matchMedia;
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1366 });
   });
 
   afterEach(() => {
@@ -236,6 +248,17 @@ describe("CommandPalette Properties", () => {
       }
     });
 
+    it("toggles the side rail, with its shortcut shown", async () => {
+      const wrapper = render(CommandPalette);
+      await fireEvent.click(wrapper.getByRole('button'));
+      await nextTick();
+
+      const item = wrapper.getByText("Toggle sidebar");
+      expect(item.closest(".palette-item, li")?.textContent).toContain("Alt+\\");
+      await fireEvent.click(item);
+      expect(mockToggleRail).toHaveBeenCalledTimes(1);
+    });
+
     it("should execute theme actions correctly", async () => {
       const wrapper = render(CommandPalette);
 
@@ -385,8 +408,8 @@ describe("CommandPalette Properties", () => {
       const input = wrapper.getByRole('textbox');
       expect(input).toBeTruthy();
 
-      // Verify autofocus attribute is set
-      expect(input.getAttribute('autofocus')).toBeDefined();
+      // The palette focused its own input through its template ref
+      await waitFor(() => expect(document.activeElement).toBe(input));
     });
   });
 
@@ -489,6 +512,26 @@ describe("CommandPalette Properties", () => {
 
       expect(wasDefaultPrevented).toBe(false);
       expect(wrapper.queryByText("Command Palette")).toBeNull();
+    });
+  });
+
+  describe("Toggle sidebar", () => {
+    async function openAt(width: number) {
+      Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+      const wrapper = render(CommandPalette);
+      await fireEvent.click(wrapper.getByRole("button"));
+      await nextTick();
+      return wrapper;
+    }
+
+    it("is offered on a desktop", async () => {
+      const wrapper = await openAt(1366);
+      expect(wrapper.queryByText("Toggle sidebar")).toBeTruthy();
+    });
+
+    it("is not offered on a phone, where there is no sidebar", async () => {
+      const wrapper = await openAt(390);
+      expect(wrapper.queryByText("Toggle sidebar")).toBeNull();
     });
   });
 });

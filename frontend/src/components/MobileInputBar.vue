@@ -67,36 +67,38 @@ interface QuickKey {
   tmux?: boolean
 }
 
-const quickKeys: QuickKey[] = [
+// The keys' names come from the texts, so a Japanese page names them in Japanese. Each
+// colour has one fixed meaning (red is Ctrl+C alone).
+const quickKeys = computed<QuickKey[]>(() => [
   // Arrow keys for menu navigation (default/neutral)
-  { icon: PhCaretUp, raw: '\x1b[A', title: 'Up' },
-  { icon: PhCaretDown, raw: '\x1b[B', title: 'Down' },
-  { icon: PhCaretLeft, raw: '\x1b[D', title: 'Left' },
-  { icon: PhCaretRight, raw: '\x1b[C', title: 'Right' },
+  { icon: PhCaretUp, raw: '\x1b[A', title: t('mobile.key_up') },
+  { icon: PhCaretDown, raw: '\x1b[B', title: t('mobile.key_down') },
+  { icon: PhCaretLeft, raw: '\x1b[D', title: t('mobile.key_left') },
+  { icon: PhCaretRight, raw: '\x1b[C', title: t('mobile.key_right') },
   // Confirm (blue)
-  { icon: PhKeyReturn, raw: '\r', title: 'Enter', color: 'blue' },
+  { icon: PhKeyReturn, raw: '\r', title: t('mobile.key_enter'), color: 'blue' },
   // Tab (purple)
-  { icon: PhArrowElbowDownRight, raw: '\t', title: 'Tab', color: 'purple' },
+  { icon: PhArrowElbowDownRight, raw: '\t', title: t('mobile.key_tab'), color: 'purple' },
   // Escape (yellow - caution, stops things)
-  { icon: PhStopCircle, raw: '\x1b', title: 'Escape / Stop', color: 'yellow' },
+  { icon: PhStopCircle, raw: '\x1b', title: t('mobile.key_escape'), color: 'yellow' },
   // Interrupt (red - dangerous, kills processes)
-  { icon: PhHandPalm, raw: '\x03', title: 'Interrupt (Ctrl+C)', color: 'red' },
+  { icon: PhHandPalm, raw: '\x03', title: t('mobile.key_ctrlc'), color: 'red' },
   // Tmux scroll (orange group)
-  { icon: PhScroll, raw: '\x02[', title: 'Scroll mode', color: 'orange', tmux: true },
-  { icon: PhArrowFatLinesUp, raw: '\x1b[5~', title: 'Page Up', color: 'orange' },
-  { icon: PhArrowFatLinesDown, raw: '\x1b[6~', title: 'Page Down', color: 'orange' },
+  { icon: PhScroll, raw: '\x02[', title: t('mobile.key_scroll'), color: 'orange', tmux: true },
+  { icon: PhArrowFatLinesUp, raw: '\x1b[5~', title: t('mobile.key_pgup'), color: 'orange' },
+  { icon: PhArrowFatLinesDown, raw: '\x1b[6~', title: t('mobile.key_pgdn'), color: 'orange' },
   // Exit (teal - graceful exit, sends EOF)
-  { icon: PhSignOut, raw: '\x04', title: 'Exit (Ctrl+D)', color: 'teal' },
+  { icon: PhSignOut, raw: '\x04', title: t('mobile.key_ctrld'), color: 'teal' },
   // Tmux keys (after divider, scrolled right)
   { divider: true, title: 'tmux', raw: '', tmux: true },
-  { icon: PhArrowLineLeft, raw: '\x02p', title: 'Prev window', color: 'yellow', tmux: true },
-  { icon: PhPlus, raw: '\x02c', title: 'New window', color: 'yellow', tmux: true },
-  { icon: PhArrowLineRight, raw: '\x02n', title: 'Next window', color: 'yellow', tmux: true },
-  { icon: PhSplitVertical, raw: '\x02%', title: 'Split vertical', color: 'purple', tmux: true },
-  { icon: PhSplitHorizontal, raw: '\x02"', title: 'Split horizontal', color: 'purple', tmux: true },
-]
+  { icon: PhArrowLineLeft, raw: '\x02p', title: t('mobile.key_prev_window'), color: 'yellow', tmux: true },
+  { icon: PhPlus, raw: '\x02c', title: t('mobile.key_new_window'), color: 'yellow', tmux: true },
+  { icon: PhArrowLineRight, raw: '\x02n', title: t('mobile.key_next_window'), color: 'yellow', tmux: true },
+  { icon: PhSplitVertical, raw: '\x02%', title: t('mobile.key_split_v'), color: 'purple', tmux: true },
+  { icon: PhSplitHorizontal, raw: '\x02"', title: t('mobile.key_split_h'), color: 'purple', tmux: true },
+])
 
-const shownKeys = computed(() => (props.tmux ? quickKeys : quickKeys.filter((key) => !key.tmux)))
+const shownKeys = computed(() => (props.tmux ? quickKeys.value : quickKeys.value.filter((key) => !key.tmux)))
 
 const handleSubmit = () => {
   const text = inputText.value
@@ -222,7 +224,8 @@ watch(() => props.rawMode, (raw) => {
       <button
         class="quick-key help-btn"
         @click="showLegend = true"
-        title="Show key legend"
+        :title="t('mobile.show_legend')"
+        :aria-label="t('mobile.show_legend')"
       >
         <PhQuestion :size="18" weight="bold" />
       </button>
@@ -230,6 +233,7 @@ watch(() => props.rawMode, (raw) => {
 
     <!-- Legend overlay -->
     <Teleport to="body">
+      <Transition name="modal-fade">
       <div v-if="showLegend" class="legend-overlay" @click="showLegend = false">
         <div class="legend-card" @click.stop>
           <div class="legend-header">
@@ -251,6 +255,7 @@ watch(() => props.rawMode, (raw) => {
           </div>
         </div>
       </div>
+      </Transition>
     </Teleport>
 
     <!-- Input row -->
@@ -327,17 +332,18 @@ watch(() => props.rawMode, (raw) => {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.04);
   color: rgba(255, 255, 255, 0.7);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  transition: background var(--dur-instant) var(--ease-out), border-color var(--dur-instant) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
 
 .quick-key:active {
+  transform: scale(0.94);
   background: rgba(255, 255, 255, 0.15);
   border-color: rgba(255, 255, 255, 0.25);
 }
@@ -447,7 +453,7 @@ watch(() => props.rawMode, (raw) => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
 }
 
 .mode-toggle.active {
@@ -457,6 +463,7 @@ watch(() => props.rawMode, (raw) => {
 }
 
 .mode-toggle:active {
+  transform: scale(0.94);
   background: rgba(255, 255, 255, 0.1);
 }
 
@@ -481,7 +488,7 @@ watch(() => props.rawMode, (raw) => {
   border: none;
   outline: none;
   color: var(--text);
-  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.4;
   resize: none;
@@ -509,7 +516,7 @@ watch(() => props.rawMode, (raw) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.1s ease;
+  transition: background var(--dur-instant) var(--ease-out);
 }
 
 .send-btn:active {

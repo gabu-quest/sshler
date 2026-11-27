@@ -371,7 +371,8 @@ async def test_on_a_phone_the_last_row_of_a_long_list_is_reachable_and_picks(
     await last.scroll_into_view_if_needed()
     box = await last.bounding_box()
     assert box is not None
-    assert 0 <= box["y"] and box["y"] + box["height"] <= MOBILE["height"]
+    # One pixel of slack: the page scrolls by whole pixels, a card's height is fractional.
+    assert 0 <= box["y"] and box["y"] + box["height"] <= MOBILE["height"] + 1
     assert 0 <= box["x"] and box["x"] + box["width"] <= MOBILE["width"]
     picked = (await last.locator(".result-path").inner_text()).rsplit("/", 1)[-1]
     await last.tap()

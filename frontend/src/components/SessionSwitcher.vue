@@ -122,13 +122,16 @@ async function restore(session: ApiSession) {
   await sync()
 }
 
+// The one rename field on screen (only the edited row draws it).
+let renameInput: HTMLInputElement | null = null
+const setRenameInput = (el: unknown) => { renameInput = el as HTMLInputElement | null }
+
 function startRename(session: ApiSession) {
   editingId.value = session.id
   editName.value = session.session_name
   nextTick(() => {
-    const input = document.querySelector('.rename-input') as HTMLInputElement
-    input?.focus()
-    input?.select()
+    renameInput?.focus()
+    renameInput?.select()
   })
 }
 
@@ -196,25 +199,26 @@ watch(() => props.boxName, load)
 
     <NEmpty v-else-if="sortedSessions.length === 0" :description="loadError ?? t('sessions.empty')" size="small" />
 
-    <div v-else class="session-list">
-      <div v-if="loadError" class="load-error" data-testid="load-error">{{ loadError }}</div>
+    <TransitionGroup v-else name="list-row" tag="div" class="session-list">
+      <div v-if="loadError" key="load-error" class="load-error" data-testid="load-error">{{ loadError }}</div>
       <div
-        v-for="session in sortedSessions"
+        v-for="(session, index) in sortedSessions"
         :key="session.id"
         class="session-item"
         :class="{ active: session.session_name === currentSession, inactive: !session.active }"
-        :style="{ '--session-color': getColorForSession(session.session_name) }"
+        :style="{ '--session-color': getColorForSession(session.session_name), '--row-index': index }"
         @click="emit('select', session)"
       >
         <div class="session-info">
           <div class="session-name">
-            <NIcon size="10" :color="session.active ? '#52c41a' : '#666'">
+            <NIcon size="10" :color="session.active ? 'var(--success)' : 'var(--muted)'">
               <PhCircle weight="fill" />
             </NIcon>
-            <span v-if="session.metadata?.recovered_at" class="recovered-badge" title="Recovered from crash">↺</span>
+            <span v-if="session.metadata?.recovered_at" class="recovered-badge" :title="t('sessions.recovered_tooltip')">↺</span>
             <template v-if="editingId === session.id">
               <input
                 v-model="editName"
+                :ref="setRenameInput"
                 class="rename-input"
                 @click.stop
                 @keyup.enter.stop="confirmRename(session)"
@@ -271,7 +275,7 @@ watch(() => props.boxName, load)
           </template>
         </div>
       </div>
-    </div>
+    </TransitionGroup>
   </div>
 </template>
 
@@ -295,7 +299,7 @@ watch(() => props.boxName, load)
   border-bottom: 1px solid var(--stroke);
   margin-bottom: 4px;
   padding-bottom: 8px;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .home-item:hover {
@@ -314,7 +318,7 @@ watch(() => props.boxName, load)
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #52c41a;
+  background: var(--success);
   flex-shrink: 0;
 }
 
@@ -358,7 +362,7 @@ watch(() => props.boxName, load)
   padding: 6px 8px 6px 6px;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
   border-left: 3px solid var(--session-color, transparent);
 }
 
@@ -367,8 +371,8 @@ watch(() => props.boxName, load)
 }
 
 .session-item.active {
-  background: rgba(136, 58, 234, 0.15);
-  border: 1px solid rgba(136, 58, 234, 0.3);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
 }
 
 .session-item.inactive {
@@ -408,7 +412,7 @@ watch(() => props.boxName, load)
 
 .recovered-badge {
   font-size: 10px;
-  color: #faad14;
+  color: var(--warning);
   margin-left: 2px;
 }
 

@@ -19,12 +19,10 @@ vi.mock("naive-ui", () => {
   return {
     NButton: stub("<button><slot /></button>"),
     NIcon: stub("<span><slot /></span>"),
-    NSpace: stub("<div><slot /></div>"),
     NDrawer: stub("<div><slot /></div>"),
     NDrawerContent: stub("<div><slot /></div>"),
     NTooltip: stub("<span><slot name='trigger' /><slot /></span>"),
-    NProgress: stub("<div />"),
-    NSelect: stub("<select />"),
+    NPopover: stub("<span><slot name='trigger' /><slot /></span>"),
   };
 });
 
@@ -45,7 +43,7 @@ function mountHeader() {
   return render(AppHeader, {
     global: {
       plugins: [router],
-      stubs: { CommandPalette: { template: "<span />" }, ShortcutsOverlay: { template: "<span />" } },
+      stubs: { CommandPalette: { template: "<span />" }, ShortcutsOverlay: { template: "<span />" }, ProgressPicker: { template: "<span />" } },
     },
   });
 }
@@ -76,16 +74,17 @@ describe("AppHeader: the local box's stats", () => {
     const { container } = render(AppHeader, {
       global: {
         plugins: [router],
-        stubs: { CommandPalette: { template: "<span />" }, ShortcutsOverlay: { template: "<span />" } },
+        stubs: { CommandPalette: { template: "<span />" }, ShortcutsOverlay: { template: "<span />" }, ProgressPicker: { template: "<span />" } },
       },
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(container.querySelectorAll(".mobile-stats")).toHaveLength(1);
+    expect(container.querySelectorAll('[data-testid="local-stats"]')).toHaveLength(1);
+    expect(container.querySelector('[data-testid="local-stats"]')?.textContent).toMatch(/42/);
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(vi.mocked(boxStats)).toHaveBeenCalledTimes(2);
-    expect(container.querySelectorAll(".mobile-stats")).toHaveLength(0);
+    expect(container.querySelectorAll('[data-testid="local-stats"]')).toHaveLength(0);
   });
 
   it("signed out: neither poll is asked", async () => {
@@ -95,13 +94,14 @@ describe("AppHeader: the local box's stats", () => {
     expect([vi.mocked(boxStats).mock.calls.length, vi.mocked(fetchSnapshotStatus).mock.calls.length]).toEqual([0, 0]);
   });
 
-  it("signed in with a password set: each poll is asked once at the start", async () => {
+  it("signed in with a password set: the stats are asked once at the start, the snapshot status never", async () => {
     signIn(true, true);
     vi.mocked(boxStats).mockResolvedValue({
       name: "local", cpu_percent: 1, memory_used_mb: 1, memory_total_mb: 2, memory_percent: 50, uptime_seconds: 1,
     });
     mountHeader();
     await vi.advanceTimersByTimeAsync(0);
-    expect([vi.mocked(boxStats).mock.calls.length, vi.mocked(fetchSnapshotStatus).mock.calls.length]).toEqual([1, 1]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect([vi.mocked(boxStats).mock.calls.length, vi.mocked(fetchSnapshotStatus).mock.calls.length]).toEqual([2, 0]);
   });
 });

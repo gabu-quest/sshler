@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { errorText } from '@/api/apiError'
-import { ref, computed, onMounted, watch } from 'vue'
+import type { ApiSession } from '@/api/types'
+import { ref, computed, onMounted, watch, TransitionGroup } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NSpace, NModal, NPopover, NSelect, NInput, useMessage } from 'naive-ui'
 import { PhArrowLeft, PhFloppyDisk, PhLayout, PhPlus, PhTerminalWindow, PhTrash } from '@phosphor-icons/vue'
@@ -11,8 +12,10 @@ import { useBoxesStore } from '@/stores/boxes'
 import { useFavoritesStore } from '@/stores/favorites'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import { normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
-import { generateSessionName } from '@/utils/sessionName'
+import { WINDOWS_SHELL_KEY, normalizePosixShell, useShellOptions, type PosixShell } from '@/composables/useShellOptions'
+import { generateSessionName, lastPathSegment } from '@/utils/sessionName'
+import { terminalThemeOf } from '@/utils/terminalThemes'
+import { useDirectoryOptions, isImeConfirm, BROWSE_DIRECTORY, CUSTOM_DIRECTORY } from '@/composables/useDirectoryOptions'
 import Terminal from '@/components/Terminal.vue'
 import DirectoryPickerModal from '@/components/DirectoryPickerModal.vue'
 import { getEmojiForBox } from '@/utils/emoji-favicon'
@@ -57,6 +60,10 @@ const showAddModal = ref(false)
 const showSaveLayoutModal = ref(false)
 const showDirPicker = ref(false)
 const showLayoutMenu = ref(false)
+// "Custom path..." swaps the directory list for a field to type the path in.
+const showCustomDir = ref(false)
+// The list's choice before Custom path was picked; Back puts it back.
+let directoryBeforeCustom = ''
 const newLayoutName = ref('')
 const newTerminal = ref<{ boxName: string; sessionName: string; directory: string; shell: PosixShell }>({
   boxName: '',
@@ -89,7 +96,9 @@ const gridCols = computed(() => {
   const count = terminals.value.length
   const w = viewportWidth.value
   if (count === 0 || count === 1) return 1
-  if (w <= 768) return 1
+  if (w < 768) return 1
+  // Four panes make a 2 x 2: wider panes and taller rows than one row of four.
+  if (count === 4) return 2
   if (w <= 1024) return Math.min(count, 2)
   if (w <= 1400) return Math.min(count, 3)
   return Math.min(count, 4)
@@ -102,7 +111,7 @@ const terminalFontSize = computed(() => {
   // Start from the user's configured size, then shrink as panes multiply
   let size = count <= 4 ? base : count <= 8 ? base - 2 : base - 3
   // Single column on narrow screens — use the full configured size
-  if (w <= 768) return Math.max(base, 8)
+  if (w < 768) return Math.max(base, 8)
   // Tablet: shrink a bit more with multiple panes to avoid overflow
   if (w <= 1024 && count > 1) size = Math.min(size, base - 2)
   return Math.max(size, 8)
@@ -112,64 +121,41 @@ const terminalFontSize = computed(() => {
 const terminalMinHeight = computed(() => {
   const count = terminals.value.length
   const w = viewportWidth.value
-  if (w <= 768) return '250px'
-  if (w <= 1024) {
-    return count <= 2 ? '350px' : '280px'
-  }
-  if (count <= 1) return '400px'
-  if (count <= 4) return '350px'
-  return '300px'
+  // A floor only: the rows share the window's height, so four panes at 1366 x 768 all fit.
+  if (w < 768) return '250px'
+  if (w <= 1024) return '240px'
+  return count <= 1 ? '300px' : '220px'
 })
 
-const terminalColors = ['#6aa6ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2', '#eb2f96', '#f5222d']
+// The box's saved terminal theme (calm for a box with none, or one this page no longer knows).
+const themeOf = (boxName: string) =>
+  terminalThemeOf(boxesStore.items.find((b) => b.name === boxName)?.terminal_theme)
 
-const getTerminalColor = (index: number) => {
-  return terminalColors[index % terminalColors.length]
-}
-
-// T7: Directory options for dropdown - favorites from selected box only
-const directoryOptions = computed(() => {
-  const options: Array<{ label: string; value: string }> = []
-
-  // Add favorites from selected box
-  if (newTerminal.value.boxName) {
-    const boxData = boxesStore.items.find(b => b.name === newTerminal.value.boxName)
-    if (boxData?.favorites) {
-      boxData.favorites.forEach(fav => {
-        const label = fav.split(/[/\\]/).filter(Boolean).pop() || fav
-        options.push({ label: `★ ${label}`, value: fav })
-      })
-    }
-    // Also check favoritesStore
-    const storeFavs = Array.from(favoritesStore.favoritesForBox(newTerminal.value.boxName).values())
-    storeFavs.forEach(fav => {
-      if (!options.some(o => o.value === fav)) {
-        const label = fav.split(/[/\\]/).filter(Boolean).pop() || fav
-        options.push({ label: `★ ${label}`, value: fav })
-      }
-    })
-  }
-
-  // Default home if no favorites
-  if (options.length === 0) {
-    options.push({ label: '~ (Home)', value: '~' })
-  }
-
-  // Add Browse option
-  options.push({ label: '📁 Browse...', value: '__browse__' })
-
-  return options
-})
+// The one directory list: home, the box's favourites, Browse, custom path.
+const directoryOptions = useDirectoryOptions(() => newTerminal.value.boxName)
 
 const handleDirectoryChange = (value: string) => {
-  if (value === '__browse__') {
+  if (value === BROWSE_DIRECTORY) {
     showDirPicker.value = true
     return
   }
+  if (value === CUSTOM_DIRECTORY) {
+    directoryBeforeCustom = newTerminal.value.directory
+    showCustomDir.value = true
+    newTerminal.value.directory = ''
+    return
+  }
+  showCustomDir.value = false
   newTerminal.value.directory = value
 }
 
+const backToDirectoryList = () => {
+  showCustomDir.value = false
+  newTerminal.value.directory = directoryBeforeCustom
+}
+
 const handleDirPickerSelect = (path: string) => {
+  showCustomDir.value = false
   newTerminal.value.directory = path
 }
 
@@ -213,6 +199,34 @@ const addTerminal = () => {
     directory: '~',
     shell: 'tmux', // each new terminal starts as tmux
   }
+  showCustomDir.value = false
+}
+
+// A pick in a pane's session list (its title bar) puts that pane on the session, as the
+// single view does; the pane remounts on it (its key holds the session name). A plain shell
+// has no sessions: the pick replaces it with tmux.
+const handleSessionSelect = (id: string, session: ApiSession) => {
+  const target = terminals.value.find((item) => item.id === id)
+  if (!target) return
+  target.sessionName = session.session_name
+  target.directory = session.working_directory || target.directory
+  target.shell = 'tmux'
+  saveLayout()
+}
+
+// A Windows local box opens a native shell, as the single view's tabs do: the stored shell
+// id (empty is the default) and native-shell. Any other box passes "plain" or nothing (tmux).
+const shellOf = (terminal: TerminalInstance): string =>
+  isWindowsLocalBox(terminal.boxName)
+    ? localStorage.getItem(WINDOWS_SHELL_KEY) || ''
+    : terminal.shell === 'plain' ? 'plain' : ''
+const nativeShellOf = (terminal: TerminalInstance): boolean | undefined =>
+  isWindowsLocalBox(terminal.boxName) ? true : undefined
+
+// A key in the custom path field: Enter adds the pane, unless it confirms an IME conversion.
+const onCustomDirKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Enter' || isImeConfirm(event)) return
+  addTerminal()
 }
 
 const removeTerminal = (id: string) => {
@@ -230,11 +244,15 @@ const openAddModal = () => {
     favoritesStore.loadBox(newTerminal.value.boxName, tokenValue.value || null)
   }
   newTerminal.value.shell = 'tmux'
+  showCustomDir.value = false
   showAddModal.value = true
 }
 
-// Watch for box selection changes to load favorites
+// Watch for box selection changes to load favorites; the folder belonged to the old box,
+// so it goes back to home and the custom field closes.
 watch(() => newTerminal.value.boxName, async (boxName) => {
+  newTerminal.value.directory = '~'
+  showCustomDir.value = false
   if (boxName) {
     await favoritesStore.loadBox(boxName, tokenValue.value || null)
   }
@@ -350,21 +368,17 @@ onMounted(async () => {
 
 <template>
   <div class="multi-terminal-page">
-    <!-- Header -->
+    <!-- One toolbar row: title, count, Add, Save, Load -->
     <div class="header">
-      <div class="header-left">
-        <NButton size="small" quaternary @click="goBack" :title="t('terminal.go_back')">
-          <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
-        </NButton>
-        <div>
-          <h1>{{ t('multi.title') }}</h1>
-          <p class="text-muted">{{ terminals.length }} {{ terminals.length !== 1 ? t('multi.terminals') : t('multi.terminal') }} {{ t('multi.active') }}</p>
-        </div>
-      </div>
+      <NButton size="small" quaternary :title="t('terminal.go_back')" :aria-label="t('terminal.go_back')" @click="goBack">
+        <NIcon size="16"><PhArrowLeft weight="duotone" /></NIcon>
+      </NButton>
+      <h1>{{ t('multi.title') }}</h1>
+      <span class="count-pill text-muted">{{ terminals.length }} {{ terminals.length !== 1 ? t('multi.terminals') : t('multi.terminal') }} {{ t('multi.active') }}</span>
 
       <div class="header-actions">
-        <NButton type="primary" @click="openAddModal">
-          <NIcon size="16"><PhPlus weight="duotone" /></NIcon>
+        <NButton type="primary" size="small" @click="openAddModal">
+          <template #icon><NIcon size="16"><PhPlus weight="duotone" /></NIcon></template>
           {{ t('multi.add_terminal') }}
         </NButton>
 
@@ -372,10 +386,12 @@ onMounted(async () => {
           size="small"
           quaternary
           :disabled="terminals.length === 0"
+          :title="t('multi_terminal.save_layout')"
+          :aria-label="t('multi_terminal.save_layout')"
           @click="showSaveLayoutModal = true"
         >
           <NIcon size="16"><PhFloppyDisk weight="duotone" /></NIcon>
-          {{ t('multi_terminal.save_layout') }}
+          <span class="btn-label">{{ t('multi_terminal.save_layout') }}</span>
         </NButton>
 
         <NPopover
@@ -384,9 +400,9 @@ onMounted(async () => {
           v-model:show="showLayoutMenu"
         >
           <template #trigger>
-            <NButton size="small" quaternary>
+            <NButton size="small" quaternary :title="t('multi_terminal.load_layout')" :aria-label="t('multi_terminal.load_layout')">
               <NIcon size="16"><PhLayout weight="duotone" /></NIcon>
-              {{ t('multi_terminal.load_layout') }}
+              <span class="btn-label">{{ t('multi_terminal.load_layout') }}</span>
             </NButton>
           </template>
 
@@ -417,50 +433,48 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Terminal Grid -->
-    <div
+    <!-- Terminal Grid: each pane is a Terminal with its own title bar (closable) -->
+    <TransitionGroup
+      v-if="terminals.length > 0"
+      name="list-row"
+      tag="div"
       class="terminal-grid"
       :style="{
-        gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
+        gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
         '--terminal-min-height': terminalMinHeight
       }"
     >
       <div
         v-for="(terminal, index) in terminals"
         :key="terminal.id"
-        class="terminal-container"
-        :style="{
-          borderColor: getTerminalColor(index),
-          borderWidth: '2px'
-        }"
+        class="multi-pane"
+        :style="{ '--row-index': index }"
       >
-        <div
-          class="terminal-header"
-          :style="{ backgroundColor: getTerminalColor(index) + '20' }"
+        <Terminal
+          :key="terminal.sessionName"
+          :box-name="terminal.boxName"
+          :session-name="terminal.sessionName"
+          :directory="terminal.directory"
+          :shell="shellOf(terminal)"
+          :native-shell="nativeShellOf(terminal)"
+          :theme="themeOf(terminal.boxName)"
+          :font-size="terminalFontSize"
+          closable
+          @close="removeTerminal(terminal.id)"
+          @session-select="(session) => handleSessionSelect(terminal.id, session)"
         >
-          <div class="terminal-info">
-            <NIcon size="14"><PhTerminalWindow weight="duotone" /></NIcon>
-            <span>{{ getEmojiForBox(terminal.boxName) }} {{ terminal.boxName }}</span>
-            <span class="session-name">{{ terminal.sessionName }}</span>
-            <span class="directory-name">{{ terminal.directory }}</span>
-          </div>
-          <NButton size="tiny" quaternary @click="removeTerminal(terminal.id)" :title="t('common.close')">
-            ×
-          </NButton>
-        </div>
-        <div class="terminal-wrapper">
-          <Terminal
-            :box-name="terminal.boxName"
-            :session-name="terminal.sessionName"
-            :directory="terminal.directory"
-            :shell="terminal.shell === 'plain' ? 'plain' : ''"
-            :font-size="terminalFontSize"
-          />
-        </div>
+          <template #titlebar-meta>
+            <span class="pane-meta" :title="terminal.directory">
+              {{ getEmojiForBox(terminal.boxName) }}
+              <span class="directory-name">{{ lastPathSegment(terminal.directory) || terminal.directory }}</span>
+            </span>
+          </template>
+        </Terminal>
       </div>
+    </TransitionGroup>
 
-      <!-- Empty state -->
-      <div v-if="terminals.length === 0" class="empty-state">
+    <div v-else class="terminal-grid">
+      <div class="empty-state">
         <NIcon size="48" class="empty-icon"><PhTerminalWindow weight="duotone" /></NIcon>
         <h3>{{ t('multi.no_terminals') }}</h3>
         <p class="text-muted">{{ t('multi.no_terminals_hint') }}</p>
@@ -501,11 +515,22 @@ onMounted(async () => {
         <div>
           <label class="form-label">{{ t('multi.directory') }}</label>
           <NSelect
+            v-if="!showCustomDir"
             :value="newTerminal.directory"
             :options="directoryOptions"
             :placeholder="t('multi.dir_placeholder')"
             @update:value="handleDirectoryChange"
           />
+          <div v-else class="custom-dir-row">
+            <NInput
+              v-model:value="newTerminal.directory"
+              :input-props="{ class: 'custom-dir' }"
+              :placeholder="t('terminal.dir_placeholder')"
+              @keydown="onCustomDirKeydown"
+              @keydown.esc.stop="backToDirectoryList"
+            />
+            <NButton @click="backToDirectoryList">{{ t('common.back') }}</NButton>
+          </div>
           <p class="form-help">{{ t('multi.dir_help') }}</p>
         </div>
       </NSpace>
@@ -562,6 +587,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.custom-dir-row {
+  display: flex;
+  gap: 8px;
+}
+
 .multi-terminal-page {
   height: 100%;
   display: flex;
@@ -570,37 +600,46 @@ onMounted(async () => {
   padding: 0;
 }
 
+/* One row, at most 36px: back, title, count, then Add / Save / Load. */
 .header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 8px;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--stroke);
   flex-shrink: 0;
+  min-width: 0;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.header h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.count-pill {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-variant);
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
-.header h1 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.header p {
-  margin: 0;
-  font-size: 12px;
+.btn-label {
+  margin-left: 4px;
 }
 
 .terminal-grid {
@@ -609,63 +648,63 @@ onMounted(async () => {
   gap: 4px;
   padding: 4px;
   min-height: 0;
+  height: 100%;
   overflow-y: auto;
-  grid-auto-rows: minmax(var(--terminal-min-height, 300px), 1fr);
+  grid-auto-rows: minmax(var(--terminal-min-height, 220px), 1fr);
 }
 
-.terminal-container {
+/* A neutral 1px frame and a 3px accent on top, from the tokens. */
+.multi-pane {
   display: flex;
   flex-direction: column;
-  border: 2px solid var(--stroke);
-  border-radius: 8px;
+  min-width: 0;
+  border: 1px solid var(--stroke);
+  border-top: 3px solid var(--accent);
+  border-radius: 6px;
   overflow: hidden;
   background: var(--surface);
-  min-height: var(--terminal-min-height, 300px);
+  min-height: var(--terminal-min-height, 220px);
+  container-type: inline-size;
 }
 
-.terminal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: var(--surface-variant);
-  border-bottom: 1px solid var(--stroke);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.terminal-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* A narrow pane keeps its title bar to one line: the title shortens before it wraps. */
+.multi-pane :deep(.titlebar-center) {
+  min-width: 0;
   overflow: hidden;
+  flex-wrap: nowrap;
 }
 
-.session-name {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
+.multi-pane :deep(.titlebar-text) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.multi-pane > :deep(*) {
+  flex: 1;
+  min-height: 0;
+}
+
+.pane-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .directory-name {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
-  opacity: 0.7;
-  max-width: 100px;
+  font-size: 11px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.terminal-wrapper {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
 .empty-state {
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -742,33 +781,19 @@ onMounted(async () => {
   color: var(--muted);
 }
 
-/* Responsive — grid cols/font/heights driven by JS (useResponsive) */
-@media (max-width: 768px) {
-  .header {
-    flex-direction: column;
-    gap: 8px;
-    align-items: stretch;
+/* Grid columns, font and floor heights are driven by JS (useResponsive). On the phone the
+   toolbar stays one row: Save and Load keep their icons, their words go. */
+@media (max-width: 767px) {
+  .btn-label {
+    display: none;
   }
 
-  .header-left {
-    justify-content: center;
-  }
-
-  .header-actions {
-    justify-content: center;
+  .count-pill {
+    display: none;
   }
 
   .directory-name {
     display: none;
   }
-}
-
-/* Ensure terminals fit properly */
-.terminal-wrapper :deep(.terminal-container) {
-  height: 100%;
-}
-
-.terminal-wrapper :deep(.xterm) {
-  height: 100%;
 }
 </style>

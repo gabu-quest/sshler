@@ -268,7 +268,7 @@ const canMoveDown = computed(() => props.index < props.total - 1);
   font-family: "JetBrains Mono", monospace;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .picker-row {
     grid-template-columns: 1fr;
   }

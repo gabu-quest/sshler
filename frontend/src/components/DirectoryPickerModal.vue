@@ -278,7 +278,7 @@ watch(() => props.show, (show) => {
   padding: 6px 8px;
   border-radius: 4px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 
 .favorite-item:hover {
@@ -312,7 +312,7 @@ watch(() => props.show, (show) => {
   gap: 8px;
   padding: 10px 12px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
   border-bottom: 1px solid var(--stroke);
 }
 
@@ -339,7 +339,7 @@ watch(() => props.show, (show) => {
 
 .star-btn {
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .directory-item:hover .star-btn {

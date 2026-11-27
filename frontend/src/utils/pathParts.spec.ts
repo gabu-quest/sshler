@@ -8,7 +8,30 @@ import {
   parentPath,
   pathSegments,
   resolvePathAgainst,
+  separatorAfter,
 } from "./pathParts";
+
+describe("separatorAfter", () => {
+  // Mutation: draw a separator after every crumb -> `//tmp/x`, `C://Users`.
+  it.each([
+    ["/tmp/x", "/tmp/x"],
+    ["/", "/"],
+    ["~/a/b", "~/a/b"],
+    ["C:/Users/me", "C:/Users/me"],
+    ["//srv/sh/d", "//srv/sh/d"],
+  ])("the crumbs of %s read back as %s", (path, text) => {
+    const crumbs = pathSegments(path);
+    const drawn = crumbs.map((c, i) => c.label + (i < crumbs.length - 1 && separatorAfter(c) ? "/" : "")).join("");
+    expect(drawn).toBe(text);
+  });
+
+  it("a label that ends in a slash is followed by no separator; any other is", () => {
+    expect(separatorAfter({ label: "/", path: "/" })).toBe(false);
+    expect(separatorAfter({ label: "C:/", path: "C:/" })).toBe(false);
+    expect(separatorAfter({ label: "tmp", path: "/tmp" })).toBe(true);
+    expect(separatorAfter({ label: "~", path: "~" })).toBe(true);
+  });
+});
 
 describe("parentPath", () => {
   it.each([

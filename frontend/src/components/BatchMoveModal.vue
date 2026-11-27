@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { NModal, NCard, NButton, NSpace, NIcon } from "naive-ui";
 import { PhArrowBendUpLeft, PhCopy } from "@phosphor-icons/vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
+import { useI18n } from "@/i18n";
 
 const props = defineProps<{
   visible: boolean;
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   (e: "close"): void;
 }>();
 
+const { t } = useI18n();
 const destination = ref("");
 
 function handleSelect(path: string) {
@@ -32,14 +34,14 @@ function handleConfirm() {
 <template>
   <NModal :show="visible" @update:show="(v: boolean) => { if (!v) emit('close') }">
     <NCard
-      :title="mode === 'move' ? `Move ${count} item(s)` : `Copy ${count} item(s)`"
+      :title="t(mode === 'move' ? 'files.batch_title_move' : 'files.batch_title_copy', { count })"
       style="max-width: 480px; width: 100%"
       closable
       @close="emit('close')"
     >
       <NSpace vertical size="medium">
         <div style="font-size: 13px; color: var(--muted)">
-          Search for a destination directory:
+          {{ t('files.batch_search_hint') }}
         </div>
         <DirectorySearchInput
           :box="box"
@@ -52,7 +54,7 @@ function handleConfirm() {
       </NSpace>
       <template #action>
         <NSpace justify="end">
-          <NButton @click="emit('close')">Cancel</NButton>
+          <NButton @click="emit('close')">{{ t('common.cancel') }}</NButton>
           <NButton
             :type="mode === 'move' ? 'warning' : 'primary'"
             :disabled="!destination"
@@ -62,7 +64,7 @@ function handleConfirm() {
               <PhArrowBendUpLeft v-if="mode === 'move'" weight="duotone" />
               <PhCopy v-else weight="duotone" />
             </NIcon>
-            {{ mode === 'move' ? 'Move Here' : 'Copy Here' }}
+            {{ t(mode === 'move' ? 'files.batch_move_here' : 'files.batch_copy_here') }}
           </NButton>
         </NSpace>
       </template>

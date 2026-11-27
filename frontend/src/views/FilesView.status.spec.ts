@@ -58,7 +58,13 @@ const { passthrough } = vi.hoisted(() => ({
   passthrough: (name: string) => ({ default: { name, template: `<div class="stub-${name}"><slot /></div>` } }),
 }));
 vi.mock("@/components/FavoritesPanel.vue", () => passthrough("FavoritesPanel"));
-vi.mock("@/components/FileBreadcrumb.vue", () => passthrough("FileBreadcrumb"));
+vi.mock("@/components/FileBreadcrumb.vue", () => ({
+  default: {
+    name: "FileBreadcrumb",
+    emits: ["update:box"],
+    template: '<div class="stub-FileBreadcrumb"><button class="switch-box" @click="$emit(\'update:box\', \'other\')" /></div>',
+  },
+}));
 vi.mock("@/components/FileUploadZone.vue", () => passthrough("FileUploadZone"));
 vi.mock("@/components/FilePreviewModal.vue", () => passthrough("FilePreviewModal"));
 vi.mock("@/components/FileEditorModal.vue", () => passthrough("FileEditorModal"));
@@ -107,6 +113,7 @@ vi.mock("naive-ui", async () => {
     NIcon: stub('<span class="stub-icon"><slot /></span>'),
     NInput: stub('<input class="stub-input" />', ["value", "size", "placeholder"]),
     NModal: stub('<div class="stub-modal" v-if="show"><slot /></div>', ["show"]),
+    NPopover: stub('<div class="stub-popover"><slot name="trigger" /><div class="popover-body"><slot /></div></div>', ["show", "trigger", "placement"]),
     NProgress: stub('<div class="stub-progress" />'),
     NSelect: stub(
       `<select class="stub-select" @change="$emit('update:value', $event.target.value)">
@@ -131,7 +138,7 @@ vi.mock("@phosphor-icons/vue", () => {
     "PhUploadSimple", "PhEye", "PhPencil", "PhPrinter", "PhDownloadSimple", "PhTextAa", "PhCopy",
     "PhClipboard", "PhTrash", "PhFolder", "PhMagnifyingGlass", "PhGear", "PhTerminalWindow",
     "PhArrowBendUpLeft", "PhCaretRight", "PhCaretDown", "PhArrowsOutSimple", "PhArrowsInSimple",
-    "PhArchive",
+    "PhArchive", "PhPlus",
   ];
   return Object.fromEntries(names.map((n) => [n, stub(n)]));
 });
@@ -165,7 +172,7 @@ describe("FilesView: the status of the box", () => {
     });
     const { container } = render(FilesView, { global: { plugins: [i18nPlugin] } });
     await waitFor(() =>
-      expect(alertText(container)).toBe("local is offline: Cannot connect to the box — local did not answer"),
+      expect(alertText(container)).toBe("local · Offline: Cannot connect to the box — local did not answer"),
     );
   });
 
@@ -173,7 +180,7 @@ describe("FilesView: the status of the box", () => {
     vi.mocked(boxStatus).mockRejectedValueOnce(new ApiError(0, "network", ""));
     const { container } = render(FilesView, { global: { plugins: [i18nPlugin] } });
     await waitFor(() =>
-      expect(alertText(container)).toBe("local is offline: No answer from sshler; check the connection"),
+      expect(alertText(container)).toBe("local · Offline: No answer from sshler; check the connection"),
     );
     expect(messageSpy.error).toHaveBeenCalledTimes(0);
   });
@@ -186,9 +193,10 @@ describe("FilesView: the status of the box", () => {
         .mockResolvedValueOnce({ name: "other", status: "online", latency_ms: 3, error: null, reason: null });
       const { container } = render(FilesView, { global: { plugins: [i18nPlugin] } });
       await waitFor(() => expect(boxStatus).toHaveBeenCalledTimes(1));
-      const select = container.querySelector(".stub-select") as HTMLSelectElement;
-      await fireEvent.change(select, { target: { value: "other" } });
-      await waitFor(() => expect(alertText(container)).toBe("other is online"));
+      await fireEvent.click(container.querySelector(".switch-box")!);
+      await waitFor(() => expect(boxStatus).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(alertText(container)).toBe(""); // other is online: no alert
       return { container, settleLocal };
     }
 
@@ -196,14 +204,14 @@ describe("FilesView: the status of the box", () => {
       const { container, settleLocal } = await switchWhileOut();
       settleLocal.resolve({ name: "local", status: "offline", latency_ms: null, error: "local did not answer", reason: "unreachable" });
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(alertText(container)).toBe("other is online");
+      expect(alertText(container)).toBe(""); // still no alert for the online box
     });
 
     it("a failure of the first box's call that arrives last is not shown for the second", async () => {
       const { container, settleLocal } = await switchWhileOut();
       settleLocal.reject(new ApiError(0, "network", ""));
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(alertText(container)).toBe("other is online");
+      expect(alertText(container)).toBe(""); // still no alert for the online box
     });
   });
 
@@ -220,7 +228,7 @@ describe("FilesView: the status of the box", () => {
     const asked = () => vi.mocked(fetchDirectory).mock.calls.filter((call) => call[1] === "/home/u/proj/src").length;
 
     await fireEvent.click(caret());
-    await waitFor(() => expect(alertText(container, 1)).toBe("Permission denied — /home/u/proj/src: permission denied"));
+    await waitFor(() => expect(alertText(container, 0)).toBe("Permission denied — /home/u/proj/src: permission denied"));
     expect(caret().title).toBe("Expand");
     expect(asked()).toBe(1);
 

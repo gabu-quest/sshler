@@ -33,7 +33,7 @@ vi.mock("naive-ui", () => {
   const stub = (template: string, props: string[] = [], emits: string[] = []) => ({ props, emits, template });
   return {
     NAlert: stub('<div class="stub-alert"><slot /></div>'),
-    NButton: stub('<button class="stub-button" @click="$emit(\'click\')"><slot /></button>', [], ["click"]),
+    NButton: stub('<button class="stub-button" :data-type="type" @click="$emit(\'click\')"><slot /></button>', ["type"], ["click"]),
     NCard: stub('<div class="stub-card"><slot /></div>'),
     NCode: stub("<code><slot /></code>"),
     NInputNumber: stub("<input />"),
@@ -135,5 +135,52 @@ describe("SettingsView: the sign-out row", () => {
     expect(loadPageMock).toHaveBeenCalledTimes(0);
     expect(useBootstrapStore().token).toBe("tok");
     expect(useAuthStore().username).toBe("admin");
+  });
+});
+
+describe("SettingsView: the theme buttons and the logo", () => {
+  const primaryThemeButtons = (container: Element): string[] =>
+    Array.from(container.querySelectorAll<HTMLElement>(".stub-button"))
+      .filter((b) => /Theme$/.test(b.textContent?.trim() ?? "") && b.dataset.type === "primary")
+      .map((b) => b.textContent!.trim());
+
+  beforeEach(() => {
+    pinia = createPinia();
+    setActivePinia(pinia);
+    vi.clearAllMocks();
+    localStorage.clear();
+    httpMock.get.mockResolvedValue({ data: { idle_timeout: null, max_lifetime: null, max_connections_per_box: 3 } });
+  });
+
+  it("highlights System when System is chosen, even if the system is dark", async () => {
+    const { useAppStore } = await import("@/stores/app");
+    signedIn(false);
+    useAppStore().setColorMode("system");
+    const { container } = renderView();
+    await waitFor(() => expect(httpMock.get).toHaveBeenCalled());
+    expect(primaryThemeButtons(container)).toEqual(["System Theme"]);
+  });
+
+  it("highlights Dark when Dark is chosen and Light when Light is chosen", async () => {
+    const { useAppStore } = await import("@/stores/app");
+    signedIn(false);
+    useAppStore().setColorMode("dark");
+    const { container } = renderView();
+    await waitFor(() => expect(httpMock.get).toHaveBeenCalled());
+    expect(primaryThemeButtons(container)).toEqual(["Dark Theme"]);
+    await fireEvent.click(Array.from(container.querySelectorAll<HTMLElement>(".stub-button")).find((b) => b.textContent?.trim() === "Light Theme")!);
+    expect(primaryThemeButtons(container)).toEqual(["Light Theme"]);
+  });
+
+  it("keeps the wordmark logo 48px high, its width from its own ratio", () => {
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const css = readFileSync(require("node:path").resolve(__dirname, "SettingsView.vue"), "utf8");
+    const rules = [...css.matchAll(/\.settings-logo\s*\{([^}]*)\}/g)].map((m) => m[1]);
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      expect(rule).toMatch(/(?<![-\w])height:\s*48px/);
+      expect(rule).not.toMatch(/(?<![-\w])width:\s*48px/);
+      expect(rule).not.toMatch(/(?:max-)?height:\s*(?:60|80|120)px/);
+    }
   });
 });

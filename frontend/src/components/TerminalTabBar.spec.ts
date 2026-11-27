@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { render, fireEvent } from '@testing-library/vue'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { nextTick, type App } from 'vue'
@@ -327,19 +330,57 @@ describe('TerminalTabBar', () => {
     expect(emitted('kill')).toBeUndefined()
   })
 
-  it('clicking the backdrop closes the menu without emitting kill or close', async () => {
+  it('clicking outside the menu closes the menu without emitting kill or close', async () => {
     const { container, emitted } = mountBar()
     const items = container.querySelectorAll('[data-testid="tab-item"]')
     await fireEvent.contextMenu(items[0]!)
     await nextTick()
     expect(document.querySelector('[data-testid="tab-context-menu"]')).not.toBeNull()
 
-    const backdrop = document.querySelector('[data-testid="tab-menu-backdrop"]') as HTMLElement
-    await fireEvent.click(backdrop)
+    await fireEvent.click(document.body)
     await nextTick()
 
     expect(document.querySelector('[data-testid="tab-context-menu"]')).toBeNull()
     expect(emitted('kill')).toBeUndefined()
     expect(emitted('close')).toBeUndefined()
+  })
+
+  it('the tab menu opens inside the window when the right-click is at the bottom-right corner', async () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 760 })
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 700 })
+    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(200)
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(120)
+    const { container } = mountBar()
+    const items = container.querySelectorAll('[data-testid="tab-item"]')
+    await fireEvent.contextMenu(items[0]!, { clientX: 759, clientY: 699 })
+    await nextTick()
+    const menu = document.querySelector('[data-testid="tab-context-menu"]') as HTMLElement
+    expect(menu.style.left).toBe('552px')
+    expect(menu.style.top).toBe('572px')
+    width.mockRestore()
+    height.mockRestore()
+  })
+
+  it('a tab that is added enters with tab-item, and its marker is a transformed layer', async () => {
+    const view = render(TerminalTabBar, {
+      props: defaultProps(),
+      global: { plugins: [i18nPlugin], stubs: { transition: false, 'transition-group': false } },
+    })
+    await view.rerender(defaultProps({ tabs: [TAB_A, TAB_B, { ...TAB_A, id: 'c', label: 'third' }] }))
+    await nextTick()
+    const entered = view.container.querySelector('[data-tab-id="c"]')!
+    expect(entered.classList.contains('tab-item-enter-active')).toBe(true)
+    // the plain "+" button never takes part in the animation
+    expect(view.container.querySelector('[data-testid="tab-add"]')!.className).not.toContain('tab-item-enter')
+  })
+
+  it('the active tab marker is scaled by transform, not a border that jumps', () => {
+    const css = readFileSync(resolve(__dirname, 'TerminalTabBar.vue'), 'utf8')
+    const active = css.match(/^\.tab-item\.active \{([^}]*)\}/m)![1]
+    expect(active).not.toContain('border-bottom')
+    const marker = css.match(/^\.tab-item::after \{([^}]*)\}/m)![1]
+    expect(marker).toMatch(/transform:\s*scaleX\(0\)/)
+    expect(marker).toMatch(/transition:\s*transform var\(--dur-fast\)/)
+    expect(css).toMatch(/^\.tab-item\.active::after \{[^}]*scaleX\(1\)/m)
   })
 })

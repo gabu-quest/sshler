@@ -4,7 +4,7 @@
  */
 import { render, fireEvent, waitFor } from "@testing-library/vue";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "vue";
 
 import { createI18n } from "@/i18n";
@@ -73,7 +73,7 @@ vi.mock("@/components/FileEditorModal.vue", () => passthrough("FileEditorModal")
 vi.mock("naive-ui", () => ({
   NModal: { props: ["show", "maskClosable"], emits: ["update:show"], template: '<div v-if="show" class="stub-modal"><slot /></div>' },
   NButton: { props: ["type", "size", "ghost"], template: "<button><slot /></button>" },
-  NCheckbox: { props: ["checked"], template: "<input type=\"checkbox\" />" },
+  NCheckbox: { props: ["checked"], emits: ["update:checked"], template: '<label><input type="checkbox" :checked="checked" @change="$emit(\'update:checked\', $event.target.checked)" /><slot /></label>' },
   NProgress: { template: '<div class="stub-progress" />' },
   useDialog: () => dialogSpy,
   useMessage: () => messageSpy,
@@ -114,23 +114,43 @@ async function startTransfer(container: Element, key: "f5" | "f6") {
   await fireEvent.click(container.querySelector(`.${key}`)!);
 }
 
-async function prompt(n: number) {
-  await waitFor(() => expect(dialogSpy.warning).toHaveBeenCalledTimes(n));
-  // Replace is dead for a moment after a prompt appears; wait until it answers.
-  await new Promise((resolve) => setTimeout(resolve, REPLACE_ARM_MS + 50));
-  return dialogSpy.warning.mock.calls[n - 1]![0];
+// Every question the panel under the transfer list has shown, in order.
+const shown: string[] = [];
+let watcher: MutationObserver | null = null;
+function watchPrompts() {
+  shown.length = 0;
+  watcher?.disconnect();
+  watcher = new MutationObserver(() => {
+    const text = document.querySelector(".transfer-prompt .prompt-content")?.textContent;
+    if (text && shown[shown.length - 1] !== text) shown.push(text);
+  });
+  watcher.observe(document.body, { subtree: true, childList: true, characterData: true });
 }
 
-/** The buttons of a prompt (the tick box and the row), and the one called `label`: "No" is the first, "Replace" the last. */
-function buttonsOf(options: any) {
-  const [row, box] = options.action().children as any[];
-  return { box, buttons: row.children as any[] };
+afterAll(() => watcher?.disconnect());
+
+/** A question as the panel shows it: its text and the panel itself. */
+type Asked = { content: string; panel: HTMLElement };
+
+async function prompt(n: number): Promise<Asked> {
+  await waitFor(() => expect(shown.length).toBeGreaterThanOrEqual(n));
+  const panel = document.querySelector<HTMLElement>(".transfer-prompt")!;
+  // Replace is dead for a moment after a prompt appears; wait until it answers.
+  await new Promise((resolve) => setTimeout(resolve, REPLACE_ARM_MS + 50));
+  return { content: shown[n - 1]!, panel };
 }
-function press(options: any, label: string, ticked = false) {
-  const { box, buttons } = buttonsOf(options);
-  if (ticked) box.props["onUpdate:checked"](true);
-  const found = label === "No" ? buttons[0] : buttons.find((v) => v.children.default() === label);
-  found.props.onClick();
+
+/** Press the button called `label` ("No" is the first, "Replace" the last), after the tick box if `ticked`. */
+function press(asked: Asked, label: string, ticked = false) {
+  const buttons = [...asked.panel.querySelectorAll<HTMLButtonElement>(".replace-actions button")];
+  if (ticked) (asked.panel.querySelector("input[type=checkbox]") as HTMLInputElement).click();
+  const found = label === "No" ? buttons[0] : buttons.find((b) => b.textContent?.trim() === label);
+  found!.click();
+}
+
+/** Escape inside the panel: the answer "no". */
+function escape(asked: Asked) {
+  asked.panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 }
 
 /** The progress dialog's rows: name, state, text. */
@@ -147,6 +167,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     localStorage.clear();
+    watchPrompts();
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: (query: string) => ({
@@ -208,7 +229,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
       ["b.txt", "failed", line("cannot_replace", "Only a regular file can be replaced")],
       ["c.txt", "done", null],
     ]);
-    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    expect(shown).toEqual([]);
     expect(same).toHaveBeenCalledTimes(1);
   });
 
@@ -225,7 +246,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
       ["b.txt", "failed", line("failed", "Could not replace /dst/b.txt: disk full")],
       ["c.txt", "done", null],
     ]);
-    expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
+    expect(shown).toHaveLength(1);
   });
 
   // Mutation: no "all" buttons with several names left, or Skip all applied to the first only.
@@ -240,7 +261,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
       ["c.txt", "skipped", "skipped, the existing file was kept"],
     ]);
     expect(same).toHaveBeenCalledTimes(1);
-    expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
+    expect(shown).toHaveLength(1);
   });
 
   it("one box: Keep both sends the file again with keepBoth only and names the landed name", async () => {
@@ -293,7 +314,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
       [["/src/a.txt", "/src/b.txt", "/src/c.txt"], undefined],
       [["/src/b.txt", "/src/c.txt"], { overwrite: true }],
     ]);
-    expect(dialogSpy.warning).toHaveBeenCalledTimes(1);
+    expect(shown).toHaveLength(1);
   });
 
   it("several taken names: Replace on the first, No on the last", async () => {
@@ -335,7 +356,7 @@ describe("CommanderView: a transfer onto existing names asks", () => {
     crossAnswers({ succeeded: ["/src/a.txt", "/src/c.txt"], failed: [exists("/src/b.txt")] });
     const { container } = await mountReady({ rightBox: "other", rightDir: "/dst" });
     await startTransfer(container, "f6");
-    (await prompt(1)).onEsc();
+    escape(await prompt(1));
     expect(await finalRows(container)).toEqual([
       ["a.txt", "done", null],
       ["b.txt", "skipped", "skipped, the existing file was kept"],
@@ -358,6 +379,7 @@ describe("CommanderView: every row is true while the transfer runs", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     localStorage.clear();
+    watchPrompts();
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: (query: string) => ({
@@ -371,7 +393,6 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     vi.clearAllMocks();
     same.mockReset();
     cross.mockReset();
-    dialogSpy.warning.mockReset();
   });
 
   // Mutation: the file asked about reads done (or pending) while the prompt is open.
@@ -448,7 +469,7 @@ describe("CommanderView: every row is true while the transfer runs", () => {
     same.mockResolvedValueOnce(result(["/src/a.txt"], [exists("/src/b.txt"), exists("/src/c.txt")]));
     const { container } = await mountReady({ rightDir: "/dst" });
     await startTransfer(container, "f5");
-    (await prompt(1)).onEsc();
+    escape(await prompt(1));
     await prompt(2);
     expect(rowsNow(container)).toEqual([
       ["a.txt", "done", null],
@@ -511,13 +532,11 @@ describe("CommanderView: every row is true while the transfer runs", () => {
   });
 });
 
-describe("CommanderView: a prompt does not outlive what it belongs to", () => {
-  const destroy = vi.fn();
+describe("CommanderView: the question sits under the transfer list", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     localStorage.clear();
-    destroy.mockReset();
-    dialogSpy.warning.mockImplementation(() => ({ destroy }));
+    watchPrompts();
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: (query: string) => ({
@@ -531,7 +550,80 @@ describe("CommanderView: a prompt does not outlive what it belongs to", () => {
     vi.clearAllMocks();
     same.mockReset();
     cross.mockReset();
-    dialogSpy.warning.mockReset();
+  });
+
+  // Mutation: the question is a dialog of its own over the list (the old behaviour).
+  it("three taken names: the list stays in the page with every row while the question is open", async () => {
+    same.mockResolvedValueOnce(result([], [exists("/src/a.txt"), exists("/src/b.txt"), exists("/src/c.txt")]));
+    const { container } = await mountReady({ rightDir: "/dst" });
+    await startTransfer(container, "f5");
+    const asked = await prompt(1);
+    expect(dialogSpy.warning).not.toHaveBeenCalled();
+    const list = container.querySelector(".transfer-files")!;
+    expect(list.querySelectorAll(".transfer-file-row")).toHaveLength(3);
+    expect(list.contains(asked.panel)).toBe(false);
+    expect(asked.panel.parentElement).toBe(list.parentElement);
+    expect(list.compareDocumentPosition(asked.panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(asked.panel.getAttribute("role")).toBe("dialog");
+    expect(asked.panel.textContent).toContain("Do the same for the other 2");
+    press(asked, "Skip", true);
+    await finalRows(container);
+    expect(shown).toHaveLength(1);
+  });
+
+  // Mutation: Replace is enabled when the question appears, so the second click of a double click answers name two.
+  it("a double click on Replace answers one name; the next question waits for its own click", async () => {
+    same
+      .mockResolvedValueOnce(result([], [exists("/src/a.txt"), exists("/src/b.txt")]))
+      .mockResolvedValueOnce(result(["/src/a.txt"]));
+    const { container } = await mountReady({ rightDir: "/dst" });
+    await startTransfer(container, "f5");
+    const first = await prompt(1);
+    const replace = [...first.panel.querySelectorAll<HTMLButtonElement>(".replace-actions button")][2]!;
+    await fireEvent.click(replace);
+    await fireEvent.click(replace);
+    await waitFor(() => expect(shown).toHaveLength(2));
+    expect(shown[1]).toContain("b.txt");
+    const second = document.querySelector<HTMLButtonElement>(".transfer-prompt .replace-actions button:last-child")!;
+    expect(second.disabled).toBe(true);
+    press(await prompt(2), "No");
+    await finalRows(container);
+    expect(same.mock.calls[1]![1]).toEqual(["/src/a.txt"]);
+  });
+
+  // Mutation: Escape in the panel closes the whole transfer, or answers Yes.
+  it("Escape answers No for that name and the transfer goes on", async () => {
+    same.mockResolvedValueOnce(result(["/src/a.txt", "/src/c.txt"], [exists("/src/b.txt")]));
+    const { container } = await mountReady({ rightDir: "/dst" });
+    await startTransfer(container, "f5");
+    escape(await prompt(1));
+    expect(await finalRows(container)).toEqual([
+      ["a.txt", "done", null],
+      ["b.txt", "skipped", "skipped, the existing file was kept"],
+      ["c.txt", "done", null],
+    ]);
+    expect(same).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CommanderView: a prompt does not outlive what it belongs to", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    watchPrompts();
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({
+        matches: false, media: query, onchange: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      }),
+    });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    same.mockReset();
+    cross.mockReset();
   });
 
   // Mutation: the prompt stays up after the view is left, and a Yes starts a retry.
@@ -541,7 +633,7 @@ describe("CommanderView: a prompt does not outlive what it belongs to", () => {
     await startTransfer(container, "f5");
     const opts = await prompt(1);
     unmount();
-    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".transfer-prompt")).toBeNull();
     press(opts, "Replace");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(same).toHaveBeenCalledTimes(1);
@@ -554,7 +646,7 @@ describe("CommanderView: a prompt does not outlive what it belongs to", () => {
     await startTransfer(container, "f5");
     const opts = await prompt(1);
     await fireEvent.click(container.querySelector(".transfer-footer button")!);
-    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".transfer-prompt")).toBeNull();
     expect(container.querySelector(".transfer-error")?.textContent).toContain("Cancelled");
     press(opts, "Replace");
     await new Promise((resolve) => setTimeout(resolve, 50));

@@ -19,12 +19,14 @@ import {
   PhRobot,
   PhGitDiff,
   PhGlobe,
+  PhSidebarSimple,
 } from "@phosphor-icons/vue";
 
 import { useRouter } from "vue-router";
 import { useAppStore } from "@/stores/app";
 import { useBoxesStore } from "@/stores/boxes";
 import { useI18n } from "@/i18n";
+import { useResponsive } from "@/composables/useResponsive";
 import { getEmojiForString } from "@/utils/emoji-favicon";
 
 interface CommandAction {
@@ -42,6 +44,9 @@ const router = useRouter();
 const appStore = useAppStore();
 const boxesStore = useBoxesStore();
 const { t } = useI18n();
+// One breakpoint, owned by useResponsive: the sidebar exists only from it on.
+const { width, breakpoints } = useResponsive();
+const hasSidebar = computed(() => width.value >= breakpoints.tablet);
 const show = ref(false);
 const query = ref("");
 const selectedIndex = ref(0);
@@ -167,6 +172,15 @@ const actions = computed((): CommandAction[] => [
     keywords: ["bookmarks", "starred", "saved", "file"],
   },
   {
+    id: "rail-toggle",
+    label: t('palette.toggle_rail'),
+    icon: PhSidebarSimple,
+    shortcut: "Alt+\\",
+    category: t('nav.navigation'),
+    action: () => appStore.toggleRailCollapsed(),
+    keywords: ["sidebar", "rail", "navigation", "collapse", "expand"],
+  },
+  {
     id: "theme-toggle",
     label: t('palette.action_toggle_theme'),
     description: t('palette.action_toggle_theme_desc'),
@@ -216,7 +230,9 @@ const favoriteActions = computed((): CommandAction[] => {
   return result;
 });
 
-const allActions = computed(() => [...actions.value, ...favoriteActions.value]);
+const allActions = computed(() =>
+  [...actions.value, ...favoriteActions.value].filter((a) => a.id !== "rail-toggle" || hasSidebar.value),
+);
 
 // Fuzzy search implementation
 const fuzzyMatch = (text: string, query: string): { score: number; matches: number[] } => {
@@ -356,6 +372,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeydown);
 });
 
+const cmdInput = ref<{ focus: () => void } | null>(null);
+
 watch(
   () => show.value,
   (open) => {
@@ -363,8 +381,7 @@ watch(
       // Trap focus in modal
       document.body.style.overflow = "hidden";
       nextTick(() => {
-        const input = document.querySelector<HTMLInputElement>("#cmd-input");
-        input?.focus();
+        cmdInput.value?.focus();
       });
     } else {
       document.body.style.overflow = "";
@@ -413,6 +430,7 @@ watch(
       <div class="palette-search">
         <NInput
           id="cmd-input"
+          ref="cmdInput"
           v-model:value="query"
           :placeholder="t('palette.placeholder')"
           autofocus
@@ -530,19 +548,17 @@ watch(
   cursor: pointer;
   border-radius: 8px;
   margin: 2px 0;
-  transition: all 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
   border: 1px solid transparent;
 }
 
-.palette-item:hover,
-.palette-item-selected {
-  background: rgba(124, 93, 255, 0.1);
-  border-color: rgba(124, 93, 255, 0.2);
+.palette-item:hover {
+  background: var(--surface-hover);
 }
 
 .palette-item-selected {
-  background: rgba(124, 93, 255, 0.15);
-  border-color: rgba(124, 93, 255, 0.3);
+  background: var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .palette-item-content {
@@ -567,7 +583,7 @@ watch(
 }
 
 .palette-item-icon-favorite {
-  color: var(--warning, #e8b339);
+  color: var(--warning);
 }
 
 .palette-item-text {
@@ -591,11 +607,11 @@ watch(
 .palette-item-shortcut {
   flex-shrink: 0;
   padding: 2px 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--hover-overlay);
   border-radius: 4px;
-  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--stroke);
 }
 
 .palette-empty {
@@ -616,9 +632,9 @@ watch(
 
 .palette-help {
   padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--hover-overlay);
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--stroke);
 }
 
 .palette-help-section {
@@ -663,7 +679,7 @@ watch(
 
   .palette-item-selected {
     background: var(--accent);
-    color: white;
+    color: var(--surface);
   }
 
   .palette-item-shortcut {
@@ -672,7 +688,7 @@ watch(
 }
 
 /* Mobile optimizations */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .palette {
     max-height: 70vh;
   }

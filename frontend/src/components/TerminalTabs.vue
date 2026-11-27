@@ -6,6 +6,7 @@ import TerminalTabBar from '@/components/TerminalTabBar.vue'
 import { useTerminalTabsStore, scopeKey } from '@/stores/terminalTabs'
 import { killTerminalSession } from '@/api/http'
 import type { ApiSession } from '@/api/types'
+import { DEFAULT_TERMINAL_THEME, type TerminalThemeName } from '@/utils/terminalThemes'
 
 /**
  * Multi-tab terminal host (Windows-local boxes). Tabs are scoped per
@@ -22,7 +23,7 @@ interface Props {
   boxName: string
   /** Current directory — the scope driver and the seed dir for a fresh scope. */
   directory?: string
-  theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai' | 'light'
+  theme?: TerminalThemeName
   fontSize?: number
   fontFamily?: string
   showTitleBar?: boolean
@@ -35,7 +36,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   directory: '~',
-  theme: 'cyberpunk',
+  theme: DEFAULT_TERMINAL_THEME,
   fontSize: 14,
   showTitleBar: true,
   externalInput: false,
@@ -49,6 +50,8 @@ const emit = defineEmits<{
   (e: 'update:activeSession', session: string): void
   (e: 'killed', sessionName: string): void
   (e: 'killError', sessionName: string): void
+  /** A pane's session button picked a session: the parent opens it as a tab. */
+  (e: 'sessionSelect', session: ApiSession): void
 }>()
 
 const store = useTerminalTabsStore()
@@ -311,6 +314,7 @@ onUnmounted(() => {
         :external-input="externalInput"
         @connected="onTabConnected(tab.id)"
         @disconnected="onTabDisconnected(tab.id)"
+        @session-select="(s) => emit('sessionSelect', s)"
       />
     </div>
   </div>

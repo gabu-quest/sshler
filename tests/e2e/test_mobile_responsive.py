@@ -1,9 +1,9 @@
 """Playwright E2E tests for mobile responsiveness.
 
 Tests the actual mobile implementation:
-- Ultra-thin 14px header with logo + CPU/MEM stats
-- No hamburger menu (mobile navigation removed for maximum screen space)
-- Desktop nav hidden on mobile
+- The terminal's ultra-thin 14px bar with logo + CPU/MEM stats
+- Every other view's 36px bar, whose menu button opens the drawer from the left
+- No side rail below 768px; the rail from 768px on
 - Pages fit within mobile viewport (no horizontal scroll)
 
 Run with:
@@ -35,36 +35,83 @@ async def assert_no_horizontal_overflow(page, label: str) -> None:
 
 @pytest.mark.asyncio
 async def test_mobile_header_ultra_thin(open_page):
-    """Mobile header is the 14px strip from AppHeader.vue's mobile media query.
+    """On the terminal the phone bar is the 14px strip, with no menu button.
 
-    Mutation: drop the mobile ``height: 14px`` rule (22px desktop height) or
-    collapse the header to 0 -> the exact-height assertion fails.
+    Mutation: give the terminal the 36px bar (or drop the 14px height) -> the
+    exact-height assertion fails.
     """
     page = await open_page(MOBILE_VIEWPORT)
-    await page.goto("/app/", wait_until="load")
+    await page.goto("/app/terminal", wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
 
     header = page.locator(".app-header")
     await expect(header).to_be_visible()
 
     header_height = await header.evaluate("el => el.getBoundingClientRect().height")
     assert header_height == 14, f"Mobile header is {header_height}px, expected 14px"
+    await expect(page.locator(".mobile-menu-btn")).to_have_count(0)
 
 
 @pytest.mark.asyncio
-async def test_mobile_desktop_nav_hidden(open_page):
-    """Desktop nav is in the DOM but hidden on a mobile viewport.
+@pytest.mark.parametrize("path", ["/app/", "/app/files", "/app/multi-terminal", "/app/commander"])
+async def test_mobile_nav_bar_and_drawer(open_page, path):
+    """Every view but the terminal has the 36px bar; its menu button opens the drawer
+    from the left, and a pick in the drawer navigates and closes it.
 
-    Mutation: remove the mobile ``.desktop-nav { display: none }`` rule ->
-    ``to_be_hidden`` fails. The header-visible and count checks stop a page that
-    never rendered from passing as "hidden".
+    Mutation: no menu button (the drawer nothing opens) -> the click finds nothing; a
+    drawer from the right -> its left edge is not 0; a 14px bar here -> the height fails.
     """
     page = await open_page(MOBILE_VIEWPORT)
-    await page.goto("/app/", wait_until="load")
-    await expect(page.locator(".app-header")).to_be_visible()
+    await page.goto(path, wait_until="load")
+    header = page.locator(".app-header.app-header--nav")
+    await expect(header).to_be_visible()
+    assert await header.evaluate("el => el.getBoundingClientRect().height") == 36
+    await expect(page.locator(".app-rail")).to_have_count(0)
 
-    desktop_nav = page.locator(".desktop-nav")
-    await expect(desktop_nav).to_have_count(1)
-    await expect(desktop_nav).to_be_hidden()
+    await page.get_by_role("button", name="Open menu").click()
+    drawer = page.locator(".n-drawer")
+    await expect(drawer).to_be_visible()
+    settings = drawer.get_by_role("link", name="Settings")
+    await expect(settings).to_be_visible()
+    await page.wait_for_function(
+        "() => { const d = document.querySelector('.n-drawer'); "
+        "return d && Math.round(d.getBoundingClientRect().left) === 0; }"
+    )
+    await settings.click()
+    await expect(page).to_have_url(re.compile(r"/app/settings$"))
+    await expect(drawer).to_have_count(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("width", "rails", "bars"), [(767, 0, 1), (768, 1, 0)], ids=["767-phone", "768-desktop"]
+)
+async def test_the_breakpoint_is_768(open_page, width, rails, bars):
+    """767px is a phone (the bar, no rail); 768px is a desktop (the rail, no bar).
+
+    Mutation: a breakpoint at 769 or a CSS rule at `max-width: 768px` -> 768 shows the bar.
+    """
+    page = await open_page({"width": width, "height": 700})
+    await page.goto("/app/files", wait_until="load")
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
+    await expect(page.locator(".app-rail")).to_have_count(rails)
+    await expect(page.locator(".app-header")).to_have_count(bars)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "viewport", [MOBILE_VIEWPORT, {"width": 1366, "height": 768}], ids=["phone", "desktop"]
+)
+async def test_sign_in_page_has_no_navigation(open_page, viewport):
+    """The sign-in page shows the form alone: no rail, no bar.
+
+    Mutation: render the shell's navigation on /login -> a count is 1.
+    """
+    page = await open_page(viewport)
+    await page.goto("/app/login", wait_until="load")
+    await expect(page.get_by_placeholder("Enter username")).to_be_visible()
+    await expect(page.locator(".app-rail")).to_have_count(0)
+    await expect(page.locator(".app-header")).to_have_count(0)
 
 
 @pytest.mark.asyncio
@@ -97,7 +144,7 @@ async def test_mobile_file_browser_no_horizontal_scroll(open_page):
     """
     page = await open_page(MOBILE_VIEWPORT)
     await page.goto("/app/files", wait_until="load")
-    await expect(page.get_by_text("File Browser & Editor", exact=True)).to_be_visible()
+    await expect(page.get_by_test_id("files-workspace")).to_be_visible()
 
     await assert_no_horizontal_overflow(page, "file browser")
 
@@ -130,7 +177,7 @@ async def test_overview_grid_collapses_on_mobile(open_page):
 
 @pytest.mark.asyncio
 async def test_tablet_viewport_layout(open_page):
-    """At tablet width the desktop nav is visible and lists the main destinations.
+    """At tablet width the side rail is the navigation and lists the main destinations.
 
     Mutation: raise the mobile breakpoint above 800px -> nav hidden, the
     visibility check fails.
@@ -141,6 +188,7 @@ async def test_tablet_viewport_layout(open_page):
     desktop_nav = page.locator(".desktop-nav")
     await expect(desktop_nav).to_be_visible()
     await expect(desktop_nav.get_by_role("link", name=re.compile(r"^Terminal \("))).to_have_count(1)
+    await expect(page.locator(".app-header")).to_have_count(0)
 
 
 @pytest.mark.asyncio
@@ -160,6 +208,9 @@ async def test_mobile_search_dropdown_opens_under_its_input(open_page, wrapper, 
     """
     page = await open_page(MOBILE_VIEWPORT)
     await page.goto("/app/files?box=local", wait_until="load")
+    if wrapper == ".content-search":
+        # The content search sits behind a toolbar button, not in a card of its own.
+        await page.get_by_role("button", name="Search contents").click()
     field = page.locator(wrapper).first
     await field.locator("input").fill(query)
     panel = page.locator(dropdown).first
@@ -171,3 +222,25 @@ async def test_mobile_search_dropdown_opens_under_its_input(open_page, wrapper, 
     assert round(panel_box["y"]) == round(field_box["y"] + field_box["height"]) + 4
     assert panel_box["x"] >= 0
     assert panel_box["x"] + panel_box["width"] <= MOBILE_VIEWPORT["width"]
+
+
+@pytest.mark.asyncio
+async def test_phone_terminal_menu_opens_the_drawer_with_progress(open_page):
+    """On the phone's terminal the 14px bar stays, and the menu button in the terminal's own
+    row opens the drawer, which reaches the progress picker.
+
+    Mutation: no menu button in the terminal's row -> nothing on the terminal opens the
+    drawer (the 14px bar has no button).
+    """
+    page = await open_page({"width": 390, "height": 844})
+    await page.goto("/app/terminal?box=local", wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    assert (
+        await page.locator(".app-header").evaluate("el => el.getBoundingClientRect().height") == 14
+    )
+
+    await page.locator(".mobile-header").get_by_role("button", name="Open menu").click()
+    drawer = page.locator(".n-drawer")
+    await expect(drawer.get_by_role("link", name="Files")).to_be_visible()
+    await drawer.get_by_role("button", name="Progress bars").click()
+    await expect(page.get_by_text("Bars for local", exact=True)).to_be_visible()

@@ -37,7 +37,7 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
     from ..webapp import ServerSettings  # noqa: F401
 
 
-_VALID_THEMES = {"cyberpunk", "default", "solarized", "dracula", "nord", "monokai", "light"}
+_VALID_THEMES = {"cyberpunk", "default", "solarized", "dracula", "nord", "monokai", "light", "calm"}
 
 
 def _box_to_api(box: StoredBox | Box) -> APIBox:

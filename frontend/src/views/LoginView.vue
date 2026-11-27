@@ -81,7 +81,7 @@ const handleKeypress = (event: KeyboardEvent) => {
       <div class="login-header">
         <img src="/logo.png" alt="sshler" class="login-logo" />
         <p class="subtitle">
-          <NIcon size="16" color="var(--text-color-3)" style="vertical-align: middle; margin-right: 4px;">
+          <NIcon size="16" color="var(--muted)" style="vertical-align: middle; margin-right: 4px;">
             <PhLock weight="duotone" />
           </NIcon>
           {{ t('login.auth_required') }}
@@ -147,7 +147,7 @@ const handleKeypress = (event: KeyboardEvent) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--body-color);
+  background: var(--bg);
   padding: 24px;
 }
 
@@ -173,25 +173,25 @@ const handleKeypress = (event: KeyboardEvent) => {
   margin: 16px 0 8px 0;
   font-size: 28px;
   font-weight: 600;
-  color: var(--text-color);
+  color: var(--text);
 }
 
 .subtitle {
   margin: 0;
-  color: var(--text-color-3);
+  color: var(--muted);
   font-size: 15px;
 }
 
 .security-notice {
   margin-top: 24px;
   padding-top: 24px;
-  border-top: 1px solid var(--divider-color);
+  border-top: 1px solid var(--stroke);
 }
 
 .security-notice p {
   margin: 0 0 8px 0;
   font-size: 13px;
-  color: var(--text-color-2);
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
@@ -200,7 +200,7 @@ const handleKeypress = (event: KeyboardEvent) => {
 }
 
 .muted-text {
-  color: var(--text-color-3) !important;
+  color: var(--muted) !important;
   font-size: 12px !important;
 }
 

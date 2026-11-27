@@ -31,7 +31,8 @@ const favoritesStore = useFavoritesStore();
 const appStore = useAppStore();
 const message = useMessage();
 const { t } = useI18n();
-const { withReplace, dismiss: dismissPrompt, leave: leavePrompt } = useReplacePrompt();
+// The question sits under the transfer list (inline), not over it.
+const { withReplace, dismiss: dismissPrompt, leave: leavePrompt, pendingPrompt } = useReplacePrompt({ inline: true });
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null);
 
@@ -785,6 +786,7 @@ onUnmounted(() => {
       :failed-so-far="transferFailedSoFar"
       :held="transferHeld"
       :sending="transferSending"
+      :prompt="pendingPrompt"
       :error="transferError"
       @cancel="cancelTransfer"
       @close="closeTransfer"
@@ -826,9 +828,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #0a0a0f;
+  background: var(--bg);
   font-family: var(--font-mono);
-  color: #e0e0e6;
+  color: var(--text);
   overflow: hidden;
 }
 
@@ -856,7 +858,7 @@ onUnmounted(() => {
 .splitter {
   width: 4px;
   cursor: col-resize;
-  background: #1a1a24;
+  background: var(--stroke);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -866,25 +868,25 @@ onUnmounted(() => {
 .splitter-handle {
   width: 1px;
   height: 40%;
-  background: #a78bfa;
+  background: var(--accent);
   border-radius: 1px;
 }
 
 .splitter:hover .splitter-handle {
-  background: #c4b5fd;
+  background: var(--accent-hover);
   width: 2px;
 }
 
 .mobile-pane-toggle {
-  display: flex; gap: 0; padding: 0; background: #0a0a0f;
-  border-bottom: 1px solid #1a1a24;
+  display: flex; gap: 0; padding: 0; background: var(--bg);
+  border-bottom: 1px solid var(--stroke);
 }
 .mobile-pane-toggle button {
-  flex: 1; padding: 6px; background: #0d0d14; border: none;
-  color: #888; font-family: var(--font-mono); font-size: 12px; cursor: pointer;
+  flex: 1; padding: 6px; background: var(--surface); border: none;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px; cursor: pointer;
 }
 .mobile-pane-toggle button.active {
-  color: #a78bfa; border-bottom: 2px solid #a78bfa; background: #111118;
+  color: var(--accent); border-bottom: 2px solid var(--accent); background: var(--surface-variant);
 }
 .panes.mobile { flex-direction: column; }
 .panes.mobile .pane-wrapper { width: 100% !important; flex: 1; }

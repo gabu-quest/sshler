@@ -3,15 +3,17 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useResponsive } from "@/composables/useResponsive";
 import {
-  NAlert, NButton, NCard, NDataTable, NIcon, NInput, NModal, NProgress, NSelect, NSpace, NSpin, NTag, NTooltip, useDialog, useMessage,
+  NAlert, NButton, NDataTable, NIcon, NInput, NModal, NPopover, NProgress, NSpace, NSpin, NTag, NTooltip, useDialog, useMessage,
 } from "naive-ui";
 import {
-  PhClockCounterClockwise, PhFile, PhFilePdf, PhList, PhFolderSimple, PhStar, PhUploadSimple, PhEye, PhPencil, PhPrinter, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArchive,
+  PhClockCounterClockwise, PhFile, PhFilePdf, PhFolderSimple, PhPlus, PhStar, PhUploadSimple, PhEye, PhPencil, PhPrinter, PhDownloadSimple, PhTextAa, PhCopy, PhClipboard, PhTrash, PhFolder, PhMagnifyingGlass, PhGear, PhTerminalWindow, PhArrowBendUpLeft, PhCaretRight, PhCaretDown, PhArrowsOutSimple, PhArrowsInSimple, PhArchive,
 } from "@phosphor-icons/vue";
 
-import type { ApiBox, GitInfo } from "@/api/types";
+import type { ApiBox } from "@/api/types";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePdfExport } from "@/composables/usePdfExport";
+import { useBoxAnswer } from "@/composables/useBoxAnswer";
+import { useGitInfo } from "@/composables/useGitInfo";
 import { useReplacePrompt } from "@/composables/useReplacePrompt";
 import { useBoxesStore } from "@/stores/boxes";
 import { useDirectoryStore } from "@/stores/directory";
@@ -29,7 +31,7 @@ import ContentSearchInput from "@/components/ContentSearchInput.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 import DirectorySearchInput from "@/components/DirectorySearchInput.vue";
 import { ApiError, failureText, errorText } from "@/api/apiError";
-import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, gitInfo, chmodFile, createArchive, extractArchive } from "@/api/http";
+import { touchFile, createFolder, boxStatus, downloadFile, downloadDirectory, directorySize, chmodFile, createArchive, extractArchive } from "@/api/http";
 import { setEmojiFavicon, resetFavicon, getEmojiForBox } from "@/utils/emoji-favicon";
 import { useI18n } from "@/i18n";
 import { parentPath } from "@/utils/pathParts";
@@ -84,8 +86,17 @@ const { t } = useI18n();
 // State
 const selectedBox = ref<string | null>(null);
 const currentDir = ref("/");
-const newFileName = ref("");
-const newFolderName = ref("");
+const newName = ref("");
+const newOpen = ref(false);
+const newNameRef = ref<{ focus?: () => void } | null>(null);
+// The popover draws its content after it opens, so focus the name field on the next tick.
+watch(newOpen, async (open) => {
+  if (!open) return;
+  await nextTick();
+  newNameRef.value?.focus?.();
+});
+const showGrep = ref(false);
+const uploadInputRef = ref<HTMLInputElement>();
 const actionBusy = ref(false);
 const uploadTarget = ref<File | null>(null);
 const renameTarget = ref<string | null>(null);
@@ -110,7 +121,6 @@ const expandingDir = ref<string | null>(null);
 const refreshing = ref(false);
 const sortState = ref<SortState>(readSortState());
 const batchModal = ref<{ visible: boolean; mode: "move" | "copy" }>({ visible: false, mode: "move" });
-const currentGitInfo = ref<GitInfo | null>(null);
 const chmodModalVisible = ref(false);
 const chmodTarget = ref<{ path: string; currentMode: number | null }>({ path: '', currentMode: null });
 const chmodValue = ref("");
@@ -123,6 +133,16 @@ const fileTableWrapRef = ref<HTMLDivElement>();
 const canScrollUp = ref(false);
 const canScrollDown = ref(false);
 let scrollObserver: MutationObserver | null = null;
+
+let scrollTarget: HTMLElement | null = null;
+/** Listen to the table's current scroll element; a remounted table has a new one. */
+function listenToTableScroll() {
+  const scrollEl = fileTableWrapRef.value?.querySelector('.n-scrollbar-container') as HTMLElement | null;
+  if (!scrollEl || scrollEl === scrollTarget) return;
+  scrollTarget?.removeEventListener('scroll', updateScrollIndicators);
+  scrollEl.addEventListener('scroll', updateScrollIndicators, { passive: true });
+  scrollTarget = scrollEl;
+}
 
 function updateScrollIndicators() {
   const wrap = fileTableWrapRef.value;
@@ -155,6 +175,14 @@ const boxOptions = computed(() =>
 );
 
 const tokenValue = computed(() => bootstrapStore.token || bootstrapStore.payload?.token || null);
+// Which box the address means (one answer for every page) and the git state of the folder shown.
+const { answer: boxAnswer, unknownText } = useBoxAnswer(() => route.query.box, () => boxesStore.items);
+const { info: currentGitInfo, reload: reloadGit } = useGitInfo(() => selectedBox.value, () => currentDir.value, () => tokenValue.value);
+// The slim alert is for a box that is not online; while the first answer is out ("unknown") it stays away.
+const offlineText = computed(() => {
+  if (!selectedBox.value || status.value === "online" || status.value === "unknown") return "";
+  return `${selectedBox.value} · ${t("files.status_offline")}${statusText.value ? `: ${statusText.value}` : ""}`;
+});
 const favoritesForSelection = computed(() => favoritesStore.favoritesForBox(selectedBox.value));
 const isCurrentDirFavorite = computed(() => favoritesStore.isFavorite(selectedBox.value, currentDir.value));
 const filteredRows = computed(() => {
@@ -189,8 +217,8 @@ const filteredRows = computed(() => {
     switch (columnKey) {
       case 'name': cmp = a.name.localeCompare(b.name); break;
       case 'is_directory': {
-        const aType = a.is_directory ? 'directory' : getFileType(a.name);
-        const bType = b.is_directory ? 'directory' : getFileType(b.name);
+        const aType = a.is_directory ? t('files.type_directory') : getFileType(a.name);
+        const bType = b.is_directory ? t('files.type_directory') : getFileType(b.name);
         cmp = aType.localeCompare(bType);
         break;
       }
@@ -233,11 +261,11 @@ const uploading = computed(() => !!filesStore.uploadFileName);
 // Display name for current directory (last component)
 const displayDirName = computed(() => {
   if (!currentDir.value || currentDir.value === '/' || currentDir.value === '~') {
-    return currentDir.value === '~' ? 'Home' : 'Root';
+    return currentDir.value === '~' ? t('common.home') : t('terminal.root_label');
   }
   // Split on both POSIX (/) and Windows (\) separators.
   const parts = currentDir.value.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] || 'Root';
+  return parts[parts.length - 1] || t('terminal.root_label');
 });
 
 // Persist sort order + view filter across reloads
@@ -257,7 +285,7 @@ watch([selectedBox, currentDir], () => {
     document.title = `${displayDirName.value} — ${selectedBox.value}`;
     setEmojiFavicon(`${selectedBox.value}:${currentDir.value}`);
   } else {
-    document.title = 'Files';
+    document.title = t('common.files');
     resetFavicon();
   }
 }, { immediate: true });
@@ -265,10 +293,14 @@ watch([selectedBox, currentDir], () => {
 // Utility functions
 const getFileType = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
+  // Names that are the same in every language stay as they are; the rest are text keys.
   const types: Record<string, string> = {
-    'js': 'JavaScript', 'ts': 'TypeScript', 'py': 'Python', 'html': 'HTML', 'css': 'CSS', 'json': 'JSON', 'md': 'Markdown', 'txt': 'Text', 'log': 'Log', 'yml': 'YAML', 'yaml': 'YAML', 'xml': 'XML', 'svg': 'SVG', 'png': 'Image', 'jpg': 'Image', 'jpeg': 'Image', 'gif': 'Image', 'pdf': 'PDF', 'zip': 'Archive', 'tar': 'Archive', 'gz': 'Archive'
+    'js': 'JavaScript', 'ts': 'TypeScript', 'py': 'Python', 'html': 'HTML', 'css': 'CSS', 'json': 'JSON', 'md': 'Markdown', 'yml': 'YAML', 'yaml': 'YAML', 'xml': 'XML', 'svg': 'SVG', 'pdf': 'PDF',
+    'txt': t('files.type_text'), 'log': t('files.type_log'),
+    'png': t('files.type_image'), 'jpg': t('files.type_image'), 'jpeg': t('files.type_image'), 'gif': t('files.type_image'),
+    'zip': t('files.type_archive'), 'tar': t('files.type_archive'), 'gz': t('files.type_archive'),
   };
-  return types[ext || ''] || 'File';
+  return types[ext || ''] || t('files.type_file');
 };
 
 const formatFileSize = (bytes: number) => {
@@ -488,19 +520,18 @@ async function ensureData() {
   if (!boxesStore.items.length && !boxesStore.loading) await boxesStore.load(tokenValue.value || null);
   if (boxesStore.items.length) favoritesStore.hydrateFromBoxes(boxesStore.items);
 
-  // Read box and path from URL query params
-  const boxFromUrl = route.query.box as string | undefined;
+  // Read box and path from URL query params. A name nobody has selects no box (the page says so).
   const pathFromUrl = (route.query.dir as string | undefined) ?? (route.query.path as string | undefined);
+  const answered = boxAnswer.value;
 
-  if (boxFromUrl && boxesStore.items.some(b => b.name === boxFromUrl)) {
-    selectedBox.value = boxFromUrl;
+  if (answered.kind === "known") {
+    selectedBox.value = answered.box.name;
     if (pathFromUrl) {
       currentDir.value = pathFromUrl;
-    } else {
-      const box = boxesStore.items.find(b => b.name === boxFromUrl);
-      if (box?.default_dir) currentDir.value = box.default_dir;
+    } else if (answered.box.default_dir) {
+      currentDir.value = answered.box.default_dir;
     }
-  } else if (!selectedBox.value && boxesStore.items.length) {
+  } else if (answered.kind === "none" && !selectedBox.value && boxesStore.items.length) {
     const firstBox = boxesStore.items[0];
     if (firstBox) {
       selectedBox.value = firstBox.name;
@@ -536,12 +567,9 @@ onMounted(async () => {
   nextTick(() => {
     const wrap = fileTableWrapRef.value;
     if (wrap) {
-      const scrollEl = wrap.querySelector('.n-scrollbar-container') as HTMLElement | null;
-      if (scrollEl) {
-        scrollEl.addEventListener('scroll', updateScrollIndicators, { passive: true });
-      }
-      // Observe DOM changes (data table re-renders) to re-check scroll state
-      scrollObserver = new MutationObserver(() => nextTick(updateScrollIndicators));
+      listenToTableScroll();
+      // Observe DOM changes: the table remounts after a folder loads, which gives it a new scroll element
+      scrollObserver = new MutationObserver(() => nextTick(() => { listenToTableScroll(); updateScrollIndicators(); }));
       scrollObserver.observe(wrap, { childList: true, subtree: true });
       updateScrollIndicators();
     }
@@ -551,6 +579,7 @@ onMounted(async () => {
 onUnmounted(() => {
   leavePrompt();
   scrollObserver?.disconnect();
+  scrollTarget?.removeEventListener('scroll', updateScrollIndicators);
 });
 
 /**
@@ -571,26 +600,13 @@ async function refreshStatus(box: string) {
   }
 }
 
-async function loadGitInfo() {
-  if (!selectedBox.value || !currentDir.value) {
-    currentGitInfo.value = null;
-    return;
-  }
-  try {
-    currentGitInfo.value = await gitInfo(selectedBox.value, currentDir.value, tokenValue.value || null);
-  } catch {
-    // Silent on purpose: the git badge is a decoration, and its absence is the answer.
-    currentGitInfo.value = null;
-  }
-}
-
 async function reloadDir() {
   if (!selectedBox.value) return;
   refreshing.value = true;
   try {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    loadGitInfo();
+    void reloadGit();
     // Re-fetch children for all currently expanded directories
     const expandedPaths = [...expandedDirs.value];
     if (expandedPaths.length > 0) {
@@ -640,17 +656,17 @@ async function onBoxChange(val: string) {
   await directoryStore.load(val, currentDir.value, tokenValue.value || null);
   await filesStore.load(val, currentDir.value, tokenValue.value || null);
   await refreshStatus(val);
-  loadGitInfo();
 }
 
 async function createEmptyFile() {
-  if (!selectedBox.value || !newFileName.value.trim()) return;
+  if (!selectedBox.value || !newName.value.trim()) return;
   actionBusy.value = true;
   try {
-    await touchFile(selectedBox.value, currentDir.value, newFileName.value.trim(), tokenValue.value || null);
+    await touchFile(selectedBox.value, currentDir.value, newName.value.trim(), tokenValue.value || null);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    newFileName.value = "";
+    newName.value = "";
+    newOpen.value = false;
     message.success(t('files.file_created'));
   } catch (err) {
     directoryStore.error = errorText(err);
@@ -660,13 +676,14 @@ async function createEmptyFile() {
 }
 
 async function createNewFolder() {
-  if (!selectedBox.value || !newFolderName.value.trim()) return;
+  if (!selectedBox.value || !newName.value.trim()) return;
   actionBusy.value = true;
   try {
-    await createFolder(selectedBox.value, currentDir.value, newFolderName.value.trim(), tokenValue.value || null);
+    await createFolder(selectedBox.value, currentDir.value, newName.value.trim(), tokenValue.value || null);
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
-    newFolderName.value = "";
+    newName.value = "";
+    newOpen.value = false;
     message.success(t('files.folder_created'));
   } catch (err) {
     directoryStore.error = errorText(err);
@@ -679,10 +696,10 @@ function confirmDelete(path: string) {
   if (!selectedBox.value) return;
   const name = path.split('/').pop() || path;
   dialog.warning({
-    title: 'Delete',
-    content: `Permanently delete "${name}"? This cannot be undone.`,
-    positiveText: 'Delete',
-    negativeText: 'Cancel',
+    title: t('common.delete'),
+    content: t('files.delete_confirm_single', { name }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
     positiveButtonProps: { type: 'error' } as any,
     onPositiveClick: () => removePath(path),
   });
@@ -724,7 +741,7 @@ async function applyChmod() {
   try {
     await chmodFile(selectedBox.value, chmodTarget.value.path, chmodValue.value.trim(), tokenValue.value || null);
     chmodModalVisible.value = false;
-    message.success(`Permissions changed to ${chmodValue.value}`);
+    message.success(t('files.chmod_changed', { mode: chmodValue.value }));
     await reloadDir();
   } catch (err) {
     message.error(errorText(err));
@@ -828,6 +845,17 @@ async function uploadOne(file: File, landed: string[]): Promise<"uploaded" | "sk
   throw lastError;
 }
 
+// The Upload button opens the hidden file input; the list is read before the input is cleared,
+// so the same file can be picked again.
+async function onUploadPicked(event: Event) {
+  const input = event.target as HTMLInputElement;
+  try {
+    await handleUpload(input.files);
+  } finally {
+    try { input.value = ""; } catch { /* a read-only input has nothing to clear */ }
+  }
+}
+
 async function handleUpload(files: FileList | null) {
   if (!files || !files.length || !selectedBox.value) return;
   actionBusy.value = true;
@@ -853,7 +881,7 @@ async function handleUpload(files: FileList | null) {
   actionBusy.value = false;
 
   if (uploaded > 0) {
-    message.success(uploaded === 1 ? t('files.uploaded') : `${uploaded} files uploaded`);
+    message.success(uploaded === 1 ? t('files.uploaded') : t('files.uploaded_many', { count: uploaded }));
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     await filesStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     showKeptBoth(landed);
@@ -937,7 +965,7 @@ async function handleDownloadDirectory(row: any) {
   if (!selectedBox.value || !row.is_directory) return;
   let loadingMsg: { destroy: () => void } | null = null;
   try {
-    loadingMsg = message.loading('Calculating directory size...', { duration: 0 });
+    loadingMsg = message.loading(t('files.zip_calculating'), { duration: 0 });
     const sized = await directorySize(selectedBox.value, row.path, tokenValue.value || null);
     // The server sends null when neither `du -sb` nor `du -sk` worked on the box.
     const size_bytes = sized.size_bytes;
@@ -946,23 +974,19 @@ async function handleDownloadDirectory(row: any) {
 
     if (size_bytes === null) {
       // Unknown size: ask instead of blocking; the server still enforces its own limit.
-      const proceed = window.confirm(
-        `Could not determine the size of this directory. Download as .zip anyway?`
-      );
+      const proceed = window.confirm(t('files.zip_unknown_size_confirm'));
       if (!proceed) return;
     } else if (size_bytes > SIZE_HARD_LIMIT) {
-      message.error(`Directory is ${formatBytes(size_bytes)} — too large to download (max ${formatBytes(SIZE_HARD_LIMIT)})`);
+      message.error(t('files.zip_too_large', { size: formatBytes(size_bytes), max: formatBytes(SIZE_HARD_LIMIT) }));
       return;
     }
 
     if (size_bytes !== null && size_bytes > SIZE_WARN_THRESHOLD) {
-      const proceed = window.confirm(
-        `This directory is ${formatBytes(size_bytes)}. Download as .zip?`
-      );
+      const proceed = window.confirm(t('files.zip_large_confirm', { size: formatBytes(size_bytes) }));
       if (!proceed) return;
     }
 
-    loadingMsg = message.loading('Creating zip...', { duration: 0 });
+    loadingMsg = message.loading(t('files.zip_creating'), { duration: 0 });
     const { blob, filename } = await downloadDirectory(selectedBox.value, row.path, tokenValue.value || null);
     loadingMsg.destroy();
     loadingMsg = null;
@@ -975,7 +999,7 @@ async function handleDownloadDirectory(row: any) {
     anchor.download = zipName;
     anchor.click();
     URL.revokeObjectURL(objectUrl);
-    message.success(`Downloaded ${zipName} (${formatBytes(blob.size)})`);
+    message.success(t('files.zip_downloaded', { name: zipName, size: formatBytes(blob.size) }));
   } catch (err) {
     loadingMsg?.destroy();
     message.error(errorText(err));
@@ -1002,10 +1026,10 @@ function confirmBulkDelete() {
   if (!selectedBox.value || !selectedPaths.value.length) return;
   const count = selectedPaths.value.length;
   dialog.warning({
-    title: 'Delete Selection',
-    content: `Permanently delete ${count} item${count > 1 ? 's' : ''}? This cannot be undone.`,
-    positiveText: `Delete ${count} item${count > 1 ? 's' : ''}`,
-    negativeText: 'Cancel',
+    title: t('files.delete_selection_title'),
+    content: t('files.delete_confirm_many', { count }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
     positiveButtonProps: { type: 'error' } as any,
     onPositiveClick: () => bulkDelete(),
   });
@@ -1019,7 +1043,7 @@ async function bulkDelete() {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     filesStore.setSelectedFiles([]);
     if (result.status === "partial") {
-      message.warning(`Deleted ${result.succeeded.length}, failed ${result.failed.length}`);
+      message.warning(t('files.batch_deleted_partial', { done: result.succeeded.length, failed: result.failed.length }));
     } else {
       message.success(t('files.deleted_selection'));
     }
@@ -1098,7 +1122,7 @@ async function handleArchiveCreate(format: string, paths?: string[]) {
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     filesStore.setSelectedFiles([]);
     if (landed) showKeptBoth([landed]);
-    else message.success(`Created ${archiveName}`);
+    else message.success(t('files.archive_created', { name: archiveName }));
   } catch (err) {
     message.error(errorText(err));
   } finally {
@@ -1128,7 +1152,7 @@ async function handleArchiveExtract(archivePath: string) {
     }
     await directoryStore.load(selectedBox.value, currentDir.value, tokenValue.value || null);
     if (landed) showKeptBoth([landed]);
-    else message.success("Extracted archive");
+    else message.success(t('files.archive_extracted'));
   } catch (err) {
     message.error(errorText(err));
   } finally {
@@ -1181,7 +1205,7 @@ async function bulkDownload() {
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      message.error(`Failed to download ${path}: ${errorText(err)}`);
+      message.error(`${t('files.download_failed')}: ${path}: ${errorText(err)}`);
     }
   }
 }
@@ -1203,7 +1227,7 @@ const tableRowClassName = (row: any) => (row._isParent ? 'files-parent-row' : ''
 // Table columns — responsive: on mobile show only name + actions
 const columns = computed(() => {
   const nameCol = {
-    title: "name", key: "name",
+    title: t("files.col_name"), key: "name",
     render(row: any) {
       // Parent (..) entry — single click navigates
       if (row._isParent) {
@@ -1228,7 +1252,7 @@ const columns = computed(() => {
         children.push(h("button", {
           style: "background:none;border:none;cursor:pointer;padding:2px;color:var(--muted);display:flex;align-items:center;flex-shrink:0;",
           onClick: (e: MouseEvent) => { e.stopPropagation(); toggleExpandDir(row.path); },
-          title: isExpanded ? 'Collapse' : 'Expand',
+          title: isExpanded ? t('files.collapse_folder') : t('files.expand_folder'),
         }, [
           isExpanding
             ? h("div", { class: "spinner", style: "width:12px;height:12px;border-width:1.5px;" })
@@ -1272,30 +1296,30 @@ const columns = computed(() => {
     { type: "selection" as const, disabled: isParentRow },
     { ...nameCol, sorter: true, sortOrder: sortOrder('name') },
     {
-      title: "type", key: "is_directory", sorter: true, sortOrder: sortOrder('is_directory'),
-      render(row: any) { return row.is_directory ? "directory" : getFileType(row.name); },
+      title: t("files.col_type"), key: "is_directory", sorter: true, sortOrder: sortOrder('is_directory'),
+      render(row: any) { return row.is_directory ? t("files.type_directory") : getFileType(row.name); },
     },
     {
-      title: "size", key: "size", sorter: true, sortOrder: sortOrder('size'),
+      title: t("files.col_size"), key: "size", sorter: true, sortOrder: sortOrder('size'),
       render(row: any) { return row.size ? formatFileSize(row.size) : "-"; },
     },
     {
-      title: "modified", key: "modified", sorter: true, sortOrder: sortOrder('modified'),
+      title: t("files.col_modified"), key: "modified", sorter: true, sortOrder: sortOrder('modified'),
       render(row: any) { return row.modified ? new Date(row.modified * 1000).toLocaleDateString() : "-"; },
     },
     {
-      title: "perms", key: "mode", width: 100,
+      title: t("files.col_perms"), key: "mode", width: 140,
       render(row: any) {
         if (row._isParent || row.mode == null) return "-";
         return h("span", {
           style: "font-family:var(--font-mono);font-size:12px;cursor:pointer;",
-          title: `${row.mode.toString(8).padStart(3, '0')} — click to chmod`,
+          title: t('files.chmod_tooltip', { mode: row.mode.toString(8).padStart(3, '0') }),
           onClick: () => handleChmodPrompt(row),
         }, formatMode(row.mode));
       },
     },
     {
-      title: "actions", key: "actions",
+      title: t("files.col_actions"), key: "actions",
       render(row: any) {
         if (row._isParent) return null;
         const isFav = row.is_directory && favoritesStore.isFavorite(selectedBox.value, row.path);
@@ -1317,7 +1341,7 @@ const columns = computed(() => {
               quaternary: true,
               onClick: () => toggleFavoriteDir(row.path)
             }, { icon: () => h(NIcon, { size: 14, color: isFav ? "#faad14" : undefined }, () => h(PhStar, { weight: isFav ? "fill" : "duotone" })) }),
-            default: () => isFav ? "Remove from Favorites" : "Add to Favorites"
+            default: () => isFav ? t('files.remove_from_favorites') : t('files.add_to_favorites')
           }),
           row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, {
@@ -1325,7 +1349,7 @@ const columns = computed(() => {
               quaternary: true,
               onClick: () => window.open(`/app/terminal?box=${encodeURIComponent(selectedBox.value || '')}&dir=${encodeURIComponent(row.path)}`, '_blank')
             }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTerminalWindow, { weight: 'duotone' })) }),
-            default: () => "Open Terminal Here"
+            default: () => t('files.open_terminal_here')
           }),
           row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, {
@@ -1333,27 +1357,27 @@ const columns = computed(() => {
               quaternary: true,
               onClick: () => handleDownloadDirectory(row)
             }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple, { weight: 'duotone' })) }),
-            default: () => "Download as .zip"
+            default: () => t('files.download_as_zip')
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handlePreview(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhEye, { weight: 'duotone' })) }),
-            default: () => "Preview"
+            default: () => t('common.preview')
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleEdit(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhPencil, { weight: 'duotone' })) }),
-            default: () => "Edit"
+            default: () => t('common.edit')
           }),
           !row.is_directory && h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleDownload(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhDownloadSimple, { weight: 'duotone' })) }),
-            default: () => "Download"
+            default: () => t('common.download')
           }),
           h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, onClick: () => handleRenamePrompt(row) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTextAa, { weight: 'duotone' })) }),
-            default: () => "Rename"
+            default: () => t('common.rename')
           }),
           h(NTooltip, { trigger: "hover", placement: "left" }, {
             trigger: () => h(NButton, { size: "tiny", quaternary: true, type: "error", onClick: () => confirmDelete(row.path) }, { icon: () => h(NIcon, { size: 14 }, () => h(PhTrash, { weight: 'duotone' })) }),
-            default: () => "Delete"
+            default: () => t('common.delete')
           }),
         ]);
       },
@@ -1362,205 +1386,173 @@ const columns = computed(() => {
 });
 </script>
 <template>
-  <div class="page">
-    <!-- Breadcrumb Navigation -->
+  <div class="page files-workspace" data-testid="files-workspace" :aria-label="t('files.subtitle')" role="region">
+    <!-- The workspace bar: box, Home and Up, the path, the actions of this folder -->
     <FileBreadcrumb
       :current-dir="currentDir"
       :git-info="currentGitInfo"
       :selected-box="selectedBox"
       :refreshing="refreshing"
       :wsl-distro="bootstrapStore.wslDistro"
+      :box-options="boxOptions"
+      :boxes-loading="boxesStore.loading"
+      :status="status"
+      :status-text="statusText"
+      :is-favorite="isCurrentDirFavorite"
+      @update:box="onBoxChange"
+      @navigate="navigateToDirectory"
       @navigate-home="navigateHome"
       @navigate-up="navigateUp"
+      @toggle-favorite="toggleFavoriteCurrentDir"
       @reload="reloadDir"
-      @open-terminal="$router.push(`/terminal?box=${selectedBox}&dir=${encodeURIComponent(currentDir)}`)"
+      @open-terminal="$router.push(`/terminal?box=${encodeURIComponent(selectedBox ?? '')}&dir=${encodeURIComponent(currentDir)}`)"
     />
 
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">{{ t('files.heading') }}</p>
-        <h1>{{ t('files.subtitle') }}</h1>
-        <p class="text-muted">{{ t('files.description') }}</p>
-      </div>
-    </header>
+    <NAlert v-if="offlineText" type="error" class="status-alert">{{ offlineText }}</NAlert>
+    <NAlert v-if="unknownText && !selectedBox" type="warning" class="unknown-box-alert">{{ unknownText }}</NAlert>
 
-    <!-- Box Selection & Status -->
-    <NCard class="surface-card" size="medium">
-      <div class="card-title">
-        <NIcon size="18"><PhFolderSimple weight="duotone" /></NIcon>
-        <span>{{ t('files.connection') }}</span>
+    <FavoritesPanel compact :box="selectedBox" @openPath="navigateToDirectory" @togglePin="handlePinToggle" />
+
+    <!-- One toolbar row -->
+    <div class="files-toolbar" data-testid="files-toolbar">
+      <DirectorySearchInput
+        class="toolbar-search"
+        :box="selectedBox"
+        :token="tokenValue"
+        :root="currentDir"
+        :files="true"
+        @select="handleSearchSelect"
+      />
+      <NInput v-model:value="filterQuery" class="toolbar-filter" :placeholder="t('files.filter_placeholder')" size="small">
+        <template #prefix><NIcon size="14"><PhMagnifyingGlass weight="duotone" /></NIcon></template>
+      </NInput>
+      <div class="toolbar-kinds">
+        <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">{{ t('common.all') }}</NButton>
+        <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">{{ t('common.files') }}</NButton>
+        <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">{{ t('common.folders') }}</NButton>
       </div>
-      <NSpace vertical size="small">
-        <NSpace size="small" align="center" wrap>
-          <NSelect v-model:value="selectedBox" :options="boxOptions" :placeholder="t('files.choose_box')" :disabled="boxesStore.loading" @update:value="onBoxChange" style="min-width: 200px" />
-          <NInput v-model:value="currentDir" :placeholder="t('files.dir_placeholder')" size="small" style="max-width: 320px" @keyup.enter="reloadDir" />
-          <NButton size="small" @click="reloadDir" :disabled="!selectedBox">{{ t('files.load') }}</NButton>
-          <NButton size="small" tertiary :disabled="!selectedBox" @click="toggleFavoriteCurrentDir">
-            <NIcon size="14"><PhStar weight="duotone" /></NIcon>
-            {{ isCurrentDirFavorite ? t('files.unfavorite') : t('files.favorite') }}
+      <NPopover v-model:show="newOpen" trigger="click" placement="bottom-start">
+        <template #trigger>
+          <NButton size="small" :disabled="!selectedBox">
+            <NIcon size="14"><PhPlus weight="bold" /></NIcon>{{ t('files.new_item') }}
           </NButton>
-        </NSpace>
-        <NAlert :type="status === 'online' ? 'success' : 'error'" v-if="selectedBox">
-          <template #icon>
-            <div class="connection-indicator" :class="{ connected: status === 'online' }" />
-          </template>
-          {{ selectedBox }} is {{ status }}<template v-if="statusText">: {{ statusText }}</template>
-        </NAlert>
-      </NSpace>
-    </NCard>
-
-    <!-- File Browser -->
-    <NCard class="surface-card" size="medium">
-      <div class="card-title">
-        <NIcon size="18"><PhList weight="duotone" /></NIcon>
-        <span>{{ t('common.files') }}</span>
-        <div class="card-actions">
-          <NSpace size="small" :wrap="isMobile">
-            <DirectorySearchInput
-              :box="selectedBox"
-              :token="tokenValue"
-              :root="currentDir"
-              :files="true"
-              @select="handleSearchSelect"
-            />
-            <NInput v-model:value="filterQuery" :placeholder="t('files.filter_placeholder')" size="small" style="width: 140px">
-              <template #prefix><NIcon size="14"><PhMagnifyingGlass weight="duotone" /></NIcon></template>
-            </NInput>
-            <NButton size="small" :type="viewFilter === 'all' ? 'primary' : 'default'" @click="viewFilter = 'all'">{{ t('common.all') }}</NButton>
-            <NButton size="small" :type="viewFilter === 'files' ? 'primary' : 'default'" @click="viewFilter = 'files'">{{ t('common.files') }}</NButton>
-            <NButton size="small" :type="viewFilter === 'dirs' ? 'primary' : 'default'" @click="viewFilter = 'dirs'">{{ t('common.folders') }}</NButton>
-            <NButton size="small" quaternary class="download-current-dir" @click="handleDownloadCurrentDirectory" :disabled="!selectedBox" :title="t('files.download_current_dir')">
-              <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>
+        </template>
+        <NSpace vertical size="small" class="new-pop">
+          <NInput ref="newNameRef" v-model:value="newName" :placeholder="t('files.new_filename')" size="small" @keyup.enter="createEmptyFile" />
+          <NSpace size="small">
+            <NButton :disabled="actionBusy || !selectedBox || !newName.trim()" size="small" type="primary" @click="createEmptyFile">
+              <NIcon size="14"><PhFile weight="duotone" /></NIcon>{{ t('files.create_file') }}
             </NButton>
-            <NButton size="small" quaternary @click="expandAllDirs" :disabled="!selectedBox || !!expandingDir" :title="'Expand All'">
-              <NIcon size="14"><PhArrowsOutSimple weight="duotone" /></NIcon>
-            </NButton>
-            <NButton size="small" quaternary @click="collapseAllDirs" :disabled="expandedDirs.size === 0" :title="'Collapse All'">
-              <NIcon size="14"><PhArrowsInSimple weight="duotone" /></NIcon>
+            <NButton :disabled="actionBusy || !selectedBox || !newName.trim()" size="small" type="primary" @click="createNewFolder">
+              <NIcon size="14"><PhFolderSimple weight="duotone" /></NIcon>{{ t('files.create_folder') }}
             </NButton>
           </NSpace>
-        </div>
+        </NSpace>
+      </NPopover>
+      <NButton size="small" :disabled="!selectedBox" @click="uploadInputRef?.click()">
+        <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('files.upload') }}
+      </NButton>
+      <input ref="uploadInputRef" type="file" multiple hidden @change="onUploadPicked" />
+      <NButton size="small" :type="showGrep ? 'primary' : 'default'" :disabled="!selectedBox" @click="showGrep = !showGrep">
+        <NIcon size="14"><PhMagnifyingGlass weight="duotone" /></NIcon>{{ t('files.grep') }}
+      </NButton>
+      <div class="toolbar-icons">
+        <NButton size="small" quaternary class="download-current-dir" @click="handleDownloadCurrentDirectory" :disabled="!selectedBox" :title="t('files.download_current_dir')">
+          <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>
+        </NButton>
+        <NButton size="small" quaternary @click="expandAllDirs" :disabled="!selectedBox || !!expandingDir" :title="t('files.expand_all')">
+          <NIcon size="14"><PhArrowsOutSimple weight="duotone" /></NIcon>
+        </NButton>
+        <NButton size="small" quaternary @click="collapseAllDirs" :disabled="expandedDirs.size === 0" :title="t('files.collapse_all')">
+          <NIcon size="14"><PhArrowsInSimple weight="duotone" /></NIcon>
+        </NButton>
+      </div>
+    </div>
+
+    <ContentSearchInput
+      v-if="showGrep"
+      :box="selectedBox || null"
+      :token="tokenValue || null"
+      :directory="currentDir"
+      @navigate="(dir: string) => navigateToDirectory(dir)"
+      @select-file="(path: string) => { previewPath = path; previewing = true }"
+    />
+
+      <!-- Bulk Actions -->
+      <div v-if="selectedCount > 0" class="bulk-actions">
+        <NSpace size="small" align="center">
+          <span class="text-muted">{{ selectedCount }} {{ t('files.selected') }}</span>
+          <NButton size="small" type="error" ghost @click="confirmBulkDelete">
+            <NIcon size="14"><PhTrash weight="duotone" /></NIcon>{{ t('files.delete_selected') }}
+          </NButton>
+          <NButton size="small" @click="bulkDownload" :disabled="selectedCount > 10">
+            <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>{{ t('files.download_selected') }}
+          </NButton>
+          <NButton
+            v-if="bootstrapStore.pdfAvailable"
+            size="small"
+            :loading="pdfBusy"
+            :disabled="pdfBusy"
+            :title="t('files.download_pdf')"
+            @click="bulkDownloadPdf"
+          >
+            <NIcon size="14"><PhFilePdf weight="duotone" /></NIcon>{{ t('files.pdf') }}
+          </NButton>
+          <NButton size="small" @click="openBatchModal('move')">
+            <NIcon size="14"><PhArrowBendUpLeft weight="duotone" /></NIcon>{{ t('files.move_to') }}
+          </NButton>
+          <NButton size="small" @click="openBatchModal('copy')">
+            <NIcon size="14"><PhCopy weight="duotone" /></NIcon>{{ t('files.copy_to') }}
+          </NButton>
+          <NButton size="small" @click="handleArchiveCreate('tar.gz')">
+            <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.tar.gz
+          </NButton>
+          <NButton size="small" @click="handleArchiveCreate('zip')">
+            <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.zip
+          </NButton>
+          <NButton v-if="selectedCount === 2" size="small" @click="openDiffModal(selectedPaths[0], selectedPaths[1])">
+            <NIcon size="14"><PhEye weight="duotone" /></NIcon>{{ t('files.diff_compare') }}
+          </NButton>
+          <NButton size="small" @click="filesStore.setSelectedFiles([])">{{ t('files.clear_selection') }}</NButton>
+        </NSpace>
       </div>
 
-      <NSpace vertical size="small">
-        <!-- Bulk Actions -->
-        <div v-if="selectedCount > 0" class="bulk-actions">
-          <NSpace size="small" align="center">
-            <span class="text-muted">{{ selectedCount }} {{ t('files.selected') }}</span>
-            <NButton size="small" type="error" ghost @click="confirmBulkDelete">
-              <NIcon size="14"><PhTrash weight="duotone" /></NIcon>{{ t('files.delete_selected') }}
-            </NButton>
-            <NButton size="small" @click="bulkDownload" :disabled="selectedCount > 10">
-              <NIcon size="14"><PhDownloadSimple weight="duotone" /></NIcon>{{ t('files.download_selected') }}
-            </NButton>
-            <NButton
-              v-if="bootstrapStore.pdfAvailable"
-              size="small"
-              :loading="pdfBusy"
-              :disabled="pdfBusy"
-              :title="t('files.download_pdf')"
-              @click="bulkDownloadPdf"
-            >
-              <NIcon size="14"><PhFilePdf weight="duotone" /></NIcon>{{ t('files.pdf') }}
-            </NButton>
-            <NButton size="small" @click="openBatchModal('move')">
-              <NIcon size="14"><PhArrowBendUpLeft weight="duotone" /></NIcon>Move To...
-            </NButton>
-            <NButton size="small" @click="openBatchModal('copy')">
-              <NIcon size="14"><PhCopy weight="duotone" /></NIcon>Copy To...
-            </NButton>
-            <NButton size="small" @click="handleArchiveCreate('tar.gz')">
-              <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.tar.gz
-            </NButton>
-            <NButton size="small" @click="handleArchiveCreate('zip')">
-              <NIcon size="14"><PhArchive weight="duotone" /></NIcon>.zip
-            </NButton>
-            <NButton v-if="selectedCount === 2" size="small" @click="openDiffModal(selectedPaths[0], selectedPaths[1])">
-              <NIcon size="14"><PhEye weight="duotone" /></NIcon>Compare
-            </NButton>
-            <NButton size="small" @click="filesStore.setSelectedFiles([])">{{ t('files.clear_selection') }}</NButton>
-          </NSpace>
-        </div>
+      <!-- Recent Paths -->
 
-        <!-- Recent Paths -->
-        <div v-if="recentPaths.length" class="recent-paths">
-          <NSpace size="small" align="center">
-            <NIcon size="14"><PhClockCounterClockwise weight="duotone" /></NIcon>
-            <span class="text-muted small">{{ t('files.recent') }}</span>
-            <NTag v-for="path in recentPaths.slice(0, 5)" :key="path" size="small" checkable @click="navigateToDirectory(path)">{{ path }}</NTag>
-          </NSpace>
-        </div>
-
-        <!-- Loading State -->
-        <NSpin v-if="directoryStore.loading || boxesStore.loading" size="small">
-          <span class="text-muted">{{ t('files.loading_dir') }}</span>
-        </NSpin>
-
-        <!-- File Table -->
-        <FileUploadZone v-else :current-dir="currentDir" @upload="handleUpload">
-          <div aria-live="polite" :aria-label="t('a11y.file_list')" class="file-table-scroll-wrap" :class="{ 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }" ref="fileTableWrapRef">
-            <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :row-class-name="tableRowClassName" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" :max-height="isMobile ? undefined : 'calc(100vh - 280px)'" />
-          </div>
-        </FileUploadZone>
-
-        <!-- Error Display -->
-        <NAlert v-if="directoryStore.error || boxesStore.error" type="error" closable>{{ directoryStore.error || boxesStore.error }}</NAlert>
-      </NSpace>
-    </NCard>
-
-    <!-- File Actions -->
-    <NCard class="surface-card" size="medium">
-      <div class="card-title">
-        <NIcon size="18"><PhGear weight="duotone" /></NIcon>
-        <span>{{ t('files.col_actions') }}</span>
+      <div v-if="recentPaths.length" class="recent-paths">
+        <NSpace size="small" align="center">
+          <NIcon size="14"><PhClockCounterClockwise weight="duotone" /></NIcon>
+          <span class="text-muted small">{{ t('files.recent') }}</span>
+          <NTag v-for="path in recentPaths.slice(0, 5)" :key="path" size="small" checkable @click="navigateToDirectory(path)">{{ path }}</NTag>
+        </NSpace>
       </div>
-      <NSpace vertical size="small">
-        <!-- Create File -->
-        <NSpace size="small" align="center">
-          <NInput v-model:value="newFileName" :placeholder="t('files.new_filename')" size="small" style="max-width: 220px" @keyup.enter="createEmptyFile" />
-          <NButton :disabled="actionBusy || !selectedBox || !newFileName.trim()" size="small" type="primary" @click="createEmptyFile">
-            <NIcon size="14"><PhUploadSimple weight="duotone" /></NIcon>{{ t('files.create_file') }}
-          </NButton>
-        </NSpace>
 
-        <!-- Create Folder -->
-        <NSpace size="small" align="center">
-          <NInput v-model:value="newFolderName" :placeholder="t('files.new_foldername')" size="small" style="max-width: 220px" @keyup.enter="createNewFolder" />
-          <NButton :disabled="actionBusy || !selectedBox || !newFolderName.trim()" size="small" type="primary" @click="createNewFolder">
-            <NIcon size="14"><PhFolderSimple weight="duotone" /></NIcon>{{ t('files.create_folder') }}
-          </NButton>
-        </NSpace>
+    <!-- The table fills the rest of the height -->
+    <div
+      class="table-region file-browser file-table-scroll-wrap"
+      :class="{ 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }"
+      :aria-label="t('a11y.file_list')"
+      aria-live="polite"
+      ref="fileTableWrapRef"
+    >
+      <NSpin v-if="directoryStore.loading || boxesStore.loading" size="small" class="table-loading">
+        <span class="text-muted">{{ t('files.loading_dir') }}</span>
+      </NSpin>
+      <FileUploadZone v-else class="table-zone" :current-dir="currentDir" @upload="handleUpload">
+        <NDataTable :columns="columns" :data="filteredRows" size="small" striped :row-key="(row: any) => row._isParent ? '__parent__' : row.path" :checked-row-keys="selectedPaths" @update:checked-row-keys="(keys: (string | number)[]) => filesStore.setSelectedFiles(keys.map(String))" @update:sorter="handleSortChange" :row-props="getRowProps" :row-class-name="tableRowClassName" :scroll-x="isMobile ? undefined : 800" :virtual-scroll="!isMobile" flex-height style="height: 100%" />
+      </FileUploadZone>
+    </div>
 
-        <!-- Content Search (grep) -->
-        <ContentSearchInput
-          :box="selectedBox || null"
-          :token="tokenValue || null"
-          :directory="currentDir"
-          @navigate="(dir: string) => navigateToDirectory(dir)"
-          @select-file="(path: string) => { previewPath = path; previewing = true }"
-        />
+    <NAlert v-if="directoryStore.error || boxesStore.error" type="error" closable>{{ directoryStore.error || boxesStore.error }}</NAlert>
 
-        <!-- File Upload -->
-        <NSpace size="small" align="center">
-          <input type="file" multiple @change="(e: any) => handleUpload(e.target.files)" style="max-width: 200px" />
-          <span class="text-muted small">{{ t('files.or_drag_drop') }}</span>
-        </NSpace>
-
-        <!-- Upload Progress -->
-        <div v-if="uploading" class="upload-progress">
-          <NAlert type="info">
-            <template #icon><div class="spinner" /></template>
-            Uploading {{ filesStore.uploadFileName }}...
-            <NProgress type="line" :percentage="filesStore.uploadProgress" status="info" style="margin-top: 8px" />
-          </NAlert>
-        </div>
-
-        <NAlert v-if="filesStore.uploadError" type="error" closable>{{ filesStore.uploadError }}</NAlert>
-      </NSpace>
-    </NCard>
-
-    <!-- Favorites Panel -->
-    <FavoritesPanel :box="selectedBox" @openPath="navigateToDirectory" @togglePin="handlePinToggle" />
+    <div v-if="uploading" class="upload-progress">
+      <NAlert type="info">
+        <template #icon><div class="spinner" /></template>
+        {{ t('files.uploading') }} {{ filesStore.uploadFileName }}...
+        <NProgress type="line" :percentage="filesStore.uploadProgress" status="info" style="margin-top: 8px" />
+      </NAlert>
+    </div>
+    <NAlert v-if="filesStore.uploadError" type="error" closable>{{ filesStore.uploadError }}</NAlert>
 
     <!-- File Preview Modal -->
     <FilePreviewModal
@@ -1601,20 +1593,20 @@ const columns = computed(() => {
     />
 
     <!-- Rename Modal -->
-    <NModal v-model:show="renameModalVisible" preset="dialog" :title="t('common.rename')" positive-text="Rename" negative-text="Cancel" @positive-click="doRename" @negative-click="renameModalVisible = false" style="max-width: 400px">
+    <NModal v-model:show="renameModalVisible" preset="dialog" :title="t('common.rename')" :positive-text="t('common.rename')" :negative-text="t('common.cancel')" @positive-click="doRename" @negative-click="renameModalVisible = false" style="max-width: 400px">
       <NSpace vertical size="small">
         <p class="text-muted" style="font-size:13px;">{{ renameTarget?.split('/').pop() }}</p>
-        <NInput v-model:value="renameValue" placeholder="New name" size="small" @keyup.enter="doRename" />
+        <NInput v-model:value="renameValue" :placeholder="t('files.rename_placeholder')" size="small" @keyup.enter="doRename" />
       </NSpace>
     </NModal>
 
     <!-- Chmod Modal -->
-    <NModal v-model:show="chmodModalVisible" preset="dialog" title="Change Permissions" positive-text="Apply" negative-text="Cancel" @positive-click="applyChmod" @negative-click="chmodModalVisible = false" style="max-width: 360px">
+    <NModal v-model:show="chmodModalVisible" preset="dialog" :title="t('files.chmod_title')" :positive-text="t('files.chmod_apply')" :negative-text="t('common.cancel')" @positive-click="applyChmod" @negative-click="chmodModalVisible = false" style="max-width: 360px">
       <NSpace vertical size="small">
         <p class="text-muted" style="font-size:13px;">{{ chmodTarget.path.split('/').pop() }}</p>
-        <p v-if="chmodTarget.currentMode != null" style="font-size:12px;font-family:var(--font-mono);">Current: {{ formatMode(chmodTarget.currentMode) }} ({{ chmodTarget.currentMode.toString(8).padStart(3, '0') }})</p>
-        <NInput v-model:value="chmodValue" placeholder="e.g. 755" size="small" style="font-family:var(--font-mono);" @keyup.enter="applyChmod" />
-        <p v-if="chmodValue" style="font-size:12px;font-family:var(--font-mono);color:var(--muted);">Preview: {{ formatMode(parseInt(chmodValue, 8) || 0) }}</p>
+        <p v-if="chmodTarget.currentMode != null" style="font-size:12px;font-family:var(--font-mono);">{{ t('files.chmod_current') }} {{ formatMode(chmodTarget.currentMode) }} ({{ chmodTarget.currentMode.toString(8).padStart(3, '0') }})</p>
+        <NInput v-model:value="chmodValue" :placeholder="t('files.chmod_placeholder')" size="small" style="font-family:var(--font-mono);" @keyup.enter="applyChmod" />
+        <p v-if="chmodValue" style="font-size:12px;font-family:var(--font-mono);color:var(--muted);">{{ t('files.preview_label') }} {{ formatMode(parseInt(chmodValue, 8) || 0) }}</p>
       </NSpace>
     </NModal>
 
@@ -1634,11 +1626,7 @@ const columns = computed(() => {
   </div>
 </template>
 <style scoped>
-/* Scroll indicators — gradient shadows showing more content above/below */
-.file-table-scroll-wrap {
-  position: relative;
-}
-
+/* Scroll indicators: gradient shadows showing more content above/below */
 .file-table-scroll-wrap::before,
 .file-table-scroll-wrap::after {
   content: '';
@@ -1649,19 +1637,19 @@ const columns = computed(() => {
   pointer-events: none;
   z-index: 2;
   opacity: 0;
-  transition: opacity 0.2s ease;
+  transition: opacity var(--dur-base) var(--ease-out);
 }
 
 .file-table-scroll-wrap::before {
   top: 0;
-  background: linear-gradient(to bottom, rgba(56, 140, 255, 0.15), transparent);
-  border-top: 2px solid rgba(56, 140, 255, 0.3);
+  background: linear-gradient(to bottom, rgba(var(--accent-rgb), 0.15), transparent);
+  border-top: 2px solid rgba(var(--accent-rgb), 0.3);
 }
 
 .file-table-scroll-wrap::after {
   bottom: 0;
-  background: linear-gradient(to top, rgba(56, 140, 255, 0.15), transparent);
-  border-bottom: 2px solid rgba(56, 140, 255, 0.3);
+  background: linear-gradient(to top, rgba(var(--accent-rgb), 0.15), transparent);
+  border-bottom: 2px solid rgba(var(--accent-rgb), 0.3);
 }
 
 .file-table-scroll-wrap.can-scroll-up::before {
@@ -1672,82 +1660,100 @@ const columns = computed(() => {
   opacity: 1;
 }
 
+/* The workspace is the height of the content area; the table takes what the bars leave. */
 .page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
 }
 
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.page > * {
+  flex: 0 0 auto;
 }
 
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-size: 12px;
-  margin: 0 0 4px 0;
-  color: var(--muted);
+.page > .table-region {
+  flex: 1 1 auto;
 }
 
-h1 {
-  margin: 0 0 8px 0;
-  font-size: 26px;
-}
-
-.surface-card {
+.table-region {
+  position: relative;
+  min-height: 200px;
   background: var(--surface);
-  border-radius: 16px;
   border: 1px solid var(--stroke);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
-.card-title {
+/* The upload zone is the table's frame: it has the region's size, the table scrolls inside it. */
+.table-region .table-zone {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+
+.table-loading {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-weight: 600;
-  margin-bottom: 16px;
+  justify-content: center;
 }
 
-.card-title > span {
+.files-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
-.card-actions {
+.toolbar-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.toolbar-filter {
+  flex: 0 1 150px;
+  min-width: 100px;
+}
+
+.toolbar-kinds {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
-.connection-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--error);
-  transition: background-color 0.2s ease;
+.toolbar-icons {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
 }
 
-.connection-indicator.connected {
-  background: var(--success);
+/* The column a table is sorted by is not tinted: the arrow in its title says so. */
+.file-browser :deep(.n-data-table) {
+  --n-merged-td-color-sorting: transparent !important;
+  --n-merged-td-color-hover-sorting: transparent !important;
+}
+
+.new-pop {
+  min-width: 220px;
 }
 
 .bulk-actions {
-  padding: 12px;
+  padding: 8px 12px;
   background: var(--surface-variant);
   border-radius: 8px;
   border: 1px solid var(--stroke);
 }
 
 .recent-paths {
-  padding: 8px 12px;
+  padding: 4px 12px;
   background: var(--surface-variant);
   border-radius: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 .upload-progress {
@@ -1762,13 +1768,7 @@ h1 {
   border: 2px solid rgba(var(--accent-rgb), 0.3);
   border-top: 2px solid var(--accent);
   border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.file-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  animation: spin var(--dur-loop) linear infinite;
 }
 
 .small {
@@ -1779,48 +1779,29 @@ h1 {
   color: var(--muted);
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
 /* Mobile optimizations */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .page {
-    gap: 12px;
+    gap: 6px;
   }
 
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
+  .toolbar-search {
+    flex: 1 1 100%;
+    max-width: none;
   }
 
-  .page-header h1 {
-    font-size: 20px;
+  .toolbar-filter {
+    flex: 1 1 80px;
+    min-width: 80px;
+    width: auto;
   }
 
-  .card-title {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .card-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .card-actions :deep(.n-input) {
-    width: 100% !important;
+  .toolbar-kinds :deep(.n-button) {
+    padding: 0 8px;
   }
 
   .bulk-actions :deep(.n-space) {
     flex-wrap: wrap;
-  }
-
-  /* Full-width upload input */
-  input[type="file"] {
-    max-width: 100% !important;
-    width: 100%;
   }
 }
 
@@ -1838,21 +1819,8 @@ h1 {
 
 /* High contrast mode */
 @media (prefers-contrast: high) {
-  .surface-card {
+  .table-region {
     border: 2px solid var(--stroke);
-  }
-
-  .connection-indicator {
-    border: 1px solid var(--text);
-  }
-}
-
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  .connection-indicator,
-  .spinner {
-    transition: none;
-    animation: none;
   }
 }
 

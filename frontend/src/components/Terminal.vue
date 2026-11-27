@@ -35,6 +35,7 @@ import {
   PhClockCounterClockwise,
   PhArrowsClockwise,
   PhList,
+  PhDotsThree,
 } from '@phosphor-icons/vue'
 import { useBootstrapStore } from '@/stores/bootstrap'
 import { useAppStore } from '@/stores/app'
@@ -48,6 +49,8 @@ import { PTY_STREAM_OPTIONS } from '@/utils/terminalOptions'
 import { classifyTerminalCloseCode } from '@/utils/terminalCloseCodes'
 import type { ApiSession } from '@/api/types'
 import SessionSwitcher from '@/components/SessionSwitcher.vue'
+import ContextMenu from '@/components/ContextMenu.vue'
+import { DEFAULT_TERMINAL_THEME, terminalColours, type TerminalThemeName } from '@/utils/terminalThemes'
 
 interface Props {
   boxName: string
@@ -64,12 +67,14 @@ interface Props {
    * frame overrides it once it has come.
    */
   nativeShell?: boolean
-  theme?: 'cyberpunk' | 'default' | 'solarized' | 'dracula' | 'nord' | 'monokai' | 'light'
+  theme?: TerminalThemeName
   fontSize?: number
   fontFamily?: string
   showTitleBar?: boolean
   /** When true, suppress xterm.js keyboard capture — external input handles it */
   externalInput?: boolean
+  /** A close button at the end of the title bar, which emits `close` (a pane in a grid). */
+  closable?: boolean
 }
 
 interface Emits {
@@ -81,6 +86,7 @@ interface Emits {
   (e: 'session-select', session: ApiSession): void
   /** What the server opened, told once per socket; `fallback` is a plain shell opened where tmux is missing. */
   (e: 'shell', data: { kind: 'tmux' | 'plain'; fallback: boolean }): void
+  (e: 'close'): void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -88,12 +94,13 @@ const props = withDefaults(defineProps<Props>(), {
   directory: '~',
   // Absent means "go by `shell`": without this default Vue casts an absent Boolean to false.
   nativeShell: undefined,
-  theme: 'cyberpunk',
+  theme: DEFAULT_TERMINAL_THEME,
   fontSize: 14,
   // Monaspace Neon for text, Nerd Fonts for Starship symbols
   fontFamily: '"Monaspace Neon", "CaskaydiaCove Nerd Font", "JetBrains Mono Nerd Font", "FiraCode Nerd Font", "Symbols Nerd Font Mono", "JetBrains Mono", "Fira Code", monospace',
   showTitleBar: true,
-  externalInput: false
+  externalInput: false,
+  closable: false,
 })
 
 const emit = defineEmits<Emits>()
@@ -119,6 +126,8 @@ const isNativeShell = computed(() =>
 )
 
 const terminalRef = ref<HTMLDivElement>()
+// This pane's own root: what fullscreen fills, and where the cards go while it does.
+const wrapperRef = ref<HTMLElement>()
 const connected = ref(false)
 const connecting = ref(false)
 const reconnecting = ref(false)
@@ -224,179 +233,11 @@ const queueWrite = (data: Uint8Array | string) => {
 let reconnectTimeout: number | null = null
 let intentionalDisconnect = false
 
-const TERMINAL_THEMES = {
-  cyberpunk: {
-    background: '#0a0e14',      // Deep near-black
-    foreground: '#b3b1ad',      // Muted warm gray
-    cursor: '#e6b450',          // Amber cursor
-    cursorAccent: '#0a0e14',
-    selectionBackground: '#273747',
-    selectionForeground: '#e6e6e6',
-    // ANSI colors tuned for Starship + readability
-    black: '#01060e',
-    red: '#ea6c73',             // Errors: visible but not screaming
-    green: '#91b362',           // Success: calm green
-    yellow: '#f9af4f',          // Warnings: readable amber
-    blue: '#53bdfa',            // Info: cool blue
-    magenta: '#fae994',         // Accent
-    cyan: '#90e1c6',            // Secondary
-    white: '#c7c7c7',
-    brightBlack: '#686868',
-    brightRed: '#f07178',
-    brightGreen: '#c2d94c',
-    brightYellow: '#ffb454',
-    brightBlue: '#59c2ff',
-    brightMagenta: '#ffee99',
-    brightCyan: '#95e6cb',
-    brightWhite: '#ffffff',
-  },
-  default: {
-    background: '#0f1115',
-    foreground: '#e6e6e6',
-    cursor: '#6aa6ff',
-    cursorAccent: '#0f1115',
-    selectionBackground: '#4a86df80',
-    black: '#1a1a1a',
-    red: '#ff6a6a',
-    green: '#3ba86a',
-    yellow: '#f5c542',
-    blue: '#6aa6ff',
-    magenta: '#c678dd',
-    cyan: '#56b6c2',
-    white: '#e6e6e6',
-    brightBlack: '#6b7280',
-    brightRed: '#ff8787',
-    brightGreen: '#5fd75f',
-    brightYellow: '#ffd75f',
-    brightBlue: '#85b8ff',
-    brightMagenta: '#d19aff',
-    brightCyan: '#76d7c4',
-    brightWhite: '#ffffff',
-  },
-  solarized: {
-    background: '#002b36',
-    foreground: '#839496',
-    cursor: '#839496',
-    cursorAccent: '#002b36',
-    selectionBackground: '#073642',
-    black: '#073642',
-    red: '#dc322f',
-    green: '#859900',
-    yellow: '#b58900',
-    blue: '#268bd2',
-    magenta: '#d33682',
-    cyan: '#2aa198',
-    white: '#eee8d5',
-    brightBlack: '#002b36',
-    brightRed: '#cb4b16',
-    brightGreen: '#586e75',
-    brightYellow: '#657b83',
-    brightBlue: '#839496',
-    brightMagenta: '#6c71c4',
-    brightCyan: '#93a1a1',
-    brightWhite: '#fdf6e3',
-  },
-  dracula: {
-    background: '#282a36',
-    foreground: '#f8f8f2',
-    cursor: '#f8f8f2',
-    cursorAccent: '#282a36',
-    selectionBackground: '#44475a',
-    black: '#000000',
-    red: '#ff5555',
-    green: '#50fa7b',
-    yellow: '#f1fa8c',
-    blue: '#bd93f9',
-    magenta: '#ff79c6',
-    cyan: '#8be9fd',
-    white: '#bfbfbf',
-    brightBlack: '#4d4d4d',
-    brightRed: '#ff6e67',
-    brightGreen: '#5af78e',
-    brightYellow: '#f4f99d',
-    brightBlue: '#caa9fa',
-    brightMagenta: '#ff92d0',
-    brightCyan: '#9aedfe',
-    brightWhite: '#e6e6e6',
-  },
-  nord: {
-    background: '#2e3440',
-    foreground: '#d8dee9',
-    cursor: '#d8dee9',
-    cursorAccent: '#2e3440',
-    selectionBackground: '#4c566a',
-    black: '#3b4252',
-    red: '#bf616a',
-    green: '#a3be8c',
-    yellow: '#ebcb8b',
-    blue: '#81a1c1',
-    magenta: '#b48ead',
-    cyan: '#88c0d0',
-    white: '#e5e9f0',
-    brightBlack: '#4c566a',
-    brightRed: '#bf616a',
-    brightGreen: '#a3be8c',
-    brightYellow: '#ebcb8b',
-    brightBlue: '#81a1c1',
-    brightMagenta: '#b48ead',
-    brightCyan: '#8fbcbb',
-    brightWhite: '#eceff4',
-  },
-  monokai: {
-    background: '#272822',
-    foreground: '#f8f8f2',
-    cursor: '#f8f8f0',
-    cursorAccent: '#272822',
-    selectionBackground: '#49483e',
-    black: '#272822',
-    red: '#f92672',
-    green: '#a6e22e',
-    yellow: '#f4bf75',
-    blue: '#66d9ef',
-    magenta: '#ae81ff',
-    cyan: '#a1efe4',
-    white: '#f8f8f2',
-    brightBlack: '#75715e',
-    brightRed: '#f92672',
-    brightGreen: '#a6e22e',
-    brightYellow: '#f4bf75',
-    brightBlue: '#66d9ef',
-    brightMagenta: '#ae81ff',
-    brightCyan: '#a1efe4',
-    brightWhite: '#f9f8f5',
-  },
-  light: {
-    background: '#fafafa',
-    foreground: '#383a42',
-    cursor: '#526eff',
-    cursorAccent: '#fafafa',
-    selectionBackground: '#bfceff',
-    selectionForeground: '#383a42',
-    black: '#383a42',
-    red: '#e45649',
-    green: '#50a14f',
-    yellow: '#c18401',
-    blue: '#4078f2',
-    magenta: '#a626a4',
-    cyan: '#0184bc',
-    white: '#a0a1a7',
-    brightBlack: '#4f525e',
-    brightRed: '#e06c75',
-    brightGreen: '#98c379',
-    brightYellow: '#e5c07b',
-    brightBlue: '#61afef',
-    brightMagenta: '#c678dd',
-    brightCyan: '#56b6c2',
-    brightWhite: '#c0c1c7',
-  }
-}
-
 // overviewRuler.width (set for the scroll bar's width) also makes xterm draw an overview
 // ruler. This terminal adds no decorations, so the ruler's only paint is a 1 px left
 // border, which would show as a line beside the scroll bar: make it transparent.
-type TerminalThemeName = keyof typeof TERMINAL_THEMES
-const xtermTheme = (name: TerminalThemeName) => ({
-  ...TERMINAL_THEMES[name],
+const xtermTheme = (name: TerminalThemeName, dark: boolean) => ({
+  ...terminalColours(name, dark),
   overviewRulerBorder: 'rgba(0, 0, 0, 0)',
 })
 
@@ -470,10 +311,7 @@ const handleFilePathClick = async (rawPath: string) => {
     const info = await statPath(box, cleanPath, token)
     if (!info.exists) {
       win?.close()
-      message.warning(
-        `Path not found: ${rawPath}. You may have cd'd since opening this terminal.`,
-        { duration: 5000 }
-      )
+      message.warning(t('terminal.path_not_found', { path: rawPath }), { duration: 5000 })
       return
     }
 
@@ -492,7 +330,7 @@ const handleFilePathClick = async (rawPath: string) => {
     }
   } catch (err) {
     win?.close()
-    message.error(`Failed to check path: ${errorText(err)}`)
+    message.error(t('terminal.path_check_failed', { err: errorText(err) }))
   }
 }
 
@@ -683,10 +521,11 @@ const triggerActivity = () => {
 
 // Toggle fullscreen mode
 const toggleFullscreen = async () => {
-  const wrapper = document.querySelector('.terminal-wrapper')
+  // This pane's own root, never the first `.terminal-wrapper` on the page (a grid has several).
+  const wrapper = wrapperRef.value
   if (!wrapper) return
 
-  if (!document.fullscreenElement) {
+  if (document.fullscreenElement !== wrapper) {
     await wrapper.requestFullscreen()
     isFullscreen.value = true
   } else {
@@ -694,6 +533,17 @@ const toggleFullscreen = async () => {
     isFullscreen.value = false
   }
   // Re-fit terminal after fullscreen change
+  nextTick(() => fitAddon?.fit())
+  terminal?.focus()
+}
+
+// Only the fullscreen element's own subtree is drawn, so while this pane is fullscreen its
+// cards and popover are put inside it; otherwise they sit under <body> as always.
+const overlayTarget = ref<HTMLElement | string>('body')
+const handleFullscreenChange = () => {
+  const mine = !!wrapperRef.value && document.fullscreenElement === wrapperRef.value
+  isFullscreen.value = mine
+  overlayTarget.value = mine && wrapperRef.value ? wrapperRef.value : 'body'
   nextTick(() => fitAddon?.fit())
 }
 
@@ -820,10 +670,8 @@ const loadWebglRenderer = () => {
 const createTerminal = () => {
   if (!terminalRef.value) return
 
-  // Auto-select light theme when app is in light mode (unless explicitly overridden)
-  const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-  const theme = xtermTheme(effectiveTheme)
-  const isCyberpunk = effectiveTheme === 'cyberpunk'
+  const theme = xtermTheme(props.theme, appStore.isDark)
+  const isCyberpunk = props.theme === 'cyberpunk' && appStore.isDark
 
   terminal = new Terminal({
     theme,
@@ -831,7 +679,7 @@ const createTerminal = () => {
     fontFamily: props.fontFamily,
     lineHeight: isCyberpunk ? 1.25 : 1.2,
     letterSpacing: 0,
-    cursorBlink: true,
+    cursorBlink: !appStore.reducedMotion,
     cursorStyle: isCyberpunk ? 'bar' : 'block',
     cursorInactiveStyle: 'outline',
     allowTransparency: false,
@@ -839,7 +687,7 @@ const createTerminal = () => {
     // xterm draws its own scroll bar this many px wide, and FitAddon reserves the same
     // width; 10 px is the width of the thin native scroll bar this terminal had before.
     overviewRuler: { width: SCROLL_BAR_WIDTH },
-    smoothScrollDuration: isCyberpunk ? 150 : 100,
+    smoothScrollDuration: appStore.reducedMotion ? 0 : isCyberpunk ? 150 : 100,
     rightClickSelectsWord: false,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: false,
@@ -1036,6 +884,21 @@ const createTerminal = () => {
       return false
     }
 
+    // The side rail's keys. The page's own listener skips keys typed into xterm's textarea,
+    // so they reach the rail from here: Alt+\ toggles it, and Escape closes it while it is
+    // open. A closed rail leaves Escape to the shell. The phone has no rail.
+    if (!isMobile.value) {
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'Backslash' || event.key === '\\')) {
+        event.preventDefault()
+        appStore.toggleRailCollapsed()
+        return false
+      }
+      if (event.key === 'Escape' && !appStore.railCollapsed) {
+        appStore.toggleRailCollapsed()
+        return false
+      }
+    }
+
     return true
   })
 
@@ -1151,8 +1014,8 @@ const handleBell = () => {
 
     // Show notification if permission granted
     if (Notification.permission === 'granted') {
-      new Notification('Terminal Bell', {
-        body: `Activity in ${props.boxName}`,
+      new Notification(t('terminal.bell'), {
+        body: `${t('terminal.activity_in')} ${props.boxName}`,
         icon: '/favicon.svg',
         tag: 'terminal-bell'
       })
@@ -1364,15 +1227,10 @@ const connect = async () => {
         }
       })
 
-      // Show success message - more prominent if recovering from reconnect
+      // Only a reconnect says so: on a first connect the terminal showing is the sign.
       if (reconnectAttempts.value > 0) {
         message.success(t('terminal.reconnected_to', { box: props.boxName }), {
           duration: 3000,
-          closable: false
-        })
-      } else {
-        message.success(t('terminal.connected_to', { box: props.boxName }), {
-          duration: 2000,
           closable: false
         })
       }
@@ -1567,7 +1425,8 @@ const handleViewportChange = () => {
   if (!window.visualViewport) return undefined
 
   const viewport = window.visualViewport
-  const wrapperEl = () => document.querySelector('.terminal-wrapper') as HTMLElement | null
+  // This pane's own wrapper: a grid mounts several terminals.
+  const wrapperEl = () => wrapperRef.value ?? null
 
   const handleResize = () => {
     if (resizeTimeout) {
@@ -1621,6 +1480,8 @@ const handleViewportChange = () => {
 let cleanupViewport: (() => void) | undefined
 
 onMounted(async () => {
+  document.addEventListener(MORE_MENU_OPENED, closeMoreMenuOf)
+  document.addEventListener('fullscreenchange', handleFullscreenChange)
   await nextTick()
   createTerminal()
 
@@ -1691,6 +1552,8 @@ onMounted(async () => {
 
 
 onUnmounted(() => {
+  document.removeEventListener(MORE_MENU_OPENED, closeMoreMenuOf)
+  document.removeEventListener('fullscreenchange', handleFullscreenChange)
   // Cleanup snapshot polling
   if (snapshotPollInterval) clearInterval(snapshotPollInterval)
   if (snapshotTickInterval) clearInterval(snapshotTickInterval)
@@ -1747,8 +1610,15 @@ watch(() => props.boxName, () => {
 
 watch([() => props.theme, () => appStore.isDark], () => {
   if (terminal) {
-    const effectiveTheme = !appStore.isDark && props.theme === 'cyberpunk' ? 'light' : props.theme
-    terminal.options.theme = xtermTheme(effectiveTheme)
+    terminal.options.theme = xtermTheme(props.theme, appStore.isDark)
+  }
+})
+
+// Reduce motion stops xterm's own cursor blink and smooth scroll, and back again, live
+watch(() => appStore.reducedMotion, (reduced) => {
+  if (terminal) {
+    terminal.options.cursorBlink = !reduced
+    terminal.options.smoothScrollDuration = reduced ? 0 : (props.theme === 'cyberpunk' && appStore.isDark ? 150 : 100)
   }
 })
 
@@ -1788,6 +1658,125 @@ const switchSession = (name: string, dir: string) => {
   nextTick(() => connect())
 }
 
+// ---------------------------------------------------------------------------
+// The narrow title bar: one "more" button opens the shared menu with every action the
+// bar hides (the stylesheet decides when, by the bar's own width). Each item calls what
+// its button calls; a kill asks first, as its button's confirmation does.
+// ---------------------------------------------------------------------------
+const moreMenu = ref({ visible: false, x: 0, y: 0 })
+const compactSwitcher = ref(false)
+const pendingKill = ref<{ title: string; text: string; positive: string; run: () => void; needsSocket: boolean } | null>(null)
+const showHelp = ref(false)
+
+// One pane's menu at a time: the pane that opens announces itself, every other one closes.
+const MORE_MENU_OPENED = 'sshler:more-menu-opened'
+const closeMoreMenuOf = (event: Event) => {
+  if ((event as CustomEvent).detail !== wrapperRef.value) moreMenu.value.visible = false
+}
+
+const openMoreMenu = (event: MouseEvent) => {
+  // The menu closes on any click outside itself; this click is the button's own, so it must
+  // not reach that listener (it would close the menu this click opens). A second click closes.
+  event.stopPropagation()
+  if (moreMenu.value.visible) {
+    moreMenu.value.visible = false
+    return
+  }
+  document.dispatchEvent(new CustomEvent(MORE_MENU_OPENED, { detail: wrapperRef.value }))
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
+  moreMenu.value = { visible: true, x: rect ? rect.right : event.clientX, y: rect ? rect.bottom + 4 : event.clientY }
+}
+
+const moreMenuItems = computed(() => {
+  const off = !connected.value
+  const item = (id: string, label: string, icon: unknown, extra: Record<string, unknown> = {}) =>
+    ({ id, label, icon, testid: `terminal-menu-${id}`, ...extra })
+  const items: Record<string, unknown>[] = []
+  if (!isNativeShell.value) {
+    items.push(
+      item('prev-window', t('terminal.menu_prev_window'), PhCaretLeft, { disabled: off }),
+      item('new-window', t('terminal.menu_new_window'), PhPlus, { disabled: off }),
+      item('next-window', t('terminal.menu_next_window'), PhCaretRight, { disabled: off }),
+      { id: 'sep-windows', label: '', separator: true },
+      item('pane-left', t('terminal.menu_pane_left'), PhArrowLineLeft, { disabled: off }),
+      item('split-vertical', t('terminal.menu_split_vertical'), PhSplitVertical, { disabled: off }),
+      item('split-horizontal', t('terminal.menu_split_horizontal'), PhSplitHorizontal, { disabled: off }),
+      item('pane-right', t('terminal.menu_pane_right'), PhArrowLineRight, { disabled: off }),
+      item('kill-pane', t('terminal.menu_kill_pane'), PhX, { disabled: off, danger: true }),
+      { id: 'sep-panes', label: '', separator: true },
+      item('kill-window', t('terminal.menu_kill_window'), PhXCircle, { disabled: off, danger: true }),
+      item('kill-session', t('terminal.menu_kill_session'), PhPower, { disabled: off, danger: true }),
+      item('force-kill', t('terminal.menu_force_kill'), PhSkull, { danger: true }),
+      { id: 'sep-kill', label: '', separator: true },
+      item('mouse', mouseMode.value ? t('terminal.menu_mouse_on') : t('terminal.menu_mouse_off'), PhMouse, { disabled: off }),
+      item('copy-mode', t('terminal.menu_copy_mode'), PhCopy, { disabled: off }),
+    )
+  }
+  items.push(
+    item('scrollback', t('terminal.menu_scrollback'), PhListBullets),
+    item('copy-all', t('terminal.menu_copy_all'), PhCopySimple),
+    item('paste', t('terminal.menu_paste'), PhClipboard, { disabled: off }),
+    item('clear', t('terminal.menu_clear'), PhBroom, { disabled: off }),
+    item('search', t('terminal.menu_search'), PhMagnifyingGlass),
+    item('sessions', t('terminal.menu_sessions'), PhList),
+    item('fullscreen', isFullscreen.value ? t('terminal.menu_exit_fullscreen') : t('terminal.menu_fullscreen'), isFullscreen.value ? PhCornersIn : PhCornersOut),
+    item('help', t('terminal.menu_help'), PhQuestion),
+  )
+  return items as any[]
+})
+
+const askKill = (title: string, text: string, positive: string, run: () => void, needsSocket = true) => {
+  pendingKill.value = { title, text, positive, run, needsSocket }
+}
+
+// A card closing, or an action that leaves no field of its own to type in, hands the
+// keyboard back to the terminal (the clicked menu item is gone from the page by then).
+watch(() => pendingKill.value === null, (closed) => { if (closed) terminal?.focus() })
+watch(showHelp, (open) => { if (!open) terminal?.focus() })
+
+const selectMoreItem = (id: string) => {
+  const result = runMoreItem(id)
+  // These open something that takes the keyboard itself: the search field, the switcher, the
+  // scrollback viewer, a card.
+  const keepsOwnFocus = ['search', 'sessions', 'scrollback', 'help', 'kill-pane', 'kill-window', 'kill-session', 'force-kill', 'fullscreen']
+  if (!keepsOwnFocus.includes(id)) nextTick(() => terminal?.focus())
+  return result
+}
+
+const runMoreItem = (id: string) => {
+  switch (id) {
+    case 'prev-window': return tmuxPrevWindow()
+    case 'new-window': return tmuxNewWindow()
+    case 'next-window': return tmuxNextWindow()
+    case 'pane-left': return tmuxPaneLeft()
+    case 'split-vertical': return tmuxSplitVertical()
+    case 'split-horizontal': return tmuxSplitHorizontal()
+    case 'pane-right': return tmuxPaneRight()
+    case 'kill-pane': return askKill(t('terminal.kill_pane'), t('terminal.kill_pane_confirm'), t('terminal.kill_pane'), tmuxKillPaneConfirmed)
+    case 'kill-window': return askKill(t('terminal.kill_window'), t('terminal.kill_window_confirm'), t('terminal.kill_window'), tmuxKillWindowConfirmed)
+    case 'kill-session': return askKill(t('terminal.kill_session'), t('terminal.kill_session_confirm'), t('terminal.kill_session'), tmuxKillSession)
+    case 'force-kill': return askKill(t('terminal.force_kill_session'), t('terminal.force_kill_session_confirm'), t('terminal.force_kill_session'), tmuxForceKillSession, false)
+    case 'mouse': return toggleMouseMode()
+    case 'copy-mode': return enterCopyMode()
+    case 'scrollback': return openScrollbackViewer()
+    case 'copy-all': return copyAllScrollback()
+    case 'paste': return pasteFromClipboard()
+    case 'clear': return clear()
+    case 'search': return toggleSearch()
+    // After this click: a popover opened inside it would count it as a click outside.
+    case 'sessions': return void setTimeout(() => { compactSwitcher.value = true }, 0)
+    case 'fullscreen': return toggleFullscreen()
+    case 'help': showHelp.value = true
+  }
+}
+
+const confirmPendingKill = () => {
+  const pending = pendingKill.value
+  if (pending?.needsSocket && !connected.value) return
+  pendingKill.value = null
+  pending?.run()
+}
+
 defineExpose({
   connect,
   disconnect,
@@ -1825,25 +1814,25 @@ defineExpose({
 </script>
 
 <template>
-  <div class="terminal-wrapper" :class="{ 'has-activity': hasActivity, 'is-fullscreen': isFullscreen }">
+  <div ref="wrapperRef" class="terminal-wrapper" :class="{ 'has-activity': hasActivity, 'is-fullscreen': isFullscreen }">
     <!-- Title Bar with Tmux Toolbar -->
     <div v-if="showTitleBar && !titleBarCollapsed" class="terminal-titlebar">
       <div class="titlebar-left">
         <!-- Yellow group: Windows (tmux-only) -->
         <div v-if="!isNativeShell" class="toolbar-group toolbar-yellow">
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxPrevWindow"><PhCaretLeft :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.prev_window') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxNewWindow"><PhPlus :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.new_window') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxNextWindow"><PhCaretRight :size="14" weight="bold" /></button>
             </template>
@@ -1852,37 +1841,38 @@ defineExpose({
         </div>
         <!-- Purple group: Panes (tmux-only) -->
         <div v-if="!isNativeShell" class="toolbar-group toolbar-purple">
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxPaneLeft"><PhArrowLineLeft :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.pane_left') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxSplitVertical"><PhSplitVertical :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.split_vertical') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxSplitHorizontal"><PhSplitHorizontal :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.split_horizontal') }}
           </NTooltip>
-          <NTooltip :delay="400">
+          <NTooltip :to="overlayTarget" :delay="400">
             <template #trigger>
               <button class="toolbar-btn" :disabled="!connected" @click="tmuxPaneRight"><PhArrowLineRight :size="14" weight="bold" /></button>
             </template>
             {{ t('terminal.pane_right') }}
           </NTooltip>
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.kill_pane')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxKillPaneConfirmed"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhX :size="14" weight="bold" /></button>
                 </template>
@@ -1895,12 +1885,13 @@ defineExpose({
         <!-- Red group: Destructive (tmux-only; native shells kill via SessionSwitcher) -->
         <div v-if="!isNativeShell" class="toolbar-group toolbar-red">
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.kill_window')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxKillWindowConfirmed"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhXCircle :size="14" weight="bold" /></button>
                 </template>
@@ -1910,12 +1901,13 @@ defineExpose({
             {{ t('terminal.kill_window_confirm') }}
           </NPopconfirm>
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.kill_session')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxKillSession"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger" :disabled="!connected"><PhPower :size="14" weight="bold" /></button>
                 </template>
@@ -1925,12 +1917,13 @@ defineExpose({
             {{ t('terminal.kill_session_confirm') }}
           </NPopconfirm>
           <NPopconfirm
+            :to="overlayTarget"
             :positive-text="t('terminal.force_kill_session')"
             :negative-text="t('common.cancel')"
             @positive-click="tmuxForceKillSession"
           >
             <template #trigger>
-              <NTooltip :delay="400">
+              <NTooltip :to="overlayTarget" :delay="400">
                 <template #trigger>
                   <button class="toolbar-btn toolbar-btn-danger"><PhSkull :size="14" weight="bold" /></button>
                 </template>
@@ -1941,14 +1934,15 @@ defineExpose({
           </NPopconfirm>
         </div>
         <span class="connection-indicator" :class="{ connected, connecting }" />
-        <span v-if="!isNativeShell" class="snapshot-indicator" :style="snapshotDotStyle" :title="`Snapshot: ${lastSnapshotAt ? Math.floor(snapshotNow / 1000 - lastSnapshotAt) + 's ago' : 'none'}`" />
+        <span v-if="!isNativeShell" class="snapshot-indicator" :style="snapshotDotStyle" :title="lastSnapshotAt ? t('terminal.snapshot_ago', { seconds: Math.floor(snapshotNow / 1000 - lastSnapshotAt) }) : t('terminal.snapshot_none')" />
       </div>
       <div class="titlebar-center">
         <span class="session-color-dot" :style="{ background: sessionColor }" />
-        <span class="titlebar-text">{{ boxName }} — {{ sessionName }}</span>
+        <span class="titlebar-text" :title="`${boxName} — ${sessionName}`">{{ boxName }} — {{ sessionName }}</span>
+        <slot name="titlebar-meta" />
       </div>
       <div class="titlebar-right">
-        <NTooltip v-if="!isNativeShell" :delay="300">
+        <NTooltip v-if="!isNativeShell" :to="overlayTarget" :delay="300">
           <template #trigger>
             <button
               class="titlebar-btn mouse-btn"
@@ -1962,7 +1956,7 @@ defineExpose({
           </template>
           {{ mouseMode ? t('terminal.mouse_on') : t('terminal.mouse_off') }}
         </NTooltip>
-        <NTooltip v-if="!isNativeShell" :delay="400">
+        <NTooltip v-if="!isNativeShell" :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :disabled="!connected" @click="enterCopyMode">
               <PhCopy :size="14" weight="duotone" />
@@ -1970,7 +1964,7 @@ defineExpose({
           </template>
           {{ t('terminal.copy_mode') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" @click="openScrollbackViewer">
               <PhListBullets :size="14" weight="duotone" />
@@ -1978,7 +1972,7 @@ defineExpose({
           </template>
           {{ t('terminal.scrollback_viewer_tip') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" @click="copyAllScrollback">
               <PhCopySimple :size="14" weight="duotone" />
@@ -1986,7 +1980,7 @@ defineExpose({
           </template>
           {{ t('terminal.copy_all_tip') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :disabled="!connected" @click="pasteFromClipboard">
               <PhClipboard :size="14" weight="duotone" />
@@ -1994,7 +1988,7 @@ defineExpose({
           </template>
           {{ t('terminal.paste') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :disabled="!connected" @click="clear">
               <PhBroom :size="14" weight="duotone" />
@@ -2002,7 +1996,7 @@ defineExpose({
           </template>
           {{ t('terminal.clear') }}
         </NTooltip>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" :class="{ 'active': showSearch }" @click="toggleSearch">
               <PhMagnifyingGlass :size="14" weight="duotone" />
@@ -2010,15 +2004,15 @@ defineExpose({
           </template>
           {{ t('terminal.search') }}
         </NTooltip>
-        <NPopover v-model:show="showSessionSwitcher" trigger="click" placement="bottom-end">
+        <NPopover v-model:show="showSessionSwitcher" :to="overlayTarget" trigger="click" placement="bottom-end">
           <template #trigger>
-            <NTooltip :delay="400">
+            <NTooltip :to="overlayTarget" :delay="400">
               <template #trigger>
                 <button class="titlebar-btn" :class="{ active: showSessionSwitcher }">
                   <PhList :size="14" weight="duotone" />
                 </button>
               </template>
-              {{ t('terminal.sessions') || 'Sessions' }}
+              {{ t('sessions.title') }}
             </NTooltip>
           </template>
           <SessionSwitcher
@@ -2029,7 +2023,7 @@ defineExpose({
             @select="(s) => { emit('session-select', s); showSessionSwitcher = false }"
           />
         </NPopover>
-        <NTooltip :delay="400">
+        <NTooltip :to="overlayTarget" :delay="400">
           <template #trigger>
             <button class="titlebar-btn" @click="toggleFullscreen">
               <component :is="isFullscreen ? PhCornersIn : PhCornersOut" :size="14" weight="duotone" />
@@ -2037,7 +2031,7 @@ defineExpose({
           </template>
           {{ isFullscreen ? t('terminal.exit_fullscreen') : t('terminal.fullscreen') }}
         </NTooltip>
-        <NTooltip :delay="200" :style="{ maxWidth: '320px' }">
+        <NTooltip :to="overlayTarget" :delay="200" :style="{ maxWidth: '320px' }">
           <template #trigger>
             <button class="titlebar-btn help-btn">
               <PhQuestion :size="14" weight="duotone" />
@@ -2057,8 +2051,88 @@ defineExpose({
             <div>4. <b>q</b> — {{ t('terminal.help_exit_copy') }}</div>
           </div>
         </NTooltip>
+        <NPopover :show="compactSwitcher" :to="overlayTarget" trigger="manual" placement="bottom-end" @clickoutside="compactSwitcher = false">
+          <template #trigger>
+            <button
+              class="titlebar-btn more-btn"
+              data-testid="terminal-more"
+              :title="t('terminal.more_actions')"
+              :aria-label="t('terminal.more_actions')"
+              @click="openMoreMenu"
+            >
+              <PhDotsThree :size="14" weight="bold" />
+            </button>
+          </template>
+          <SessionSwitcher
+            :box-name="props.boxName"
+            :token="tokenValue"
+            :current-session="sessionOverride ?? props.sessionName"
+            :home-session="spawnSession"
+            @select="(s) => { emit('session-select', s); compactSwitcher = false }"
+          />
+        </NPopover>
+        <button
+          v-if="closable"
+          class="titlebar-btn close-btn"
+          data-testid="terminal-close"
+          :title="t('common.close')"
+          :aria-label="t('common.close')"
+          @click="emit('close')"
+        >
+          <PhX :size="14" weight="bold" />
+        </button>
       </div>
     </div>
+
+    <ContextMenu
+      :items="moreMenuItems"
+      :x="moreMenu.x"
+      :y="moreMenu.y"
+      :visible="moreMenu.visible"
+      testid="terminal-more-menu"
+      :to="overlayTarget"
+      @select="selectMoreItem"
+      @close="moreMenu.visible = false"
+    />
+
+    <NModal
+      :show="pendingKill !== null"
+      :to="overlayTarget"
+      @after-leave="focus"
+      preset="card"
+      :title="pendingKill?.title"
+      style="max-width: 90vw; width: 340px"
+      @update:show="(v: boolean) => { if (!v) pendingKill = null }"
+    >
+      <p class="confirm-text">{{ pendingKill?.text }}</p>
+      <div class="confirm-actions">
+        <button class="confirm-btn" @click="pendingKill = null">{{ t('common.cancel') }}</button>
+        <button class="confirm-btn danger" data-testid="terminal-menu-confirm" :disabled="!!pendingKill?.needsSocket && !connected" @click="confirmPendingKill">{{ pendingKill?.positive }}</button>
+      </div>
+    </NModal>
+
+    <NModal
+      :show="showHelp"
+      :to="overlayTarget"
+      @after-leave="focus"
+      preset="card"
+      :title="t('terminal.help_title')"
+      style="max-width: 90vw; width: 380px"
+      @update:show="(v: boolean) => { showHelp = v }"
+    >
+      <div style="font-size: 12px; line-height: 1.5">
+        <div><b>Ctrl+C</b> — {{ t('terminal.help_copy') }}</div>
+        <div><b>Ctrl+V</b> — {{ t('terminal.help_paste') }}</div>
+        <div><b>Shift+drag</b> — {{ t('terminal.help_select') }}</div>
+        <div><b>Ctrl+Shift+A</b> — {{ t('terminal.help_scrollback_viewer') }}</div>
+        <div><b>Ctrl+Shift+C</b> — {{ t('terminal.help_copy_all') }}</div>
+        <div style="margin-top: 6px; font-weight: 600">{{ t('terminal.help_copy_long_title') }}</div>
+        <div>1. {{ t('terminal.help_click_copy_btn') }}</div>
+        <div>2. {{ t('terminal.help_scroll_select') }}</div>
+        <div>3. <b>Enter</b> — {{ t('terminal.help_copy_confirm') }}</div>
+        <div>4. <b>q</b> — {{ t('terminal.help_exit_copy') }}</div>
+      </div>
+    </NModal>
 
     <!-- Collapsed Title Bar -->
     <div v-if="showTitleBar && titleBarCollapsed" class="terminal-titlebar-collapsed" @click="toggleTitleBar">
@@ -2071,6 +2145,7 @@ defineExpose({
     <!-- Terminal Container with Effects -->
     <div class="terminal-container" :class="{ 'no-titlebar': !showTitleBar || titleBarCollapsed }">
       <!-- Search Bar (floating overlay) -->
+      <Transition name="slide-down-sm">
       <div v-if="showSearch" class="terminal-search-bar">
         <input
           ref="searchInputRef"
@@ -2092,9 +2167,7 @@ defineExpose({
           <PhX :size="14" weight="bold" />
         </button>
       </div>
-
-      <!-- CRT Scanlines Overlay -->
-      <div class="scanlines" />
+      </Transition>
 
       <div
         ref="terminalRef"
@@ -2106,12 +2179,13 @@ defineExpose({
       />
 
       <!-- Connection Overlays -->
+      <Transition name="route-fade-plain">
       <div v-if="connecting || reconnecting" class="terminal-overlay">
         <div class="connecting-indicator">
           <div class="spinner" />
           <span v-if="reconnecting">
             {{ t('terminal.reconnecting_to', { box: boxName }) }}
-            <small v-if="reconnectAttempts > 0">(attempt {{ reconnectAttempts }}/{{ maxReconnectAttempts }})</small>
+            <small v-if="reconnectAttempts > 0">{{ t('terminal.attempt_of', { n: reconnectAttempts, max: maxReconnectAttempts }) }}</small>
           </span>
           <span v-else>{{ t('terminal.connecting_to', { box: boxName }) }}</span>
         </div>
@@ -2122,6 +2196,7 @@ defineExpose({
           <button @click="connect" class="reconnect-btn">{{ t('terminal.reconnect') }}</button>
         </div>
       </div>
+      </Transition>
 
       <!-- Activity Accent Line -->
       <div class="activity-line" :class="{ active: hasActivity }" />
@@ -2130,6 +2205,7 @@ defineExpose({
     <!-- Scrollback Viewer Modal: native textarea so OS scroll+select works perfectly -->
     <NModal
       :show="showScrollback"
+      :to="overlayTarget"
       preset="card"
       :title="t('terminal.scrollback_viewer_title')"
       style="max-width: 95vw; width: 95vw; max-height: 92vh"
@@ -2204,12 +2280,12 @@ defineExpose({
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--stroke);
-  box-shadow: 0 2px 12px var(--shadow), 0 1px 4px var(--shadow);
-  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  box-shadow: 0 1px 3px var(--shadow);
+  transition: box-shadow var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
 }
 
 /* Focus state */
@@ -2231,12 +2307,86 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 36px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 8px;
   background: var(--surface-variant);
   border-bottom: 1px solid var(--stroke);
   user-select: none;
   flex-shrink: 0;
+  /* the bar is judged by its own width (a pane in a grid is narrow in a wide window) */
+  container-type: inline-size;
+}
+
+.titlebar-btn.more-btn {
+  display: none;
+}
+
+.confirm-text {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirm-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: var(--surface-variant);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.confirm-btn.danger {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* One row of at most 32 px under 700 px of the bar's own width: the colour dot, the title
+   (cut with an ellipsis), the caller's chip, the connection dot, "more" and close. */
+@container (max-width: 699px) {
+  .terminal-titlebar .titlebar-center {
+    order: 0;
+    min-width: 0;
+    justify-content: flex-start;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .terminal-titlebar .titlebar-left {
+    order: 1;
+    min-width: 0;
+  }
+
+  .terminal-titlebar .titlebar-right {
+    order: 2;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+
+  .titlebar-left .toolbar-group,
+  .titlebar-right > .titlebar-btn:not(.more-btn):not(.close-btn) {
+    display: none;
+  }
+
+  .titlebar-left .connection-indicator {
+    margin-left: 0;
+  }
+
+  .titlebar-btn.more-btn {
+    display: flex;
+  }
+
+  .titlebar-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .titlebar-left,
@@ -2306,8 +2456,12 @@ defineExpose({
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
   color: inherit;
+}
+
+.toolbar-btn:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 .toolbar-yellow .toolbar-btn {
@@ -2359,17 +2513,17 @@ defineExpose({
   border-radius: 50%;
   background: #ff5f56;
   margin-left: 8px;
-  transition: all 0.3s ease;
+  transition: background-color var(--dur-base) var(--ease-out);
 }
 
 .connection-indicator.connected {
   background: #27c93f;
-  animation: breathe 2s ease-in-out infinite;
+  animation: breathe var(--dur-ambient) ease-in-out infinite;
 }
 
 .connection-indicator.connecting {
   background: #ffbd2e;
-  animation: pulse 1s ease-in-out infinite;
+  animation: pulse var(--dur-loop) ease-in-out infinite;
 }
 
 /* Snapshot indicator - blue dot next to connection dot */
@@ -2378,7 +2532,7 @@ defineExpose({
   height: 6px;
   border-radius: 50%;
   margin-left: 4px;
-  transition: background 1s ease, box-shadow 1s ease;
+  transition: background var(--dur-slow) var(--ease-out), box-shadow var(--dur-slow) var(--ease-out);
 }
 
 /* Collapsed title bar */
@@ -2392,7 +2546,7 @@ defineExpose({
   border-bottom: 1px solid var(--stroke);
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .terminal-titlebar-collapsed:hover {
@@ -2454,7 +2608,16 @@ defineExpose({
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+}
+
+.titlebar-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.close-btn:hover {
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .titlebar-btn:hover {
@@ -2492,7 +2655,7 @@ defineExpose({
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  transition: background 0.2s ease;
+  transition: background var(--dur-base) var(--ease-out);
 }
 
 .mouse-btn.mouse-on .mouse-status-dot {
@@ -2531,35 +2694,12 @@ defineExpose({
   flex: 1;
   min-width: 0;
   min-height: 0;
-  padding: 8px 12px 12px;
+  padding: 6px 8px 6px;
   overflow: hidden;
 }
 
 .terminal-container.no-titlebar {
-  border-radius: 14px 14px 0 0;
-}
-
-/* =============================================================================
-   CRT SCANLINES - Subtle retro effect
-   ============================================================================= */
-.scanlines {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: 10;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.02) 0px,
-    rgba(0, 0, 0, 0.02) 1px,
-    transparent 1px,
-    transparent 2px
-  );
-  /* Subtle vignette */
-  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 60%, transparent 100%);
-  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 60%, transparent 100%);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 
 /* =============================================================================
@@ -2590,11 +2730,6 @@ defineExpose({
    with it keeps the part-row below the last full row in the theme colour. */
 .terminal :deep(.xterm-scrollable-element) {
   height: 100%;
-}
-
-/* Phosphor text glow - subtle CRT effect */
-.terminal :deep(.xterm-rows) {
-  text-shadow: 0 0 1px currentColor;
 }
 
 /* Make selection more visible and persistent */
@@ -2634,12 +2769,12 @@ defineExpose({
   height: 2px;
   background: linear-gradient(90deg, transparent, rgba(230, 180, 80, 0.3), transparent);
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .activity-line.active {
   opacity: 1;
-  animation: line-glow 0.3s ease;
+  animation: line-glow var(--dur-slow) ease;
 }
 
 @keyframes line-glow {
@@ -2691,7 +2826,7 @@ defineExpose({
   border: 2px solid rgba(230, 180, 80, 0.2);
   border-top: 2px solid #e6b450;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spin var(--dur-loop) linear infinite;
 }
 
 .reconnect-btn {
@@ -2703,7 +2838,11 @@ defineExpose({
   cursor: pointer;
   font-size: 14px;
   font-family: inherit;
-  transition: all 0.2s ease;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+}
+
+.reconnect-btn:active {
+  transform: scale(0.96);
 }
 
 .reconnect-btn:hover {
@@ -2712,15 +2851,10 @@ defineExpose({
   box-shadow: 0 0 20px rgba(83, 189, 250, 0.15);
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
 /* =============================================================================
    RESPONSIVE & ACCESSIBILITY
    ============================================================================= */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .terminal-wrapper {
     border-radius: 0;
     border: none;
@@ -2761,15 +2895,6 @@ defineExpose({
     padding: 2px 2px 0;
   }
 
-  /* Remove text glow on mobile for perf */
-  .terminal :deep(.xterm-rows) {
-    text-shadow: none;
-  }
-
-  .scanlines {
-    display: none;
-  }
-
   .terminal :deep(.xterm-viewport) {
     touch-action: pan-y pinch-zoom;
   }
@@ -2787,34 +2912,6 @@ defineExpose({
 @media (prefers-contrast: high) {
   .terminal-wrapper {
     border: 2px solid var(--stroke);
-  }
-
-  .scanlines {
-    display: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
-  }
-
-  .connection-indicator.connected {
-    animation: none;
-  }
-
-  .connection-indicator.connecting {
-    animation: none;
-  }
-
-  .activity-line.active {
-    animation: none;
-  }
-
-  .terminal-wrapper,
-  .terminal-wrapper:focus-within,
-  .terminal-wrapper.has-activity {
-    transition: none;
   }
 }
 
@@ -2911,10 +3008,10 @@ defineExpose({
   border-radius: 6px;
   border: 1px solid var(--stroke);
   background: var(--surface-variant);
-  color: var(--text-primary);
+  color: var(--text);
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .scrollback-btn:hover {
@@ -2965,14 +3062,14 @@ defineExpose({
   flex: 1 1 auto;
   width: 100%;
   resize: none;
-  font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.45;
   padding: 12px;
   border-radius: 8px;
   border: 1px solid var(--stroke);
   background: var(--bg-elevated, var(--surface));
-  color: var(--text-primary);
+  color: var(--text);
   white-space: pre;
   overflow: auto;
   tab-size: 4;
@@ -2996,18 +3093,6 @@ defineExpose({
      Vite/Vue drops the descendant selector in production builds, causing
      bare [data-theme=light]{display:none} on <html> -->
 <style>
-[data-theme="light"] .scanlines {
-  display: none;
-}
-
-[data-theme="light"] .terminal .xterm-rows {
-  text-shadow: none;
-}
-
-[data-theme="light"] .terminal-wrapper {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-
 [data-theme="light"] .terminal {
   --terminal-scrollbar-thumb: rgba(0, 0, 0, 0.15);
 }

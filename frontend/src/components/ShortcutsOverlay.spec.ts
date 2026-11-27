@@ -60,6 +60,11 @@ async function mountOverlay(links: NavShortcutLink[]) {
 }
 
 describe("ShortcutsOverlay", () => {
+  it("names its trigger button for screen readers with the shortcuts title", () => {
+    const { container } = render(ShortcutsOverlay, { props: { links: [] }, global: { plugins: [i18nPlugin] } });
+    expect(container.querySelector("button")!.getAttribute("aria-label")).toBe("Shortcuts");
+  });
+
   it("renders exactly one row per implemented shortcut: N links + the Cmd+K row it owns", async () => {
     const links = makeLinks(10);
     const { container } = await mountOverlay(links);

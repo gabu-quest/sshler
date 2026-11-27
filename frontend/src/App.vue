@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, type CSSProperties } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import {
@@ -8,7 +8,6 @@ import {
   NGlobalStyle,
   NLayout,
   NLayoutContent,
-  NLayoutHeader,
   NLoadingBarProvider,
   NMessageProvider,
   NNotificationProvider,
@@ -20,6 +19,7 @@ import AppHeader from "@/components/AppHeader.vue";
 import PingNotificationHandler from "@/components/PingNotificationHandler.vue";
 import ProgressStrip from "@/components/ProgressStrip.vue";
 import RecoveryModal from "@/components/RecoveryModal.vue";
+import { useResponsive } from "@/composables/useResponsive";
 import { useAppStore } from "@/stores/app";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePingStore } from "@/stores/ping";
@@ -37,7 +37,34 @@ const theme = computed(() => (appStore.isDark ? darkTheme : lightTheme));
 const themeOverrides = computed(() =>
   appStore.isDark ? darkThemeOverrides : lightThemeOverrides
 );
-const isTerminalRoute = computed(() => route.path === '/terminal' || route.path === '/multi-terminal' || route.path === '/commander');
+const TERMINAL_PATHS = new Set(['/terminal', '/multi-terminal', '/commander']);
+const isTerminalRoute = computed(() => TERMINAL_PATHS.has(route.path));
+// Views that fill the main area and scroll inside themselves (a table, a terminal): the
+// content box takes the area's height, so their `height: 100%` resolves.
+const FILL_PATHS = new Set([...TERMINAL_PATHS, '/files']);
+const isFillRoute = computed(() => FILL_PATHS.has(route.path));
+// A view that holds a terminal fades by opacity alone: a transform on xterm's box
+// would move it under the cursor and its measurement.
+const routeTransition = (path: string) => (TERMINAL_PATHS.has(path) ? 'route-fade-plain' : 'route-fade');
+
+// Desktop (768 px and wider): the side rail on the left of every view, no top bar.
+// Phone: a bar on top. The sign-in page has neither. The width is read at once, so a
+// phone never draws the rail first.
+const { width, breakpoints } = useResponsive();
+// The page mounts before the router has read the address (its first route matches
+// nothing): no navigation is drawn until it has, so the sign-in page never flashes the
+// rail and a phone's terminal never flashes the 36 px bar.
+const showChrome = computed(() => route.matched.length > 0 && route.path !== '/login');
+const railShell = computed(() => showChrome.value && width.value >= breakpoints.tablet);
+const frameClass = computed(() => `app-frame ${railShell.value ? 'app-frame--rail' : 'app-frame--bar'}`);
+// The main area fills what the header and the progress strip leave. A terminal route
+// sizes itself to that area and never scrolls the page; every other view scrolls in it.
+// Naive applies this to the area's own scroll container.
+const mainScrollStyle = computed<CSSProperties>(() => ({
+  minHeight: '0px',
+  overflowY: isFillRoute.value ? 'hidden' : 'auto',
+  overflowX: 'hidden',
+}));
 
 const showRecovery = ref(false);
 const recoverySessions = ref<LostSession[]>([]);
@@ -130,18 +157,25 @@ onUnmounted(() => {
     <NLoadingBarProvider>
     <NDialogProvider>
     <NNotificationProvider placement="top-right" :max="5">
-    <NMessageProvider>
+    <NMessageProvider placement="bottom">
       <PingNotificationHandler />
-      <NLayout class="app-layout">
-        <NLayoutHeader bordered>
-          <AppHeader />
-        </NLayoutHeader>
-        <ProgressStrip />
-        <NLayoutContent class="app-main">
-          <div class="app-content" :class="{ 'terminal-mode': isTerminalRoute }">
-            <RouterView />
+      <NLayout class="app-layout" :content-class="frameClass">
+        <AppHeader v-if="showChrome" />
+        <div class="app-stage">
+          <div class="app-frame-fixed">
+            <ProgressStrip />
           </div>
-        </NLayoutContent>
+          <NLayoutContent class="app-main" :content-style="mainScrollStyle">
+            <div class="app-content" :class="{ 'terminal-mode': isTerminalRoute, 'fill-mode': isFillRoute }">
+              <!-- Keyed by path: a change of ?box= or ?dir= alone keeps the view. -->
+              <RouterView v-slot="{ Component, route: viewRoute }">
+                <Transition :name="routeTransition(viewRoute.path)" mode="out-in">
+                  <component :is="Component" :key="viewRoute.path" />
+                </Transition>
+              </RouterView>
+            </div>
+          </NLayoutContent>
+        </div>
       </NLayout>
       <RecoveryModal
         :show="showRecovery"
@@ -158,13 +192,42 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The page frame is the height of the window. On a desktop it is a row: the side rail,
+   then the stage. On a phone it is a column: the bar, then the stage. The stage is a
+   column: the progress strip keeps its own height (none while it is empty), the main
+   area takes the rest. */
 .app-layout {
   height: var(--vh-full, 100vh);
 }
 
+.app-layout :deep(.app-frame) {
+  display: flex;
+  height: 100%;
+}
+
+.app-layout :deep(.app-frame--rail) {
+  flex-direction: row;
+}
+
+.app-layout :deep(.app-frame--bar) {
+  flex-direction: column;
+}
+
+.app-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-frame-fixed {
+  flex: 0 0 auto;
+}
+
 .app-main {
-  height: calc(var(--vh-full, 100vh) - 64px);
-  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .app-content {
@@ -173,26 +236,23 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 
+.app-content.fill-mode {
+  height: 100%;
+  box-sizing: border-box;
+}
+
 .app-content.terminal-mode {
   padding: 0;
   max-width: none;
-  height: 100%;
 }
 
-@media (max-width: 768px) {
-  .app-main {
-    height: calc(var(--vh-full, 100vh) - 16px);
-    overflow: hidden;
-  }
-
+@media (max-width: 767px) {
   .app-content {
     padding: 8px;
   }
 
   .app-content.terminal-mode {
     padding: 0;
-    height: 100%;
-    overflow: hidden;
   }
 }
 

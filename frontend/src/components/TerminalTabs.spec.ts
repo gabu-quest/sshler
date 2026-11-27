@@ -39,7 +39,7 @@ vi.mock('@/components/Terminal.vue', async () => {
         showTitleBar: { type: Boolean, default: true },
         externalInput: { type: Boolean, default: false },
       },
-      emits: ['connected', 'disconnected'],
+      emits: ['connected', 'disconnected', 'session-select'],
       // TerminalTabs drives the active ref via these — stub them as no-ops.
       methods: {
         fit() {},
@@ -50,7 +50,8 @@ vi.mock('@/components/Terminal.vue', async () => {
       // String(undefined) === 'undefined' — distinguishes "never passed" from false.
       template:
         '<div class="term-stub" :data-native-shell="String(nativeShell)" :data-shell="shell" ' +
-        ':data-session="sessionName" :data-directory="directory" />',
+        ':data-session="sessionName" :data-directory="directory" ' +
+        '@click="$emit(\'session-select\', { session_name: \'work\', working_directory: \'C:\\\\x\' })" />',
     }),
   }
 })
@@ -256,5 +257,17 @@ describe('TerminalTabs', () => {
     await rerender({ boxName: 'local', directory: 'C:\\work\\alpha', seedShell: 'pwsh' })
     await nextTick()
     expect(container.querySelector('.term-stub')!.getAttribute('data-session')).toBe('alpha')
+  })
+
+  // Mutation: the pane's session-select not passed on -> a tab's session button picks nothing.
+  it('passes a pane\'s session pick on to its parent', async () => {
+    const { container, emitted } = render(TerminalTabs, {
+      props: { boxName: 'local', directory: 'C:\\work\\alpha', seedShell: 'pwsh' },
+      global: { plugins: [createPinia()] },
+    })
+    await nextTick()
+    ;(container.querySelector('.term-stub') as HTMLElement).click()
+
+    expect(emitted().sessionSelect).toEqual([[{ session_name: 'work', working_directory: 'C:\\x' }]])
   })
 })

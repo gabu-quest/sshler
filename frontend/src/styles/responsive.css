@@ -1,10 +1,5 @@
 /* Responsive breakpoints and spacing */
 :root {
-  --bp-mobile: 480px;
-  --bp-tablet: 768px;
-  --bp-tablet-lg: 1024px;
-  --bp-desktop: 1400px;
-
   /* Touch-friendly minimum target sizes */
   --touch-target: 44px;
   --touch-target-sm: 36px;

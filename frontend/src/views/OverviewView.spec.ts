@@ -221,13 +221,11 @@ describe("OverviewView: Restore layout on the box card's session list", () => {
   });
 
   async function openList(container: Element): Promise<void> {
-    await waitFor(() => expect(container.querySelector(".session-link")).not.toBeNull());
-    await fireEvent.mouseEnter(container.querySelector(".session-link")!);
-    await waitFor(() => expect(document.querySelector(".session-tooltip")).not.toBeNull());
+    await waitFor(() => expect(container.querySelector(".session-chip")).not.toBeNull());
   }
 
   function restoreRows(): string[] {
-    return Array.from(document.querySelectorAll(".session-tooltip .session-item"))
+    return Array.from(document.querySelectorAll(".session-chip"))
       .filter((item) => item.querySelector(".restore-layout"))
       .map((item) => item.querySelector(".session-name")!.textContent ?? "");
   }
@@ -238,7 +236,7 @@ describe("OverviewView: Restore layout on the box card's session list", () => {
     await openList(container);
 
     expect(restoreRows()).toEqual(["web"]);
-    expect(document.querySelector(".session-tooltip .restore-layout")!.textContent!.trim()).toBe("Restore layout");
+    expect(document.querySelector(".session-chip .restore-layout")!.textContent!.trim()).toBe("Restore layout");
   });
 
   it("one press recreates the session by the recovery route, then the row is running", async () => {
@@ -248,12 +246,12 @@ describe("OverviewView: Restore layout on the box card's session list", () => {
     vi.mocked(recreateSession).mockResolvedValue({ status: "ok", message: "Recreated web" } as never);
     const { container } = render(OverviewView);
     await openList(container);
-    await fireEvent.click(document.querySelector(".session-tooltip .restore-layout")!);
+    await fireEvent.click(document.querySelector(".session-chip .restore-layout")!);
 
     await waitFor(() => expect(restoreRows()).toEqual([]));
     expect(vi.mocked(recreateSession).mock.calls).toEqual([["2", "tok"]]);
     expect(push).not.toHaveBeenCalled();
-    expect(document.querySelector(".session-tooltip .session-item")!.classList.contains("inactive")).toBe(false);
+    expect(document.querySelector(".session-chip")!.classList.contains("inactive")).toBe(false);
   });
 
   it("a failed restore shows its message on the row and keeps the entry", async () => {
@@ -261,13 +259,102 @@ describe("OverviewView: Restore layout on the box card's session list", () => {
     vi.mocked(recreateSession).mockRejectedValue(new ApiError(404, "not_found", "Session has no saved layout"));
     const { container } = render(OverviewView);
     await openList(container);
-    await fireEvent.click(document.querySelector(".session-tooltip .restore-layout")!);
+    await fireEvent.click(document.querySelector(".session-chip .restore-layout")!);
 
     await waitFor(() =>
-      expect(document.querySelector(".session-tooltip .restore-failure")?.textContent?.trim()).toBe(
+      expect(document.querySelector(".session-chip .restore-failure")?.textContent?.trim()).toBe(
         "Not found — Session has no saved layout",
       ),
     );
     expect(restoreRows()).toEqual(["web"]);
+  });
+});
+
+describe("OverviewView: the box card's links and session chips", () => {
+  const mk = (i: number) => ({
+    id: String(i), box: "build-box", session_name: `s${i}`, working_directory: `/h/s${i}`,
+    created_at: i, last_accessed_at: i, active: true, window_count: 1, metadata: {}, restorable: false,
+  });
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+    FakeStream.last = null;
+    vi.stubGlobal("EventSource", FakeStream);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["my box", "my%20box"],
+    ["a%20b", "a%2520b"],
+  ])("a box named %s: Files, Multi and Terminal carry the encoded name", async (name, encoded) => {
+    vi.mocked(fetchBoxes).mockResolvedValue([
+      { name, host: "h", transport: "ssh", favorites: [], pinned: false, default_dir: "/" },
+    ] as never);
+    vi.mocked(syncBoxSessions).mockResolvedValue([] as never);
+    const { container } = render(OverviewView);
+    await waitFor(() => expect(container.querySelector("[data-testid='box-files']")).not.toBeNull());
+    await fireEvent.click(container.querySelector("[data-testid='box-files']")!);
+    await fireEvent.click(container.querySelector("[data-testid='box-multi']")!);
+    await fireEvent.click(container.querySelector("[data-testid='box-terminal']")!);
+    expect(push.mock.calls).toEqual([
+      [`/files?box=${encoded}`],
+      [`/multi-terminal?box=${encoded}`],
+      [`/terminal?box=${encoded}`],
+    ]);
+  });
+
+  it("twelve sessions show four chips, then all of them, then four again", async () => {
+    vi.mocked(fetchBoxes).mockResolvedValue([
+      { name: "build-box", host: "h", transport: "ssh", favorites: [], pinned: false, default_dir: "/" },
+    ] as never);
+    vi.mocked(syncBoxSessions).mockResolvedValue(Array.from({ length: 12 }, (_, i) => mk(i + 1)) as never);
+    const { container } = render(OverviewView);
+    await waitFor(() => expect(container.querySelectorAll(".session-chip")).toHaveLength(4));
+    const more = container.querySelector("[data-testid='sessions-toggle']")!;
+    expect(more.textContent!.trim()).toBe("+8 more");
+    await fireEvent.click(more);
+    await waitFor(() => expect(container.querySelectorAll(".session-chip")).toHaveLength(12));
+    expect(container.querySelector("[data-testid='sessions-toggle']")!.textContent!.trim()).toBe("Show less");
+    await fireEvent.click(container.querySelector("[data-testid='sessions-toggle']")!);
+    await waitFor(() => expect(container.querySelectorAll(".session-chip")).toHaveLength(4));
+  });
+
+  it("a chip opens the terminal of its session on a tap", async () => {
+    vi.mocked(fetchBoxes).mockResolvedValue([
+      { name: "build-box", host: "h", transport: "ssh", favorites: [], pinned: false, default_dir: "/" },
+    ] as never);
+    vi.mocked(syncBoxSessions).mockResolvedValue([mk(1)] as never);
+    const { container } = render(OverviewView);
+    await waitFor(() => expect(container.querySelector(".session-chip .session-open")).not.toBeNull());
+    await fireEvent.click(container.querySelector(".session-chip .session-open")!);
+    expect(push.mock.calls).toEqual([["/terminal?box=build-box&session=s1"]]);
+  });
+
+  it("a favourite on a box with a space has encoded links and a settings button that is not hover-only", async () => {
+    vi.mocked(fetchBoxes).mockResolvedValue([
+      { name: "my box", host: "h", transport: "ssh", favorites: ["/h/proj one"], pinned: false, default_dir: "/" },
+    ] as never);
+    vi.mocked(syncBoxSessions).mockResolvedValue([] as never);
+    const { container } = render(OverviewView);
+    await waitFor(() => expect(container.querySelectorAll(".favorite-tile")).toHaveLength(1));
+    const hrefs = Array.from(container.querySelectorAll(".favorite-tile a")).map((a) => a.getAttribute("href"));
+    expect(hrefs).toEqual([
+      "/app/terminal?box=my%20box&dir=%2Fh%2Fproj%20one",
+      "/app/files?box=my%20box&path=%2Fh%2Fproj%20one",
+    ]);
+    expect(container.querySelector(".favorite-tile .fav-settings-btn")).not.toBeNull();
+  });
+
+  it("with no favourites there is no favourites section", async () => {
+    vi.mocked(fetchBoxes).mockResolvedValue([
+      { name: "build-box", host: "h", transport: "ssh", favorites: [], pinned: false, default_dir: "/" },
+    ] as never);
+    vi.mocked(syncBoxSessions).mockResolvedValue([] as never);
+    const { container } = render(OverviewView);
+    await waitFor(() => expect(container.querySelectorAll(".server-card")).toHaveLength(1));
+    expect(container.querySelectorAll(".favorite-tile")).toHaveLength(0);
   });
 });
