@@ -36,6 +36,7 @@ import { boxStats, recreateSession, statsStreamUrl } from "@/api/http";
 import { failureText, errorText } from "@/api/apiError";
 import type { ApiSession, BoxStats } from "@/api/types";
 import BoxSearchInput from "@/components/BoxSearchInput.vue";
+import { filesUrl, openInBackgroundTab, terminalUrl } from "@/utils/dirLinks";
 import { resetFavicon, getEmojiForString, getEmojiForBox } from "@/utils/emoji-favicon";
 
 const router = useRouter();
@@ -181,23 +182,6 @@ const favoritesByBox = computed(() => {
 
 // Flat list for total count
 const allFavorites = computed(() => favoritesByBox.value.flatMap(g => g.items));
-
-// Build URLs for favorites (used as href for middle-click support)
-const getFavoriteTerminalUrl = (box: string, path: string) => {
-  return `/app/terminal?box=${encodeURIComponent(box)}&dir=${encodeURIComponent(path)}`
-};
-
-const getFavoriteFilesUrl = (box: string, path: string) => {
-  return `/app/files?box=${encodeURIComponent(box)}&path=${encodeURIComponent(path)}`
-};
-
-// Handle left-click: open in background tab (don't switch focus)
-const openInBackgroundTab = (event: MouseEvent, url: string) => {
-  event.preventDefault();
-  window.open(url, '_blank');
-  // Try to keep focus on current tab (not always reliable)
-  window.focus();
-};
 
 // Favorite notes (localStorage-based)
 const showFavSettings = ref(false)
@@ -388,20 +372,20 @@ const toggleSessions = (boxName: string) => {
               <span v-if="getFavNote(fav.box, fav.path)" class="favorite-subtitle">{{ getFavNote(fav.box, fav.path) }}</span>
             </span>
             <a
-              :href="getFavoriteTerminalUrl(fav.box, fav.path)"
+              :href="terminalUrl(fav.box, fav.path)"
               class="favorite-btn"
               :title="t('overview.terminal')"
               :aria-label="t('overview.terminal')"
-              @click="openInBackgroundTab($event, getFavoriteTerminalUrl(fav.box, fav.path))"
+              @click="openInBackgroundTab($event, terminalUrl(fav.box, fav.path))"
             >
               <NIcon size="14"><PhTerminal weight="duotone" /></NIcon>
             </a>
             <a
-              :href="getFavoriteFilesUrl(fav.box, fav.path)"
+              :href="filesUrl(fav.box, fav.path)"
               class="favorite-btn"
               :title="t('overview.files')"
               :aria-label="t('overview.files')"
-              @click="openInBackgroundTab($event, getFavoriteFilesUrl(fav.box, fav.path))"
+              @click="openInBackgroundTab($event, filesUrl(fav.box, fav.path))"
             >
               <NIcon size="14"><PhFolderOpen weight="duotone" /></NIcon>
             </a>
