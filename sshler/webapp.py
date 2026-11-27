@@ -971,7 +971,10 @@ def make_app(settings: ServerSettings | None = None) -> FastAPI:
             # answers as to a stranger, so it cannot be used to go on guessing.
             if not authenticated and basic_sent and not locked:
                 if settings.auth_manager.verify_basic_auth_header(auth_header):
-                    auth_tracker.reset_failures(client_ip)
+                    # The sign-in route judges the body's credentials and resets the
+                    # count itself on a good one; a valid header must not wipe it first.
+                    if request.scope["path"].rstrip("/") != "/api/v1/auth/login":
+                        auth_tracker.reset_failures(client_ip)
                     authenticated = True
                 else:
                     auth_tracker.record_failure(client_ip)

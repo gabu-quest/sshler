@@ -380,3 +380,28 @@ def test_pdf_render_rejects_oversize_payload(tmp_path, monkeypatch):
         assert resp.json()["detail"] == "HTML payload too large"
     finally:
         client.close()
+
+
+def test_refresh_box_defined_only_in_boxes_yaml_keeps_it(tmp_path, monkeypatch):
+    """A box with no SSH config entry has nothing to refresh to: the box and the saved
+    file stay as they are."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    entry = {"name": "only-yaml", "host": "10.0.0.9", "user": "me", "port": 2222}
+    (config_dir / "boxes.yaml").write_text(
+        yaml.safe_dump({"boxes": [entry]}, sort_keys=False), encoding="utf-8"
+    )
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text("", encoding="utf-8")
+    monkeypatch.setenv("SSHLER_SSH_CONFIG", str(ssh_config))
+    before = (config_dir / "boxes.yaml").read_text(encoding="utf-8")
+
+    client = build_client(config_dir, monkeypatch)
+    try:
+        resp = client.post("/api/v1/boxes/only-yaml/refresh", headers=auth_headers())
+        assert resp.status_code == 200
+        assert (config_dir / "boxes.yaml").read_text(encoding="utf-8") == before
+        names = [b["name"] for b in client.get("/api/v1/boxes", headers=auth_headers()).json()]
+        assert "only-yaml" in names
+    finally:
+        client.close()
