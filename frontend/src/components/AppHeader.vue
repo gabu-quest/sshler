@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from "vue";
+import { computed, nextTick, ref, onMounted, onUnmounted, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { NIcon, NDrawer, NDrawerContent, NTooltip, NPopover } from "naive-ui";
@@ -174,6 +174,69 @@ const toolsActive = computed(() => toolLinks.value.some((link) => isActive(link.
 const railEl = ref<HTMLElement | null>(null);
 const toolsOpen = ref(false);
 const progressPickerOpen = ref(false);
+const toolsButton = ref<HTMLElement | null>(null);
+// Where the tools flyout opens: against the rail's visible right edge (the panel is
+// slid left under its clip when collapsed, so the button's own box reaches past it),
+// level with the Tools button. The popover adds a 6 px offset of its own to the point it
+// is given, so the point sits 3 px inside the edge and the menu opens 3 px outside it
+// (expanded: 211, where the trigger-anchored menu opened at 213).
+const FLYOUT_GAP = -3;
+const flyoutX = ref(0);
+const flyoutY = ref(0);
+
+function toggleTools() {
+  if (toolsOpen.value) {
+    toolsOpen.value = false;
+    return;
+  }
+  const panel = railEl.value?.querySelector(".rail-panel");
+  const button = toolsButton.value;
+  if (!panel || !button) return;
+  flyoutX.value = panel.getBoundingClientRect().right + FLYOUT_GAP;
+  flyoutY.value = button.getBoundingClientRect().top;
+  toolsOpen.value = true;
+  // The keys follow the menu: its first tool takes the focus once it is drawn.
+  void nextTick(() => toolItems()[0]?.focus());
+}
+
+function toolItems(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('[data-testid="rail-tools-menu"] .rail-tools-item'),
+  );
+}
+
+// The menu's x/y are measured when it opens; a resize or a scroll of the rail moves the
+// button from under it, so either closes it.
+function closeTools() {
+  toolsOpen.value = false;
+}
+
+const TOOLS_KEY_STEP: Record<string, (index: number, count: number) => number> = {
+  ArrowDown: (index, count) => (index + 1) % count,
+  ArrowUp: (index, count) => (index - 1 + count) % count,
+  Home: () => 0,
+  End: (_index, count) => count - 1,
+};
+
+function onToolsMenuKeydown(event: KeyboardEvent) {
+  const step = TOOLS_KEY_STEP[event.key];
+  if (!step) return;
+  const items = toolItems();
+  if (!items.length) return;
+  event.preventDefault();
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  items[step(Math.max(index, 0), items.length)]?.focus();
+}
+
+function onToolsClickOutside(event: MouseEvent) {
+  if (event.target instanceof Node && toolsButton.value?.contains(event.target)) return;
+  toolsOpen.value = false;
+}
+
+// The rail moving under an open flyout would leave it at the old place: close it.
+watch(() => appStore.railCollapsed, () => {
+  toolsOpen.value = false;
+});
 const toggleLabel = computed(() => (appStore.railCollapsed ? t("rail.expand") : t("rail.collapse")));
 
 function closeRail() {
@@ -218,6 +281,11 @@ function isTypingTarget(el: EventTarget | null): boolean {
 const handleKeydown = (event: KeyboardEvent) => {
   if (isTypingTarget(event.target)) return;
   if (event.key === "Escape") {
+    if (toolsOpen.value) {
+      toolsOpen.value = false;
+      toolsButton.value?.focus();
+      return;
+    }
     if (!isPhone.value && !appStore.railCollapsed) closeRail();
     return;
   }
@@ -271,6 +339,7 @@ watch(() => bootstrapStore.signedIn, (signedIn) => {
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('resize', closeTools);
   document.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   if (!document.hidden) {
@@ -280,6 +349,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('resize', closeTools);
   document.removeEventListener('pointerdown', onPointerDown, true);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   stopStatsPolling();
@@ -298,7 +368,7 @@ onUnmounted(() => {
   >
     <div class="rail-shadow" aria-hidden="true" />
     <div class="rail-panel">
-      <div class="rail-inner">
+      <div class="rail-inner" @scroll="closeTools">
         <div class="rail-top">
           <RouterLink class="rail-item rail-brand" to="/" :aria-label="t('nav.overview')" @click="onPick">
             <span class="rail-icon"><img src="/logo.png" alt="" class="brand-logo" /></span>
@@ -338,35 +408,38 @@ onUnmounted(() => {
             <span class="rail-hint">{{ link.shortcut }}</span>
           </RouterLink>
 
+          <button
+            ref="toolsButton"
+            type="button"
+            class="rail-item"
+            :class="{ active: toolsActive }"
+            data-testid="rail-tools"
+            aria-haspopup="menu"
+            :aria-expanded="toolsOpen"
+            :aria-label="t('nav.tools')"
+            :title="t('nav.tools')"
+            @click="toggleTools"
+          >
+            <span class="rail-icon">
+              <NIcon size="18" aria-hidden="true"><PhToolbox weight="duotone" /></NIcon>
+            </span>
+            <span class="rail-label">{{ t('nav.tools') }}</span>
+            <span class="rail-hint">
+              <NIcon size="12" aria-hidden="true"><PhCaretRight weight="bold" /></NIcon>
+            </span>
+          </button>
+
           <NPopover
-            trigger="click"
+            trigger="manual"
             placement="right-start"
             :show="toolsOpen"
+            :x="flyoutX"
+            :y="flyoutY"
             :show-arrow="false"
             class="rail-flyout"
-            @update:show="(value: boolean) => (toolsOpen = value)"
+            @clickoutside="onToolsClickOutside"
           >
-            <template #trigger>
-              <button
-                type="button"
-                class="rail-item"
-                :class="{ active: toolsActive }"
-                data-testid="rail-tools"
-                aria-haspopup="menu"
-                :aria-expanded="toolsOpen"
-                :aria-label="t('nav.tools')"
-                :title="t('nav.tools')"
-              >
-                <span class="rail-icon">
-                  <NIcon size="18" aria-hidden="true"><PhToolbox weight="duotone" /></NIcon>
-                </span>
-                <span class="rail-label">{{ t('nav.tools') }}</span>
-                <span class="rail-hint">
-                  <NIcon size="12" aria-hidden="true"><PhCaretRight weight="bold" /></NIcon>
-                </span>
-              </button>
-            </template>
-            <div class="rail-tools-menu" data-testid="rail-tools-menu" role="menu">
+            <div class="rail-tools-menu" data-testid="rail-tools-menu" role="menu" @keydown="onToolsMenuKeydown">
               <RouterLink
                 v-for="link in toolLinks"
                 :key="link.to"

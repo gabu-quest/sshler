@@ -78,7 +78,9 @@ from .remote import (
     in_directory,
     path_word,
     remote_directory,
+    remote_home,
     remote_path,
+    remote_real_home,
 )
 
 logger = logging.getLogger(__name__)
@@ -484,6 +486,27 @@ async def _remote_own_name_by_case(sftp_client, source: str, target: str) -> boo
         return False
     names = {entry.filename for entry in await sftp_client.readdir(target_dir)}
     return target_name not in names
+
+
+async def _remote_refuse_home_or_above(connection, sftp_client, paths: Sequence[str]) -> None:
+    """Refuse the whole batch (400, nothing touched) when a resolved path is the home
+    folder or above it, or is a link to either. Both the paths and the home are
+    compared as spelled and as the server's real path, so a link anywhere along
+    either (`/home -> /export/home`, `/srv/h -> /home`) cannot hide the home."""
+    homes = [await remote_home(connection)]
+    real_home = await remote_real_home(connection, sftp_client)
+    if real_home is not None and real_home not in homes:
+        homes.append(real_home)
+    for path in paths:
+        names = [path]
+        with contextlib.suppress(asyncssh.SFTPError):  # a missing path fails on its own later
+            names.append(str(await sftp_client.realpath(path)))
+        for name in names:
+            for base in homes:
+                try:
+                    PathValidator.refuse_home_or_ancestor(name, base)
+                except ValidationError as exc:
+                    raise Failure(REASON_INVALID, str(exc)) from exc
 
 
 async def _remote_realpath_of_missing(sftp_client, folder: str) -> str:
@@ -1201,10 +1224,15 @@ class RemoteFiles:
         ensure_source_unchanged(fingerprint, after, target)
         await sftp_client.remove(path)
 
-    async def delete(self, path: str) -> None:
+    async def delete(self, path: str) -> str:
+        PathValidator.validate_remote_path(path)
+        connection = await self._conn()
+        target = self._spelled.note(await remote_path(connection, path), path)
         sftp_client = await self._session()
-        async with self._needs(path, folder=False):
-            await sftp_client.remove(path)
+        await _remote_refuse_home_or_above(connection, sftp_client, [target])
+        async with self._needs(target, folder=False):
+            await sftp_client.remove(target)  # a link is removed, not followed
+        return target
 
     async def chmod(self, path: str, mode: int) -> None:
         await sftp_chmod(await self._conn(), path, mode)
@@ -1214,10 +1242,13 @@ class RemoteFiles:
     ) -> str:
         PathValidator.validate_remote_path(path)
         new_name = PathValidator.validate_filename(new_name)
-        source = self._spelled.note(await remote_path(await self._conn(), path), path)
+        connection = await self._conn()
+        source = self._spelled.note(await remote_path(connection, path), path)
+        sftp_client = await self._session()
+        await _remote_refuse_home_or_above(connection, sftp_client, [source])
         target = str(PurePosixPath(source).parent / new_name)
         return await _remote_place(
-            await self._session(),
+            sftp_client,
             source,
             target,
             move=True,
@@ -1245,13 +1276,16 @@ class RemoteFiles:
         remote_dest_dir = self._spelled.note(
             await remote_path(connection, destination), destination
         )
+        sftp_client = await self._session()
+        if move:
+            await _remote_refuse_home_or_above(connection, sftp_client, [remote_src])
         name = new_name or PurePosixPath(remote_src).name
         if not move:
             # Named after the resolved source: `~` alone has no usable name.
             name = PathValidator.validate_filename(name)
         target = str(PurePosixPath(remote_dest_dir) / name)
         return await _remote_place(
-            await self._session(),
+            sftp_client,
             remote_src,
             target,
             move=move,
@@ -1418,11 +1452,13 @@ class RemoteFiles:
             connection = await self._conn()
             validated = await _resolve_tilde_paths(connection, validated, failed)
             sftp_client = await self._session()
+            await _remote_refuse_home_or_above(connection, sftp_client, [v for _, v in validated])
             for orig, vpath in validated:
                 self._spelled.note(vpath, orig)
                 try:
-                    attrs = await sftp_client.stat(vpath)
-                    if stat_mod.S_ISDIR(attrs.permissions or 0):
+                    attrs = await sftp_client.lstat(vpath)  # a link is removed, not followed
+                    mode = attrs.permissions or 0
+                    if stat_mod.S_ISDIR(mode) and not stat_mod.S_ISLNK(mode):
                         await connection.run(remove_tree_command(vpath), check=True)
                     else:
                         await sftp_client.remove(vpath)
@@ -1467,6 +1503,10 @@ class RemoteFiles:
             dest_resolved = await _resolve_tilde_destination(connection, dest_validated)
             validated = await _resolve_tilde_paths(connection, validated, failed)
             sftp_client = await self._session()
+            if move:
+                await _remote_refuse_home_or_above(
+                    connection, sftp_client, [v for _, v in validated]
+                )
             for orig, vpath in validated:
                 self._spelled.note(vpath, orig)
                 target = str(PurePosixPath(dest_resolved) / PurePosixPath(vpath).name)

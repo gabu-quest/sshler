@@ -20,6 +20,8 @@ import shlex
 import weakref
 from pathlib import PurePosixPath
 
+import asyncssh
+
 from ..validation import PathValidator, ValidationError
 from .failure import REASON_INVALID, REASON_UNREACHABLE, Failure
 
@@ -58,6 +60,29 @@ async def remote_home(connection) -> str:
     except TypeError:
         pass  # a connection that cannot be weakly referenced is asked every time
     return home
+
+
+# The server's real path of each live connection's home folder, for the home guard.
+_real_homes: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
+
+
+async def remote_real_home(connection, sftp_client) -> str | None:
+    """The real path of the home folder (a link along it followed), asked once per
+    connection; None when the server cannot say."""
+    try:
+        return _real_homes[connection]
+    except (KeyError, TypeError):
+        pass
+    home = await remote_home(connection)
+    try:
+        real = str(await sftp_client.realpath(home))
+    except asyncssh.SFTPError:
+        return None
+    try:
+        _real_homes[connection] = real
+    except TypeError:
+        pass
+    return real
 
 
 async def resolve_tilde(connection, path: str) -> str:

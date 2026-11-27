@@ -130,8 +130,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
     ) -> APISimpleMessage:
         box = deps.get_box_or_404(application_config, name)
         async with box_files(deps, box, application_config, _FILE) as files:
-            target = await files.path(payload.path)
-            await files.delete(target)
+            target = await files.delete(payload.path)
         return APISimpleMessage(status="ok", message="deleted", path=target)
 
     @router.post("/boxes/{name}/move", response_model=APISimpleMessage)

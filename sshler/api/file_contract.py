@@ -291,8 +291,10 @@ class BoxFiles(Protocol):
         (``ensure_source_unchanged``, which names ``target``); otherwise keep it."""
         ...
 
-    async def delete(self, path: str) -> None:
-        """Delete one file."""
+    async def delete(self, path: str) -> str:
+        """Delete one file, given as the client sent it; a link is removed, never what it
+        points to, and the home folder or a folder above it is refused. Returns the path
+        removed."""
         ...
 
     async def chmod(self, path: str, mode: int) -> None: ...

@@ -18,7 +18,7 @@ from sshler.webapp import ServerSettings, make_app
 
 
 class _Sleeps:
-    """Stand-in for ``asyncio`` inside sshler.snapshot: each sleep runs the
+    """Stand-in for the loop's wait (``_sleep_or_wake``): each wait runs the
     next scripted step (which may change settings), then the loop is cancelled
     once the script is used up."""
 
@@ -29,7 +29,7 @@ class _Sleeps:
         self.steps = list(steps)
         self.requested: list[float] = []
 
-    async def sleep(self, delay: float) -> None:
+    async def wait(self, delay: float) -> None:
         self.requested.append(delay)
         if not self.steps:
             raise asyncio.CancelledError
@@ -50,7 +50,7 @@ async def _run_loop(settings, steps, monkeypatch):
         return 0
 
     sleeps = _Sleeps(settings, steps)
-    monkeypatch.setattr(snapshot, "asyncio", sleeps)
+    monkeypatch.setattr(snapshot, "_sleep_or_wake", sleeps.wait)
     monkeypatch.setattr(snapshot, "snapshot_all_sessions", fake_snapshot_all)
     monkeypatch.setattr(snapshot.state, "purge_stale_snapshots_async", fake_purge)
     with pytest.raises(asyncio.CancelledError):

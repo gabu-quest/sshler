@@ -467,3 +467,128 @@ async def test_typing_a_custom_folder_in_the_terminal_view_opens_no_socket_until
     await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
     await page.wait_for_timeout(1000)
     assert len(urls) == 1, f"Enter opened {len(urls)} sockets"
+
+
+async def open_tools(page) -> dict[str, dict[str, float]]:
+    """Click Tools (on its icon, as a user does) and return the button's and the open
+    menu's boxes once the menu has stopped moving."""
+    await page.get_by_test_id("rail-tools").click(position=ICON)
+    await expect(page.locator(".rail-flyout")).to_be_visible()
+    return await page.evaluate(
+        """async () => {
+          const rect = (el) => {
+            const r = el.getBoundingClientRect();
+            return {left: r.left, top: r.top, right: r.right, bottom: r.bottom};
+          };
+          const menu = document.querySelector('.rail-flyout');
+          let last = null;
+          for (let i = 0; i < 40; i++) {
+            const now = JSON.stringify(rect(menu));
+            if (now === last) break;
+            last = now;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return {
+            button: rect(document.querySelector('[data-testid="rail-tools"]')),
+            menu: rect(menu),
+          };
+        }"""
+    )
+
+
+async def settled_box(page, selector: str) -> dict[str, float]:
+    """The box of *selector* once two reads 300 ms apart agree (the terminal refits after load)."""
+    last = await box_of(page, selector)
+    for _ in range(20):
+        await page.wait_for_timeout(300)
+        now = await box_of(page, selector)
+        if now == last:
+            return now
+        last = now
+    raise AssertionError(f"{selector} keeps moving: {last}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locale", ["en", "ja"])
+@pytest.mark.parametrize(
+    ("collapsed", "edge"), [(True, COLLAPSED), (False, EXPANDED)], ids=["collapsed", "expanded"]
+)
+async def test_tools_menu_touches_the_rails_visible_edge(open_page, collapsed, edge, locale):
+    """At 1366 x 768 the Tools menu opens against the rail's visible right edge (52 px
+    collapsed, 208 expanded) with its top level with the Tools button, and Escape closes it.
+
+    Mutation: anchor the menu to the button's box (full 208 px wide under the clip) -> the
+    collapsed menu's left edge is about 208, not 52.
+    """
+    page = await open_page(LAPTOP_VIEWPORT)
+    await page.goto("/app/terminal?box=local", wait_until="load")
+    await page.evaluate(f"localStorage.setItem('sshler:locale', '{locale}')")
+    await page.reload(wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    if not collapsed:
+        await page.get_by_test_id("rail-toggle").click(position=ICON)
+        await wait_panel_at(page, 0)
+    terminal_before = await settled_box(page, ".xterm-screen")
+
+    boxes = await open_tools(page)
+    assert abs(boxes["menu"]["left"] - edge) <= 4, boxes
+    assert abs(boxes["menu"]["top"] - boxes["button"]["top"]) <= 4, boxes
+    await expect(page.get_by_test_id("rail-tools")).to_have_attribute("aria-expanded", "true")
+    # Opening Tools neither expands the rail nor resizes the terminal.
+    await wait_panel_at(page, 0 if not collapsed else COLLAPSED - EXPANDED)
+    assert await settled_box(page, ".xterm-screen") == terminal_before
+
+    # The keys follow the menu: its first tool has the focus, the arrows move it, and
+    # Escape hands it back to the Tools button.
+    tools_items = page.locator(".rail-tools-menu .rail-tools-item")
+    await expect(tools_items.nth(0)).to_be_focused()
+    await page.keyboard.press("ArrowDown")
+    await expect(tools_items.nth(1)).to_be_focused()
+
+    await page.keyboard.press("Escape")
+    await expect(page.locator(".rail-flyout")).to_have_count(0)
+    await expect(page.get_by_test_id("rail-tools")).to_have_attribute("aria-expanded", "false")
+    await expect(page.get_by_test_id("rail-tools")).to_be_focused()
+
+    # A second click closes it, and a press on the page closes it.
+    await open_tools(page)
+    await page.get_by_test_id("rail-tools").click(position=ICON)
+    await expect(page.locator(".rail-flyout")).to_have_count(0)
+    await open_tools(page)
+    await page.mouse.click(900, 400)
+    await expect(page.locator(".rail-flyout")).to_have_count(0)
+
+
+@pytest.mark.asyncio
+async def test_tools_menu_closes_when_the_rail_collapses_under_it(open_page):
+    """Open from the expanded rail, then collapse it: the menu closes and never floats at
+    the old place (x 208).
+
+    Mutation: a menu that stays open on collapse -> `.rail-flyout` is still on the page.
+    """
+    page = await open_page(LAPTOP_VIEWPORT)
+    await page.goto("/app/terminal?box=local", wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    await page.get_by_test_id("rail-toggle").click(position=ICON)
+    await wait_panel_at(page, 0)
+    await open_tools(page)
+    await page.keyboard.press("Alt+Backslash")
+    await wait_panel_at(page, COLLAPSED - EXPANDED)
+    await expect(page.locator(".rail-flyout")).to_have_count(0)
+
+
+@pytest.mark.asyncio
+async def test_tools_menu_stays_on_screen_when_the_button_is_near_the_bottom(open_page):
+    """In a 360 px tall window the Tools button is near the bottom and the menu still
+    sits inside the window, touching the rail's edge.
+
+    Mutation: a fixed top at the button's top with no flip -> the menu's bottom is
+    below 360.
+    """
+    page = await open_page({"width": 1366, "height": 360})
+    await page.goto("/app/terminal?box=local", wait_until="load")
+    await expect(page.locator(".xterm-screen")).to_be_visible(timeout=15000)
+    boxes = await open_tools(page)
+    assert abs(boxes["menu"]["left"] - COLLAPSED) <= 4, boxes
+    assert 0 <= boxes["menu"]["top"], boxes
+    assert boxes["menu"]["bottom"] <= 360, boxes

@@ -148,9 +148,11 @@ def get_router(deps: APIDependencies) -> APIRouter:
         application_config: AppConfig = Depends(deps.get_application_config),
     ) -> APIRefreshResult:
         """Remove connection overrides so SSH config values apply."""
-        deps.get_box_or_404(application_config, name)
+        box = deps.get_box_or_404(application_config, name)
         stored_override = application_config.stored.get(name)
-        if stored_override is not None:
+        # A box defined only in boxes.yaml has no SSH config to fall back to: its
+        # stored entry is the box itself, so a refresh must leave it alone.
+        if stored_override is not None and box.source != "custom":
             stored_override.host = None
             stored_override.user = None
             stored_override.port = None
@@ -244,8 +246,8 @@ async def _get_local_stats(name: str) -> APIBoxStats:
 
     import psutil
 
-    # CPU usage (average over 0.1 second)
-    cpu_percent = psutil.cpu_percent(interval=0.1)
+    # CPU usage (average over 0.1 second), sampled off the event loop
+    cpu_percent = await asyncio.to_thread(psutil.cpu_percent, 0.1)
 
     # Memory info
     mem = psutil.virtual_memory()

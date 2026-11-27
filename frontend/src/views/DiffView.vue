@@ -45,7 +45,9 @@ function scheduleFetch(idx: number) {
   if (prev) window.clearTimeout(prev);
   const id = window.setTimeout(() => {
     fetchTimers.delete(cell.id);
-    diffStore.fetchCell(idx, bootstrapStore.token);
+    // The cell may have moved or gone while the timer ran: find it by id.
+    const now = diffStore.cells.findIndex((c) => c.id === cell.id);
+    if (now >= 0) diffStore.fetchCell(now, bootstrapStore.token);
   }, FETCH_DEBOUNCE_MS);
   fetchTimers.set(cell.id, id);
 }
@@ -107,8 +109,8 @@ function onMoveDown(idx: number) {
 }
 
 function onSwapSides(idx: number) {
-  diffStore.swapSides(idx);
-  scheduleFetch(idx);
+  // The sides trade places with their content; only a failed side is asked for again.
+  if (diffStore.swapSides(idx)) scheduleFetch(idx);
   scheduleUrlWrite();
 }
 

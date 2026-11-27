@@ -74,6 +74,11 @@ class FakeSFTP:
         self.calls.append(("stat", path))
         return SimpleNamespace(permissions=0o100644)
 
+    async def realpath(self, path: str) -> str:
+        """No links on this box: every path is its own real path."""
+        self.calls.append(("realpath", path))
+        return path
+
     async def lstat(self, path: str):
         """A folder of ``folders`` and the temp file of an archive are there; every other
         name is free."""
@@ -242,12 +247,26 @@ def test_archive_extract_resolves_tilde_in_archive_and_destination(remote, archi
 
 def test_batch_delete_resolves_tilde_paths(remote):
     """Mutation: skip `_resolve_tilde_paths` in batch delete; SFTP is asked about `~/f`."""
+    remote.sftp.folders.discard(f"{HOME}/f")
+
+    async def file_lstat(path: str):
+        remote.sftp.calls.append(("lstat", path))
+        return SimpleNamespace(permissions=0o100644)
+
+    remote.sftp.lstat = file_lstat
     resp = _post(remote, "batch/delete", {"paths": ["~/f"]})
     assert (resp.status_code, resp.json()) == (
         200,
         {"status": "ok", "succeeded": ["~/f"], "failed": []},
     )
-    assert remote.sftp.calls == [("stat", f"{HOME}/f"), ("remove", f"{HOME}/f")]
+    # The home guard asks the real paths of the home and the path, then the delete
+    # looks at the path without following a link.
+    assert remote.sftp.calls == [
+        ("realpath", HOME),
+        ("realpath", f"{HOME}/f"),
+        ("lstat", f"{HOME}/f"),
+        ("remove", f"{HOME}/f"),
+    ]
 
 
 # --- excel and grep ------------------------------------------------------------
@@ -386,14 +405,14 @@ def test_batch_delete_of_a_relative_folder_starting_with_a_dash_names_it_as_a_pa
     """Mutation: pass the folder to rm as it came; rm reads `-rf` as options."""
 
     async def folder_stat(path: str):
-        remote.sftp.calls.append(("stat", path))
+        remote.sftp.calls.append(("lstat", path))
         return SimpleNamespace(permissions=0o040755)
 
-    remote.sftp.stat = folder_stat
+    remote.sftp.lstat = folder_stat
     remote.replies["rm -rf ./-rf"] = _reply()
     resp = _post(remote, "batch/delete", {"paths": ["-rf"]})
     assert (resp.status_code, resp.json()) == (
         200,
         {"status": "ok", "succeeded": ["-rf"], "failed": []},
     )
-    assert remote.log == ["rm -rf ./-rf"]
+    assert remote.log == [HOME_CMD, "rm -rf ./-rf"]  # the home guard asks for the home first

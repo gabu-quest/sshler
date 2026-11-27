@@ -17,14 +17,14 @@ async def test_open_tmux_uses_remote_ts_server():
 
     result = await open_tmux(
         FakeConnection(),
-        "/home/u/projects/blogler",
-        "blogler",
+        "/home/u/projects/app",
+        "app",
         columns=100,
         rows=40,
     )
 
     assert result == "process"
-    assert calls["command"] == ("tmux -L ts-blogler new -As blogler -c /home/u/projects/blogler")
+    assert calls["command"] == ("tmux -L ts-app new -As app -c /home/u/projects/app")
     assert calls["term_size"] == (100, 40)
 
 

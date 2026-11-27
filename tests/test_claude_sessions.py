@@ -744,3 +744,43 @@ def test_endpoints_require_token(tmp_path, monkeypatch, tmux_spy):
     client = _make_client(tmp_path, monkeypatch, work_cwd=str(work))
     resp = client.get("/api/v1/claude/sessions")
     assert resp.status_code == 403
+
+
+def test_open_answers_502_when_the_session_list_is_incomplete(tmp_path, monkeypatch, tmux_spy):
+    """A listing that could not ask every tmux server must not lead to `new-session`:
+    the session may already run on the server that was not asked."""
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".git").mkdir()
+    client = _make_client(tmp_path, monkeypatch, work_cwd=str(work))
+
+    async def incomplete():
+        return LiveSessions(frozenset(), complete=False)
+
+    monkeypatch.setattr(claude_api, "discover_local_sessions", incomplete)
+
+    resp = client.post(f"/api/v1/claude/sessions/{UUID_A}/open", headers=_headers())
+    assert resp.status_code == 502
+    assert resp.json() == {"detail": "Could not list local tmux sessions", "reason": "unreachable"}
+    assert tmux_spy["runs"] == []
+    assert tmux_spy["created"] == []
+
+
+def test_open_seen_session_is_used_even_when_the_list_is_incomplete(
+    tmp_path, monkeypatch, tmux_spy
+):
+    """A session that was seen needs no complete list: no `new-session`, the window opens."""
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".git").mkdir()
+    client = _make_client(tmp_path, monkeypatch, work_cwd=str(work))
+
+    async def incomplete():
+        return LiveSessions(frozenset({"work"}), complete=False)
+
+    monkeypatch.setattr(claude_api, "discover_local_sessions", incomplete)
+
+    resp = client.post(f"/api/v1/claude/sessions/{UUID_A}/open", headers=_headers())
+    assert resp.status_code == 200
+    assert not any(args[0] == "new-session" for _, args in tmux_spy["runs"])
+    assert any(args[0] == "new-window" for _, args in tmux_spy["runs"])

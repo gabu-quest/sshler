@@ -73,7 +73,9 @@ vi.mock("@phosphor-icons/vue", () => {
     PhCopy: stub("PhCopy"),
     PhFileText: stub("PhFileText"),
     PhFolder: stub("PhFolder"),
+    PhFolderOpen: stub("PhFolderOpen"),
     PhGitBranch: stub("PhGitBranch"),
+    PhTerminal: stub("PhTerminal"),
     PhPlay: stub("PhPlay"),
     PhRobot: stub("PhRobot"),
     PhSlidersHorizontal: stub("PhSlidersHorizontal"),
@@ -373,6 +375,84 @@ describe("ClaudeSessionsView", () => {
           JSON.stringify(["/work/alpha"]),
         );
       });
+    });
+  });
+
+  describe("group folder buttons", () => {
+    const linksOf = (c: Element) =>
+      Array.from(c.querySelectorAll<HTMLAnchorElement>("a.claude-group__btn"));
+
+    it("shows Terminal and Files links for a real folder, percent-encoded", async () => {
+      mockFetch.mockResolvedValue([makeSession("a", { repo_root: "/h/my dir 100%#x" })]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+      const hrefs = linksOf(screen.container).map((a) => a.getAttribute("href"));
+      expect(hrefs).toEqual([
+        "/app/terminal?box=local&dir=%2Fh%2Fmy%20dir%20100%25%23x",
+        "/app/files?box=local&path=%2Fh%2Fmy%20dir%20100%25%23x",
+      ]);
+    });
+
+    it("normalises a Windows folder in both forms", async () => {
+      mockFetch.mockResolvedValue([
+        makeSession("a", { cwd: "C:\\Users\\x\\repo" }),
+        makeSession("b", { cwd: "C:/Users/y/repo" }),
+      ]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+      const hrefs = linksOf(screen.container).map((a) => a.getAttribute("href"));
+      expect(hrefs).toContain("/app/terminal?box=local&dir=C%3A%2FUsers%2Fx%2Frepo");
+      expect(hrefs).toContain("/app/files?box=local&path=C%3A%2FUsers%2Fy%2Frepo");
+    });
+
+    it("shows no buttons for a group keyed by project_dir", async () => {
+      mockFetch.mockResolvedValue([
+        makeSession("a", { cwd: "", repo_root: null, project_dir: "-gone" }),
+      ]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+      expect(linksOf(screen.container)).toHaveLength(0);
+    });
+
+    it("left click opens a background tab and does not bubble to the group", async () => {
+      const open = vi.spyOn(window, "open").mockReturnValue(null);
+      mockFetch.mockResolvedValue([makeSession("a", { repo_root: "/h/p" })]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+      const parentClick = vi.fn();
+      screen.container.addEventListener("click", parentClick);
+      const [term] = linksOf(screen.container);
+      await fireEvent.click(term);
+      expect(open).toHaveBeenCalledWith("/app/terminal?box=local&dir=%2Fh%2Fp", "_blank");
+      expect(parentClick).not.toHaveBeenCalled();
+      open.mockRestore();
+    });
+
+    it("Enter on a focused button opens the background tab without bubbling", async () => {
+      const open = vi.spyOn(window, "open").mockReturnValue(null);
+      mockFetch.mockResolvedValue([makeSession("a", { repo_root: "/h/p" })]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+      const parentKey = vi.fn();
+      screen.container.addEventListener("keydown", parentKey);
+      const [, files] = linksOf(screen.container);
+      files.focus();
+      await fireEvent.keyDown(files, { key: "Enter" });
+      expect(parentKey).not.toHaveBeenCalled();
+      // jsdom does not turn Enter into a click on an anchor; the handler is on click.
+      await fireEvent.click(files);
+      expect(open).toHaveBeenCalledWith("/app/files?box=local&path=%2Fh%2Fp", "_blank");
+      open.mockRestore();
+    });
+
+    it("has English and Japanese tooltips", async () => {
+      mockFetch.mockResolvedValue([makeSession("a", { repo_root: "/h/p" })]);
+      const screen = mountView();
+      await screen.findAllByTestId("claude-session");
+      expect(linksOf(screen.container).map((a) => a.getAttribute("title"))).toEqual([
+        "Terminal",
+        "Files",
+      ]);
     });
   });
 });

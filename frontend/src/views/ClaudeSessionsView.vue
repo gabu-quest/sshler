@@ -28,10 +28,12 @@ import {
   PhCopy,
   PhFileText,
   PhFolder,
+  PhFolderOpen,
   PhGitBranch,
   PhPlay,
   PhRobot,
   PhSlidersHorizontal,
+  PhTerminal,
   PhTag,
 } from "@phosphor-icons/vue";
 
@@ -43,6 +45,7 @@ import {
   DEFAULT_RESUME_TEMPLATE,
   useClaudeSessionsStore,
 } from "@/stores/claudeSessions";
+import { filesUrl, normalizeDir, openInBackgroundTab, terminalUrl } from "@/utils/dirLinks";
 import { getEmojiForString } from "@/utils/emoji-favicon";
 import { getColorForSession } from "@/utils/sessionName";
 
@@ -109,6 +112,7 @@ const filtered = computed<ClaudeSession[]>(() => {
 
 interface SessionGroup {
   key: string; // full grouping path (repo root, or cwd fallback) — stable + unique
+  folder: string | null; // real working folder (normalised), null when keyed by Claude's log folder
   label: string; // display name (repo basename)
   emoji: string; // same per-directory emoji the rest of the app uses (local:<path>)
   color: string; // deterministic accent per repo
@@ -156,8 +160,11 @@ function recencyType(ts: number): TimelineType {
 const groups = computed<SessionGroup[]>(() => {
   const order: string[] = [];
   const map = new Map<string, ClaudeSession[]>();
+  const realFolders = new Set<string>();
   for (const session of filtered.value) {
-    const key = session.repo_root || session.cwd || session.project_dir;
+    const folder = session.repo_root || session.cwd;
+    const key = folder || session.project_dir;
+    if (folder) realFolders.add(key);
     if (!map.has(key)) {
       map.set(key, []);
       order.push(key);
@@ -168,6 +175,7 @@ const groups = computed<SessionGroup[]>(() => {
     const sessions = map.get(key)!;
     return {
       key,
+      folder: realFolders.has(key) ? normalizeDir(key) : null,
       label: baseName(key),
       // Match the directory emoji used across the app (favicon, favorites,
       // command palette): keyed by `local:<path>`.
@@ -416,6 +424,28 @@ onUnmounted(() => {
             </div>
           </template>
           <template #header-extra>
+            <span v-if="group.folder" class="claude-group__links">
+              <a
+                :href="terminalUrl('local', group.folder)"
+                class="claude-group__btn claude-group__btn--accent"
+                :title="t('overview.terminal')"
+                :aria-label="t('overview.terminal')"
+                @click.stop="openInBackgroundTab($event, terminalUrl('local', group.folder))"
+                @keydown.stop
+              >
+                <NIcon size="14"><PhTerminal weight="duotone" /></NIcon>
+              </a>
+              <a
+                :href="filesUrl('local', group.folder)"
+                class="claude-group__btn"
+                :title="t('overview.files')"
+                :aria-label="t('overview.files')"
+                @click.stop="openInBackgroundTab($event, filesUrl('local', group.folder))"
+                @keydown.stop
+              >
+                <NIcon size="14"><PhFolderOpen weight="duotone" /></NIcon>
+              </a>
+            </span>
             <span class="claude-group__summary">
               {{ t(
                 group.sessions.length === 1
@@ -684,6 +714,31 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.claude-group__links {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+}
+.claude-group__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.claude-group__btn:hover {
+  background: var(--hover-overlay);
+  color: var(--text);
+}
+.claude-group__btn--accent {
+  color: var(--accent);
 }
 .claude-group__summary {
   font-size: 12px;

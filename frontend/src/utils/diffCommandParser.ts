@@ -15,7 +15,7 @@
 // hold. Examples:
 //   local:/repo@main:src/foo.ts
 //   :@feat:src/foo.ts          (no box/dir; ref + path only)
-//   local::main:src/foo.ts     (no dir)
+//   local:@main:src/foo.ts     (no dir)
 //   local:/repo@:src/foo.ts    (no ref)
 //   local:/repo@main:          (no path — useful for setting repo defaults, not strictly meaningful for :add)
 
