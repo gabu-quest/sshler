@@ -1416,6 +1416,9 @@ class _FolderSFTP:
 
     lstat = stat
 
+    async def realpath(self, path: str) -> str:
+        return path
+
     def exit(self) -> None:
         pass
 
