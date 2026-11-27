@@ -1,5 +1,5 @@
 """The `/ws/term` boundary: token and auth close codes, and session-name sanitization
-before any tmux argv is built (audit M5, roadmap T2).
+before any tmux argv is built.
 
 Every test names the mutation it kills. The M5 mutation is deleting the
 `session = PathValidator.sanitize_session_name(session)` call in `terminal_socket`.
