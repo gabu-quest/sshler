@@ -727,14 +727,16 @@ async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
     """
     try:
         returncode, stdout, _ = await run_bounded(
-            ["git", "check-ignore", "--stdin"],
+            # -z: names in and out as they are; without it git prints a name with
+            # non-ASCII characters (日本.log) quoted and escaped, and it never matches.
+            ["git", "check-ignore", "--stdin", "-z"],
             GITIGNORE_TIMEOUT,
             cwd=directory,
-            stdin_data="\n".join(names).encode(),
+            stdin_data="\0".join(names).encode(),
         )
         if returncode not in (0, 1):  # 1 means none matched, 128 means not a git repo
             return set()
-        ignored = set(line.strip() for line in stdout.decode().splitlines() if line.strip())
+        ignored = {name for name in stdout.decode(errors="replace").split("\0") if name}
     except Exception:
         return set()
     if ignored.issuperset(names):

@@ -67,7 +67,8 @@ def test_the_gitignore_check_gives_git_the_names_on_its_input(tmp_path, monkeypa
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "git"
-    stub.write_text("#!/bin/sh\ngrep -v keep\n")
+    # Speaks `check-ignore --stdin -z`: NUL-separated names in and out.
+    stub.write_text("#!/bin/sh\ntr '\\0' '\\n' | grep -v keep | tr '\\n' '\\0'\n")
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
@@ -83,6 +84,7 @@ def test_a_folder_that_ignores_its_own_contents_is_marked_as_git_status_marks_it
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
     (tmp_path / "out.log").write_text("x", encoding="utf-8")
+    (tmp_path / "日本 メモ.log").write_text("x", encoding="utf-8")
     (tmp_path / "kept.txt").write_text("x", encoding="utf-8")
     cache = tmp_path / ".cache"
     cache.mkdir()
@@ -93,10 +95,10 @@ def test_a_folder_that_ignores_its_own_contents_is_marked_as_git_status_marks_it
     (partly / "main.py").write_text("x", encoding="utf-8")
     (partly / "debug.log").write_text("x", encoding="utf-8")
 
-    names = [".cache", ".gitignore", "kept.txt", "out.log", "src"]
+    names = [".cache", ".gitignore", "kept.txt", "out.log", "src", "日本 メモ.log"]
     ignored = asyncio.run(local_files._get_gitignored_names(str(tmp_path), names))
 
-    assert ignored == {".cache", "out.log"}
+    assert ignored == {".cache", "out.log", "日本 メモ.log"}
 
 
 @pytest.mark.posix_only("a #!/bin/sh stand-in for git first on PATH")
