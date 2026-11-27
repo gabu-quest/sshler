@@ -10,6 +10,7 @@ on:
 jobs:
   static:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +52,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -69,9 +71,10 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
         with:
