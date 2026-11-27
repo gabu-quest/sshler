@@ -7,7 +7,7 @@ import logging
 import os
 import shlex
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 from . import state
@@ -153,24 +153,58 @@ async def snapshot_all_sessions() -> int:
     return count
 
 
-async def snapshot_loop(settings: SnapshotSettings) -> None:
-    """Background task that periodically snapshots tmux state."""
+PURGE_PERIOD_SECONDS = 3600
+
+# Set by ``notify_interval_changed`` to end the loop's wait early. Created by the
+# loop, so it belongs to the loop that runs it.
+_wake: asyncio.Event | None = None
+
+
+def notify_interval_changed() -> None:
+    """Wake the snapshot loop so it reads the new interval now, not after the old sleep."""
+    if _wake is not None:
+        _wake.set()
+
+
+async def _sleep_or_wake(interval: float) -> None:
+    """Wait *interval* seconds, or until ``notify_interval_changed`` is called."""
+    wake = _wake
+    if wake is None:
+        await asyncio.sleep(interval)
+        return
+    try:
+        await asyncio.wait_for(wake.wait(), timeout=interval)
+    except TimeoutError:
+        pass
+    wake.clear()
+
+
+async def snapshot_loop(
+    settings: SnapshotSettings, *, clock: Callable[[], float] = time.monotonic
+) -> None:
+    """Background task that periodically snapshots tmux state.
+
+    The stale-snapshot purge runs once every ``PURGE_PERIOD_SECONDS`` of elapsed
+    time, whatever the interval is or becomes.
+    """
+    global _wake
+    _wake = asyncio.Event()
     logger.info(
         "Snapshot loop started (enabled=%s interval=%ss)",
         settings.snapshot_enabled,
         settings.snapshot_interval,
     )
-    ticks = 0
+    last_purge = clock()
     while True:
         interval = max(5, settings.snapshot_interval)
-        await asyncio.sleep(interval)
-        ticks += 1
+        await _sleep_or_wake(interval)
         try:
             if settings.snapshot_enabled:
                 count = await snapshot_all_sessions()
                 if count > 0:
                     logger.debug("Snapshotted %d session(s)", count)
-            if ticks % max(1, 3600 // interval) == 0:
+            if clock() - last_purge >= PURGE_PERIOD_SECONDS:
+                last_purge = clock()
                 purged = await state.purge_stale_snapshots_async()
                 if purged > 0:
                     logger.info("Purged %d stale snapshot(s)", purged)

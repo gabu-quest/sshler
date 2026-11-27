@@ -13,6 +13,7 @@ from ..session_activity import match_tmux
 from ..snapshot import (
     get_last_snapshot_at,
     get_recovery_sessions,
+    notify_interval_changed,
     recreate_session,
     remove_recovery_session,
     saved_layout,
@@ -197,6 +198,7 @@ def get_router(deps: APIDependencies) -> APIRouter:
             deps.settings.snapshot_enabled = update.enabled
         if update.interval is not None:
             deps.settings.snapshot_interval = max(5, min(300, update.interval))
+            notify_interval_changed()
         return APISnapshotConfig(
             enabled=deps.settings.snapshot_enabled,
             interval=deps.settings.snapshot_interval,

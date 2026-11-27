@@ -32,7 +32,7 @@ from ..tmux import (
     ts_session_name,
 )
 from .dependencies import APIDependencies
-from .failure import REASON_INVALID, REASON_NOT_FOUND, Failure
+from .failure import REASON_INVALID, REASON_NOT_FOUND, REASON_UNREACHABLE, Failure
 from .models import APIClaudeOpenRequest, APIClaudeOpenResult, APIClaudeSession
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,12 @@ def get_router(deps: APIDependencies) -> APIRouter:
         target = f"{session}:{window}"
 
         # Ensure the repo-root session exists.
-        if session not in (await discover_local_sessions()).names:
+        live = await discover_local_sessions()
+        if session not in live.names:
+            if not live.complete:
+                # A server could not be asked: the session may run there, and
+                # `new-session` would start a second one.
+                raise Failure(REASON_UNREACHABLE, "Could not list local tmux sessions")
             await _run_local_tmux_command(
                 session, ["new-session", "-d", "-s", session, "-c", session_dir]
             )
