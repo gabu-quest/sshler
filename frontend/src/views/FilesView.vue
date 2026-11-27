@@ -101,8 +101,6 @@ const actionBusy = ref(false);
 const uploadTarget = ref<File | null>(null);
 const renameTarget = ref<string | null>(null);
 const renameValue = ref("");
-const copyDestination = ref("");
-const copyNewName = ref("");
 const status = ref<string>("unknown");
 // Why the box is not online, shown after the status words.
 const statusText = ref<string | null>(null);
@@ -121,6 +119,7 @@ const expandingDir = ref<string | null>(null);
 const refreshing = ref(false);
 const sortState = ref<SortState>(readSortState());
 const batchModal = ref<{ visible: boolean; mode: "move" | "copy" }>({ visible: false, mode: "move" });
+const batchPaths = ref<string[] | null>(null);
 const chmodModalVisible = ref(false);
 const chmodTarget = ref<{ path: string; currentMode: number | null }>({ path: '', currentMode: null });
 const chmodValue = ref("");
@@ -436,7 +435,7 @@ const handleContextMenuSelect = async (itemId: string) => {
     case 'download': await handleDownload(file); break;
     case 'rename': handleRenamePrompt(file); break;
     case 'chmod': handleChmodPrompt(file); break;
-    case 'copy': renameTarget.value = file.path; copyDestination.value = currentDir.value; copyNewName.value = `${file.name}_copy`; break;
+    case 'copy': openBatchModal('copy', [file.path]); break;
     case 'copy-path': await navigator.clipboard.writeText(file.path); message.success(t('files.path_copied')); break;
     case 'copy-wsl-path': {
       const winPath = `\\\\wsl$\\${bootstrapStore.wslDistro}${file.path.replace(/\//g, '\\')}`
@@ -1054,16 +1053,20 @@ async function bulkDelete() {
   }
 }
 
-function openBatchModal(mode: "move" | "copy") {
+// `paths` is the one file the menu's Copy was used on; without it the dialog works on the
+// checkbox selection.
+function openBatchModal(mode: "move" | "copy", paths: string[] | null = null) {
+  batchPaths.value = paths;
   batchModal.value = { visible: true, mode };
 }
 
 async function handleBatchConfirm(destination: string) {
-  if (!selectedBox.value || !selectedPaths.value.length) return;
+  const own = batchPaths.value;
+  const paths = own ? [...own] : [...selectedPaths.value];
+  if (!selectedBox.value || !paths.length) return;
   const box = selectedBox.value;
   const token = tokenValue.value || null;
   const mode = batchModal.value.mode;
-  const paths = [...selectedPaths.value];
   batchModal.value.visible = false;
   actionBusy.value = true;
   try {
@@ -1073,7 +1076,7 @@ async function handleBatchConfirm(destination: string) {
     );
     await directoryStore.load(box, currentDir.value, token);
     // Names the user kept are no failure; a selection that moved nothing stays as it was.
-    if (outcome.succeeded.length || outcome.failed.length) filesStore.setSelectedFiles([]);
+    if (!own && (outcome.succeeded.length || outcome.failed.length)) filesStore.setSelectedFiles([]);
     showKeptBoth(outcome.placed.map((item) => item.placed));
     for (const item of outcome.failed) {
       message.error(`${item.path.split('/').pop() || item.path}: ${failureText(item)}`, { closable: true, duration: 0 });
@@ -1619,7 +1622,7 @@ const columns = computed(() => {
       :mode="batchModal.mode"
       :box="selectedBox || null"
       :token="tokenValue || null"
-      :count="selectedCount"
+      :count="batchPaths ? batchPaths.length : selectedCount"
       @confirm="handleBatchConfirm"
       @close="batchModal.visible = false"
     />

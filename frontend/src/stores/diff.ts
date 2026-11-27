@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, ref, toRaw } from "vue";
 import { defineStore } from "pinia";
 
 import { ApiError, errorText } from "@/api/apiError";
@@ -265,15 +265,18 @@ export const useDiffStore = defineStore("diff", () => {
     serverId.value = null;
   }
 
-  function swapSides(idx: number): void {
+  // Swaps the two sides in place. Each side carries its own content and any load in
+  // flight, so nothing is cleared and nothing reloads. Returns true when a side still
+  // needs a request (it failed, or never ran), so the caller can retry it.
+  function swapSides(idx: number): boolean {
     const c = cells.value[idx];
-    if (!c) return;
+    if (!c) return false;
     const tmp = c.left;
     c.left = c.right;
     c.right = tmp;
-    c.status = "idle";
-    c.error = null;
     serverId.value = null;
+    const stale = (s: SideState) => s.status === "error" || (s.status === "idle" && isComplete(s.config));
+    return stale(c.left) || stale(c.right);
   }
 
   function clearAll(): void {
@@ -293,9 +296,19 @@ export const useDiffStore = defineStore("diff", () => {
     };
   }
 
+  // A load writes only if it is still the newest for its side and the side still has
+  // the config it was asked for; setSide or a newer load makes it stale.
+  const sideSeq = new WeakMap<object, number>();
+  const cellSeq = new Map<string, number>();
+
   async function _loadSide(c: DiffCellState, which: "left" | "right", token: string | null): Promise<void> {
     const side = which === "left" ? c.left : c.right;
-    if (!isComplete(side.config)) {
+    const key = toRaw(side);
+    const seq = (sideSeq.get(key) ?? 0) + 1;
+    sideSeq.set(key, seq);
+    const config = side.config;
+    const current = () => sideSeq.get(key) === seq && side.config === config;
+    if (!isComplete(config)) {
       side.status = "idle";
       side.content = "";
       side.error = null;
@@ -305,17 +318,13 @@ export const useDiffStore = defineStore("diff", () => {
     side.status = "loading";
     side.error = null;
     try {
-      const res = await gitShow(
-        side.config.box,
-        side.config.directory || "/",
-        side.config.path,
-        side.config.ref || "HEAD",
-        token,
-      );
+      const res = await gitShow(config.box, config.directory || "/", config.path, config.ref || "HEAD", token);
+      if (!current()) return;
       side.content = res.content ?? "";
       side.status = "loaded";
       side.truncated = side.content.length >= MAX_SHOW_BYTES;
     } catch (err) {
+      if (!current()) return;
       // A file not at the ref, or a folder that is not a repository, answers
       // `not_found`: the side is missing (an add or a delete), not an error.
       const msg = errorText(err);
@@ -328,9 +337,9 @@ export const useDiffStore = defineStore("diff", () => {
   async function fetchCell(idx: number, token: string | null): Promise<void> {
     const c = cells.value[idx];
     if (!c) return;
-    const leftReady = isComplete(c.left.config);
-    const rightReady = isComplete(c.right.config);
-    if (!leftReady && !rightReady) {
+    const seq = (cellSeq.get(c.id) ?? 0) + 1;
+    cellSeq.set(c.id, seq);
+    if (!isComplete(c.left.config) && !isComplete(c.right.config)) {
       c.status = "idle";
       c.error = null;
       return;
@@ -338,6 +347,12 @@ export const useDiffStore = defineStore("diff", () => {
     c.status = "loading";
     c.error = null;
     await Promise.all([_loadSide(c, "left", token), _loadSide(c, "right", token)]);
+    // A newer load of this cell owns the result; a removed cell has nobody to show it.
+    if (cellSeq.get(c.id) !== seq) return;
+    // Read the sides as they are now: a swap or an edit may have moved them.
+    const leftReady = isComplete(c.left.config);
+    const rightReady = isComplete(c.right.config);
+    if (c.left.status === "loading" || c.right.status === "loading") return;
     if (c.left.status === "error" && c.right.status === "error") {
       c.status = "error";
       c.error = `Left: ${c.left.error}\nRight: ${c.right.error}`;
@@ -353,11 +368,18 @@ export const useDiffStore = defineStore("diff", () => {
       c.error = c.right.error;
       return;
     }
-    if (cellIsBinary(idx)) {
-      c.status = "binary";
+    if (c.left.status === "idle" && c.right.status === "idle") {
+      c.status = "idle";
       return;
     }
-    c.status = "ready";
+    c.status = looksBinaryCell(c) ? "binary" : "ready";
+  }
+
+  function looksBinaryCell(c: DiffCellState): boolean {
+    return (
+      (c.left.status === "loaded" && looksBinary(c.left.content)) ||
+      (c.right.status === "loaded" && looksBinary(c.right.content))
+    );
   }
 
   // ----- URL hydration -----
