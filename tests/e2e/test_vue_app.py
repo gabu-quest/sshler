@@ -538,9 +538,17 @@ async def test_tools_menu_touches_the_rails_visible_edge(open_page, collapsed, e
     await wait_panel_at(page, 0 if not collapsed else COLLAPSED - EXPANDED)
     assert await settled_box(page, ".xterm-screen") == terminal_before
 
+    # The keys follow the menu: its first tool has the focus, the arrows move it, and
+    # Escape hands it back to the Tools button.
+    tools_items = page.locator(".rail-tools-menu .rail-tools-item")
+    await expect(tools_items.nth(0)).to_be_focused()
+    await page.keyboard.press("ArrowDown")
+    await expect(tools_items.nth(1)).to_be_focused()
+
     await page.keyboard.press("Escape")
     await expect(page.locator(".rail-flyout")).to_have_count(0)
     await expect(page.get_by_test_id("rail-tools")).to_have_attribute("aria-expanded", "false")
+    await expect(page.get_by_test_id("rail-tools")).to_be_focused()
 
     # A second click closes it, and a press on the page closes it.
     await open_tools(page)
