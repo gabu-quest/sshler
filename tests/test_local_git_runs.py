@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -74,6 +75,28 @@ def test_the_gitignore_check_gives_git_the_names_on_its_input(tmp_path, monkeypa
     ignored = asyncio.run(local_files._get_gitignored_names(str(tmp_path), names))
 
     assert ignored == {"out.log", "tmp"}
+
+
+def test_a_folder_that_ignores_its_own_contents_is_marked_as_git_status_marks_it(tmp_path):
+    """A cache folder (.mypy_cache, .pytest_cache, .ruff_cache, a uv .venv) holds a .gitignore
+    of `*`: no rule names the folder, yet `git status --ignored` lists it as ignored."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    (tmp_path / "out.log").write_text("x", encoding="utf-8")
+    (tmp_path / "kept.txt").write_text("x", encoding="utf-8")
+    cache = tmp_path / ".cache"
+    cache.mkdir()
+    (cache / ".gitignore").write_text("*\n", encoding="utf-8")
+    (cache / "data").write_text("x", encoding="utf-8")
+    partly = tmp_path / "src"
+    partly.mkdir()
+    (partly / "main.py").write_text("x", encoding="utf-8")
+    (partly / "debug.log").write_text("x", encoding="utf-8")
+
+    names = [".cache", ".gitignore", "kept.txt", "out.log", "src"]
+    ignored = asyncio.run(local_files._get_gitignored_names(str(tmp_path), names))
+
+    assert ignored == {".cache", "out.log"}
 
 
 @pytest.mark.posix_only("a #!/bin/sh stand-in for git first on PATH")

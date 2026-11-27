@@ -713,10 +713,18 @@ async def _local_delete_file(path: str) -> None:
 # The gitignore marks of a listing are a nicety: a git that does not answer in
 # this time is given up on and the listing goes out without them.
 GITIGNORE_TIMEOUT = 5.0
+# Finding the folders that ignore all they hold walks the folder's tree as `git status`
+# does; a tree too big for this time keeps only the marks of the first check.
+WHOLLY_IGNORED_TIMEOUT = 2.0
 
 
 async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
-    """Check which filenames in a directory are gitignored. Returns set of ignored names."""
+    """The names in *directory* that `git status --ignored` lists as ignored.
+
+    `check-ignore` marks the names a rule matches. A folder that ignores its own contents
+    with a `.gitignore` of `*` (.mypy_cache, .pytest_cache, a uv .venv) is matched by no
+    rule, so `ls-files` adds the folders git reports as wholly ignored (`name/`).
+    """
     try:
         returncode, stdout, _ = await run_bounded(
             ["git", "check-ignore", "--stdin"],
@@ -726,9 +734,27 @@ async def _get_gitignored_names(directory: str, names: list[str]) -> set[str]:
         )
         if returncode not in (0, 1):  # 1 means none matched, 128 means not a git repo
             return set()
-        return set(line.strip() for line in stdout.decode().splitlines() if line.strip())
+        ignored = set(line.strip() for line in stdout.decode().splitlines() if line.strip())
     except Exception:
         return set()
+    if ignored.issuperset(names):
+        return ignored
+    try:
+        returncode, stdout, _ = await run_bounded(
+            ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+            WHOLLY_IGNORED_TIMEOUT,
+            cwd=directory,
+        )
+    except Exception:
+        return ignored
+    if returncode != 0:
+        return ignored
+    wanted = set(names)
+    for path in stdout.decode(errors="replace").split("\0"):
+        name, slash, rest = path.partition("/")
+        if slash and not rest and name in wanted:
+            ignored.add(name)
+    return ignored
 
 
 def _safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
