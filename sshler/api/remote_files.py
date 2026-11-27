@@ -1218,10 +1218,15 @@ class RemoteFiles:
         ensure_source_unchanged(fingerprint, after, target)
         await sftp_client.remove(path)
 
-    async def delete(self, path: str) -> None:
+    async def delete(self, path: str) -> str:
+        PathValidator.validate_remote_path(path)
+        connection = await self._conn()
+        target = self._spelled.note(await remote_path(connection, path), path)
         sftp_client = await self._session()
-        async with self._needs(path, folder=False):
-            await sftp_client.remove(path)
+        await _remote_refuse_home_or_above(connection, sftp_client, [target])
+        async with self._needs(target, folder=False):
+            await sftp_client.remove(target)  # a link is removed, not followed
+        return target
 
     async def chmod(self, path: str, mode: int) -> None:
         await sftp_chmod(await self._conn(), path, mode)

@@ -695,7 +695,7 @@ async def _local_read_bytes(path: str, limit: int) -> tuple[bytes, bool]:
 async def _local_batch_delete(path: str) -> None:
     def _worker() -> None:
         target = Path(path)
-        if target.is_symlink():
+        if target.is_symlink() or target.is_junction():
             target.unlink()  # the link itself, never what it points to
         elif target.is_dir():
             shutil.rmtree(target)
@@ -1062,7 +1062,9 @@ def _local_link_itself(sent: str, resolved: str) -> str:
         name = os.path.basename(base)
         if name not in ("", ".", ".."):
             candidate = os.path.join(os.path.realpath(os.path.dirname(base)), name)
-            if os.path.islink(candidate):
+            # A Windows directory junction links a folder as a symlink does, but
+            # `islink` says False for it.
+            if os.path.islink(candidate) or os.path.isjunction(candidate):
                 return local_path_form(candidate)
     except (OSError, ValueError):
         pass
@@ -1318,8 +1320,15 @@ class LocalFiles:
 
         await asyncio.to_thread(_check_and_remove)
 
-    async def delete(self, path: str) -> None:
-        await _local_delete_file(path)
+    async def delete(self, path: str) -> str:
+        def _target() -> str:
+            resolved = self._resolve(path)
+            _local_refuse_home_or_above([resolved])
+            return _local_link_itself(path, resolved)
+
+        target = await asyncio.to_thread(_target)
+        await _local_delete_file(target)
+        return target
 
     async def chmod(self, path: str, mode: int) -> None:
         await asyncio.to_thread(Path(path).chmod, mode)

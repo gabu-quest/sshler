@@ -7,6 +7,8 @@ loopback SFTP server whose home is ``/home``)."""
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 import pytest
 import test_box_files_contract as contract
@@ -146,6 +148,30 @@ async def test_a_batch_delete_of_a_link_to_a_folder_keeps_the_folder(kind):
     assert (kind.outside / "secret.txt").read_bytes() == b"secret\n"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="a directory junction exists only on Windows")
+@pytest.mark.parametrize("single", [False, True], ids=["batch", "single"])
+async def test_a_delete_of_a_junction_keeps_the_folder_it_points_to(kind, single):
+    """A junction is no symlink to Python (`is_symlink()` is False), so it was taken for
+    the folder it points to and that folder was deleted."""
+    if kind.name != "local":
+        pytest.skip("a junction is a local Windows folder link")
+    junction = kind.root / "junction"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(kind.outside)],
+        check=True,
+        capture_output=True,
+    )
+
+    async def op(files, kind):
+        if single:
+            return await files.delete(kind.at("junction"))
+        return await files.delete_many([kind.at("junction")])
+
+    await _outcome(kind, op)
+    assert not os.path.lexists(junction)
+    assert (kind.outside / "secret.txt").read_bytes() == b"secret\n"
+
+
 async def test_a_batch_delete_of_a_dangling_link_removes_it(kind):
     make_symlink(kind.root / "dangling", "no-such-target")
 
@@ -187,3 +213,75 @@ async def test_a_rename_of_a_link_renames_the_link(kind):
     assert os.path.islink(kind.root / "link_new")
     assert not os.path.lexists(kind.root / "link_a")
     assert (kind.root / "a.txt").read_bytes() == b"hello\n"
+
+
+# --- the single-file delete -----------------------------------------------------------
+
+
+async def test_a_single_delete_of_home_is_refused(kind, monkeypatch):
+    home = _home_for(kind, monkeypatch)
+
+    async def op(files, kind):
+        return await files.delete(home)
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "sub" / "inner.txt").exists()
+
+
+async def test_a_single_delete_of_a_folder_above_home_is_refused(kind, monkeypatch):
+    _home_for(kind, monkeypatch)
+
+    async def op(files, kind):
+        return await files.delete(kind.at(""))
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "a.txt").exists()
+
+
+async def test_a_single_delete_of_a_link_to_home_is_refused(kind, monkeypatch):
+    if kind.name != "local":
+        pytest.skip("a remote link to home needs a real remote home folder")
+    _home_for(kind, monkeypatch)
+    make_symlink(kind.root / "home_link", kind.root / "sub", target_is_directory=True)
+
+    async def op(files, kind):
+        return await files.delete(kind.at("home_link"))
+
+    assert _refused(await _outcome(kind, op))
+    assert (kind.root / "sub" / "inner.txt").exists()
+    assert os.path.islink(kind.root / "home_link")
+
+
+async def test_a_single_delete_of_a_link_to_a_file_keeps_the_file(kind):
+    async def op(files, kind):
+        return await files.delete(kind.at("link_out"))
+
+    await _outcome(kind, op)
+    assert not os.path.lexists(kind.root / "link_out")
+    assert (kind.outside / "secret.txt").read_bytes() == b"secret\n"
+
+
+def test_the_delete_route_removes_a_link_not_its_target(tmp_path, monkeypatch):
+    """The route resolved the path first, and a resolved link is its target."""
+    from fastapi.testclient import TestClient
+
+    from sshler.webapp import ServerSettings, make_app
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "boxes.yaml").write_text("boxes: []\n", encoding="utf-8")
+    target = tmp_path / "target.txt"
+    target.write_text("keep")
+    link = tmp_path / "link.txt"
+    make_symlink(link, target)
+    monkeypatch.setenv("SSHLER_CONFIG_DIR", str(config_dir))
+    client = TestClient(make_app(ServerSettings(csrf_token="t")))
+    try:
+        resp = client.post(
+            "/api/v1/boxes/local/delete", json={"path": str(link)}, headers={"X-SSHLER-TOKEN": "t"}
+        )
+        assert resp.status_code == 200, resp.text
+    finally:
+        client.close()
+    assert not os.path.lexists(link)
+    assert target.read_text() == "keep"
